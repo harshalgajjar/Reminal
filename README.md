@@ -1,8 +1,24 @@
+<div align="center">
+
 # reminal
 
-Remote terminal access from any browser or terminal — more secure than SSH, zero setup.
+### Your terminal. Anywhere. In one command.
 
-Run `reminal` on your laptop, open the link on any device, and control your terminal. A free Cloudflare relay handles the connection — nothing to expose on your network.
+**A modern, zero-config alternative to SSH for reaching your own machine.**
+No open ports. No long-lived keys. No router gymnastics.
+Run `reminal`, scan a QR code, you're in.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/harshalgajjar/Reminal?color=success&label=release)](https://github.com/harshalgajjar/Reminal/releases)
+[![Homebrew](https://img.shields.io/badge/homebrew-harshalgajjar%2Freminal-orange)](https://github.com/harshalgajjar/Reminal)
+[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/harshalgajjar/Reminal/releases)
+[![Encryption](https://img.shields.io/badge/encryption-AES--256--GCM-success)](#security)
+[![Relay](https://img.shields.io/badge/relay-Cloudflare%20free%20tier-F38020?logo=cloudflare&logoColor=white)](cloudflare/README.md)
+
+</div>
+
+---
 
 ```
   Your laptop                 Cloudflare relay              Any device
@@ -10,7 +26,30 @@ Run `reminal` on your laptop, open the link on any device, and control your term
   │  reminal    │◄──WSS─────►│  Workers +  │◄────WSS─────►│  browser or │
   │  (PTY/shell)│            │  Durable Obj│              │  reminal -c │
   └─────────────┘            └─────────────┘              └─────────────┘
+              end-to-end encrypted — the relay sees ciphertext only
 ```
+
+---
+
+## The 30-second pitch
+
+SSH was designed in 1995. It assumes you own a static IP, a router you can configure, and a security team to keep keys rotated.
+
+**reminal assumes none of that.** It is built for laptops, hotel Wi-Fi, locked-down corporate networks, and the phone in your pocket — without compromising on security.
+
+| | **reminal** | SSH |
+|---|---|---|
+| **Setup time** | One command | Keys, configs, port-forwarding, firewalls |
+| **Listening port** | None | TCP 22 exposed to the internet |
+| **Credentials** | Ephemeral session ID + PIN | Permanent keys on disk |
+| **Behind NAT / hotel Wi-Fi** | Just works | VPN or jump host required |
+| **Phone friendly** | Scan QR → in | No native client |
+| **If laptop is stolen** | Sessions already dead | Old keys still grant access |
+| **Encryption** | End-to-end through relay | End-to-end direct (if configured right) |
+
+> You trust Cloudflare to deliver packets — the same way you trust your ISP with SSH traffic. Neither can read what you send. The difference: **reminal never opens your machine to the internet.**
+
+---
 
 ## Install
 
@@ -19,20 +58,17 @@ brew tap harshalgajjar/reminal
 brew install reminal
 ```
 
-Or build from source (Go 1.22+):
+<sub>Or build from source (Go 1.25+): `./scripts/build.sh && sudo cp dist/reminal /usr/local/bin/`</sub>
 
-```bash
-./scripts/build.sh
-sudo cp dist/reminal /usr/local/bin/
-```
+---
 
-## Usage — zero config
-
-Just run it. If you're online, it connects to the hosted relay automatically.
+## Use it
 
 ```bash
 reminal
 ```
+
+That's the whole tutorial. Here's what you'll see:
 
 ```
   reminal — remote terminal
@@ -44,22 +80,82 @@ reminal
 
   Scan to join from your phone:
 
-  [QR code printed here — encodes the URL + PIN]
+  ██▀▀▀▀▀▀▀██▀▀██▀▀█▀▀▀▀▀▀▀██
+  █ █████ █ █ █  ██ █████ █
+  █ █   █ █▀ ▀▄█▀█ █   █ █
+  █ █████ █ ▄██ ▀█ █████ █
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
   Waiting for connection... (Ctrl+C to stop)
 ```
 
-From any other device:
+Pick your portal — they all work:
 
-- **Phone:** scan the QR — auto-joins with the PIN, no typing
-- **Browser:** open the URL above, enter the PIN
-- **Terminal:** `reminal --connect K7M2NP4Q --pin 482916`
+- **Phone.** Scan the QR. URL fragment carries the PIN. You're auto-joined.
+- **Browser.** Open the URL, type the PIN. Works on any device with a browser.
+- **Terminal.** `reminal --connect K7M2NP4Q --pin 482916` — full TTY, full color, full speed.
 
-That's it. No env vars, no relay setup, no ports.
+No env vars. No relay setup. No ports.
 
-## Deploy the relay (one time, free)
+---
 
-The hosted relay lives in `cloudflare/` — Cloudflare Workers + Durable Objects (free tier).
+## Why people use it
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+#### Forgot something at home
+
+Laptop sleeping on the desk. Phone in your pocket on the train. Scan, run the command, lock it back up.
+
+</td>
+<td width="33%" valign="top">
+
+#### Hostile networks
+
+Hotel Wi-Fi, corporate guest network, conference NAT — all block inbound. They all allow outbound HTTPS. reminal only needs outbound HTTPS.
+
+</td>
+<td width="33%" valign="top">
+
+#### Pair from anywhere
+
+Send a session ID and PIN to a teammate. They scan or paste. Live shared terminal. Hang up when done — no keys to revoke.
+
+</td>
+</tr>
+</table>
+
+---
+
+## Security
+
+> Built to be **as secure as a properly configured SSH — and safer by default.**
+
+SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to configure everything correctly. reminal takes the opposite approach: **nothing to expose, nothing permanent to steal, encryption end-to-end.**
+
+| Layer | What it does |
+|---|---|
+| **No open ports** | Your machine only initiates outbound connections. There is nothing on the network to scan, brute-force, or zero-day. |
+| **Ephemeral credentials** | Session ID and PIN exist only while `reminal` is running. Ctrl+C and they are gone forever. |
+| **Dual-factor by design** | An attacker needs both the session ID (~1 trillion combinations) and the 6-digit PIN. Knowing one is useless. |
+| **Lockout on abuse** | Five wrong PINs trigger a 5-minute lockout. PIN guessing is not viable. |
+| **End-to-end encryption** | AES-256-GCM. Keys derived from PIN + session ID via HKDF — never sent to the relay. |
+| **Relay-blind** | Cloudflare Workers route ciphertext. Even with full control of the relay, nobody sees your terminal. |
+| **TLS in transit** | WSS / TLS on every hop in production. |
+
+### Best practices
+
+- Share the session ID and PIN over **different channels** (e.g. email the ID, text the PIN).
+- Stop the session with **Ctrl+C** when you're done. Credentials die instantly.
+- Keep your client up to date — `brew upgrade reminal`.
+
+---
+
+## Self-host the relay (free, one time)
+
+The relay runs on **Cloudflare Workers + Durable Objects**. Free tier handles thousands of sessions a month.
 
 ```bash
 cd cloudflare
@@ -68,73 +164,54 @@ npx wrangler login
 npm run deploy
 ```
 
-Update `DefaultCloudRelay` / `DefaultCloudWeb` in `internal/config/config.go` with your workers.dev URL, then rebuild. See [cloudflare/README.md](cloudflare/README.md).
+Then point `DefaultCloudRelay` / `DefaultCloudWeb` in `internal/config/config.go` at your `workers.dev` URL and rebuild. Full guide in [cloudflare/README.md](cloudflare/README.md).
+
+---
 
 ## Local development
 
 ```bash
-# Terminal 1
+# Terminal 1 — your own relay on localhost:8080
 reminal relay
 
-# Terminal 2
+# Terminal 2 — share a session via the local relay
 REMINAL_LOCAL=1 reminal
 
-# Terminal 3 or browser
+# Terminal 3 — connect from another shell or the browser
 REMINAL_LOCAL=1 reminal --connect <session_id> --pin <pin>
 # or http://localhost:8080/?s=<session_id>
 ```
 
-## Commands
+---
 
-| Command | Description |
-|---------|-------------|
+## Reference
+
+### Commands
+
+| Command | What it does |
+|---|---|
 | `reminal` | Share this terminal session |
 | `reminal --connect <id> --pin <pin>` | Connect to a remote session from your terminal |
-| `reminal relay [port]` | Start local relay (dev only) |
+| `reminal relay [port]` | Start a local relay (development only) |
 | `reminal version` | Print version |
 
-## Environment variables
+### Environment variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `REMINAL_RELAY` | Cloudflare relay URL | Override relay WebSocket base URL |
-| `REMINAL_WEB` | Cloudflare web URL | Override web UI URL shown to user |
-| `REMINAL_LOCAL` | — | Set to `1` to use localhost relay |
-| `SHELL` | `$SHELL` or `/bin/zsh` | Shell to spawn |
+| Variable | Default | What it does |
+|---|---|---|
+| `REMINAL_RELAY` | Cloudflare relay URL | Override the relay WebSocket base URL |
+| `REMINAL_WEB` | Cloudflare web URL | Override the web UI URL shown in the banner |
+| `REMINAL_LOCAL` | — | Set to `1` to point everything at `localhost` |
+| `SHELL` | `$SHELL` or `/bin/zsh` | Which shell to spawn inside the session |
 
-## Security
+---
 
-reminal is built to be **as secure as SSH — and safer by default**.
+<div align="center">
 
-SSH leaves port 22 open, stores long-lived keys on disk, and depends on you configuring everything correctly. reminal takes a different approach: **nothing to expose, nothing permanent to steal, encryption end-to-end**.
+### License
 
-| Layer | Protection |
-|-------|------------|
-| **No open ports** | Your machine initiates outbound connections only — nothing to scan or brute-force |
-| **Ephemeral credentials** | Session ID + PIN expire when you quit — no keys sitting on disk for years |
-| **Dual-factor connect** | Attacker needs both session ID (~1 trillion combos) and 6-digit PIN |
-| **Rate limiting** | 5 wrong PINs → 5-minute lockout |
-| **E2E encryption** | AES-256-GCM; key derived from PIN + session ID via HKDF |
-| **Relay-blind** | Cloudflare routes packets but cannot read your terminal — only encrypted blobs |
-| **Transport** | WSS/TLS in production |
+[MIT](LICENSE) — do whatever you want, just don't sue me.
 
-**Why reminal beats SSH for remote access:**
+<sub>Built by <a href="https://github.com/harshalgajjar">@harshalgajjar</a>. Stars are appreciated. Issues even more so.</sub>
 
-| | reminal | SSH |
-|---|---------|-----|
-| Attack surface | No listening port | Port 22 exposed to the internet |
-| Credentials | Temporary, per-session | Permanent keys/passwords |
-| Stolen laptop | Old SSH keys still work | Sessions already dead |
-| Misconfiguration | Works out of the box | Password auth, weak keys, exposed agents |
-| NAT / firewall | Just works | Port forwarding, VPN, or jump hosts |
-| Encryption | E2E through relay | E2E direct (when configured correctly) |
-
-You trust Cloudflare to **deliver** packets — the same way you trust your ISP with SSH traffic. Neither can read what you send. The difference: reminal never opens your machine to inbound connections.
-
-**Good habits:**
-- Share session ID and PIN separately
-- Stop `reminal` when done (Ctrl+C)
-
-## License
-
-MIT
+</div>
