@@ -1,29 +1,14 @@
-# reminal Homebrew tap
+# Homebrew tap for reminal
 
-Install reminal:
+**Do not put source code here.** This folder gets pushed to a separate repo:
+
+→ [github.com/harshalgajjar/homebrew-reminal](https://github.com/harshalgajjar/homebrew-reminal)
+
+Users run:
 
 ```bash
-brew tap reminal/tap
+brew tap harshalgajjar/reminal
 brew install reminal
 ```
 
-This repository is published separately from [reminal/reminal](https://github.com/reminal/reminal).
-
-## Maintainer: publish a new version
-
-1. Tag a release on the main repo (`v0.1.0` → GitHub Actions uploads binaries).
-2. From the main repo, run:
-
-   ```bash
-   ./scripts/update-formula-sha.sh v0.1.0
-   ```
-
-3. Copy the printed `sha256` values into `Formula/reminal.rb` and bump `version` / URLs.
-4. Commit and push this tap repo.
-
-## Install from source (before first release)
-
-```bash
-brew tap reminal/tap
-brew install --HEAD reminal
-```
+See [BREW.md](../BREW.md) for setup.

@@ -15,7 +15,7 @@ Run `reminal` on your laptop, open the link on any device, and control your term
 ## Install
 
 ```bash
-brew tap reminal/tap    # once published
+brew tap harshalgajjar/reminal
 brew install reminal
 ```
 
