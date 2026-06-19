@@ -50,12 +50,44 @@
     }
     button:hover { background: #2ea043; }
     button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
-    #status { font-size: 13px; color: #8b949e; }
+    button.danger { background: #da3633; }
+    button.danger:hover { background: #f85149; }
+    #status { font-size: 13px; color: #8b949e; display: flex; align-items: center; gap: 6px; }
     #status.connected { color: #3fb950; }
+    #status.warn { color: #d29922; }
     #status.error { color: #f85149; }
-    #terminal-wrap { flex: 1; padding: 8px; overflow: hidden; }
+    #status::before {
+      content: '';
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: 0.5;
+    }
+    #status.connecting::before { animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.25; }
+      50% { opacity: 1; }
+    }
+    #terminal-wrap { flex: 1; padding: 8px; overflow: hidden; position: relative; }
     #terminal { height: 100%; }
     .xterm { height: 100%; }
+    #overlay {
+      position: absolute;
+      inset: 8px;
+      background: rgba(13, 17, 23, 0.55);
+      backdrop-filter: blur(2px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      color: #e6edf3;
+      font-size: 14px;
+      pointer-events: none;
+      border-radius: 4px;
+    }
+    #overlay.visible { display: flex; }
+    #overlay span { background: #161b22; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; }
   </style>
 </head>
 <body>
@@ -66,9 +98,12 @@
       <input id="pin-input" placeholder="PIN" maxlength="8" inputmode="numeric" autocomplete="off" spellcheck="false">
       <button id="connect-btn">Connect</button>
     </div>
-    <div id="status">Session + PIN required</div>
+    <div id="status" class="">Session + PIN required</div>
   </header>
-  <div id="terminal-wrap"><div id="terminal"></div></div>
+  <div id="terminal-wrap">
+    <div id="terminal"></div>
+    <div id="overlay"><span id="overlay-text">Connecting…</span></div>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
@@ -77,6 +112,8 @@
     const sessionInput = document.getElementById('session-input');
     const pinInput = document.getElementById('pin-input');
     const connectBtn = document.getElementById('connect-btn');
+    const overlay = document.getElementById('overlay');
+    const overlayText = document.getElementById('overlay-text');
 
     const params = new URLSearchParams(location.search);
     const initialSession = params.get('s') || '';
@@ -86,6 +123,7 @@
       cursorBlink: true,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
       fontSize: 14,
+      scrollback: 10000,
       theme: {
         background: '#0d1117', foreground: '#e6edf3', cursor: '#58a6ff',
         selectionBackground: '#264f78',
@@ -96,9 +134,20 @@
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
 
+    // Connection state machine
     let ws = null;
     let cryptoKey = null;
-    let connected = false;
+    let authed = false;       // received auth_ok
+    let agentLive = false;    // agent is currently connected on the relay
+    let lastSeq = 0;          // highest seq we've received from agent
+    let sessionId = '';
+    let pinValue = '';
+    let manualClose = false;  // user clicked Disconnect; do not auto-reconnect
+    let fatal = false;        // unrecoverable (bad PIN, session expired); do not auto-reconnect
+    let reconnectTimer = null;
+    let backoffMs = 1000;
+    const MAX_BACKOFF_MS = 30000;
+    let connectedAt = 0;
 
     async function deriveKey(sessionId, pin) {
       const enc = new TextEncoder();
@@ -146,9 +195,36 @@
       statusEl.className = cls || '';
     }
 
+    function showOverlay(text) {
+      overlayText.textContent = text;
+      overlay.classList.add('visible');
+    }
+
+    function hideOverlay() {
+      overlay.classList.remove('visible');
+    }
+
+    function setBtnConnect() {
+      connectBtn.textContent = 'Connect';
+      connectBtn.disabled = false;
+      connectBtn.classList.remove('danger');
+    }
+
+    function setBtnDisconnect() {
+      connectBtn.textContent = 'Disconnect';
+      connectBtn.disabled = false;
+      connectBtn.classList.add('danger');
+    }
+
+    function setBtnBusy(label) {
+      connectBtn.textContent = label;
+      connectBtn.disabled = true;
+      connectBtn.classList.remove('danger');
+    }
+
     async function send(msg) {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      if (connected && cryptoKey && (msg.type === 'data' || msg.type === 'resize')) {
+      if (authed && cryptoKey && (msg.type === 'data' || msg.type === 'resize')) {
         if (msg.type === 'data') {
           msg = { type: 'data', data: await encrypt(cryptoKey, Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))) };
         } else {
@@ -163,92 +239,198 @@
       send({ type: 'resize', cols: term.cols, rows: term.rows });
     }
 
-    async function connect(sessionId, pin) {
-      sessionId = sessionId.trim().toUpperCase();
-      pin = pin.trim();
-      if (!sessionId || !pin) {
-        setStatus('Session and PIN required', 'error');
-        return;
-      }
-      if (!/^\d{6,8}$/.test(pin)) {
-        setStatus('PIN must be 6–8 digits', 'error');
-        return;
-      }
+    function sendResume() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'resume', from_seq: lastSeq }));
+    }
 
-      if (ws) { ws.close(); ws = null; }
-      connected = false;
-      cryptoKey = await deriveKey(sessionId, pin);
+    function cancelReconnect() {
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    }
 
-      connectBtn.disabled = true;
-      setStatus('Connecting…');
-      term.reset();
+    function scheduleReconnect() {
+      cancelReconnect();
+      if (manualClose || fatal) return;
+      // Reset backoff if the previous session stayed up for a while.
+      if (connectedAt && (Date.now() - connectedAt) > 30000) {
+        backoffMs = 1000;
+      }
+      const delay = Math.min(backoffMs, MAX_BACKOFF_MS);
+      const secs = Math.max(1, Math.round(delay / 1000));
+      setStatus('Reconnecting in ' + secs + 's…', 'warn connecting');
+      showOverlay('Reconnecting in ' + secs + 's…');
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        openSocket();
+      }, delay);
+      backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
+    }
+
+    async function startConnect() {
+      const s = sessionInput.value.trim().toUpperCase();
+      const p = pinInput.value.trim();
+      if (!s || !p) { setStatus('Session and PIN required', 'error'); return; }
+      if (!/^\d{6,8}$/.test(p)) { setStatus('PIN must be 6–8 digits', 'error'); return; }
+
+      manualClose = false;
+      fatal = false;
+      backoffMs = 1000;
+      // Switching to a different session invalidates the replay cursor and
+      // any previously rendered output; start the terminal clean.
+      if (s !== sessionId) {
+        lastSeq = 0;
+        sessionId = s;
+        term.reset();
+      }
+      pinValue = p;
+      cryptoKey = await deriveKey(sessionId, pinValue);
+      sessionInput.value = sessionId;
+      history.replaceState(null, '', '?s=' + sessionId);
+      openSocket();
+    }
+
+    function openSocket() {
+      cancelReconnect();
+      if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+      authed = false;
+      agentLive = false;
+
+      const fresh = lastSeq === 0;
+      setStatus(fresh ? 'Connecting…' : 'Reconnecting…', 'warn connecting');
+      showOverlay(fresh ? 'Connecting…' : 'Reconnecting…');
+      setBtnBusy('Cancel');
+      // Allow user to cancel during connect by re-purposing the button.
+      connectBtn.disabled = false;
+      connectBtn.classList.add('danger');
+      connectBtn.textContent = 'Cancel';
 
       ws = new WebSocket(relayURL(sessionId));
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'auth', pin }));
+        ws.send(JSON.stringify({ type: 'auth', pin: pinValue }));
       };
 
       ws.onmessage = async (ev) => {
         let msg;
         try { msg = JSON.parse(ev.data); } catch { return; }
-
-        switch (msg.type) {
-          case 'auth_ok':
-          case 'connected':
-            connected = true;
-            setStatus('Connected to ' + sessionId, 'connected');
-            connectBtn.disabled = false;
-            fitAddon.fit();
-            sendResize();
-            term.focus();
-            history.replaceState(null, '', '?s=' + sessionId);
-            break;
-          case 'data': {
-            const bytes = await decrypt(cryptoKey, msg.data);
-            term.write(bytes);
-            break;
-          }
-          case 'closed':
-            setStatus(msg.error || 'Disconnected', 'error');
-            connectBtn.disabled = false;
-            connected = false;
-            break;
-          case 'error':
-            setStatus(msg.error || 'Error', 'error');
-            connectBtn.disabled = false;
-            connected = false;
-            term.write('\r\n\x1b[31m' + (msg.error || 'Error') + '\x1b[0m\r\n');
-            break;
-        }
+        await handleMessage(msg);
       };
 
       ws.onclose = () => {
-        if (statusEl.className !== 'error') setStatus('Disconnected');
-        connectBtn.disabled = false;
-        connected = false;
+        authed = false;
+        agentLive = false;
+        ws = null;
+        if (manualClose) {
+          setStatus('Disconnected');
+          hideOverlay();
+          setBtnConnect();
+          return;
+        }
+        if (fatal) {
+          // Status already set by error handler.
+          hideOverlay();
+          setBtnConnect();
+          return;
+        }
+        scheduleReconnect();
       };
 
       ws.onerror = () => {
-        setStatus('Connection failed', 'error');
-        connectBtn.disabled = false;
-        connected = false;
+        // ws.onclose will run after this; let it drive reconnect logic.
       };
     }
 
+    async function handleMessage(msg) {
+      switch (msg.type) {
+        case 'auth_ok':
+          authed = true;
+          break;
+        case 'connected':
+        case 'agent_online':
+          agentLive = true;
+          connectedAt = Date.now();
+          backoffMs = 1000;
+          setStatus('Connected to ' + sessionId, 'connected');
+          hideOverlay();
+          setBtnDisconnect();
+          sendResume();
+          fitAddon.fit();
+          sendResize();
+          term.focus();
+          break;
+        case 'agent_offline':
+          agentLive = false;
+          setStatus('Agent offline — waiting…', 'warn connecting');
+          showOverlay('Agent offline — waiting for it to reconnect…');
+          // Keep the WS open; the relay will tell us when the agent is back.
+          setBtnDisconnect();
+          break;
+        case 'data': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            if (typeof msg.seq === 'number' && msg.seq > lastSeq) lastSeq = msg.seq;
+            term.write(bytes);
+          } catch (_) { /* decrypt failure: skip */ }
+          break;
+        }
+        case 'closed':
+          fatal = true;
+          setStatus(msg.error || 'Session ended', 'error');
+          term.write('\r\n\x1b[31m' + (msg.error || 'Session ended') + '\x1b[0m\r\n');
+          break;
+        case 'error':
+          fatal = true;
+          setStatus(msg.error || 'Error', 'error');
+          term.write('\r\n\x1b[31m' + (msg.error || 'Error') + '\x1b[0m\r\n');
+          break;
+      }
+    }
+
+    function userDisconnect() {
+      manualClose = true;
+      cancelReconnect();
+      if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+      authed = false;
+      agentLive = false;
+      setStatus('Disconnected');
+      hideOverlay();
+      setBtnConnect();
+    }
+
     term.onData(async (data) => {
+      if (!agentLive) return; // typing into nothing while agent is offline
       const bytes = new TextEncoder().encode(data);
       let binary = '';
       bytes.forEach(b => binary += String.fromCharCode(b));
       await send({ type: 'data', data: btoa(binary) });
     });
 
-    window.addEventListener('resize', () => { fitAddon.fit(); sendResize(); });
-    connectBtn.addEventListener('click', () => connect(sessionInput.value, pinInput.value));
-    sessionInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(sessionInput.value, pinInput.value); });
-    pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(sessionInput.value, pinInput.value); });
+    window.addEventListener('resize', () => { fitAddon.fit(); if (agentLive) sendResize(); });
+    connectBtn.addEventListener('click', () => {
+      // Three button modes:
+      //   - "Connect" (idle/disconnected): start a new connection
+      //   - "Cancel" (connecting/reconnecting): abort and stay disconnected
+      //   - "Disconnect" (connected): manually close
+      if (!ws && !reconnectTimer) {
+        startConnect();
+      } else {
+        userDisconnect();
+      }
+    });
+    sessionInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') startConnect(); });
+    pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') startConnect(); });
 
     if (initialSession) pinInput.focus();
+
+    // If the page is closed/refreshed, close the WS cleanly.
+    window.addEventListener('beforeunload', () => {
+      manualClose = true;
+      if (ws) try { ws.close(); } catch (_) {}
+    });
   </script>
 </body>
 </html>

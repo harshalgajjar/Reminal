@@ -2,11 +2,14 @@ package client
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -19,9 +22,15 @@ import (
 )
 
 type Viewer struct {
+	// lastSeq is accessed atomically; keep it first for 64-bit alignment
+	// on 32-bit architectures.
+	lastSeq uint64
+
 	sessionID string
 	pin       string
 	box       *crypto.Box
+
+	writeMu sync.Mutex // serializes WS writes
 }
 
 func NewViewer(sessionID, pin string) (*Viewer, error) {
@@ -49,17 +58,6 @@ func Connect(sessionID, pin string) error {
 }
 
 func (v *Viewer) Run() error {
-	wsURL := config.SessionWS(v.sessionID, string(protocol.RoleViewer))
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		return fmt.Errorf("connect to relay: %w", err)
-	}
-	defer conn.Close()
-
-	if err := v.authenticate(conn); err != nil {
-		return err
-	}
-
 	fd := int(os.Stdin.Fd())
 	if !term.IsTerminal(fd) {
 		return fmt.Errorf("stdin is not a terminal")
@@ -71,21 +69,171 @@ func (v *Viewer) Run() error {
 	}
 	defer term.Restore(fd, oldState)
 
-	errCh := make(chan error, 2)
-	go func() { errCh <- v.readRelay(conn) }()
-	go func() { errCh <- v.readStdin(conn) }()
-	go v.ping(conn)
-	go v.watchResize(conn, fd)
+	// One stdin reader for the lifetime of the viewer; per-connection
+	// goroutines drain from this channel.
+	stdinCh := make(chan []byte, 64)
+	stdinDone := make(chan struct{})
+	go func() {
+		defer close(stdinDone)
+		buf := make([]byte, 4096)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if n > 0 {
+				chunk := make([]byte, n)
+				copy(chunk, buf[:n])
+				select {
+				case stdinCh <- chunk:
+				default:
+					// channel full — drop bytes rather than blocking, so a
+					// long disconnect doesn't accumulate stale input.
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
 
-	v.sendResize(conn)
-	return <-errCh
+	// SIGWINCH → resize notifications.
+	winCh := make(chan os.Signal, 1)
+	signal.Notify(winCh, syscall.SIGWINCH)
+	defer signal.Stop(winCh)
+
+	// Ctrl+C / SIGTERM → clean exit.
+	intCh := make(chan os.Signal, 1)
+	signal.Notify(intCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(intCh)
+
+	backoff := initialBackoff
+	first := true
+	for {
+		select {
+		case <-intCh:
+			fmt.Fprint(os.Stderr, "\r\n")
+			return nil
+		case <-stdinDone:
+			return io.EOF
+		default:
+		}
+
+		if first {
+			v.notify("Connecting…")
+		} else {
+			v.notify(fmt.Sprintf("Reconnecting…"))
+		}
+
+		start := time.Now()
+		err := v.runConnection(stdinCh, winCh, intCh)
+		select {
+		case <-intCh:
+			fmt.Fprint(os.Stderr, "\r\n")
+			return nil
+		default:
+		}
+
+		// Fatal errors should propagate up; transient errors trigger reconnect.
+		var fatal *fatalErr
+		if errors.As(err, &fatal) {
+			return fatal.err
+		}
+
+		if time.Since(start) > stableThresh {
+			backoff = initialBackoff
+		}
+
+		v.notify(fmt.Sprintf("Connection lost (%v) — reconnecting in %v", err, backoff))
+
+		select {
+		case <-intCh:
+			fmt.Fprint(os.Stderr, "\r\n")
+			return nil
+		case <-time.After(backoff):
+		}
+		first = false
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+}
+
+// fatalErr wraps an error that should not trigger reconnect (e.g., bad PIN,
+// session expired, lockout). The viewer exits when one is returned.
+type fatalErr struct{ err error }
+
+func (e *fatalErr) Error() string { return e.err.Error() }
+func (e *fatalErr) Unwrap() error { return e.err }
+
+func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, intCh <-chan os.Signal) error {
+	wsURL := config.SessionWS(v.sessionID, string(protocol.RoleViewer))
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		return fmt.Errorf("dial: %w", err)
+	}
+	defer conn.Close()
+
+	if err := v.authenticate(conn); err != nil {
+		// Auth failures are fatal — wrong PIN, locked out, mismatched session.
+		return &fatalErr{err: err}
+	}
+
+	// agentLive tracks whether the relay says the agent is currently connected.
+	// We start optimistic; the relay corrects us with agent_offline if needed.
+	var agentLive atomic.Bool
+	agentLive.Store(true)
+
+	// On (re)connect, ask the agent to replay everything we missed and
+	// resync the terminal size.
+	if err := v.sendResume(conn); err != nil {
+		return err
+	}
+	v.sendResizeNow(conn)
+
+	readerDone := make(chan error, 1)
+	go func() {
+		readerDone <- v.runReader(conn, &agentLive)
+	}()
+
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+
+	for {
+		select {
+		case <-intCh:
+			return &fatalErr{err: errors.New("interrupted")}
+		case err := <-readerDone:
+			if err == nil {
+				err = errors.New("relay closed")
+			}
+			return err
+		case data, ok := <-stdinCh:
+			if !ok {
+				return &fatalErr{err: io.EOF}
+			}
+			if !agentLive.Load() {
+				// Drop input when the agent is offline; otherwise it would
+				// be silently consumed by the relay.
+				continue
+			}
+			enc, err := v.box.Encrypt(data)
+			if err != nil {
+				return err
+			}
+			if err := v.writeMsg(conn, protocol.Message{Type: protocol.TypeData, Data: enc}); err != nil {
+				return err
+			}
+		case <-winCh:
+			v.sendResizeNow(conn)
+		case <-pingTicker.C:
+			if err := v.writeMsg(conn, protocol.Message{Type: protocol.TypePing}); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func (v *Viewer) authenticate(conn *websocket.Conn) error {
-	if err := v.send(conn, protocol.Message{
-		Type: protocol.TypeAuth,
-		Pin:  v.pin,
-	}); err != nil {
+	if err := v.writeMsg(conn, protocol.Message{Type: protocol.TypeAuth, Pin: v.pin}); err != nil {
 		return err
 	}
 
@@ -103,13 +251,13 @@ func (v *Viewer) authenticate(conn *websocket.Conn) error {
 		switch msg.Type {
 		case protocol.TypeError:
 			return fmt.Errorf("%s", msg.Error)
-		case protocol.TypeAuthOK, protocol.TypeConnected:
+		case protocol.TypeAuthOK:
 			return nil
 		}
 	}
 }
 
-func (v *Viewer) readRelay(conn *websocket.Conn) error {
+func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) error {
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -127,55 +275,50 @@ func (v *Viewer) readRelay(conn *websocket.Conn) error {
 			if err != nil {
 				continue
 			}
+			if msg.Seq > 0 {
+				for {
+					cur := atomic.LoadUint64(&v.lastSeq)
+					if msg.Seq <= cur || atomic.CompareAndSwapUint64(&v.lastSeq, cur, msg.Seq) {
+						break
+					}
+				}
+			}
 			if _, err := os.Stdout.Write(data); err != nil {
 				return err
 			}
-		case protocol.TypeResize:
-			// resize from agent not expected on viewer stdout path
+		case protocol.TypeConnected, protocol.TypeAgentOnline:
+			if !agentLive.Swap(true) {
+				v.notify("Agent reconnected.")
+			}
+			// Re-sync after agent reattach.
+			_ = v.sendResume(conn)
+			v.sendResizeNow(conn)
+		case protocol.TypeAgentOffline:
+			if agentLive.Swap(false) {
+				v.notify("Agent offline — waiting…")
+			}
 		case protocol.TypeClosed:
-			return fmt.Errorf("%s", msg.Error)
+			text := msg.Error
+			if text == "" {
+				text = "session ended"
+			}
+			return &fatalErr{err: fmt.Errorf("%s", text)}
 		case protocol.TypeError:
-			return fmt.Errorf("%s", msg.Error)
+			return &fatalErr{err: fmt.Errorf("%s", msg.Error)}
 		case protocol.TypePing:
-			_ = v.send(conn, protocol.Message{Type: protocol.TypePong})
+			_ = v.writeMsg(conn, protocol.Message{Type: protocol.TypePong})
 		}
 	}
 }
 
-func (v *Viewer) readStdin(conn *websocket.Conn) error {
-	buf := make([]byte, 4096)
-	for {
-		n, err := os.Stdin.Read(buf)
-		if n > 0 {
-			enc, err := v.box.Encrypt(buf[:n])
-			if err != nil {
-				return err
-			}
-			if err := v.send(conn, protocol.Message{
-				Type: protocol.TypeData,
-				Data: enc,
-			}); err != nil {
-				return err
-			}
-		}
-		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-	}
+func (v *Viewer) sendResume(conn *websocket.Conn) error {
+	return v.writeMsg(conn, protocol.Message{
+		Type:    protocol.TypeResume,
+		FromSeq: atomic.LoadUint64(&v.lastSeq),
+	})
 }
 
-func (v *Viewer) watchResize(conn *websocket.Conn, fd int) {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGWINCH)
-	for range ch {
-		v.sendResize(conn)
-	}
-}
-
-func (v *Viewer) sendResize(conn *websocket.Conn) {
+func (v *Viewer) sendResizeNow(conn *websocket.Conn) {
 	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
 	if err != nil {
 		return
@@ -184,26 +327,21 @@ func (v *Viewer) sendResize(conn *websocket.Conn) {
 	if err != nil {
 		return
 	}
-	_ = v.send(conn, protocol.Message{
-		Type: protocol.TypeResize,
-		Data: enc,
-	})
+	_ = v.writeMsg(conn, protocol.Message{Type: protocol.TypeResize, Data: enc})
 }
 
-func (v *Viewer) send(conn *websocket.Conn, msg protocol.Message) error {
+func (v *Viewer) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
 	}
+	v.writeMu.Lock()
+	defer v.writeMu.Unlock()
 	return conn.WriteMessage(websocket.TextMessage, data)
 }
 
-func (v *Viewer) ping(conn *websocket.Conn) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for range ticker.C {
-		if err := v.send(conn, protocol.Message{Type: protocol.TypePing}); err != nil {
-			return
-		}
-	}
+// notify writes a one-line dim status to stderr. It uses \r and ANSI dim to
+// minimize disruption to the live terminal output below.
+func (v *Viewer) notify(text string) {
+	fmt.Fprintf(os.Stderr, "\r\n\x1b[2m[reminal] %s\x1b[0m\r\n", text)
 }

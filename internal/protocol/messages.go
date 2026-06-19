@@ -10,17 +10,20 @@ const (
 type MessageType string
 
 const (
-	TypeAuth      MessageType = "auth"
-	TypeAuthOK    MessageType = "auth_ok"
-	TypeRegister  MessageType = "register"
-	TypeJoin      MessageType = "join"
-	TypeData      MessageType = "data"
-	TypeResize    MessageType = "resize"
-	TypeConnected MessageType = "connected"
-	TypeError     MessageType = "error"
-	TypePing      MessageType = "ping"
-	TypePong      MessageType = "pong"
-	TypeClosed    MessageType = "closed"
+	TypeAuth         MessageType = "auth"
+	TypeAuthOK       MessageType = "auth_ok"
+	TypeRegister     MessageType = "register"
+	TypeJoin         MessageType = "join"
+	TypeData         MessageType = "data"
+	TypeResize       MessageType = "resize"
+	TypeConnected    MessageType = "connected"
+	TypeError        MessageType = "error"
+	TypePing         MessageType = "ping"
+	TypePong         MessageType = "pong"
+	TypeClosed       MessageType = "closed"
+	TypeResume       MessageType = "resume"
+	TypeAgentOnline  MessageType = "agent_online"
+	TypeAgentOffline MessageType = "agent_offline"
 )
 
 type Message struct {
@@ -33,4 +36,6 @@ type Message struct {
 	Cols      uint16      `json:"cols,omitempty"`
 	Rows      uint16      `json:"rows,omitempty"`
 	Error     string      `json:"error,omitempty"`
+	Seq       uint64      `json:"seq,omitempty"`
+	FromSeq   uint64      `json:"from_seq,omitempty"`
 }

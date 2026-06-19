@@ -6,11 +6,16 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/reminal/reminal/internal/protocol"
 	"github.com/reminal/reminal/internal/session"
 )
+
+// orphanTTL is how long a room is kept alive after the agent disconnects,
+// giving the same agent a chance to reattach (e.g., across a network blip).
+const orphanTTL = 10 * time.Minute
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
@@ -22,13 +27,15 @@ type peer struct {
 	conn   *websocket.Conn
 	role   protocol.Role
 	authed bool
+	writeMu sync.Mutex
 }
 
 type room struct {
-	agent  *peer
-	viewer *peer
-	auth   authState
-	mu     sync.Mutex
+	agent   *peer
+	viewer  *peer
+	auth    authState
+	cleanup *time.Timer
+	mu      sync.Mutex
 }
 
 type Server struct {
@@ -106,7 +113,12 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 
 		r.mu.Lock()
 		p := r.peer(role)
-		if p == nil || !p.authed {
+		if p == nil || p.conn != conn {
+			// our peer slot was taken over or cleared; bail
+			r.mu.Unlock()
+			return
+		}
+		if !p.authed {
 			if msg.Type != protocol.TypeAuth {
 				r.mu.Unlock()
 				s.sendError(conn, "authentication required")
@@ -118,20 +130,38 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 				return
 			}
 			p.authed = true
+			// Compute presence flags for notifications after unlock.
+			agentOnline := r.agent != nil && r.agent.authed
+			viewerOnline := r.viewer != nil && r.viewer.authed
 			r.mu.Unlock()
-			s.write(conn, protocol.Message{Type: protocol.TypeAuthOK})
-			if role == protocol.RoleViewer {
-				s.notifyConnected(sessionID)
+
+			s.writeTo(p, protocol.Message{Type: protocol.TypeAuthOK})
+
+			switch role {
+			case protocol.RoleViewer:
+				// Tell the freshly-authed viewer whether the agent is here.
+				if agentOnline {
+					s.writeTo(p, protocol.Message{Type: protocol.TypeConnected})
+					// Inform agent that a viewer connected.
+					s.notifyPeer(sessionID, protocol.RoleAgent, protocol.Message{Type: protocol.TypeConnected})
+				} else {
+					s.writeTo(p, protocol.Message{Type: protocol.TypeAgentOffline})
+				}
+			case protocol.RoleAgent:
+				// If a viewer was already waiting, tell them the agent is back.
+				if viewerOnline {
+					s.notifyPeer(sessionID, protocol.RoleViewer, protocol.Message{Type: protocol.TypeAgentOnline})
+				}
 			}
 			continue
 		}
 		r.mu.Unlock()
 
 		switch msg.Type {
-		case protocol.TypeData, protocol.TypeResize:
+		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume:
 			s.forward(sessionID, role, msg)
 		case protocol.TypePing:
-			s.write(conn, protocol.Message{Type: protocol.TypePong})
+			s.writeTo(p, protocol.Message{Type: protocol.TypePong})
 		}
 	}
 }
@@ -156,6 +186,12 @@ func (s *Server) handleAuthLocked(r *room, role protocol.Role, msg protocol.Mess
 	case protocol.RoleAgent:
 		if msg.PinHash == "" {
 			return "pin_hash required"
+		}
+		// If the room was previously authenticated, the reattaching agent
+		// must present the same pin_hash. This keeps a stranger from
+		// hijacking the session even if the original agent's WS drops.
+		if r.auth.pinHash != "" && r.auth.pinHash != msg.PinHash {
+			return "session credentials mismatch"
 		}
 		r.auth.pinHash = msg.PinHash
 		r.auth.agentAuthed = true
@@ -224,9 +260,10 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 				return
 			}
 			registered = true
-			s.notifyConnected(sessionID)
+			s.notifyPeer(sessionID, protocol.RoleAgent, protocol.Message{Type: protocol.TypeConnected})
+			s.notifyPeer(sessionID, protocol.RoleViewer, protocol.Message{Type: protocol.TypeConnected})
 
-		case protocol.TypeData, protocol.TypeResize:
+		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume:
 			if !registered {
 				continue
 			}
@@ -250,13 +287,16 @@ func (s *Server) getRoom(sessionID string) *room {
 
 func (s *Server) attach(sessionID string, role protocol.Role, conn *websocket.Conn) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.rooms[sessionID]
-	if !ok {
+	r, exists := s.rooms[sessionID]
+	if !exists {
+		if role != protocol.RoleAgent {
+			s.mu.Unlock()
+			return false
+		}
 		r = &room{}
 		s.rooms[sessionID] = r
 	}
+	s.mu.Unlock()
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -268,8 +308,14 @@ func (s *Server) attach(sessionID string, role protocol.Role, conn *websocket.Co
 			return false
 		}
 		r.agent = p
+		if r.cleanup != nil {
+			r.cleanup.Stop()
+			r.cleanup = nil
+		}
 	case protocol.RoleViewer:
-		if r.agent == nil || !r.auth.agentAuthed {
+		// Allow viewer to connect as long as the room was set up by an
+		// authenticated agent — even if the agent is briefly offline.
+		if !r.auth.agentAuthed {
 			return false
 		}
 		if r.viewer != nil {
@@ -283,54 +329,96 @@ func (s *Server) attach(sessionID string, role protocol.Role, conn *websocket.Co
 }
 
 func (s *Server) detach(sessionID string, role protocol.Role) {
-	s.mu.Lock()
-	r, ok := s.rooms[sessionID]
-	if !ok {
-		s.mu.Unlock()
+	r := s.getRoom(sessionID)
+	if r == nil {
 		return
 	}
-	s.mu.Unlock()
 
 	r.mu.Lock()
 	switch role {
 	case protocol.RoleAgent:
-		if r.viewer != nil {
-			s.write(r.viewer.conn, protocol.Message{Type: protocol.TypeClosed, Error: "agent disconnected"})
-			r.viewer.conn.Close()
-		}
 		r.agent = nil
-		r.viewer = nil
-		r.auth = authState{}
+		if r.viewer != nil && r.viewer.authed {
+			s.writeTo(r.viewer, protocol.Message{Type: protocol.TypeAgentOffline})
+		}
+		// Schedule TTL cleanup. If the agent reattaches before it fires,
+		// attach() cancels this timer.
+		if r.cleanup != nil {
+			r.cleanup.Stop()
+		}
+		sid := sessionID
+		r.cleanup = time.AfterFunc(orphanTTL, func() { s.expireRoom(sid) })
 	case protocol.RoleViewer:
 		r.viewer = nil
 		r.auth.viewerAuthed = false
+		if r.agent != nil && r.agent.authed {
+			s.writeTo(r.agent, protocol.Message{Type: protocol.TypeClosed, Error: "viewer disconnected"})
+		}
 	}
+	empty := r.agent == nil && r.viewer == nil && r.cleanup == nil
 	r.mu.Unlock()
 
+	if empty {
+		s.mu.Lock()
+		// Re-check under the global lock; another goroutine may have re-populated.
+		if existing, ok := s.rooms[sessionID]; ok && existing == r {
+			r.mu.Lock()
+			stillEmpty := r.agent == nil && r.viewer == nil && r.cleanup == nil
+			r.mu.Unlock()
+			if stillEmpty {
+				delete(s.rooms, sessionID)
+			}
+		}
+		s.mu.Unlock()
+	}
+}
+
+// expireRoom fires after orphanTTL. If the agent never reattached, we kick
+// the viewer (if any) and drop the room. If the agent did come back, this is
+// a no-op.
+func (s *Server) expireRoom(sessionID string) {
+	r := s.getRoom(sessionID)
+	if r == nil {
+		return
+	}
+
+	r.mu.Lock()
+	if r.agent != nil {
+		// Agent is back; nothing to do.
+		r.cleanup = nil
+		r.mu.Unlock()
+		return
+	}
+	var viewerConn *websocket.Conn
+	if r.viewer != nil {
+		s.writeTo(r.viewer, protocol.Message{Type: protocol.TypeClosed, Error: "agent session expired"})
+		viewerConn = r.viewer.conn
+		r.viewer = nil
+	}
+	r.cleanup = nil
+	r.mu.Unlock()
+
+	if viewerConn != nil {
+		_ = viewerConn.Close()
+	}
+
 	s.mu.Lock()
-	if r.agent == nil && r.viewer == nil {
+	if existing, ok := s.rooms[sessionID]; ok && existing == r {
 		delete(s.rooms, sessionID)
 	}
 	s.mu.Unlock()
 }
 
-func (s *Server) notifyConnected(sessionID string) {
-	s.mu.RLock()
-	r, ok := s.rooms[sessionID]
-	s.mu.RUnlock()
-	if !ok {
+func (s *Server) notifyPeer(sessionID string, role protocol.Role, msg protocol.Message) {
+	r := s.getRoom(sessionID)
+	if r == nil {
 		return
 	}
-
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	connected := protocol.Message{Type: protocol.TypeConnected, SessionID: sessionID}
-	if r.agent != nil && r.agent.authed {
-		s.write(r.agent.conn, connected)
-	}
-	if r.viewer != nil && r.viewer.authed {
-		s.write(r.viewer.conn, connected)
+	p := r.peer(role)
+	r.mu.Unlock()
+	if p != nil && p.authed {
+		s.writeTo(p, msg)
 	}
 }
 
@@ -341,12 +429,10 @@ func (s *Server) forward(sessionID string, from protocol.Role, msg protocol.Mess
 	}
 
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if !r.auth.agentAuthed || !r.auth.viewerAuthed {
+	if !r.auth.agentAuthed {
+		r.mu.Unlock()
 		return
 	}
-
 	var target *peer
 	switch from {
 	case protocol.RoleAgent:
@@ -354,9 +440,12 @@ func (s *Server) forward(sessionID string, from protocol.Role, msg protocol.Mess
 	case protocol.RoleViewer:
 		target = r.agent
 	}
-	if target != nil && target.authed {
-		s.write(target.conn, msg)
+	r.mu.Unlock()
+
+	if target == nil || !target.authed {
+		return
 	}
+	s.writeTo(target, msg)
 }
 
 func (s *Server) write(conn *websocket.Conn, msg protocol.Message) {
@@ -365,6 +454,16 @@ func (s *Server) write(conn *websocket.Conn, msg protocol.Message) {
 		return
 	}
 	_ = conn.WriteMessage(websocket.TextMessage, data)
+}
+
+func (s *Server) writeTo(p *peer, msg protocol.Message) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	_ = p.conn.WriteMessage(websocket.TextMessage, data)
 }
 
 func (s *Server) sendError(conn *websocket.Conn, text string) {
