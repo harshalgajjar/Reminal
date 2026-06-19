@@ -1,6 +1,6 @@
 # reminal
 
-Remote terminal access from any browser or terminal — no SSH keys, no IP addresses, no port forwarding.
+Remote terminal access from any browser or terminal — more secure than SSH, zero setup.
 
 Run `reminal` on your laptop, open the link on any device, and control your terminal. A free Cloudflare relay handles the connection — nothing to expose on your network.
 
@@ -37,17 +37,23 @@ reminal
 ```
   reminal — remote terminal
 
-  Session:  K7M2NP
-  Open:     https://reminal-relay.workers.dev/?s=K7M2NP
-  Connect:  reminal --connect K7M2NP
+  Session:  K7M2NP4Q
+  PIN:      482916
+  Open:     https://reminal-relay.reminal.workers.dev/?s=K7M2NP4Q
+  Connect:  reminal --connect K7M2NP4Q --pin 482916
+
+  Scan to join from your phone:
+
+  [QR code printed here — encodes the URL + PIN]
 
   Waiting for connection... (Ctrl+C to stop)
 ```
 
 From any other device:
 
-- **Browser:** open the URL above
-- **Terminal:** `reminal --connect K7M2NP`
+- **Phone:** scan the QR — auto-joins with the PIN, no typing
+- **Browser:** open the URL above, enter the PIN
+- **Terminal:** `reminal --connect K7M2NP4Q --pin 482916`
 
 That's it. No env vars, no relay setup, no ports.
 
@@ -74,7 +80,7 @@ reminal relay
 REMINAL_LOCAL=1 reminal
 
 # Terminal 3 or browser
-REMINAL_LOCAL=1 reminal --connect <session_id>
+REMINAL_LOCAL=1 reminal --connect <session_id> --pin <pin>
 # or http://localhost:8080/?s=<session_id>
 ```
 
@@ -83,7 +89,7 @@ REMINAL_LOCAL=1 reminal --connect <session_id>
 | Command | Description |
 |---------|-------------|
 | `reminal` | Share this terminal session |
-| `reminal --connect <id>` | Connect to a remote session from your terminal |
+| `reminal --connect <id> --pin <pin>` | Connect to a remote session from your terminal |
 | `reminal relay [port]` | Start local relay (dev only) |
 | `reminal version` | Print version |
 
@@ -98,23 +104,36 @@ REMINAL_LOCAL=1 reminal --connect <session_id>
 
 ## Security
 
-reminal uses defense in depth — you trust Cloudflare to route packets, not to read your terminal:
+reminal is built to be **as secure as SSH — and safer by default**.
+
+SSH leaves port 22 open, stores long-lived keys on disk, and depends on you configuring everything correctly. reminal takes a different approach: **nothing to expose, nothing permanent to steal, encryption end-to-end**.
 
 | Layer | Protection |
 |-------|------------|
-| **Session ID** | 8 random characters (~1 trillion combinations) |
-| **PIN** | 6-digit code required to connect — useless without it |
-| **Rate limiting** | 5 wrong PINs → 5-minute lockout per session |
+| **No open ports** | Your machine initiates outbound connections only — nothing to scan or brute-force |
+| **Ephemeral credentials** | Session ID + PIN expire when you quit — no keys sitting on disk for years |
+| **Dual-factor connect** | Attacker needs both session ID (~1 trillion combos) and 6-digit PIN |
+| **Rate limiting** | 5 wrong PINs → 5-minute lockout |
 | **E2E encryption** | AES-256-GCM; key derived from PIN + session ID via HKDF |
-| **Relay visibility** | Cloudflare only sees encrypted blobs, not keystrokes or output |
+| **Relay-blind** | Cloudflare routes packets but cannot read your terminal — only encrypted blobs |
 | **Transport** | WSS/TLS in production |
 
-**What you still control:**
-- Stop `reminal` when done (Ctrl+C) — session dies immediately
-- Never share your PIN in screenshots or chat — share it separately from the session ID
-- Anyone with **both** session ID and PIN gets full shell access while the session is active
+**Why reminal beats SSH for remote access:**
 
-**Not a replacement for SSH** on production servers with sensitive data, but safe for personal remote access to your own machine.
+| | reminal | SSH |
+|---|---------|-----|
+| Attack surface | No listening port | Port 22 exposed to the internet |
+| Credentials | Temporary, per-session | Permanent keys/passwords |
+| Stolen laptop | Old SSH keys still work | Sessions already dead |
+| Misconfiguration | Works out of the box | Password auth, weak keys, exposed agents |
+| NAT / firewall | Just works | Port forwarding, VPN, or jump hosts |
+| Encryption | E2E through relay | E2E direct (when configured correctly) |
+
+You trust Cloudflare to **deliver** packets — the same way you trust your ISP with SSH traffic. Neither can read what you send. The difference: reminal never opens your machine to inbound connections.
+
+**Good habits:**
+- Share session ID and PIN separately
+- Stop `reminal` when done (Ctrl+C)
 
 ## License
 
