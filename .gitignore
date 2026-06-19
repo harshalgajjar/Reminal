@@ -1,0 +1,17 @@
+# Binaries
+/dist/
+/reminal
+
+# Go
+/vendor/
+
+# Cloudflare
+/cloudflare/node_modules/
+/cloudflare/.wrangler/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/

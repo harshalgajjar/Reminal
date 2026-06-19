@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>reminal</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid #21262d;
+      background: #161b22;
+      flex-wrap: wrap;
+    }
+    header h1 { font-size: 15px; font-weight: 600; }
+    header h1 span { color: #58a6ff; }
+    #session-form { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+    input {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      font-size: 14px;
+      padding: 6px 10px;
+    }
+    #session-input { width: 120px; text-transform: uppercase; letter-spacing: 0.1em; }
+    #pin-input { width: 88px; letter-spacing: 0.15em; font-variant-numeric: tabular-nums; }
+    input:focus { outline: none; border-color: #58a6ff; }
+    button {
+      background: #238636;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 6px 14px;
+    }
+    button:hover { background: #2ea043; }
+    button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
+    #status { font-size: 13px; color: #8b949e; }
+    #status.connected { color: #3fb950; }
+    #status.error { color: #f85149; }
+    #terminal-wrap { flex: 1; padding: 8px; overflow: hidden; }
+    #terminal { height: 100%; }
+    .xterm { height: 100%; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><span>re</span>minal</h1>
+    <div id="session-form">
+      <input id="session-input" placeholder="Session" maxlength="8" autocomplete="off" spellcheck="false">
+      <input id="pin-input" placeholder="PIN" maxlength="8" inputmode="numeric" autocomplete="off" spellcheck="false">
+      <button id="connect-btn">Connect</button>
+    </div>
+    <div id="status">Session + PIN required</div>
+  </header>
+  <div id="terminal-wrap"><div id="terminal"></div></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script>
+    const statusEl = document.getElementById('status');
+    const sessionInput = document.getElementById('session-input');
+    const pinInput = document.getElementById('pin-input');
+    const connectBtn = document.getElementById('connect-btn');
+
+    const params = new URLSearchParams(location.search);
+    const initialSession = params.get('s') || '';
+    if (initialSession) sessionInput.value = initialSession.toUpperCase();
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+      fontSize: 14,
+      theme: {
+        background: '#0d1117', foreground: '#e6edf3', cursor: '#58a6ff',
+        selectionBackground: '#264f78',
+      },
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+
+    let ws = null;
+    let cryptoKey = null;
+    let connected = false;
+
+    async function deriveKey(sessionId, pin) {
+      const enc = new TextEncoder();
+      const baseKey = await crypto.subtle.importKey(
+        'raw', enc.encode(pin), 'HKDF', false, ['deriveBits']
+      );
+      const bits = await crypto.subtle.deriveBits(
+        {
+          name: 'HKDF',
+          hash: 'SHA-256',
+          salt: enc.encode(sessionId.toUpperCase()),
+          info: enc.encode('reminal-v1'),
+        },
+        baseKey,
+        256
+      );
+      return crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    }
+
+    async function encrypt(key, data) {
+      const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+      const nonce = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, key, bytes);
+      const out = new Uint8Array(nonce.length + ct.byteLength);
+      out.set(nonce);
+      out.set(new Uint8Array(ct), nonce.length);
+      return btoa(String.fromCharCode(...out));
+    }
+
+    async function decrypt(key, encoded) {
+      const raw = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+      const nonce = raw.slice(0, 12);
+      const ct = raw.slice(12);
+      const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, key, ct);
+      return new Uint8Array(pt);
+    }
+
+    function relayURL(sessionId) {
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return proto + '//' + location.host + '/ws/' + sessionId.toUpperCase() + '/viewer';
+    }
+
+    function setStatus(text, cls) {
+      statusEl.textContent = text;
+      statusEl.className = cls || '';
+    }
+
+    async function send(msg) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (connected && cryptoKey && (msg.type === 'data' || msg.type === 'resize')) {
+        if (msg.type === 'data') {
+          msg = { type: 'data', data: await encrypt(cryptoKey, Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))) };
+        } else {
+          const payload = JSON.stringify({ cols: msg.cols, rows: msg.rows });
+          msg = { type: 'resize', data: await encrypt(cryptoKey, payload) };
+        }
+      }
+      ws.send(JSON.stringify(msg));
+    }
+
+    function sendResize() {
+      send({ type: 'resize', cols: term.cols, rows: term.rows });
+    }
+
+    async function connect(sessionId, pin) {
+      sessionId = sessionId.trim().toUpperCase();
+      pin = pin.trim();
+      if (!sessionId || !pin) {
+        setStatus('Session and PIN required', 'error');
+        return;
+      }
+      if (!/^\d{6,8}$/.test(pin)) {
+        setStatus('PIN must be 6–8 digits', 'error');
+        return;
+      }
+
+      if (ws) { ws.close(); ws = null; }
+      connected = false;
+      cryptoKey = await deriveKey(sessionId, pin);
+
+      connectBtn.disabled = true;
+      setStatus('Connecting…');
+      term.reset();
+
+      ws = new WebSocket(relayURL(sessionId));
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ type: 'auth', pin }));
+      };
+
+      ws.onmessage = async (ev) => {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+
+        switch (msg.type) {
+          case 'auth_ok':
+          case 'connected':
+            connected = true;
+            setStatus('Connected to ' + sessionId, 'connected');
+            connectBtn.disabled = false;
+            fitAddon.fit();
+            sendResize();
+            term.focus();
+            history.replaceState(null, '', '?s=' + sessionId);
+            break;
+          case 'data': {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            term.write(bytes);
+            break;
+          }
+          case 'closed':
+            setStatus(msg.error || 'Disconnected', 'error');
+            connectBtn.disabled = false;
+            connected = false;
+            break;
+          case 'error':
+            setStatus(msg.error || 'Error', 'error');
+            connectBtn.disabled = false;
+            connected = false;
+            term.write('\r\n\x1b[31m' + (msg.error || 'Error') + '\x1b[0m\r\n');
+            break;
+        }
+      };
+
+      ws.onclose = () => {
+        if (statusEl.className !== 'error') setStatus('Disconnected');
+        connectBtn.disabled = false;
+        connected = false;
+      };
+
+      ws.onerror = () => {
+        setStatus('Connection failed', 'error');
+        connectBtn.disabled = false;
+        connected = false;
+      };
+    }
+
+    term.onData(async (data) => {
+      const bytes = new TextEncoder().encode(data);
+      let binary = '';
+      bytes.forEach(b => binary += String.fromCharCode(b));
+      await send({ type: 'data', data: btoa(binary) });
+    });
+
+    window.addEventListener('resize', () => { fitAddon.fit(); sendResize(); });
+    connectBtn.addEventListener('click', () => connect(sessionInput.value, pinInput.value));
+    sessionInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(sessionInput.value, pinInput.value); });
+    pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(sessionInput.value, pinInput.value); });
+
+    if (initialSession) pinInput.focus();
+  </script>
+</body>
+</html>
