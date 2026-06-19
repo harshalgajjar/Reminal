@@ -119,6 +119,17 @@
     const initialSession = params.get('s') || '';
     if (initialSession) sessionInput.value = initialSession.toUpperCase();
 
+    // The PIN may arrive in the URL fragment (e.g. #p=123456) from the
+    // QR code printed by the agent. Fragments never leave the browser, so
+    // this is safer than putting the PIN in the query string. We strip the
+    // fragment from the URL bar after reading it.
+    const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
+    const initialPin = hashParams.get('p') || '';
+    if (initialPin) {
+      pinInput.value = initialPin;
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
@@ -424,7 +435,12 @@
     sessionInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') startConnect(); });
     pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') startConnect(); });
 
-    if (initialSession) pinInput.focus();
+    // If the QR code provided both session and PIN, just connect.
+    if (initialSession && initialPin) {
+      startConnect();
+    } else if (initialSession) {
+      pinInput.focus();
+    }
 
     // If the page is closed/refreshed, close the WS cleanly.
     window.addEventListener('beforeunload', () => {

@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mdp/qrterminal/v3"
 	"github.com/reminal/reminal/internal/config"
 	"github.com/reminal/reminal/internal/crypto"
 	"github.com/reminal/reminal/internal/protocol"
@@ -77,6 +79,7 @@ func (a *Agent) Run() error {
 	fmt.Printf("  Open:     %s/?s=%s\n", a.webURL, a.sessionID)
 	fmt.Printf("  Connect:  reminal --connect %s --pin %s\n", a.sessionID, a.pin)
 	fmt.Println()
+	a.printQR()
 	fmt.Println("  Waiting for connection... (Ctrl+C to stop)")
 	fmt.Println()
 
@@ -129,6 +132,17 @@ func (a *Agent) Run() error {
 			backoff = maxBackoff
 		}
 	}
+}
+
+// printQR renders a scannable QR for the join URL with the PIN in the URL
+// fragment (#p=...). The fragment never leaves the phone — it's read by the
+// page's JS to autofill the PIN field, giving a one-tap join from mobile.
+func (a *Agent) printQR() {
+	joinURL := fmt.Sprintf("%s/?s=%s#p=%s", a.webURL, a.sessionID, a.pin)
+	fmt.Println("  Scan to join from your phone:")
+	fmt.Println()
+	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
+	fmt.Println()
 }
 
 // pumpPTY reads the PTY forever, encrypts each chunk and stores it in the
