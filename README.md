@@ -43,7 +43,10 @@ SSH was designed in 1995. It assumes you own a static IP, a router you can confi
 | **Listening port** | None | TCP 22 exposed to the internet |
 | **Credentials** | Ephemeral session ID + PIN | Permanent keys on disk |
 | **Behind NAT / hotel Wi-Fi** | Just works | VPN or jump host required |
+| **Client required on viewer** | None — a browser is the client | `ssh` + a configured key per device |
 | **Phone friendly** | Scan QR → in | No native client |
+| **Session survives disconnect** | Shell keeps running, hop between devices | Drop the connection, lose your work (unless you wrapped it in `tmux`) |
+| **Network blips** | Auto-reconnect, scrollback replay | `Write failed: Broken pipe` |
 | **If laptop is stolen** | Sessions already dead | Old keys still grant access |
 | **Encryption** | End-to-end through relay | End-to-end direct (if configured right) |
 
@@ -92,10 +95,42 @@ That's the whole tutorial. Here's what you'll see:
 Pick your portal — they all work:
 
 - **Phone.** Scan the QR. URL fragment carries the PIN. You're auto-joined.
-- **Browser.** Open the URL, type the PIN. Works on any device with a browser.
+- **Browser.** Built-in web terminal lives at the relay URL. Any device — laptop, iPad, kiosk PC, a friend's Chromebook. **Nothing to install, no app to download, no client to configure.**
 - **Terminal.** `reminal --connect K7M2NP4Q --pin 482916` — full TTY, full color, full speed.
 
 No env vars. No relay setup. No ports.
+
+---
+
+## What you get
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+#### Persistent shell
+
+Close the laptop, switch to your phone, reconnect from a different city — your shell is still right where you left it. The PTY lives on your machine; viewers come and go without disturbing it.
+
+<sub>SSH drops a connection? You lose the job. reminal doesn't — no `tmux`, no `nohup`, no thinking about it.</sub>
+
+</td>
+<td width="33%" valign="top">
+
+#### Zero-install web terminal
+
+A full xterm.js terminal is built into the relay. **Any browser is the client.** Phone, iPad, locked-down work laptop, hotel-lobby PC. Open the URL, type the PIN, you're in. Nothing to install. Nothing to configure.
+
+</td>
+<td width="33%" valign="top">
+
+#### Resilient by default
+
+Wi-Fi drop, tunnel switch, walk into the elevator — reminal auto-reconnects with exponential backoff and replays what you missed from a 2 MiB scrollback buffer. The connection layer is the part you should never have to think about.
+
+</td>
+</tr>
+</table>
 
 ---
 
