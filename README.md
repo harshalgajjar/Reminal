@@ -35,7 +35,7 @@ Run `reminal`, scan a QR code, you're in.
 
 SSH was designed in 1995. It assumes you own a static IP, a router you can configure, and a security team to keep keys rotated.
 
-**reminal assumes none of that.** It is built for laptops, hotel Wi-Fi, locked-down corporate networks, and the phone in your pocket — without compromising on security.
+**reminal assumes none of that.** It is built for laptops, hotel Wi-Fi, locked-down café guest networks, and the phone in your pocket — without compromising on security.
 
 | | **reminal** | SSH |
 |---|---|---|
@@ -114,7 +114,7 @@ Laptop sleeping on the desk. Phone in your pocket on the train. Scan, run the co
 
 #### Hostile networks
 
-Hotel Wi-Fi, corporate guest network, conference NAT — all block inbound. They all allow outbound HTTPS. reminal only needs outbound HTTPS.
+Hotel Wi-Fi, café Wi-Fi, conference NAT — all block inbound. They all allow outbound HTTPS. reminal only needs outbound HTTPS.
 
 </td>
 <td width="33%" valign="top">
