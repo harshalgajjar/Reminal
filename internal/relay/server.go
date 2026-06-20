@@ -73,17 +73,8 @@ func (s *Server) HandleSessionWS(w http.ResponseWriter, r *http.Request, session
 	}
 	conn.SetReadLimit(1 << 20)
 
-	if !s.attach(sessionID, peerRole, conn) {
-		var msg string
-		switch peerRole {
-		case protocol.RoleAgent:
-			msg = "session already has an agent"
-		case protocol.RoleViewer:
-			msg = "session not found or not ready"
-		default:
-			msg = "connection rejected"
-		}
-		s.sendError(conn, msg)
+	if ok, reason := s.attach(sessionID, peerRole, conn); !ok {
+		s.sendError(conn, reason)
 		conn.Close()
 		return
 	}
@@ -243,8 +234,8 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 			}
 			sessionID = msg.SessionID
 			role = protocol.RoleAgent
-			if !s.attach(sessionID, role, conn) {
-				s.sendError(conn, "session already has an agent")
+			if ok, reason := s.attach(sessionID, role, conn); !ok {
+				s.sendError(conn, reason)
 				return
 			}
 			registered = true
@@ -255,8 +246,8 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 			}
 			sessionID = msg.SessionID
 			role = protocol.RoleViewer
-			if !s.attach(sessionID, role, conn) {
-				s.sendError(conn, "session not found or viewer already connected")
+			if ok, reason := s.attach(sessionID, role, conn); !ok {
+				s.sendError(conn, reason)
 				return
 			}
 			registered = true
@@ -285,13 +276,13 @@ func (s *Server) getRoom(sessionID string) *room {
 	return s.rooms[sessionID]
 }
 
-func (s *Server) attach(sessionID string, role protocol.Role, conn *websocket.Conn) bool {
+func (s *Server) attach(sessionID string, role protocol.Role, conn *websocket.Conn) (bool, string) {
 	s.mu.Lock()
 	r, exists := s.rooms[sessionID]
 	if !exists {
 		if role != protocol.RoleAgent {
 			s.mu.Unlock()
-			return false
+			return false, "session not found or not ready"
 		}
 		r = &room{}
 		s.rooms[sessionID] = r
@@ -305,7 +296,7 @@ func (s *Server) attach(sessionID string, role protocol.Role, conn *websocket.Co
 	switch role {
 	case protocol.RoleAgent:
 		if r.agent != nil {
-			return false
+			return false, "another agent is already connected to this session"
 		}
 		r.agent = p
 		if r.cleanup != nil {
@@ -316,16 +307,16 @@ func (s *Server) attach(sessionID string, role protocol.Role, conn *websocket.Co
 		// Allow viewer to connect as long as the room was set up by an
 		// authenticated agent — even if the agent is briefly offline.
 		if !r.auth.agentAuthed {
-			return false
+			return false, "session not found or not ready"
 		}
 		if r.viewer != nil {
-			return false
+			return false, "another viewer is already connected to this session"
 		}
 		r.viewer = p
 	default:
-		return false
+		return false, "invalid role"
 	}
-	return true
+	return true, ""
 }
 
 func (s *Server) detach(sessionID string, role protocol.Role) {

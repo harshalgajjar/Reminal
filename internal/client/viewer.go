@@ -69,6 +69,9 @@ func (v *Viewer) Run() error {
 	}
 	defer term.Restore(fd, oldState)
 
+	setRemoteIndicator(v.sessionID)
+	defer clearRemoteIndicator()
+
 	// One stdin reader for the lifetime of the viewer; per-connection
 	// goroutines drain from this channel.
 	stdinCh := make(chan []byte, 64)

@@ -29,23 +29,33 @@ export class SessionRoom {
 
     const meta = await this.loadMeta();
 
+    // Decide whether to accept; if rejecting, fall through to the accept-then-
+    // close path below so the client sees a structured {type:"error"} message
+    // and treats it as fatal instead of looping on a handshake failure.
+    let rejectReason: string | null = null;
     if (role === "viewer") {
       // Allow viewer to attach as long as the room was set up by an
       // authenticated agent — even if the agent is briefly offline.
       if (!meta.agentAuthed) {
-        return new Response("session not found or not ready", { status: 404 });
-      }
-      if (this.getSocket("viewer")) {
-        return new Response("viewer already connected", { status: 409 });
+        rejectReason = "session not found or not ready";
+      } else if (this.getSocket("viewer")) {
+        rejectReason = "another viewer is already connected to this session";
       }
     } else if (this.getSocket("agent")) {
-      return new Response("agent already connected", { status: 409 });
+      rejectReason = "another agent is already connected to this session";
     }
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     server.serializeAttachment({ role, authed: false } satisfies Attachment);
     this.state.acceptWebSocket(server);
+
+    if (rejectReason) {
+      server.serializeAttachment({ role, authed: false, rejected: true } satisfies Attachment);
+      server.send(JSON.stringify({ type: "error", error: rejectReason }));
+      server.close(4002, rejectReason);
+      return new Response(null, { status: 101, webSocket: client });
+    }
 
     // Cancel any pending orphan-cleanup alarm now that someone is here.
     if (role === "agent") {
@@ -98,6 +108,12 @@ export class SessionRoom {
 
   async webSocketClose(ws: WebSocket) {
     const attachment = ws.deserializeAttachment() as Attachment;
+
+    // Rejected sockets were accepted only to deliver an error and close;
+    // they don't represent a real presence change, so skip cleanup.
+    if (attachment.rejected) {
+      return;
+    }
 
     if (attachment.role === "agent") {
       // Notify the viewer (if any) that the agent is temporarily gone,
