@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/reminal/reminal/internal/client"
+	"github.com/reminal/reminal/internal/keepawake"
 	"github.com/reminal/reminal/internal/updater"
 )
 
@@ -68,6 +69,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	stopKeepAwake := keepawake.Start()
+	defer stopKeepAwake()
 	if err := agent.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -90,10 +93,11 @@ Security:
   Terminal traffic is end-to-end encrypted — the relay cannot read it.
 
 Environment:
-  REMINAL_RELAY   Override relay URL (default: hosted Cloudflare relay)
-  REMINAL_WEB     Override web UI URL
-  REMINAL_LOCAL   Set to 1 to use localhost relay (with reminal relay)
-  SHELL           Shell to run (default: /bin/zsh or $SHELL)
+  REMINAL_RELAY          Override relay URL (default: hosted Cloudflare relay)
+  REMINAL_WEB            Override web UI URL
+  REMINAL_LOCAL          Set to 1 to use localhost relay (with reminal relay)
+  REMINAL_NO_KEEP_AWAKE  Set to 1 to let the host sleep while reminal runs
+  SHELL                  Shell to run (default: /bin/zsh or $SHELL)
 
 Examples:
   reminal

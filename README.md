@@ -240,6 +240,7 @@ REMINAL_LOCAL=1 reminal --connect <session_id> --pin <pin>
 | `REMINAL_RELAY` | Cloudflare relay URL | Override the relay WebSocket base URL |
 | `REMINAL_WEB` | Cloudflare web URL | Override the web UI URL shown in the banner |
 | `REMINAL_LOCAL` | — | Set to `1` to point everything at `localhost` |
+| `REMINAL_NO_KEEP_AWAKE` | — | Set to `1` to let the host sleep while reminal runs (defaults to keeping it awake via `caffeinate` / `systemd-inhibit`) |
 | `SHELL` | `$SHELL` or `/bin/zsh` | Which shell to spawn inside the session |
 
 ---
