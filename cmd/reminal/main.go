@@ -1,13 +1,17 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/reminal/reminal/internal/client"
 	"github.com/reminal/reminal/internal/keepawake"
 	"github.com/reminal/reminal/internal/updater"
+	"golang.org/x/term"
 )
 
 // version is the running build's version, set via -ldflags "-X main.version=..."
@@ -43,8 +47,8 @@ func main() {
 		}
 	}
 
-	connect := flag.String("connect", "", "connect to a remote session by ID")
-	pin := flag.String("pin", "", "PIN for the remote session (required with --connect)")
+	connect := flag.String("connect", "", "session ID or full relay URL to connect to (URL may include #p=PIN)")
+	pin := flag.String("pin", "", "PIN for the remote session (prompted if omitted)")
 	flag.Parse()
 
 	// Offer to upgrade if a newer release is available. Runs before we hand
@@ -53,11 +57,25 @@ func main() {
 	updater.CheckAndPromptOnStart(version)
 
 	if *connect != "" {
-		if *pin == "" {
-			fmt.Fprintln(os.Stderr, "error: --pin is required when using --connect")
+		sessionID, urlPin := parseConnectTarget(*connect)
+		if sessionID == "" {
+			fmt.Fprintln(os.Stderr, "error: --connect needs a session ID or a relay URL containing ?s=<ID>")
 			os.Exit(1)
 		}
-		if err := client.Connect(*connect, *pin); err != nil {
+		// Precedence: explicit --pin > PIN extracted from URL > interactive prompt.
+		resolvedPin := *pin
+		if resolvedPin == "" {
+			resolvedPin = urlPin
+		}
+		if resolvedPin == "" {
+			p, err := readPIN()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			resolvedPin = p
+		}
+		if err := client.Connect(sessionID, resolvedPin); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -103,5 +121,55 @@ Environment:
 Examples:
   reminal
   reminal --connect ABC12345 --pin 482916
+  reminal --connect ABC12345                                        # PIN prompted
+  reminal --connect "https://reminal-relay.reminal.workers.dev/?s=ABC12345#p=482916"
 `)
+}
+
+// parseConnectTarget accepts a bare session ID, a relay URL like
+// https://relay/?s=ABC12345, or a relay URL with the PIN in the fragment
+// (#p=NNNNNN) or query (?p=NNNNNN). Returns the session ID uppercased and the
+// PIN if found.
+func parseConnectTarget(target string) (sessionID, pin string) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", ""
+	}
+	// A bare session ID has no scheme and no URL punctuation.
+	if !strings.Contains(target, "://") && !strings.ContainsAny(target, "/?#") {
+		return strings.ToUpper(target), ""
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return "", ""
+	}
+	sessionID = strings.ToUpper(u.Query().Get("s"))
+	if u.Fragment != "" {
+		if frag, err := url.ParseQuery(u.Fragment); err == nil {
+			pin = frag.Get("p")
+		}
+	}
+	if pin == "" {
+		pin = u.Query().Get("p")
+	}
+	return sessionID, pin
+}
+
+// readPIN prompts on stderr and reads the PIN from stdin with echo disabled.
+// Errors if stdin isn't a TTY since there's no one to prompt.
+func readPIN() (string, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", errors.New("PIN required — pass --pin or run interactively")
+	}
+	fmt.Fprint(os.Stderr, "PIN: ")
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", fmt.Errorf("read PIN: %w", err)
+	}
+	pin := strings.TrimSpace(string(b))
+	if pin == "" {
+		return "", errors.New("PIN required")
+	}
+	return pin, nil
 }
