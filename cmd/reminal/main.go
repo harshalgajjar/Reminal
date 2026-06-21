@@ -55,7 +55,13 @@ func main() {
 
 	connect := flag.String("connect", "", "session ID or full relay URL to connect to (URL may include #p=PIN)")
 	pin := flag.String("pin", "", "PIN for the remote session (prompted if omitted)")
+	verbose := flag.Bool("v", false, "verbose mode — append raw error detail to status lines (same as REMINAL_DEBUG=1)")
+	verboseLong := flag.Bool("verbose", false, "alias for -v")
 	flag.Parse()
+
+	if *verbose || *verboseLong {
+		os.Setenv("REMINAL_DEBUG", "1")
+	}
 
 	// Offer to upgrade if a newer release is available. Runs before we hand
 	// stdin off to the PTY (agent) or raw mode (viewer); silently no-ops on
