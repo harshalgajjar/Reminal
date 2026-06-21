@@ -97,6 +97,7 @@ Environment:
   REMINAL_WEB            Override web UI URL
   REMINAL_LOCAL          Set to 1 to use localhost relay (with reminal relay)
   REMINAL_NO_KEEP_AWAKE  Set to 1 to let the host sleep while reminal runs
+  REMINAL_DEBUG          Set to 1 to append raw error detail to status lines
   SHELL                  Shell to run (default: /bin/zsh or $SHELL)
 
 Examples:

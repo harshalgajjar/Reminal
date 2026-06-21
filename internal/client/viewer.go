@@ -144,7 +144,7 @@ func (v *Viewer) Run() error {
 			backoff = initialBackoff
 		}
 
-		v.notify(fmt.Sprintf("Connection lost (%v) — reconnecting in %v", err, backoff))
+		v.notify(fmt.Sprintf("%s Reconnecting in %v…", humanize(err), backoff))
 
 		select {
 		case <-intCh:

@@ -120,7 +120,7 @@ func (a *Agent) Run() error {
 		if time.Since(start) > stableThresh {
 			backoff = initialBackoff
 		}
-		fmt.Printf("  ⚠ Relay disconnected: %v — reconnecting in %v\n", err, backoff)
+		fmt.Printf("  reminal: %s Reconnecting in %v…\n", humanize(err), backoff)
 
 		select {
 		case <-shellExit:
