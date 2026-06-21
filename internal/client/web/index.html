@@ -124,10 +124,43 @@
     // this is safer than putting the PIN in the query string. We strip the
     // fragment from the URL bar after reading it.
     const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
-    const initialPin = hashParams.get('p') || '';
+    let initialPin = hashParams.get('p') || '';
     if (initialPin) {
       pinInput.value = initialPin;
       history.replaceState(null, '', location.pathname + location.search);
+    }
+
+    // Restore the PIN from sessionStorage if we previously authed this same
+    // session in this tab. Refresh now Just Works without re-prompting.
+    // sessionStorage (vs localStorage) means the credential dies with the
+    // tab, matching the user's intent — closing the tab is "I'm done."
+    const CRED_KEY = 'reminal:cred';
+    function loadStoredCred(sessionId) {
+      if (!sessionId) return '';
+      try {
+        const raw = sessionStorage.getItem(CRED_KEY);
+        if (!raw) return '';
+        const c = JSON.parse(raw);
+        if (c && c.session === sessionId.toUpperCase() && typeof c.pin === 'string') {
+          return c.pin;
+        }
+      } catch (_) {}
+      return '';
+    }
+    function saveCred(sessionId, pin) {
+      try {
+        sessionStorage.setItem(CRED_KEY, JSON.stringify({ session: sessionId.toUpperCase(), pin: pin }));
+      } catch (_) {}
+    }
+    function clearCred() {
+      try { sessionStorage.removeItem(CRED_KEY); } catch (_) {}
+    }
+    if (!initialPin) {
+      const stored = loadStoredCred(initialSession);
+      if (stored) {
+        pinInput.value = stored;
+        initialPin = stored;
+      }
     }
 
     const term = new Terminal({
@@ -358,6 +391,9 @@
       switch (msg.type) {
         case 'auth_ok':
           authed = true;
+          // Auth succeeded — remember the PIN for this tab so a refresh
+          // doesn't bounce the user back to the login form.
+          saveCred(sessionId, pinValue);
           break;
         case 'connected':
         case 'agent_online':
@@ -390,11 +426,13 @@
         }
         case 'closed':
           fatal = true;
+          clearCred();
           setStatus(msg.error || 'Session ended', 'error');
           term.write('\r\n\x1b[31m' + (msg.error || 'Session ended') + '\x1b[0m\r\n');
           break;
         case 'error':
           fatal = true;
+          clearCred();
           setStatus(msg.error || 'Error', 'error');
           term.write('\r\n\x1b[31m' + (msg.error || 'Error') + '\x1b[0m\r\n');
           break;
@@ -404,6 +442,7 @@
     function userDisconnect() {
       manualClose = true;
       cancelReconnect();
+      clearCred();
       if (ws) { try { ws.close(); } catch (_) {} ws = null; }
       authed = false;
       agentLive = false;
