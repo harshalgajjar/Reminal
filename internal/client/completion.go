@@ -38,7 +38,7 @@ _reminal_complete() {
         cword=$COMP_CWORD
     }
 
-    local subcommands="relay version upgrade info doctor completion help"
+    local subcommands="connect relay version upgrade info doctor completion help"
     local flags="--connect --pin --verbose -v"
 
     case "${prev}" in
@@ -71,6 +71,7 @@ const zshCompletion = `# reminal zsh completion
 _reminal() {
     local -a subcommands
     subcommands=(
+        'connect:Connect to a remote session (positional <id-or-url> [pin])'
         'relay:Start a local relay server (dev only)'
         'version:Print version'
         'upgrade:Upgrade to the latest release'
@@ -109,6 +110,7 @@ const fishCompletion = `# reminal fish completion
 complete -c reminal -f
 
 # Subcommands (only valid as the first non-flag argument).
+complete -c reminal -n '__fish_use_subcommand' -a 'connect'    -d 'Connect to a remote session (positional <id-or-url> [pin])'
 complete -c reminal -n '__fish_use_subcommand' -a 'relay'      -d 'Start a local relay server (dev only)'
 complete -c reminal -n '__fish_use_subcommand' -a 'version'    -d 'Print version'
 complete -c reminal -n '__fish_use_subcommand' -a 'upgrade'    -d 'Upgrade to the latest release'

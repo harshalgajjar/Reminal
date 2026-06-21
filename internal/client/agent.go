@@ -77,7 +77,7 @@ func (a *Agent) Run() error {
 	fmt.Printf("  Session:  %s\n", a.sessionID)
 	fmt.Printf("  PIN:      %s\n", a.pin)
 	fmt.Printf("  Open:     %s/?s=%s\n", a.webURL, a.sessionID)
-	fmt.Printf("  Connect:  reminal --connect %s --pin %s\n", a.sessionID, a.pin)
+	fmt.Printf("  Connect:  reminal connect %s %s\n", a.sessionID, a.pin)
 	fmt.Println()
 	a.printQR()
 	fmt.Println("  Waiting for connection... (Ctrl+C to stop)")

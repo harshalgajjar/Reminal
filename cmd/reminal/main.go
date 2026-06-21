@@ -65,6 +65,21 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "connect":
+			if len(os.Args) < 3 {
+				fmt.Fprintln(os.Stderr, "usage: reminal connect <session-id-or-url> [pin]")
+				os.Exit(1)
+			}
+			target := os.Args[2]
+			pinArg := ""
+			if len(os.Args) > 3 {
+				pinArg = os.Args[3]
+			}
+			if err := runConnect(target, pinArg); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -87,25 +102,7 @@ func main() {
 	updater.CheckAndPromptOnStart(version)
 
 	if *connect != "" {
-		sessionID, urlPin := parseConnectTarget(*connect)
-		if sessionID == "" {
-			fmt.Fprintln(os.Stderr, "error: --connect needs a session ID or a relay URL containing ?s=<ID>")
-			os.Exit(1)
-		}
-		// Precedence: explicit --pin > PIN extracted from URL > interactive prompt.
-		resolvedPin := *pin
-		if resolvedPin == "" {
-			resolvedPin = urlPin
-		}
-		if resolvedPin == "" {
-			p, err := readPIN()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			resolvedPin = p
-		}
-		if err := client.Connect(sessionID, resolvedPin); err != nil {
+		if err := runConnect(*connect, *pin); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -130,7 +127,7 @@ func printHelp() {
 
 Usage:
   reminal                                  Share this terminal (works out of the box)
-  reminal --connect <session-or-url>       Connect to a remote session (PIN prompted if omitted)
+  reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
   reminal info                             Reprint session ID / PIN / URL / QR for the running agent
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
   reminal completion <bash|zsh|fish>       Print shell completion script (source it in your shell rc)
@@ -138,6 +135,8 @@ Usage:
   reminal relay [port]                     Start local relay server (dev only)
   reminal version                          Print version
   reminal help                             Show this help
+
+  reminal --connect <session-or-url>       Long-form alias of "reminal connect ..."
 
 Security:
   Each session requires a random 8-char ID + 6-digit PIN.
@@ -157,10 +156,34 @@ Environment:
 
 Examples:
   reminal
-  reminal --connect ABC12345 --pin 482916
-  reminal --connect ABC12345                                        # PIN prompted
-  reminal --connect "https://reminal-relay.reminal.workers.dev/?s=ABC12345#p=482916"
+  reminal connect ABC12345 482916
+  reminal connect ABC12345                                          # PIN prompted
+  reminal connect "https://reminal-relay.reminal.workers.dev/?s=ABC12345#p=482916"
 `)
+}
+
+// runConnect is the shared body of both `reminal connect <target> [pin]`
+// and `reminal --connect <target> --pin <pin>`. pinArg may be empty, in which
+// case we fall back to a PIN embedded in the target URL, and finally to an
+// interactive prompt.
+func runConnect(target, pinArg string) error {
+	sessionID, urlPin := parseConnectTarget(target)
+	if sessionID == "" {
+		return errors.New("needs a session ID or a relay URL containing ?s=<ID>")
+	}
+	// Precedence: explicit pin arg > PIN extracted from URL > interactive prompt.
+	resolvedPin := pinArg
+	if resolvedPin == "" {
+		resolvedPin = urlPin
+	}
+	if resolvedPin == "" {
+		p, err := readPIN()
+		if err != nil {
+			return err
+		}
+		resolvedPin = p
+	}
+	return client.Connect(sessionID, resolvedPin)
 }
 
 // parseConnectTarget accepts a bare session ID, a relay URL like

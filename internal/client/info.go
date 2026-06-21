@@ -29,7 +29,7 @@ func ShowActiveInfo() error {
 	fmt.Printf("  Session:  %s\n", a.ID)
 	fmt.Printf("  PIN:      %s\n", a.PIN)
 	fmt.Printf("  Open:     %s\n", a.OpenURL)
-	fmt.Printf("  Connect:  reminal --connect %s --pin %s\n", a.ID, a.PIN)
+	fmt.Printf("  Connect:  reminal connect %s %s\n", a.ID, a.PIN)
 	fmt.Printf("  Started:  %s (PID %d)\n", a.StartedAt.Format(time.RFC3339), a.PID)
 	fmt.Println()
 	fmt.Println("  Scan to join from your phone:")
