@@ -12,6 +12,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     strategy:
+      # Don't cancel sibling builds when one job races to create the release;
+      # rerunning the loser is a no-op against the existing release.
+      fail-fast: false
       matrix:
         include:
           - goos: darwin
