@@ -62,7 +62,7 @@ curl -fsSL https://raw.githubusercontent.com/harshalgajjar/Reminal/main/install.
 
 Installs to `~/.local/bin/reminal`. No sudo. macOS and Linux, Apple Silicon and x86_64.
 
-`reminal` checks for updates on launch and offers to upgrade in place — no `brew update` dance.
+`reminal` checks for updates on launch and offers to upgrade in place.
 
 <sub>Other options: `reminal upgrade` to force an immediate upgrade · build from source with `./scripts/build.sh` (Go 1.25+) · Homebrew tap still available at `brew tap harshalgajjar/reminal && brew install reminal` but the shell installer is recommended for the seamless upgrade UX.</sub>
 
