@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,12 @@ import (
 	"github.com/reminal/reminal/internal/session"
 	"golang.org/x/term"
 )
+
+// escapeKey is the byte that disconnects the viewer when typed at the
+// keyboard. 0x1d (Ctrl-]) is telnet's traditional escape character and is
+// almost never bound in modern shells, so it virtually never collides with
+// what the remote shell wants to receive.
+const escapeKey = 0x1d
 
 type Viewer struct {
 	// lastSeq and droppedChunks are accessed atomically; keep them at the
@@ -81,12 +88,33 @@ func (v *Viewer) Run() error {
 	// connection so it's never silent (see notifyDropped).
 	stdinCh := make(chan []byte, 256)
 	stdinDone := make(chan struct{})
+	// escapeCh fires when the user presses Ctrl-] (telnet's escape key,
+	// almost never bound in modern shells). In raw mode local Ctrl+C is
+	// forwarded to the remote shell, so this is the only way to cleanly
+	// quit the viewer without killing the terminal window.
+	escapeCh := make(chan struct{})
 	go func() {
 		defer close(stdinDone)
 		buf := make([]byte, 4096)
 		for {
 			n, err := os.Stdin.Read(buf)
 			if n > 0 {
+				if i := bytes.IndexByte(buf[:n], escapeKey); i >= 0 {
+					// Flush any bytes typed before the escape so the user's
+					// last keystrokes aren't lost. Drop anything after; the
+					// user's intent is to leave.
+					if i > 0 {
+						chunk := make([]byte, i)
+						copy(chunk, buf[:i])
+						select {
+						case stdinCh <- chunk:
+						default:
+							atomic.AddUint64(&v.droppedChunks, 1)
+						}
+					}
+					close(escapeCh)
+					return
+				}
 				chunk := make([]byte, n)
 				copy(chunk, buf[:n])
 				select {
@@ -118,22 +146,28 @@ func (v *Viewer) Run() error {
 		case <-intCh:
 			fmt.Fprint(os.Stderr, "\r\n")
 			return nil
+		case <-escapeCh:
+			v.notify("Disconnected.")
+			return nil
 		case <-stdinDone:
 			return io.EOF
 		default:
 		}
 
 		if first {
-			v.notify("Connecting…")
+			v.notify("Connecting…  (press Ctrl-] to disconnect)")
 		} else {
 			v.notify(fmt.Sprintf("Reconnecting…"))
 		}
 
 		start := time.Now()
-		err := v.runConnection(stdinCh, winCh, intCh)
+		err := v.runConnection(stdinCh, winCh, intCh, escapeCh)
 		select {
 		case <-intCh:
 			fmt.Fprint(os.Stderr, "\r\n")
+			return nil
+		case <-escapeCh:
+			v.notify("Disconnected.")
 			return nil
 		default:
 		}
@@ -154,6 +188,9 @@ func (v *Viewer) Run() error {
 		case <-intCh:
 			fmt.Fprint(os.Stderr, "\r\n")
 			return nil
+		case <-escapeCh:
+			v.notify("Disconnected.")
+			return nil
 		case <-time.After(backoff):
 		}
 		first = false
@@ -171,7 +208,7 @@ type fatalErr struct{ err error }
 func (e *fatalErr) Error() string { return e.err.Error() }
 func (e *fatalErr) Unwrap() error { return e.err }
 
-func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, intCh <-chan os.Signal) error {
+func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, intCh <-chan os.Signal, escapeCh <-chan struct{}) error {
 	wsURL := config.SessionWS(v.sessionID, string(protocol.RoleViewer))
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
@@ -216,6 +253,8 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 		select {
 		case <-intCh:
 			return &fatalErr{err: errors.New("interrupted")}
+		case <-escapeCh:
+			return &fatalErr{err: errors.New("disconnected")}
 		case err := <-readerDone:
 			if err == nil {
 				err = errors.New("relay closed")

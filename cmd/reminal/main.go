@@ -117,6 +117,10 @@ Security:
   Each session requires a random 8-char ID + 6-digit PIN.
   Terminal traffic is end-to-end encrypted — the relay cannot read it.
 
+Inside reminal --connect:
+  Local Ctrl+C goes to the remote shell. To disconnect the viewer cleanly,
+  press Ctrl-] (the agent on the host keeps running for new viewers).
+
 Environment:
   REMINAL_RELAY          Override relay URL (default: hosted Cloudflare relay)
   REMINAL_WEB            Override web UI URL
