@@ -279,9 +279,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// everything with Seq > FromSeq, so the next seq to send is FromSeq+1.
 			pushCursor(cursorCh, msg.FromSeq+1)
 		case protocol.TypeConnected:
-			fmt.Println("  ✓ Remote viewer connected")
+			fmt.Printf("  [%s] Remote viewer connected\n", time.Now().Format("15:04:05"))
 		case protocol.TypeClosed:
-			fmt.Println("  Viewer disconnected")
+			fmt.Printf("  [%s] Viewer disconnected\n", time.Now().Format("15:04:05"))
 		case protocol.TypeAgentOffline, protocol.TypeAgentOnline:
 			// Informational only on the agent side.
 		case protocol.TypeError:
