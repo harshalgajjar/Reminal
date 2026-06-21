@@ -52,6 +52,19 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "completion":
+			shell := ""
+			if len(os.Args) > 2 {
+				shell = os.Args[2]
+			}
+			if shell == "" {
+				fmt.Fprintln(os.Stderr, "usage: reminal completion <bash|zsh|fish>")
+				os.Exit(1)
+			}
+			if err := client.Completion(shell); err != nil {
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -120,6 +133,7 @@ Usage:
   reminal --connect <session-or-url>       Connect to a remote session (PIN prompted if omitted)
   reminal info                             Reprint session ID / PIN / URL / QR for the running agent
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
+  reminal completion <bash|zsh|fish>       Print shell completion script (source it in your shell rc)
   reminal upgrade                          Upgrade to the latest release
   reminal relay [port]                     Start local relay server (dev only)
   reminal version                          Print version
