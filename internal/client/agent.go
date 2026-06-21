@@ -26,6 +26,11 @@ const (
 	initialBackoff = 1 * time.Second
 	maxBackoff     = 30 * time.Second
 	stableThresh   = 30 * time.Second
+	// readDeadlineAgent bounds how long an agent-side WS read can sit idle
+	// before we declare the connection dead and reconnect. With viewer
+	// pings every 30s under normal operation this is well above the noise
+	// floor; it mainly catches half-open TCP that the OS hasn't noticed.
+	readDeadlineAgent = 60 * time.Second
 )
 
 type Agent struct {
@@ -246,6 +251,7 @@ func (a *Agent) authenticate(conn *websocket.Conn) error {
 // requests, and connection notifications.
 func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 	for {
+		_ = conn.SetReadDeadline(time.Now().Add(readDeadlineAgent))
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			return err

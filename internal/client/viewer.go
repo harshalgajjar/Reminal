@@ -28,6 +28,13 @@ import (
 // what the remote shell wants to receive.
 const escapeKey = 0x1d
 
+// readDeadline bounds how long a WebSocket read can sit idle before we give
+// up and trigger a reconnect. With pings every 30s under normal conditions
+// we'll always see traffic well inside the window; a stuck read means the
+// TCP connection is half-open (silently dropped by a middlebox) and the OS
+// hasn't noticed yet. Mirrors ssh's ServerAliveInterval/CountMax behaviour.
+const readDeadline = 60 * time.Second
+
 type Viewer struct {
 	// Atomics first for 64-bit alignment on 32-bit architectures.
 	lastSeq       uint64
@@ -249,12 +256,13 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 	var agentLive atomic.Bool
 	agentLive.Store(true)
 
-	// On (re)connect, ask the agent to replay everything we missed and
-	// resync the terminal size.
+	// On (re)connect, resync the terminal size FIRST so any SIGWINCH-
+	// triggered redraw on the agent is included in the scrollback replay
+	// the agent is about to send. Then request the replay.
+	v.sendResizeNow(conn)
 	if err := v.sendResume(conn); err != nil {
 		return err
 	}
-	v.sendResizeNow(conn)
 
 	readerDone := make(chan error, 1)
 	go func() {
@@ -331,6 +339,7 @@ func (v *Viewer) authenticate(conn *websocket.Conn) error {
 
 func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) error {
 	for {
+		_ = conn.SetReadDeadline(time.Now().Add(readDeadline))
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			return err
