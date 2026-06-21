@@ -29,17 +29,22 @@ import (
 const escapeKey = 0x1d
 
 type Viewer struct {
-	// lastSeq and droppedChunks are accessed atomically; keep them at the
-	// top for 64-bit alignment on 32-bit architectures.
+	// Atomics first for 64-bit alignment on 32-bit architectures.
 	lastSeq       uint64
 	droppedChunks uint64
+	bytesSent     uint64 // plaintext stdin bytes forwarded to the agent
+	bytesReceived uint64 // plaintext shell output received from the agent
 
 	sessionID string
 	pin       string
 	box       *crypto.Box
 
-	writeMu sync.Mutex // serializes WS writes
-	helloOnce sync.Once // ensures the one-time "Connected …" line fires exactly once per viewer lifetime
+	writeMu   sync.Mutex
+	helloOnce sync.Once // first-connect "Connected …" line; suppressed on reconnect
+	// connectTime is set inside helloOnce; zero value means we never
+	// actually connected (auth failed immediately, etc.), so we skip the
+	// disconnect summary.
+	connectTime time.Time
 }
 
 func NewViewer(sessionID, pin string) (*Viewer, error) {
@@ -80,6 +85,7 @@ func (v *Viewer) Run() error {
 
 	setRemoteIndicator(v.sessionID)
 	defer clearRemoteIndicator()
+	defer v.printDisconnectSummary()
 
 	// One stdin reader for the lifetime of the viewer; per-connection
 	// goroutines drain from this channel. A bounded buffer means we drop
@@ -148,7 +154,6 @@ func (v *Viewer) Run() error {
 			fmt.Fprint(os.Stderr, "\r\n")
 			return nil
 		case <-escapeCh:
-			v.notify("Disconnected.")
 			return nil
 		case <-stdinDone:
 			return io.EOF
@@ -168,7 +173,6 @@ func (v *Viewer) Run() error {
 			fmt.Fprint(os.Stderr, "\r\n")
 			return nil
 		case <-escapeCh:
-			v.notify("Disconnected.")
 			return nil
 		default:
 		}
@@ -190,7 +194,6 @@ func (v *Viewer) Run() error {
 			fmt.Fprint(os.Stderr, "\r\n")
 			return nil
 		case <-escapeCh:
-			v.notify("Disconnected.")
 			return nil
 		case <-time.After(backoff):
 		}
@@ -228,6 +231,7 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 	// signal (encryption named explicitly), diagnostic (handshake time so
 	// users know if the relay is sluggish), and UX (Ctrl-] hint repeated).
 	v.helloOnce.Do(func() {
+		v.connectTime = time.Now()
 		v.notify(fmt.Sprintf("Connected to %s · handshake %v · AES-256-GCM end-to-end · Ctrl-] to disconnect",
 			v.sessionID, dialTime.Round(time.Millisecond)))
 	})
@@ -289,6 +293,7 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 			if err := v.writeMsg(conn, protocol.Message{Type: protocol.TypeData, Data: enc}); err != nil {
 				return err
 			}
+			atomic.AddUint64(&v.bytesSent, uint64(len(data)))
 		case <-winCh:
 			v.sendResizeNow(conn)
 		case <-pingTicker.C:
@@ -353,6 +358,7 @@ func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) error {
 			if _, err := os.Stdout.Write(data); err != nil {
 				return err
 			}
+			atomic.AddUint64(&v.bytesReceived, uint64(len(data)))
 		case protocol.TypeConnected, protocol.TypeAgentOnline:
 			if !agentLive.Swap(true) {
 				v.notify("Agent reconnected.")
@@ -414,4 +420,44 @@ func (v *Viewer) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
 // minimize disruption to the live terminal output below.
 func (v *Viewer) notify(text string) {
 	fmt.Fprintf(os.Stderr, "\r\n\x1b[2m[reminal] %s\x1b[0m\r\n", text)
+}
+
+// printDisconnectSummary prints a one-line wrap-up on viewer exit. Skipped if
+// we never actually connected (auth failure, network never came up) so a
+// rapid-fail run doesn't pollute the user's terminal with bogus stats.
+func (v *Viewer) printDisconnectSummary() {
+	if v.connectTime.IsZero() {
+		// Never actually connected (auth failure, network never came up,
+		// or user Ctrl-]'d during the Connecting… line). Still acknowledge
+		// the exit so the prompt doesn't appear out of nowhere.
+		fmt.Fprint(os.Stderr, "\r\n\x1b[2m[reminal] Disconnected.\x1b[0m\r\n")
+		return
+	}
+	dur := time.Since(v.connectTime).Round(time.Second)
+	sent := humanBytes(atomic.LoadUint64(&v.bytesSent))
+	recv := humanBytes(atomic.LoadUint64(&v.bytesReceived))
+	fmt.Fprintf(os.Stderr, "\x1b[2m[reminal] Disconnected from %s after %v · sent %s · received %s\x1b[0m\r\n",
+		v.sessionID, dur, sent, recv)
+}
+
+// humanBytes renders byte counts with three significant digits in the largest
+// unit that still keeps the integer part to ≤4 digits: 999 B, 1.23 KB, 47 MB.
+// Powers of 1024 (KiB-style) would be more accurate but most users read 1KB
+// as 1000 bytes; matches `du -h` / `ls -h` convention.
+func humanBytes(n uint64) string {
+	const (
+		kb = 1000
+		mb = 1000 * kb
+		gb = 1000 * mb
+	)
+	switch {
+	case n < kb:
+		return fmt.Sprintf("%d B", n)
+	case n < mb:
+		return fmt.Sprintf("%.2f KB", float64(n)/kb)
+	case n < gb:
+		return fmt.Sprintf("%.2f MB", float64(n)/mb)
+	default:
+		return fmt.Sprintf("%.2f GB", float64(n)/gb)
+	}
 }
