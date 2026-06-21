@@ -22,9 +22,10 @@ import (
 )
 
 type Viewer struct {
-	// lastSeq is accessed atomically; keep it first for 64-bit alignment
-	// on 32-bit architectures.
-	lastSeq uint64
+	// lastSeq and droppedChunks are accessed atomically; keep them at the
+	// top for 64-bit alignment on 32-bit architectures.
+	lastSeq       uint64
+	droppedChunks uint64
 
 	sessionID string
 	pin       string
@@ -73,8 +74,12 @@ func (v *Viewer) Run() error {
 	defer clearRemoteIndicator()
 
 	// One stdin reader for the lifetime of the viewer; per-connection
-	// goroutines drain from this channel.
-	stdinCh := make(chan []byte, 64)
+	// goroutines drain from this channel. A bounded buffer means we drop
+	// rather than block during disconnects — blocking would let a user's
+	// `rm -rf` typed mid-blackout replay on reconnect long after they
+	// walked away. The drop count is surfaced on the next successful
+	// connection so it's never silent (see notifyDropped).
+	stdinCh := make(chan []byte, 256)
 	stdinDone := make(chan struct{})
 	go func() {
 		defer close(stdinDone)
@@ -87,8 +92,7 @@ func (v *Viewer) Run() error {
 				select {
 				case stdinCh <- chunk:
 				default:
-					// channel full — drop bytes rather than blocking, so a
-					// long disconnect doesn't accumulate stale input.
+					atomic.AddUint64(&v.droppedChunks, 1)
 				}
 			}
 			if err != nil {
@@ -180,6 +184,14 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 		return &fatalErr{err: err}
 	}
 
+	// If we dropped any stdin bytes while reconnecting, surface that now —
+	// the user needs to know to retype anything important. Reset on every
+	// successful authenticate so the notification reflects the most recent
+	// blackout, not lifetime totals.
+	if n := atomic.SwapUint64(&v.droppedChunks, 0); n > 0 {
+		v.notify(fmt.Sprintf("%d input chunk(s) dropped during the disconnect — retype anything you typed while offline.", n))
+	}
+
 	// agentLive tracks whether the relay says the agent is currently connected.
 	// We start optimistic; the relay corrects us with agent_offline if needed.
 	var agentLive atomic.Bool
@@ -215,7 +227,9 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 			}
 			if !agentLive.Load() {
 				// Drop input when the agent is offline; otherwise it would
-				// be silently consumed by the relay.
+				// be silently consumed by the relay. Count so we can warn
+				// the user on the next agent_online transition.
+				atomic.AddUint64(&v.droppedChunks, 1)
 				continue
 			}
 			enc, err := v.box.Encrypt(data)
@@ -292,6 +306,9 @@ func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) error {
 		case protocol.TypeConnected, protocol.TypeAgentOnline:
 			if !agentLive.Swap(true) {
 				v.notify("Agent reconnected.")
+				if n := atomic.SwapUint64(&v.droppedChunks, 0); n > 0 {
+					v.notify(fmt.Sprintf("%d input chunk(s) dropped while the agent was offline — retype if needed.", n))
+				}
 			}
 			// Re-sync after agent reattach.
 			_ = v.sendResume(conn)
