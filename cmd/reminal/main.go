@@ -6,9 +6,13 @@ import (
 	"os"
 
 	"github.com/reminal/reminal/internal/client"
+	"github.com/reminal/reminal/internal/updater"
 )
 
-var version = "0.1.3"
+// version is the running build's version, set via -ldflags "-X main.version=..."
+// in scripts/build.sh and the release workflow. Dev builds keep "dev" so the
+// updater skips the version check and prompt.
+var version = "dev"
 
 func main() {
 	if len(os.Args) > 1 {
@@ -26,6 +30,12 @@ func main() {
 		case "version", "-v", "--version":
 			fmt.Println(version)
 			return
+		case "upgrade":
+			if err := updater.Upgrade(version); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -35,6 +45,11 @@ func main() {
 	connect := flag.String("connect", "", "connect to a remote session by ID")
 	pin := flag.String("pin", "", "PIN for the remote session (required with --connect)")
 	flag.Parse()
+
+	// Offer to upgrade if a newer release is available. Runs before we hand
+	// stdin off to the PTY (agent) or raw mode (viewer); silently no-ops on
+	// dev builds, brew-managed installs, network failures, or cache hits.
+	updater.CheckAndPromptOnStart(version)
 
 	if *connect != "" {
 		if *pin == "" {
@@ -65,6 +80,7 @@ func printHelp() {
 Usage:
   reminal                                  Share this terminal (works out of the box)
   reminal --connect <session> --pin <pin>  Connect to a remote session
+  reminal upgrade                          Upgrade to the latest release
   reminal relay [port]                     Start local relay server (dev only)
   reminal version                          Print version
   reminal help                             Show this help

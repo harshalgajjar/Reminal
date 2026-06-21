@@ -57,11 +57,14 @@ SSH was designed in 1995. It assumes you own a static IP, a router you can confi
 ## Install
 
 ```bash
-brew tap harshalgajjar/reminal
-brew install reminal
+curl -fsSL https://raw.githubusercontent.com/harshalgajjar/Reminal/main/install.sh | sh
 ```
 
-<sub>Or build from source (Go 1.25+): `./scripts/build.sh && sudo cp dist/reminal /usr/local/bin/`</sub>
+Installs to `~/.local/bin/reminal`. No sudo. macOS and Linux, Apple Silicon and x86_64.
+
+`reminal` checks for updates on launch and offers to upgrade in place — no `brew update` dance.
+
+<sub>Other options: `reminal upgrade` to force an immediate upgrade · build from source with `./scripts/build.sh` (Go 1.25+) · Homebrew tap still available at `brew tap harshalgajjar/reminal && brew install reminal` but the shell installer is recommended for the seamless upgrade UX.</sub>
 
 ---
 
