@@ -41,6 +41,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "info":
+			if err := client.ShowActiveInfo(); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -100,7 +106,8 @@ func printHelp() {
 
 Usage:
   reminal                                  Share this terminal (works out of the box)
-  reminal --connect <session> --pin <pin>  Connect to a remote session
+  reminal --connect <session-or-url>       Connect to a remote session (PIN prompted if omitted)
+  reminal info                             Reprint session ID / PIN / URL / QR for the running agent
   reminal upgrade                          Upgrade to the latest release
   reminal relay [port]                     Start local relay server (dev only)
   reminal version                          Print version

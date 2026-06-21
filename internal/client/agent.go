@@ -81,7 +81,19 @@ func (a *Agent) Run() error {
 	fmt.Println()
 	a.printQR()
 	fmt.Println("  Waiting for connection... (Ctrl+C to stop)")
+	fmt.Println("  (Lost track of the PIN? Run `reminal info` in another terminal.)")
 	fmt.Println()
+
+	// Record this session for `reminal info`. Best-effort: failures here
+	// shouldn't break agent startup.
+	_ = session.WriteActive(session.Active{
+		ID:        a.sessionID,
+		PIN:       a.pin,
+		OpenURL:   fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID),
+		PID:       os.Getpid(),
+		StartedAt: time.Now(),
+	})
+	defer func() { _ = session.ClearActive() }()
 
 	term, err := pty.Start(a.shell)
 	if err != nil {
