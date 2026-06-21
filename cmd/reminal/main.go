@@ -47,6 +47,11 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "doctor":
+			if err := client.Doctor(version); err != nil {
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -114,6 +119,7 @@ Usage:
   reminal                                  Share this terminal (works out of the box)
   reminal --connect <session-or-url>       Connect to a remote session (PIN prompted if omitted)
   reminal info                             Reprint session ID / PIN / URL / QR for the running agent
+  reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
   reminal upgrade                          Upgrade to the latest release
   reminal relay [port]                     Start local relay server (dev only)
   reminal version                          Print version
