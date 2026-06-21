@@ -39,6 +39,7 @@ type Viewer struct {
 	box       *crypto.Box
 
 	writeMu sync.Mutex // serializes WS writes
+	helloOnce sync.Once // ensures the one-time "Connected …" line fires exactly once per viewer lifetime
 }
 
 func NewViewer(sessionID, pin string) (*Viewer, error) {
@@ -210,16 +211,26 @@ func (e *fatalErr) Unwrap() error { return e.err }
 
 func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, intCh <-chan os.Signal, escapeCh <-chan struct{}) error {
 	wsURL := config.SessionWS(v.sessionID, string(protocol.RoleViewer))
+	dialStart := time.Now()
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
+	dialTime := time.Since(dialStart)
 	defer conn.Close()
 
 	if err := v.authenticate(conn); err != nil {
 		// Auth failures are fatal — wrong PIN, locked out, mismatched session.
 		return &fatalErr{err: err}
 	}
+
+	// One-time "Connected …" line on the first successful connect. Trust
+	// signal (encryption named explicitly), diagnostic (handshake time so
+	// users know if the relay is sluggish), and UX (Ctrl-] hint repeated).
+	v.helloOnce.Do(func() {
+		v.notify(fmt.Sprintf("Connected to %s · handshake %v · AES-256-GCM end-to-end · Ctrl-] to disconnect",
+			v.sessionID, dialTime.Round(time.Millisecond)))
+	})
 
 	// If we dropped any stdin bytes while reconnecting, surface that now —
 	// the user needs to know to retype anything important. Reset on every
