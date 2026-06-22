@@ -242,12 +242,25 @@
     let helloShown = false;
     let bytesSent = 0;
     let bytesReceived = 0;
+    let lastDialMs = 0; // measured from new WebSocket() to ws.onopen
 
     function humanBytes(n) {
       if (n < 1000) return n + ' B';
       if (n < 1000000) return (n / 1000).toFixed(2) + ' KB';
       if (n < 1000000000) return (n / 1000000).toFixed(2) + ' MB';
       return (n / 1000000000).toFixed(2) + ' GB';
+    }
+
+    // humanDuration formats seconds as 47s / 8m32s / 1h12m. Matches the
+    // Go time.Duration string output the terminal viewer uses.
+    function humanDuration(secs) {
+      if (secs < 60) return secs + 's';
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      if (m < 60) return m + 'm' + (s > 0 ? s + 's' : '');
+      const h = Math.floor(m / 60);
+      const mm = m % 60;
+      return h + 'h' + (mm > 0 ? mm + 'm' : '');
     }
 
     async function deriveKey(sessionId, pin) {
@@ -408,9 +421,12 @@
       connectBtn.classList.add('danger');
       connectBtn.textContent = 'Cancel';
 
+      const dialStart = Date.now();
       ws = new WebSocket(relayURL(sessionId));
 
       ws.onopen = () => {
+        // Stash for the one-time "Connected · handshake Xms" line below.
+        lastDialMs = Date.now() - dialStart;
         ws.send(JSON.stringify({ type: 'auth', pin: pinValue }));
       };
 
@@ -462,7 +478,8 @@
           setBtnDisconnect();
           if (!helloShown) {
             helloShown = true;
-            term.write('\x1b[2m[reminal] Connected to ' + sessionId + ' · AES-256-GCM end-to-end\x1b[0m\r\n');
+            const ht = lastDialMs > 0 ? ' · handshake ' + lastDialMs + 'ms' : '';
+            term.write('\x1b[2m[reminal] Connected to ' + sessionId + ht + ' · AES-256-GCM end-to-end\x1b[0m\r\n');
           }
           sendResume();
           fitAddon.fit();
@@ -510,7 +527,7 @@
       agentLive = false;
       if (helloShown && connectedAt) {
         const dur = Math.max(1, Math.round((Date.now() - connectedAt) / 1000));
-        term.write('\x1b[2m[reminal] Disconnected from ' + sessionId + ' after ' + dur + 's · sent ' + humanBytes(bytesSent) + ' · received ' + humanBytes(bytesReceived) + '\x1b[0m\r\n');
+        term.write('\x1b[2m[reminal] Disconnected from ' + sessionId + ' after ' + humanDuration(dur) + ' · sent ' + humanBytes(bytesSent) + ' · received ' + humanBytes(bytesReceived) + '\x1b[0m\r\n');
       }
       setStatus('Disconnected');
       hideOverlay();
