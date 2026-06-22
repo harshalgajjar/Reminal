@@ -259,46 +259,20 @@ func main() {
 		return
 	}
 
-	// If an agent is already running on this machine, prefer attaching to
-	// it over silently spawning a second one (which would orphan the first
-	// — different ID/PIN, scrollback split, viewer confusion). Skipped if
-	// REMINAL_NEW=1 is set or if stdin isn't a TTY (no one to prompt).
-	if existing, err := session.ReadActive(); err == nil && os.Getenv("REMINAL_NEW") != "1" {
-		// If we're already INSIDE this session's shared shell (REMINAL_SESSION
-		// is the env var the agent injects when it spawns its PTY), attaching
-		// would create an output feedback loop: viewer stdout goes back into
-		// the PTY, pumpPTY broadcasts it, viewer renders it, broadcast again,
-		// ad infinitum. Refuse + point at the obvious fix.
-		if os.Getenv("REMINAL_SESSION") == existing.ID {
+	// Running `reminal` from inside a reminal-broadcast shell would cause
+	// an output feedback loop — the PTY echoes the agent's banner, which
+	// pumpPTY broadcasts, which the viewer renders, which… etc.
+	// Refuse + point at the obvious fix. Other "already running" cases
+	// are allowed: `reminal` always starts a fresh foreground session,
+	// and `reminal new` is for explicit background spawns.
+	if inside := os.Getenv("REMINAL_SESSION"); inside != "" {
+		if _, err := session.ReadActiveByID(inside); err == nil {
 			fmt.Fprintf(os.Stderr,
-				"You're already inside reminal session %s (this shell IS the shared shell).\n",
-				existing.ID)
-			fmt.Fprintln(os.Stderr, "  To stop sharing:        reminal stop")
-			fmt.Fprintln(os.Stderr, "  To see join info / QR:  reminal info")
-			fmt.Fprintln(os.Stderr, "  To attach from another shell, open a new terminal first.")
+				"You're already inside reminal session %s (this shell IS the shared shell).\n", inside)
+			fmt.Fprintln(os.Stderr, "  To stop this session:    reminal stop")
+			fmt.Fprintln(os.Stderr, "  To see join info / QR:   reminal info")
+			fmt.Fprintln(os.Stderr, "  To create another one:   reminal new")
 			os.Exit(2)
-		}
-		if term.IsTerminal(int(os.Stdin.Fd())) {
-			age := time.Since(existing.StartedAt).Round(time.Second)
-			viewers := ""
-			if existing.Viewers > 0 {
-				viewers = fmt.Sprintf(", %d viewer(s) attached", existing.Viewers)
-			}
-			fmt.Fprintf(os.Stderr,
-				"A reminal session is already running here: %s (started %v ago, PID %d%s)\n",
-				existing.ID, age, existing.PID, viewers)
-			fmt.Fprint(os.Stderr, "Attach to it instead of starting a new session? (Y/n) ")
-			reader := bufio.NewReader(os.Stdin)
-			line, _ := reader.ReadString('\n')
-			resp := strings.ToLower(strings.TrimSpace(line))
-			if resp == "" || resp == "y" || resp == "yes" {
-				if err := runAttach(existing.ID); err != nil {
-					fmt.Fprintf(os.Stderr, "error: %v\n", err)
-					os.Exit(1)
-				}
-				return
-			}
-			fmt.Fprintln(os.Stderr, "Starting a new session — the previous one (above) is now orphaned.")
 		}
 	}
 
@@ -354,7 +328,6 @@ Environment:
   REMINAL_LOCAL          Set to 1 to use localhost relay (with reminal relay)
   REMINAL_NO_KEEP_AWAKE  Set to 1 to let the host sleep while reminal runs
   REMINAL_DEBUG          Set to 1 to append raw error detail to status lines
-  REMINAL_NEW            Set to 1 to skip the "attach to existing?" prompt and always start a new session
   SHELL                  Shell to run (default: $SHELL, falls back to zsh / bash / sh)
 
 Examples:
@@ -495,10 +468,15 @@ func runSend(path string) error {
 	return nil
 }
 
-// resolveActive picks a target session from the supplied id arg. With no
-// arg and exactly one session running, that session is returned. With
-// multiple, we print the list and require the caller to disambiguate so
-// `reminal stop`/`kill`/`attach` can't silently target the wrong agent.
+// resolveActive picks a target session from the supplied id arg. When
+// no arg is given the resolution order is:
+//  1. REMINAL_SESSION env var (set by the agent inside the shared shell
+//     — "this terminal" is the most natural default for any command
+//     typed at the host's own prompt).
+//  2. The single running session if there's exactly one.
+//  3. Otherwise: print the list and require the caller to disambiguate
+//     so `reminal stop`/`kill`/`attach` never silently target the
+//     wrong agent.
 func resolveActive(idArg string) (*session.Active, error) {
 	idArg = strings.ToUpper(strings.TrimSpace(idArg))
 	all, err := session.ReadAllActive()
@@ -515,6 +493,13 @@ func resolveActive(idArg string) (*session.Active, error) {
 			}
 		}
 		return nil, fmt.Errorf("no active session with id %q (running: %s)", idArg, joinIDs(all))
+	}
+	if inside := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION"))); inside != "" {
+		for i := range all {
+			if all[i].ID == inside {
+				return &all[i], nil
+			}
+		}
 	}
 	if len(all) == 1 {
 		return &all[0], nil
