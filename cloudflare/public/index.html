@@ -674,6 +674,17 @@
           // Keep the WS open; the relay will tell us when the agent is back.
           setBtnDisconnect();
           break;
+        case 'download': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            triggerDownload(payload.name, payload.content);
+          } catch (e) {
+            term.write('\r\n\x1b[2m[reminal] download failed: ' + e + '\x1b[0m\r\n');
+          }
+          break;
+        }
         case 'data': {
           if (!cryptoKey) break;
           try {
@@ -777,6 +788,25 @@
         term.focus();
       });
     });
+
+    // triggerDownload turns a base64 file payload from the agent into a
+    // local download via a Blob + a hidden anchor click. Works on every
+    // modern browser including iOS Safari (which honors the download attr
+    // for same-origin blobs). A 1-line dim notice lands in the terminal so
+    // the user knows it happened without a popup.
+    function triggerDownload(name, b64) {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name || 'download';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+      term.write('\r\n\x1b[2m[reminal] downloaded ' + (name || 'file') + ' (' + bytes.length + ' bytes)\x1b[0m\r\n');
+    }
 
     // ---- File upload: drag-drop + button picker ----
     // Reads each file as base64, wraps as {name, content}, encrypts, and

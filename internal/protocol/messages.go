@@ -27,6 +27,10 @@ const (
 	// TypeUpload carries an encrypted file from a viewer to the agent.
 	// Payload (after decrypt) is JSON: {"name": "...", "content": "<base64>"}.
 	TypeUpload MessageType = "upload"
+	// TypeDownload carries an encrypted file from the agent to all
+	// viewers (broadcast like TypeData). Payload after decrypt is JSON:
+	// {"name": "...", "content": "<base64>", "size": <int>}.
+	TypeDownload MessageType = "download"
 )
 
 type Message struct {

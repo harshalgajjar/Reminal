@@ -5,8 +5,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -125,6 +127,16 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "send":
+			if len(os.Args) < 3 {
+				fmt.Fprintln(os.Stderr, "usage: reminal send <file>")
+				os.Exit(1)
+			}
+			if err := runSend(os.Args[2]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -204,6 +216,7 @@ Usage:
   reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
   reminal attach                           Re-connect to the agent running on this machine (no copy-paste)
   reminal stop                             Stop broadcasting (kicks viewers, keeps your local shell running)
+  reminal send <file>                      Push a file to every connected viewer (web client auto-downloads)
   reminal info [--json]                    Reprint session ID / PIN / URL / QR for the running agent (or JSON)
   reminal qr                               Print just the join QR for the running agent (for a second screen)
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
@@ -253,6 +266,51 @@ func printVersionInfo() {
 	fmt.Printf("  go:      %s\n", runtime.Version())
 	fmt.Printf("  os/arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Println("  bugs:    https://github.com/harshalgajjar/Reminal/issues")
+}
+
+// runSend connects to the local agent's control socket and asks it to
+// broadcast the given file to every connected viewer as a TypeDownload
+// message. The file is read by the AGENT (not this process), so the path
+// must be valid from the agent's working directory perspective — which is
+// guaranteed when invoked from inside the shared shell.
+func runSend(path string) error {
+	a, err := session.ReadActive()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.New("no active reminal session on this machine")
+		}
+		return err
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	sock := filepath.Join(home, ".reminal", fmt.Sprintf("agent-%d.sock", a.PID))
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		return fmt.Errorf("connect to agent: %w", err)
+	}
+	defer conn.Close()
+	if _, err := fmt.Fprintf(conn, "send %s\n", abs); err != nil {
+		return err
+	}
+	reply, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return err
+	}
+	reply = strings.TrimSpace(reply)
+	if reply != "ok" {
+		return fmt.Errorf("agent: %s", reply)
+	}
+	fmt.Printf("Sent %s to viewers.\n", filepath.Base(abs))
+	return nil
 }
 
 // runStop tells the agent running on this machine to stop broadcasting to

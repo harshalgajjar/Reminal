@@ -133,6 +133,12 @@ func (a *Agent) Run() error {
 	_ = session.WriteActive(a.activeRecord(0))
 	defer func() { _ = session.ClearActive() }()
 
+	// Start the per-agent control socket so `reminal send <file>` (and any
+	// other future sibling commands) can talk to us locally without going
+	// through the relay.
+	stopControl := a.listenControl()
+	defer stopControl()
+
 	// Pass REMINAL_SESSION into the spawned shell so `reminal info` run
 	// from inside this session can show THIS session's details (rather
 	// than fall back to ~/.reminal/active.json, which gets ambiguous with
