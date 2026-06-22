@@ -116,10 +116,9 @@ func (a *Agent) Run() error {
 	// errors, signal-driven shutdown. Neutral wording ("session ended")
 	// covers both shell-typed-exit and user-killed-reminal cases.
 	defer func() {
-		fmt.Printf("\n  [%s] Session ended · ran for %v\n",
+		agentNotify("\n  [%s] Session ended · ran for %v\n  Run `reminal` again to start a new session.\n",
 			time.Now().Format("15:04:05"),
 			time.Since(sessionStart).Round(time.Second))
-		fmt.Println("  Run `reminal` again to start a new session.")
 	}()
 
 	shellExit := make(chan struct{})
@@ -146,7 +145,7 @@ func (a *Agent) Run() error {
 				os.Exit(130)
 			}
 			first = false
-			fmt.Printf("\n  [%s] %s received, shutting down… (press again to force exit)\n",
+			agentNotify("\n  [%s] %s received, shutting down… (press again to force exit)\n",
 				time.Now().Format("15:04:05"), sig)
 			// Closing the PTY makes pumpPTY's Read return EOF, which
 			// closes shellExit and unwinds Run() through its defers.
@@ -176,7 +175,7 @@ func (a *Agent) Run() error {
 		if time.Since(start) > stableThresh {
 			backoff = initialBackoff
 		}
-		fmt.Printf("  reminal: %s Reconnecting in %v…\n", humanize(err), backoff)
+		agentNotify("  reminal: %s Reconnecting in %v…\n", humanize(err), backoff)
 
 		select {
 		case <-shellExit:
@@ -188,6 +187,15 @@ func (a *Agent) Run() error {
 			backoff = maxBackoff
 		}
 	}
+}
+
+// agentNotify writes a one-line dim status to stdout. Used for operational
+// events (viewer connect/disconnect, reconnect retries, shutdown signals,
+// exit summary) so they read as background metadata against the shell's own
+// output rather than competing content. Initial banner stays at full
+// brightness because that's the info the user actively needs to see.
+func agentNotify(format string, args ...interface{}) {
+	fmt.Printf("\x1b[2m"+format+"\x1b[0m", args...)
 }
 
 // printQR renders a scannable QR for the join URL with the PIN in the URL
@@ -324,9 +332,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// everything with Seq > FromSeq, so the next seq to send is FromSeq+1.
 			pushCursor(cursorCh, msg.FromSeq+1)
 		case protocol.TypeConnected:
-			fmt.Printf("  [%s] Remote viewer connected\n", time.Now().Format("15:04:05"))
+			agentNotify("  [%s] Remote viewer connected\n", time.Now().Format("15:04:05"))
 		case protocol.TypeClosed:
-			fmt.Printf("  [%s] Viewer disconnected\n", time.Now().Format("15:04:05"))
+			agentNotify("  [%s] Viewer disconnected\n", time.Now().Format("15:04:05"))
 		case protocol.TypeAgentOffline, protocol.TypeAgentOnline:
 			// Informational only on the agent side.
 		case protocol.TypeError:
