@@ -95,6 +95,9 @@
        them to reclaim screen real estate (a big deal on phones). The
        Connect button stays visible (it doubles as Disconnect when live). */
     body.connected #session-form input { display: none; }
+    /* Share button only makes sense after a successful connect. */
+    #share-btn { display: none; }
+    body.connected #share-btn { display: inline-block; }
 
     /* Mobile-only soft-key bar. Phones/tablets have no Esc, Tab, Ctrl,
        arrows on the system keyboard — without these reminal is unusable
@@ -283,6 +286,7 @@
       <input id="session-input" placeholder="Session" maxlength="8" autocomplete="off" spellcheck="false">
       <input id="pin-input" placeholder="PIN" maxlength="8" inputmode="numeric" autocomplete="off" spellcheck="false">
       <button id="connect-btn">Connect</button>
+      <button id="share-btn" title="Show join URL + QR for this session">Share</button>
     </div>
     <div id="status" class="">Session + PIN required</div>
   </header>
@@ -296,6 +300,20 @@
       <button id="find-prev" title="Previous match (Shift+Enter)">↑</button>
       <button id="find-next" title="Next match (Enter)">↓</button>
       <button id="find-close" title="Close (Esc)">✕</button>
+    </div>
+  </div>
+  <div id="share-modal" style="position:fixed; inset:0; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:16px; z-index:100;">
+    <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px; max-width:90vw; display:flex; flex-direction:column; align-items:center; gap:12px;">
+      <div style="color:#e6edf3; font-size:14px; font-weight:600;">Share this session</div>
+      <div id="share-qr" style="background:#fff; padding:12px; border-radius:6px;"></div>
+      <input id="share-url" readonly style="width:300px; max-width:80vw;">
+      <div style="display:flex; gap:8px;">
+        <button id="share-copy" style="background:#238636; border:1px solid #2ea043; border-radius:6px; color:#fff; padding:8px 14px; cursor:pointer;">Copy link</button>
+        <button id="share-close" style="background:#21262d; border:1px solid #30363d; border-radius:6px; color:#e6edf3; padding:8px 14px; cursor:pointer;">Close</button>
+      </div>
+      <div style="color:#8b949e; font-size:12px; text-align:center; max-width:300px;">
+        Anyone with this link will join the same shell. Multiple viewers can be connected at once.
+      </div>
     </div>
   </div>
   <div id="preview">
@@ -335,6 +353,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
     const statusEl = document.getElementById('status');
     const sessionInput = document.getElementById('session-input');
@@ -1100,6 +1119,50 @@
       if (reverse) searchAddon.findPrevious(q, findOpts);
       else searchAddon.findNext(q, findOpts);
     }
+    // ---- Share session (QR + link, mintable from the phone itself) ----
+    // Phone-only workflow: a viewer wants to invite a second person and
+    // doesn't want to walk back to the host terminal to type `reminal info`.
+    // Show the active session's full join URL (with PIN fragment) as a
+    // QR + copyable text.
+    const shareModal = document.getElementById('share-modal');
+    const shareUrlInput = document.getElementById('share-url');
+    const shareQrEl = document.getElementById('share-qr');
+    let shareQrCode = null;
+    function openShare() {
+      if (!sessionId || !pinValue) return;
+      const joinURL = location.origin + '/?s=' + sessionId.toUpperCase() + '#p=' + pinValue;
+      shareUrlInput.value = joinURL;
+      shareQrEl.innerHTML = '';
+      try {
+        shareQrCode = new QRCode(shareQrEl, {
+          text: joinURL,
+          width: 220, height: 220,
+          colorDark: '#000000', colorLight: '#ffffff',
+          correctLevel: QRCode.CorrectLevel.L,
+        });
+      } catch (e) {
+        shareQrEl.textContent = 'QR generation failed: ' + e;
+      }
+      shareModal.style.display = 'flex';
+    }
+    function closeShare() {
+      shareModal.style.display = 'none';
+    }
+    document.getElementById('share-btn').addEventListener('click', openShare);
+    document.getElementById('share-close').addEventListener('click', closeShare);
+    document.getElementById('share-copy').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(shareUrlInput.value);
+        const btn = document.getElementById('share-copy');
+        const original = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => { btn.textContent = original; }, 1500);
+      } catch (_) {
+        // Fallback: select the input so the user can copy manually.
+        shareUrlInput.select();
+      }
+    });
+
     // ---- Mobile copy / paste ----
     // iOS Safari lets you select text in xterm with long-press but the
     // OS Copy/Paste menu doesn't reach the canvas reliably. These two
