@@ -230,7 +230,8 @@ REMINAL_LOCAL=1 reminal --connect <session_id> --pin <pin>
 |---|---|
 | `reminal` | Share this terminal session |
 | `reminal connect <id-or-url> [pin]` | Connect to a remote session from your terminal (PIN prompted if omitted) |
-| `reminal info` | Reprint the session ID / PIN / URL / QR for the agent running on this machine |
+| `reminal info [--json]` | Reprint the session ID / PIN / URL / QR for the agent running on this machine (or JSON for scripts) |
+| `reminal qr` | Print just the join QR for the running agent (for a second screen) |
 | `reminal doctor` | Self-diagnostic: version, relay reachability, terminal, shell |
 | `reminal completion <bash\|zsh\|fish>` | Print a shell completion script |
 | `reminal upgrade` | Upgrade to the latest release |

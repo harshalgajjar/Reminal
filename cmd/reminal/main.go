@@ -64,6 +64,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "qr":
+			if err := client.ShowActiveQR(); err != nil {
+				fmt.Fprintf(os.Stderr, "%v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "completion":
 			shell := ""
 			if len(os.Args) > 2 {
@@ -141,6 +147,7 @@ Usage:
   reminal                                  Share this terminal (works out of the box)
   reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
   reminal info [--json]                    Reprint session ID / PIN / URL / QR for the running agent (or JSON)
+  reminal qr                               Print just the join QR for the running agent (for a second screen)
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
   reminal completion <bash|zsh|fish>       Print shell completion script (source it in your shell rc)
   reminal upgrade                          Upgrade to the latest release

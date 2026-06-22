@@ -66,6 +66,19 @@ func ShowActiveInfoJSON() error {
 	return enc.Encode(out)
 }
 
+// ShowActiveQR prints just the join-URL QR code for the running agent, no
+// banner. Handy for showing on a second monitor or in a video call without
+// the rest of the session details cluttering the frame.
+func ShowActiveQR() error {
+	a, err := loadActive()
+	if err != nil {
+		return err
+	}
+	joinURL := fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN)
+	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
+	return nil
+}
+
 func loadActive() (*session.Active, error) {
 	a, err := session.ReadActive()
 	if err != nil {

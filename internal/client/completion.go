@@ -38,7 +38,7 @@ _reminal_complete() {
         cword=$COMP_CWORD
     }
 
-    local subcommands="connect relay version upgrade info doctor completion help"
+    local subcommands="connect relay version upgrade info qr doctor completion help"
     local flags="--connect --pin --verbose -v"
 
     case "${prev}" in
@@ -76,6 +76,7 @@ _reminal() {
         'version:Print version'
         'upgrade:Upgrade to the latest release'
         'info:Reprint session ID / PIN / URL / QR for the running agent'
+        'qr:Print just the join QR for the running agent'
         'doctor:Run a self-diagnostic'
         'completion:Generate shell completion script'
         'help:Show help'
@@ -115,6 +116,7 @@ complete -c reminal -n '__fish_use_subcommand' -a 'relay'      -d 'Start a local
 complete -c reminal -n '__fish_use_subcommand' -a 'version'    -d 'Print version'
 complete -c reminal -n '__fish_use_subcommand' -a 'upgrade'    -d 'Upgrade to the latest release'
 complete -c reminal -n '__fish_use_subcommand' -a 'info'       -d 'Reprint session info for the running agent'
+complete -c reminal -n '__fish_use_subcommand' -a 'qr'         -d 'Print just the join QR for the running agent'
 complete -c reminal -n '__fish_use_subcommand' -a 'doctor'     -d 'Run a self-diagnostic'
 complete -c reminal -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion script'
 complete -c reminal -n '__fish_use_subcommand' -a 'help'       -d 'Show help'
