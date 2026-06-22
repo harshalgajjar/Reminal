@@ -196,6 +196,29 @@ func (v *Viewer) Run() error {
 			backoff = initialBackoff
 		}
 
+		// Rate-limited path: switch to a long pause so reconnect spam
+		// doesn't extend Cloudflare's throttle window. Same handling
+		// as the agent.
+		var rl *rateLimitedError
+		if errors.As(err, &rl) {
+			wait := rl.retryAfter
+			if wait < rateLimitMinWait {
+				wait = rateLimitMinWait
+			}
+			v.notify(humanize(err))
+			select {
+			case <-intCh:
+				fmt.Fprint(os.Stderr, "\r\n")
+				return nil
+			case <-escapeCh:
+				return nil
+			case <-time.After(wait):
+			}
+			first = false
+			backoff = initialBackoff
+			continue
+		}
+
 		v.notify(fmt.Sprintf("%s Reconnecting in %v…", humanize(err), backoff))
 
 		select {
@@ -224,8 +247,11 @@ func (e *fatalErr) Unwrap() error { return e.err }
 func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, intCh <-chan os.Signal, escapeCh <-chan struct{}) error {
 	wsURL := config.SessionWS(v.sessionID, string(protocol.RoleViewer))
 	dialStart := time.Now()
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
+		if resp != nil && resp.StatusCode == 429 {
+			return &rateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
+		}
 		return fmt.Errorf("dial: %w", err)
 	}
 	dialTime := time.Since(dialStart)

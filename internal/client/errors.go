@@ -4,9 +4,46 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
+
+// rateLimitedError is returned when the relay's edge (Cloudflare on the
+// workers.dev domain) responds 429 to the WS upgrade. The main reconnect
+// loop uses this to switch to a 10-minute back-off instead of its usual
+// 30-second cap — repeatedly retrying inside a throttle window only
+// extends it.
+type rateLimitedError struct {
+	retryAfter time.Duration // 0 if the server didn't advise one
+}
+
+func (e *rateLimitedError) Error() string {
+	if e.retryAfter > 0 {
+		return "relay rate-limited (retry after " + e.retryAfter.String() + ")"
+	}
+	return "relay rate-limited"
+}
+
+// parseRetryAfter handles both Retry-After variants — seconds (an
+// integer) or an HTTP-date string. Returns 0 when neither parses,
+// letting the caller fall back to its own default.
+func parseRetryAfter(h string) time.Duration {
+	h = strings.TrimSpace(h)
+	if h == "" {
+		return 0
+	}
+	if n, err := strconv.Atoi(h); err == nil && n > 0 {
+		return time.Duration(n) * time.Second
+	}
+	if t, err := time.Parse(time.RFC1123, h); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
 
 // humanize turns a raw error (typically from a websocket dial, a relay error
 // message, or a system call) into a one-line, actionable explanation aimed at
@@ -25,6 +62,18 @@ func humanize(err error) string {
 }
 
 func classify(err error) string {
+	// Specific typed errors get explicit copy. rateLimitedError is the
+	// one case where the agent must surface a clear "this is throttle,
+	// not your session" message — the default "bad handshake → session
+	// ended" mapping below is wrong and misleading here.
+	var rl *rateLimitedError
+	if errors.As(err, &rl) {
+		if rl.retryAfter > 0 {
+			return "Relay throttled this client (Cloudflare workers.dev rate limit) — backing off " + rl.retryAfter.String() + "."
+		}
+		return "Relay throttled this client (Cloudflare workers.dev rate limit) — backing off. Frequent reconnects extend the block; if this persists, move the relay onto a custom domain."
+	}
+
 	raw := err.Error()
 
 	// Relay-supplied error messages already pass through humans; recognise

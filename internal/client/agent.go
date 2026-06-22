@@ -338,6 +338,31 @@ func (a *Agent) Run() error {
 		if time.Since(start) > stableThresh {
 			backoff = initialBackoff
 		}
+
+		// Rate-limited path: the relay's edge (Cloudflare) has flagged
+		// this client. Retrying at the normal 1–30s cadence just keeps
+		// the throttle hot — switch to a 10-minute pause (or whatever
+		// Retry-After advised) so the bucket can drain. We DON'T grow
+		// `backoff` past initial on this branch; once the throttle
+		// clears we want fast reconnects again.
+		var rl *rateLimitedError
+		if errors.As(err, &rl) {
+			wait := rl.retryAfter
+			if wait < rateLimitMinWait {
+				wait = rateLimitMinWait
+			}
+			agentNotify("  reminal: %s\n", humanize(err))
+			select {
+			case <-shellExit:
+				return nil
+			case <-a.hostEscape:
+				return nil
+			case <-time.After(wait):
+			}
+			backoff = initialBackoff
+			continue
+		}
+
 		agentNotify("  reminal: %s Reconnecting in %v…\n", humanize(err), backoff)
 
 		select {
@@ -353,6 +378,12 @@ func (a *Agent) Run() error {
 		}
 	}
 }
+
+// rateLimitMinWait is the floor for how long we wait after a 429.
+// Cloudflare's throttle window is opaque; 10 min is long enough to
+// drain in practice without making the user wait too long when they
+// happen to start a session right at the tail of a previous burst.
+const rateLimitMinWait = 10 * time.Minute
 
 // syncSizeToPTY copies the host terminal's current size into the PTY so the
 // shell sees the correct cols/rows. Called on startup and on every SIGWINCH.
@@ -779,8 +810,16 @@ func (a *Agent) pumpHostStdin() {
 
 func (a *Agent) runConnection(shellExit <-chan struct{}) error {
 	wsURL := config.SessionWS(a.sessionID, string(protocol.RoleAgent))
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
+		// Cloudflare throttles workers.dev WS upgrades aggressively and
+		// returns 429 (a fresh HTML page, no Worker invocation at all).
+		// Surface that distinctly so the user sees "throttled — back off
+		// 10 min" instead of the misleading "session ended". Re-attempts
+		// at sub-minute cadence keep the IP/domain on the bad list.
+		if resp != nil && resp.StatusCode == 429 {
+			return &rateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
+		}
 		return fmt.Errorf("dial relay: %w", err)
 	}
 	defer conn.Close()
