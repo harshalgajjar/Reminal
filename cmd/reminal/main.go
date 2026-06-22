@@ -117,13 +117,29 @@ func main() {
 			}
 			return
 		case "attach":
-			if err := runAttach(); err != nil {
+			idArg := ""
+			if len(os.Args) > 2 && !strings.HasPrefix(os.Args[2], "-") {
+				idArg = os.Args[2]
+			}
+			if err := runAttach(idArg); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
 			return
 		case "stop":
-			if err := runStop(); err != nil {
+			idArg := ""
+			yes := false
+			for _, a := range os.Args[2:] {
+				switch a {
+				case "-y", "--yes":
+					yes = true
+				default:
+					if !strings.HasPrefix(a, "-") && idArg == "" {
+						idArg = a
+					}
+				}
+			}
+			if err := runStop(idArg, yes); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
@@ -155,6 +171,36 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "new":
+			if err := runNew(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "list", "ls":
+			if err := runList(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "kill":
+			idArg := ""
+			yes := false
+			for _, a := range os.Args[2:] {
+				switch a {
+				case "-y", "--yes":
+					yes = true
+				default:
+					if !strings.HasPrefix(a, "-") && idArg == "" {
+						idArg = a
+					}
+				}
+			}
+			if err := runKill(idArg, yes); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -173,10 +219,31 @@ func main() {
 	pin := flag.String("pin", "", "PIN for the remote session (prompted if omitted)")
 	verbose := flag.Bool("v", false, "verbose mode — append raw error detail to status lines (same as REMINAL_DEBUG=1)")
 	verboseLong := flag.Bool("verbose", false, "alias for -v")
+	headless := flag.Bool("headless", false, "run without owning the host terminal — for spawned background sessions; users normally invoke this via `reminal new`")
+	handshakeFD := flag.Int("handshake-fd", 0, "fd inherited from `reminal new` for the credentials handshake (internal)")
 	flag.Parse()
 
 	if *verbose || *verboseLong {
 		os.Setenv("REMINAL_DEBUG", "1")
+	}
+
+	// Headless agent path: skip the upgrade prompt + the
+	// "already-running, attach?" prompt — neither makes sense for a
+	// detached background child. Run the agent directly.
+	if *headless {
+		opts := client.AgentOptions{Headless: true, HandshakeFD: *handshakeFD}
+		agent, err := client.NewAgentWith(version, opts)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		stopKeepAwake := keepawake.Start()
+		defer stopKeepAwake()
+		if err := agent.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Offer to upgrade if a newer release is available. Runs before we hand
@@ -225,7 +292,7 @@ func main() {
 			line, _ := reader.ReadString('\n')
 			resp := strings.ToLower(strings.TrimSpace(line))
 			if resp == "" || resp == "y" || resp == "yes" {
-				if err := runAttach(); err != nil {
+				if err := runAttach(existing.ID); err != nil {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
 					os.Exit(1)
 				}
@@ -253,9 +320,12 @@ func printHelp() {
 
 Usage:
   reminal                                  Share this terminal (works out of the box)
+  reminal new                              Spawn a fresh background session (detached — survives this terminal closing)
+  reminal list                             List every reminal session running on this machine
   reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
-  reminal attach                           Re-connect to the agent running on this machine (no copy-paste)
-  reminal stop                             Stop broadcasting (kicks viewers, keeps your local shell running)
+  reminal attach [id]                      Re-connect to a local agent as a viewer (no copy-paste). id required if multiple
+  reminal stop [id] [-y]                   Stop broadcasting (kicks viewers, keeps shell alive). Explains consequences first
+  reminal kill [id] [-y]                   Fully terminate a session (irreversible — kills shell + disconnects viewers)
   reminal send <file>                      Push a file to every connected viewer (web client auto-downloads)
   reminal notify <message>                 Push a notification to viewers (browser notification on web)
   reminal connections                      List currently attached viewers with connect time
@@ -425,44 +495,202 @@ func runSend(path string) error {
 	return nil
 }
 
+// resolveActive picks a target session from the supplied id arg. With no
+// arg and exactly one session running, that session is returned. With
+// multiple, we print the list and require the caller to disambiguate so
+// `reminal stop`/`kill`/`attach` can't silently target the wrong agent.
+func resolveActive(idArg string) (*session.Active, error) {
+	idArg = strings.ToUpper(strings.TrimSpace(idArg))
+	all, err := session.ReadAllActive()
+	if err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		return nil, errors.New("no active reminal session on this machine — start one with `reminal` or `reminal new`")
+	}
+	if idArg != "" {
+		for i := range all {
+			if all[i].ID == idArg {
+				return &all[i], nil
+			}
+		}
+		return nil, fmt.Errorf("no active session with id %q (running: %s)", idArg, joinIDs(all))
+	}
+	if len(all) == 1 {
+		return &all[0], nil
+	}
+	return nil, fmt.Errorf("multiple sessions running — pick one (%s)", joinIDs(all))
+}
+
+func joinIDs(all []session.Active) string {
+	ids := make([]string, len(all))
+	for i, a := range all {
+		ids[i] = a.ID
+	}
+	return strings.Join(ids, ", ")
+}
+
 // runStop tells the agent running on this machine to stop broadcasting to
-// the relay (closes the WS, clears active.json, kicks any viewers) while
+// the relay (closes the WS, clears active record, kicks any viewers) while
 // keeping its PTY pumps alive — the host's terminal continues working as a
 // plain local shell. Useful when you've returned to your laptop and don't
 // need the remote-share open anymore but want to keep the shell session.
-func runStop() error {
-	a, err := session.ReadActive()
+//
+// Always prints the consequences before acting so the user doesn't trigger
+// a viewer disconnect by mistake. `-y` skips the "press Enter to continue"
+// gate for scripting.
+func runStop(idArg string, yes bool) error {
+	a, err := resolveActive(idArg)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return errors.New("no active reminal session to stop")
 		}
 		return err
 	}
+	fmt.Printf("\n  This will pause session %s.\n", a.ID)
+	if a.Viewers > 0 {
+		fmt.Printf("    · %d connected viewer(s) will be disconnected.\n", a.Viewers)
+	} else {
+		fmt.Println("    · No viewers are currently attached.")
+	}
+	if a.Headless {
+		fmt.Println("    · The shell keeps running in the background — nothing is killed, no work is lost.")
+		fmt.Printf("    · Resume with: `reminal kill %s` to fully end it, or leave it paused.\n", a.ID)
+	} else {
+		fmt.Println("    · The local shell keeps running — nothing is killed, no work is lost.")
+		fmt.Println("    · The session ID and PIN stop accepting new viewers until you start a fresh `reminal`.")
+	}
+	fmt.Println()
+	if !yes && term.IsTerminal(int(os.Stdin.Fd())) {
+		fmt.Print("  Press Enter to continue, Ctrl-C to cancel: ")
+		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	}
 	if err := syscall.Kill(a.PID, syscall.SIGUSR1); err != nil {
 		return fmt.Errorf("signal PID %d: %w", a.PID, err)
 	}
-	fmt.Printf("Sent stop to reminal (PID %d) — session %s. The local shell continues.\n",
-		a.PID, a.ID)
+	fmt.Printf("  Stopped session %s (PID %d).\n", a.ID, a.PID)
 	return nil
 }
 
-// runAttach finds the agent running on this machine (via ~/.reminal/
-// active.json) and connects to it as a viewer using its recorded session ID
-// and PIN. The user pays zero copy-paste cost to drive the existing PTY from
-// a different shell — useful when reminal is sitting in a tmux pane / nohup
-// / a window the user can't get back to.
-func runAttach() error {
-	a, err := session.ReadActive()
+// runAttach finds an agent running on this machine and connects to it as
+// a viewer using its recorded session ID and PIN. With multiple sessions
+// running, an explicit id is required.
+func runAttach(idArg string) error {
+	a, err := resolveActive(idArg)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return errors.New("no active reminal session on this machine — start one with `reminal`")
-		}
 		return err
 	}
 	if os.Getenv("REMINAL_SESSION") == a.ID {
 		return fmt.Errorf("already inside session %s — attaching would loop viewer output back through the PTY; open a different terminal first", a.ID)
 	}
 	return client.Connect(a.ID, a.PIN)
+}
+
+// runNew spawns a fresh headless reminal in the background and prints
+// its credentials in the calling terminal. Behaves exactly like opening
+// a new terminal and typing `reminal` — except the shell runs detached,
+// so killing this terminal doesn't kill the session.
+func runNew() error {
+	if os.Getenv("REMINAL_NEW_NESTED") == "1" {
+		return errors.New("refusing to spawn from inside another reminal new — protection against runaway recursion")
+	}
+	sp, err := client.Spawn()
+	if err != nil {
+		return err
+	}
+	client.PrintSpawned(sp, version)
+	return nil
+}
+
+// runList prints one line per running reminal agent on this host.
+func runList() error {
+	all, err := session.ReadAllActive()
+	if err != nil {
+		return err
+	}
+	if len(all) == 0 {
+		fmt.Println("No reminal sessions running. Start one with `reminal` or `reminal new`.")
+		return nil
+	}
+	fmt.Printf("%d session(s) running:\n\n", len(all))
+	now := time.Now()
+	for _, a := range all {
+		mode := "foreground"
+		if a.Headless {
+			mode = "headless"
+		}
+		age := now.Sub(a.StartedAt).Round(time.Second)
+		viewers := ""
+		if a.Viewers > 0 {
+			noun := "viewer"
+			if a.Viewers != 1 {
+				noun = "viewers"
+			}
+			viewers = fmt.Sprintf(", %d %s", a.Viewers, noun)
+		}
+		fmt.Printf("  %s  · %-10s · PID %-6d · up %v%s\n", a.ID, mode, a.PID, age, viewers)
+		fmt.Printf("           %s\n", a.OpenURL)
+	}
+	fmt.Println()
+	fmt.Println("  reminal attach <id>    drive a session from this terminal")
+	fmt.Println("  reminal stop <id>      pause broadcasting (keeps shell alive)")
+	fmt.Println("  reminal kill <id>      fully terminate the session")
+	return nil
+}
+
+// runKill terminates the named agent. Destructive — asks for explicit
+// y/N confirmation unless `-y` was passed.
+func runKill(idArg string, yes bool) error {
+	a, err := resolveActive(idArg)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("\n  This will fully terminate session %s on this machine.\n", a.ID)
+	fmt.Println("    · The shell process inside will be killed — anything running in")
+	fmt.Println("      that shell stops immediately (unsaved work is lost).")
+	if a.Viewers > 0 {
+		noun := "viewer"
+		if a.Viewers != 1 {
+			noun = "viewers"
+		}
+		fmt.Printf("    · %d connected %s will be disconnected.\n", a.Viewers, noun)
+	} else {
+		fmt.Println("    · No viewers are currently attached.")
+	}
+	fmt.Println("    · The session ID and PIN stop being valid right away.")
+	fmt.Println("    · This is irreversible.")
+	fmt.Println()
+	if !yes {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return errors.New("refusing to kill without confirmation — re-run with -y to skip the prompt")
+		}
+		fmt.Print("  Proceed? [y/N]: ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		resp := strings.ToLower(strings.TrimSpace(line))
+		if resp != "y" && resp != "yes" {
+			fmt.Println("  Aborted.")
+			return nil
+		}
+	}
+	if err := syscall.Kill(a.PID, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("SIGTERM PID %d: %w", a.PID, err)
+	}
+	// Give the agent a brief window to run its defers (clear active
+	// record, close WS gracefully, restore host terminal if foreground).
+	// Then escalate to SIGKILL if it's still alive — a hung agent
+	// shouldn't be able to refuse a kill.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(a.PID, 0) != nil {
+			break // process gone
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if syscall.Kill(a.PID, 0) == nil {
+		_ = syscall.Kill(a.PID, syscall.SIGKILL)
+	}
+	fmt.Printf("  Killed session %s (PID %d).\n", a.ID, a.PID)
+	return nil
 }
 
 // runConnect is the shared body of both `reminal connect <target> [pin]`

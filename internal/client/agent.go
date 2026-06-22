@@ -87,9 +87,44 @@ type Agent struct {
 	// to readDeadline (60s) for the read to time out.
 	currentConnMu sync.Mutex
 	currentConn   *websocket.Conn
+
+	// headless disables every interaction with the host terminal: no raw
+	// mode, no host indicator (cursor color / window title / banner),
+	// no host stdin pump, no Ctrl-] escape. The agent still owns its
+	// PTY and broadcasts to viewers — it just runs invisibly. Set by
+	// `reminal new` (which forks a detached child) and `reminal --headless`.
+	headless bool
+	// handshakeFD, if non-zero, is an fd inherited from the parent that
+	// `reminal new` is reading from to learn the spawned session's
+	// credentials. The headless agent writes a one-line JSON banner to
+	// this fd and closes it once startup is complete, then the parent
+	// process exits and the child detaches.
+	handshakeFD int
 }
 
+// AgentOptions configures startup behaviour. Zero-value runs the
+// classic foreground agent (the default for plain `reminal`).
+type AgentOptions struct {
+	// Headless skips every host-terminal interaction (raw mode, host
+	// indicator, host stdin pump). Set by `reminal new` for detached
+	// background sessions.
+	Headless bool
+	// HandshakeFD is an inherited fd to which the headless agent writes
+	// a one-line JSON `{"id","pin","open_url","pid"}` once startup is
+	// complete, then closes. Used by `reminal new` to learn the
+	// spawned child's credentials before exiting. Zero means none.
+	HandshakeFD int
+}
+
+// NewAgent builds a foreground agent (no host-terminal isolation).
+// Equivalent to NewAgentWith(version, AgentOptions{}).
 func NewAgent(version string) (*Agent, error) {
+	return NewAgentWith(version, AgentOptions{})
+}
+
+// NewAgentWith builds an agent with the given options. Headless mode is
+// the only non-foreground variant today.
+func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 	id, err := session.NewID(8)
 	if err != nil {
 		return nil, err
@@ -118,34 +153,42 @@ func NewAgent(version string) (*Agent, error) {
 		buf:            newScrollback(scrollbackBytes),
 		hostEscape:     make(chan struct{}),
 		pendingUploads: make(map[string]*pendingUpload),
+		headless:       opts.Headless,
+		handshakeFD:    opts.HandshakeFD,
 	}, nil
 }
 
 func (a *Agent) Run() error {
-	fmt.Println()
-	// Green "HOST" badge sits inline at the top so even on macOS
-	// Terminal.app — where we deliberately don't tint the cursor
-	// (window-wide leak) — there's still an unmistakable visual cue that
-	// THIS terminal is the source agent, not a viewer attached to one.
-	fmt.Printf("  reminal — remote terminal · v%s · \x1b[1;32m[HOST]\x1b[0m %s\n",
-		a.version, a.sessionID)
-	fmt.Println()
-	fmt.Printf("  Session:  %s\n", a.sessionID)
-	fmt.Printf("  PIN:      %s\n", a.pin)
-	fmt.Printf("  Open:     %s/?s=%s\n", a.webURL, a.sessionID)
-	fmt.Printf("  Connect:  reminal connect %s %s\n", a.sessionID, a.pin)
-	fmt.Println()
-	a.printQR()
-	fmt.Println("  \x1b[1;32mHOST:\x1b[0m This terminal IS the shared shell — type away. Remote viewers join in parallel.")
-	fmt.Println("  Press Ctrl-] to stop reminal · `reminal info` shows the join details again")
-	fmt.Println()
+	// Banner goes to the host terminal only in foreground mode. Headless
+	// agents have no terminal — credentials are delivered to the parent
+	// `reminal new` process via the handshake fd and from there printed
+	// to the user's calling shell.
+	if !a.headless {
+		fmt.Println()
+		// Green "HOST" badge sits inline at the top so even on macOS
+		// Terminal.app — where we deliberately don't tint the cursor
+		// (window-wide leak) — there's still an unmistakable visual cue that
+		// THIS terminal is the source agent, not a viewer attached to one.
+		fmt.Printf("  reminal — remote terminal · v%s · \x1b[1;32m[HOST]\x1b[0m %s\n",
+			a.version, a.sessionID)
+		fmt.Println()
+		fmt.Printf("  Session:  %s\n", a.sessionID)
+		fmt.Printf("  PIN:      %s\n", a.pin)
+		fmt.Printf("  Open:     %s/?s=%s\n", a.webURL, a.sessionID)
+		fmt.Printf("  Connect:  reminal connect %s %s\n", a.sessionID, a.pin)
+		fmt.Println()
+		a.printQR()
+		fmt.Println("  \x1b[1;32mHOST:\x1b[0m This terminal IS the shared shell — type away. Remote viewers join in parallel.")
+		fmt.Println("  Press Ctrl-] to stop reminal · `reminal info` shows the join details again")
+		fmt.Println()
+	}
 
 	// Record this session for `reminal info`. Best-effort: failures here
 	// shouldn't break agent startup. startedAt is stored on the Agent so
 	// later viewer-count rewrites keep the same value.
 	a.startedAt = time.Now()
 	_ = session.WriteActive(a.activeRecord(0))
-	defer func() { _ = session.ClearActive() }()
+	defer func() { _ = session.ClearActive(a.sessionID) }()
 
 	// Start the per-agent control socket so `reminal send <file>` (and any
 	// other future sibling commands) can talk to us locally without going
@@ -171,7 +214,12 @@ func (a *Agent) Run() error {
 	// turns `reminal` from a "display only" host into the same kind of
 	// interactive shell `reminal connect` provides — no second terminal
 	// needed, and remote viewers still join the same PTY in parallel.
-	if xterm.IsTerminal(int(os.Stdin.Fd())) {
+	//
+	// Skipped entirely in headless mode: the spawned background agent
+	// has no terminal to attach to (its stdin is /dev/null) so anything
+	// touching the host TTY would race with whatever shell the user
+	// spawned us from.
+	if !a.headless && xterm.IsTerminal(int(os.Stdin.Fd())) {
 		oldState, terr := xterm.MakeRaw(int(os.Stdin.Fd()))
 		if terr == nil {
 			defer xterm.Restore(int(os.Stdin.Fd()), oldState)
@@ -191,16 +239,26 @@ func (a *Agent) Run() error {
 		}
 	}
 
+	// Headless startup handshake: write the spawned session's credentials
+	// to the inherited fd 3 and close it, signalling the parent
+	// (`reminal new`) that we're ready and it can print + exit.
+	if a.headless && a.handshakeFD != 0 {
+		a.writeHandshake()
+	}
+
 	sessionStart := time.Now()
 	// Deferred so it runs on every clean exit path — shell exit, agent
 	// errors, signal-driven shutdown. Neutral wording ("session ended")
 	// covers both shell-typed-exit and user-killed-reminal cases.
-	defer func() {
-		agentNotify("\n  [%s] Session ended (v%s) · ran for %v\n  Run `reminal` again to start a new session.\n",
-			time.Now().Format("15:04:05"),
-			a.version,
-			time.Since(sessionStart).Round(time.Second))
-	}()
+	// Skipped in headless mode (no host terminal to print to).
+	if !a.headless {
+		defer func() {
+			agentNotify("\n  [%s] Session ended (v%s) · ran for %v\n  Run `reminal` again to start a new session.\n",
+				time.Now().Format("15:04:05"),
+				a.version,
+				time.Since(sessionStart).Round(time.Second))
+		}()
+	}
 
 	shellExit := make(chan struct{})
 	go func() {
@@ -306,6 +364,33 @@ func (a *Agent) syncSizeToPTY() {
 	_ = a.term.Resize(uint16(cols), uint16(rows))
 }
 
+// writeHandshake emits the agent's credentials to the parent process's
+// inherited pipe (fd 3) and closes it. `reminal new` blocks on this pipe
+// so the user's prompt only returns once the background session is up
+// and ready to accept viewers. Best-effort — a closed pipe (parent
+// already exited) is logged but doesn't break the headless agent.
+func (a *Agent) writeHandshake() {
+	if a.handshakeFD == 0 {
+		return
+	}
+	payload := map[string]any{
+		"id":       a.sessionID,
+		"pin":      a.pin,
+		"open_url": fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID),
+		"pid":      os.Getpid(),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	f := os.NewFile(uintptr(a.handshakeFD), "handshake")
+	if f == nil {
+		return
+	}
+	_, _ = f.Write(append(data, '\n'))
+	_ = f.Close()
+}
+
 // activeRecord builds the session.Active value the agent writes to
 // ~/.reminal/active.json. Used at startup and on every viewer-count
 // transition so `reminal info` and the attach-to-existing prompt see a
@@ -317,6 +402,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		OpenURL:   fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID),
 		PID:       os.Getpid(),
 		StartedAt: a.startedAt,
+		Headless:  a.headless,
 		Viewers:   viewers,
 	}
 }
@@ -601,7 +687,7 @@ func (a *Agent) pause() {
 	if !a.paused.CompareAndSwap(false, true) {
 		return // already paused
 	}
-	_ = session.ClearActive()
+	_ = session.ClearActive(a.sessionID)
 	a.currentConnMu.Lock()
 	if a.currentConn != nil {
 		_ = a.currentConn.Close()
