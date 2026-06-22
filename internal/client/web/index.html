@@ -775,7 +775,22 @@
 
     function openSocket() {
       cancelReconnect();
-      if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+      if (ws) {
+        // Detach handlers BEFORE closing so any messages already in-flight
+        // on the old socket don't fire our onmessage as they arrive —
+        // otherwise two live sockets (the old one during its closing
+        // grace period and the new one we're about to open) can both
+        // deliver the same agent broadcast and we'd render every byte
+        // twice.
+        try {
+          ws.onopen = null;
+          ws.onmessage = null;
+          ws.onclose = null;
+          ws.onerror = null;
+          ws.close();
+        } catch (_) {}
+        ws = null;
+      }
       authed = false;
       agentLive = false;
 
@@ -887,6 +902,14 @@
         }
         case 'data': {
           if (!cryptoKey) break;
+          // Skip any data chunk whose seq we've already rendered. Without
+          // this guard, anything that delivered the same message twice
+          // (an orphaned WS connection from a race during reconnect, a
+          // late-joiner's resume replay arriving alongside our own
+          // current stream, a relay glitch) would render duplicates —
+          // user sees "cclear" instead of "clear". Same dedup the Go
+          // viewer has had since v0.4.1.
+          if (typeof msg.seq === 'number' && msg.seq <= lastSeq) break;
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             if (typeof msg.seq === 'number' && msg.seq > lastSeq) lastSeq = msg.seq;
@@ -914,7 +937,16 @@
       manualClose = true;
       cancelReconnect();
       clearCred();
-      if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+      if (ws) {
+        try {
+          ws.onopen = null;
+          ws.onmessage = null;
+          ws.onclose = null;
+          ws.onerror = null;
+          ws.close();
+        } catch (_) {}
+        ws = null;
+      }
       authed = false;
       agentLive = false;
       if (helloShown && connectedAt) {
