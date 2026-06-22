@@ -31,6 +31,10 @@ const (
 	// viewers (broadcast like TypeData). Payload after decrypt is JSON:
 	// {"name": "...", "content": "<base64>", "size": <int>}.
 	TypeDownload MessageType = "download"
+	// TypeNotify carries an encrypted user notification from the agent to
+	// every viewer ("build done", "tests passed"). Payload after decrypt
+	// is JSON: {"message": "..."}.
+	TypeNotify MessageType = "notify"
 )
 
 type Message struct {

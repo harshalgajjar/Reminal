@@ -2,12 +2,14 @@ package client
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -403,6 +405,27 @@ func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) error {
 			return &fatalErr{err: fmt.Errorf("%s", msg.Error)}
 		case protocol.TypePing:
 			_ = v.writeMsg(conn, protocol.Message{Type: protocol.TypePong})
+		case protocol.TypeDownload:
+			plaintext, err := v.box.Decrypt(msg.Data)
+			if err != nil {
+				v.notify(fmt.Sprintf("download failed: decrypt: %v", err))
+				continue
+			}
+			v.handleDownload(plaintext)
+		case protocol.TypeNotify:
+			plaintext, err := v.box.Decrypt(msg.Data)
+			if err != nil {
+				continue
+			}
+			var n struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(plaintext, &n) == nil && n.Message != "" {
+				// Bell + dim line so the user gets both an audible cue
+				// and visible context. xterm.js and most terminals ring
+				// the bell on \x07.
+				v.notify(fmt.Sprintf("\x07notify: %s", n.Message))
+			}
 		}
 	}
 }
@@ -440,6 +463,48 @@ func (v *Viewer) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
 // minimize disruption to the live terminal output below.
 func (v *Viewer) notify(text string) {
 	fmt.Fprintf(os.Stderr, "\r\n\x1b[2m[reminal] %s\x1b[0m\r\n", text)
+}
+
+// handleDownload decrypts a TypeDownload payload (already decrypted at the
+// call site), parses it, and writes the file to ~/Downloads/reminal-incoming/.
+// Mirrors the agent-side handleUpload semantics so files move both ways
+// without surprises.
+func (v *Viewer) handleDownload(plaintext []byte) {
+	var payload struct {
+		Name    string `json:"name"`
+		Content string `json:"content"` // base64
+		Size    int    `json:"size"`
+	}
+	if err := json.Unmarshal(plaintext, &payload); err != nil {
+		v.notify(fmt.Sprintf("download failed: parse: %v", err))
+		return
+	}
+	if payload.Name == "" {
+		v.notify("download failed: missing filename")
+		return
+	}
+	safe := filepath.Base(payload.Name)
+	raw, err := base64.StdEncoding.DecodeString(payload.Content)
+	if err != nil {
+		v.notify(fmt.Sprintf("download failed: bad base64: %v", err))
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		v.notify(fmt.Sprintf("download failed: %v", err))
+		return
+	}
+	dir := filepath.Join(home, "Downloads", "reminal-incoming")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		v.notify(fmt.Sprintf("download failed: mkdir: %v", err))
+		return
+	}
+	path := uniquePath(filepath.Join(dir, safe))
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		v.notify(fmt.Sprintf("download failed: write: %v", err))
+		return
+	}
+	v.notify(fmt.Sprintf("downloaded %s (%d bytes)", path, len(raw)))
 }
 
 // printDisconnectSummary prints a one-line wrap-up on viewer exit. Skipped if

@@ -90,9 +90,46 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			return
 		}
 		_, _ = fmt.Fprintln(conn, "ok")
+	case strings.HasPrefix(line, "notify "):
+		msg := strings.TrimSpace(strings.TrimPrefix(line, "notify "))
+		if err := a.broadcastNotify(msg); err != nil {
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		_, _ = fmt.Fprintln(conn, "ok")
 	default:
 		_, _ = fmt.Fprintln(conn, "error: unknown command")
 	}
+}
+
+// broadcastNotify sends an encrypted notification message to every viewer.
+// Web clients fire a browser Notification (with permission); the terminal
+// viewer prints the message and rings the bell.
+func (a *Agent) broadcastNotify(message string) error {
+	if message == "" {
+		return errors.New("message required")
+	}
+	payload, err := json.Marshal(struct {
+		Message string `json:"message"`
+	}{Message: message})
+	if err != nil {
+		return err
+	}
+	enc, err := a.box.Encrypt(payload)
+	if err != nil {
+		return err
+	}
+	a.currentConnMu.Lock()
+	conn := a.currentConn
+	a.currentConnMu.Unlock()
+	if conn == nil {
+		return errors.New("not connected to relay (is the agent paused?)")
+	}
+	if err := a.writeMsg(conn, protocol.Message{Type: protocol.TypeNotify, Data: enc}); err != nil {
+		return err
+	}
+	a.broadcastNotice("notified viewers: " + message)
+	return nil
 }
 
 // broadcastFile reads the file at path and ships it to every connected viewer

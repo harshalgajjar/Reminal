@@ -685,6 +685,15 @@
           }
           break;
         }
+        case 'notify': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            fireNotification(payload.message || '');
+          } catch (_) {}
+          break;
+        }
         case 'data': {
           if (!cryptoKey) break;
           try {
@@ -788,6 +797,39 @@
         term.focus();
       });
     });
+
+    // fireNotification handles TypeNotify messages from the agent. Falls
+    // back gracefully when the browser denied permission, doesn't support
+    // the API, or the tab is in the foreground (in which case we still
+    // print a dim line + ring the terminal bell so the user notices).
+    function fireNotification(message) {
+      const text = (message || '').trim();
+      if (!text) return;
+      // Always write into the terminal + bell, so users without browser
+      // notification permission still get an in-page signal.
+      term.write('\r\n\x07\x1b[1;33m[reminal notify]\x1b[0m ' + text + '\r\n');
+      if (!('Notification' in window)) return;
+      const sessionLabel = sessionId || 'reminal';
+      const fire = () => {
+        try {
+          new Notification('reminal · ' + sessionLabel, {
+            body: text,
+            tag: 'reminal-' + sessionLabel,
+            silent: false,
+          });
+        } catch (_) {}
+      };
+      if (Notification.permission === 'granted') {
+        fire();
+      } else if (Notification.permission !== 'denied') {
+        // Lazy permission request — only ask when there's actually a
+        // notification to deliver, so first-load isn't gated by a permission
+        // dialog the user might dismiss without thinking.
+        Notification.requestPermission().then((p) => {
+          if (p === 'granted') fire();
+        });
+      }
+    }
 
     // triggerDownload turns a base64 file payload from the agent into a
     // local download via a Blob + a hidden anchor click. Works on every
