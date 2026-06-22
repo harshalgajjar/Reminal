@@ -11,6 +11,7 @@ import (
 
 	"github.com/reminal/reminal/internal/client"
 	"github.com/reminal/reminal/internal/keepawake"
+	"github.com/reminal/reminal/internal/session"
 	"github.com/reminal/reminal/internal/updater"
 	"golang.org/x/term"
 )
@@ -109,6 +110,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "attach":
+			if err := runAttach(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -157,6 +164,7 @@ func printHelp() {
 Usage:
   reminal                                  Share this terminal (works out of the box)
   reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
+  reminal attach                           Re-connect to the agent running on this machine (no copy-paste)
   reminal info [--json]                    Reprint session ID / PIN / URL / QR for the running agent (or JSON)
   reminal qr                               Print just the join QR for the running agent (for a second screen)
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
@@ -205,6 +213,22 @@ func printVersionInfo() {
 	fmt.Printf("  go:      %s\n", runtime.Version())
 	fmt.Printf("  os/arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Println("  bugs:    https://github.com/harshalgajjar/Reminal/issues")
+}
+
+// runAttach finds the agent running on this machine (via ~/.reminal/
+// active.json) and connects to it as a viewer using its recorded session ID
+// and PIN. The user pays zero copy-paste cost to drive the existing PTY from
+// a different shell — useful when reminal is sitting in a tmux pane / nohup
+// / a window the user can't get back to.
+func runAttach() error {
+	a, err := session.ReadActive()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.New("no active reminal session on this machine — start one with `reminal`")
+		}
+		return err
+	}
+	return client.Connect(a.ID, a.PIN)
 }
 
 // runConnect is the shared body of both `reminal connect <target> [pin]`
