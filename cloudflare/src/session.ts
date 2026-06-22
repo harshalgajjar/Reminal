@@ -331,9 +331,17 @@ export class SessionRoom {
   // ---- tunnel: HTTP proxy ----
 
   private async handleTunnelHttp(request: Request, url: URL): Promise<Response> {
-    const parts = url.pathname.split("/").filter(Boolean); // ["p", "<id>", ...rest]
-    const sessionId = (parts[1] ?? "").toUpperCase();
-    const rest = "/" + parts.slice(2).join("/");
+    // Match `/p/<id>` and slice the rest verbatim so the trailing slash
+    // (and anything else) survives intact. The earlier split/join
+    // approach dropped a trailing slash, which caused upstream apps to
+    // redirect "/folder" → "/folder/", we'd re-prefix it, and the
+    // browser would bounce back to "/folder" again → infinite loop.
+    const m = url.pathname.match(/^\/p\/([A-Z0-9]+)(\/.*|$)/i);
+    if (!m) {
+      return new Response("Not found", { status: 404 });
+    }
+    const sessionId = m[1].toUpperCase();
+    const rest = m[2] || "/";
 
     const meta = (await this.state.storage.get<TunnelMeta>("tunnelMeta")) ?? null;
     if (!meta) {
