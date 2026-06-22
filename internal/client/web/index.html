@@ -304,6 +304,8 @@
     <button data-key="down">↓</button>
     <button data-key="left">←</button>
     <button data-key="right">→</button>
+    <button id="copy-btn" title="Copy selection to clipboard">Copy</button>
+    <button id="paste-btn" title="Paste from clipboard">Paste</button>
     <button id="find-btn" title="Search scrollback">Find</button>
     <button id="upload-btn" title="Upload file to host's ~/Downloads/reminal/">⇪ Upload</button>
     <input type="file" id="upload-input" multiple style="display:none">
@@ -1055,6 +1057,35 @@
       if (reverse) searchAddon.findPrevious(q, findOpts);
       else searchAddon.findNext(q, findOpts);
     }
+    // ---- Mobile copy / paste ----
+    // iOS Safari lets you select text in xterm with long-press but the
+    // OS Copy/Paste menu doesn't reach the canvas reliably. These two
+    // buttons go through the Web Clipboard API explicitly, which is
+    // gated on a user gesture (the tap satisfies that). Falls back to
+    // a status line on failure (permission denied, no selection, etc.).
+    document.getElementById('copy-btn').addEventListener('click', async () => {
+      const sel = term.getSelection();
+      if (!sel) {
+        term.write('\r\n\x1b[2m[reminal] nothing selected — long-press to select first\x1b[0m\r\n');
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(sel);
+        term.write('\r\n\x1b[2m[reminal] copied ' + sel.length + ' chars\x1b[0m\r\n');
+      } catch (e) {
+        term.write('\r\n\x1b[2m[reminal] copy failed: ' + e + '\x1b[0m\r\n');
+      }
+    });
+    document.getElementById('paste-btn').addEventListener('click', async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) await sendInput(text);
+      } catch (e) {
+        term.write('\r\n\x1b[2m[reminal] paste failed: ' + e + '\x1b[0m\r\n');
+      }
+      term.focus();
+    });
+
     document.getElementById('find-btn').addEventListener('click', openFind);
     document.getElementById('find-prev').addEventListener('click', () => findNext(true));
     document.getElementById('find-next').addEventListener('click', () => findNext(false));
