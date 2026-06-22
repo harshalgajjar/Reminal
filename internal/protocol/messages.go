@@ -38,4 +38,8 @@ type Message struct {
 	Error     string      `json:"error,omitempty"`
 	Seq       uint64      `json:"seq,omitempty"`
 	FromSeq   uint64      `json:"from_seq,omitempty"`
+	// Count carries the live viewer count when the relay sends a presence
+	// event (TypeConnected / TypeClosed) to the agent, so the host can
+	// show "(N active)" without tracking churn itself.
+	Count int `json:"count,omitempty"`
 }

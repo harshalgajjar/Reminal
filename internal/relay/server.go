@@ -139,8 +139,11 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 				// Tell the freshly-authed viewer whether the agent is here.
 				if agentOnline {
 					s.writeTo(p, protocol.Message{Type: protocol.TypeConnected})
-					// Inform agent that a viewer connected.
-					s.notifyPeer(sessionID, protocol.RoleAgent, protocol.Message{Type: protocol.TypeConnected})
+					// Inform agent that a viewer connected, with live count.
+					s.notifyPeer(sessionID, protocol.RoleAgent, protocol.Message{
+						Type:  protocol.TypeConnected,
+						Count: s.viewerCount(sessionID),
+					})
 				} else {
 					s.writeTo(p, protocol.Message{Type: protocol.TypeAgentOffline})
 				}
@@ -254,7 +257,10 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 				return
 			}
 			registered = true
-			s.notifyPeer(sessionID, protocol.RoleAgent, protocol.Message{Type: protocol.TypeConnected})
+			s.notifyPeer(sessionID, protocol.RoleAgent, protocol.Message{
+				Type:  protocol.TypeConnected,
+				Count: s.viewerCount(sessionID),
+			})
 			s.broadcastViewers(sessionID, protocol.Message{Type: protocol.TypeConnected})
 
 		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume:
@@ -348,10 +354,12 @@ func (s *Server) detach(sessionID string, role protocol.Role, conn *websocket.Co
 				break
 			}
 		}
-		if r.agent != nil && r.agent.authed && len(r.viewers) == 0 {
-			// Only tell the agent when the LAST viewer leaves; mid-fleet
-			// churn is noise on the host terminal.
-			s.writeTo(r.agent, protocol.Message{Type: protocol.TypeClosed, Error: "viewer disconnected"})
+		if r.agent != nil && r.agent.authed {
+			s.writeTo(r.agent, protocol.Message{
+				Type:  protocol.TypeClosed,
+				Error: "viewer disconnected",
+				Count: len(r.viewers),
+			})
 		}
 	}
 	empty := r.agent == nil && len(r.viewers) == 0 && r.cleanup == nil
@@ -450,6 +458,18 @@ func (s *Server) forward(sessionID string, from protocol.Role, msg protocol.Mess
 	for _, t := range targets {
 		s.writeTo(t, msg)
 	}
+}
+
+// viewerCount returns the current live viewer count for a session, used to
+// stamp presence notifications sent to the agent.
+func (s *Server) viewerCount(sessionID string) int {
+	r := s.getRoom(sessionID)
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.viewers)
 }
 
 // broadcastViewers sends msg to every authed viewer in the room. Used for

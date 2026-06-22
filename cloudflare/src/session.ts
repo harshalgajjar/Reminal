@@ -136,15 +136,20 @@ export class SessionRoom {
       // Schedule cleanup if the agent never returns.
       await this.state.storage.setAlarm(Date.now() + ORPHAN_TTL_MS);
     } else if (attachment.role === "viewer") {
-      // Only tell the agent when the LAST viewer leaves; mid-fleet
-      // viewer churn would be noise on the host terminal.
       const remaining = this.getSockets("viewer").filter(v => v !== ws);
       if (remaining.length === 0) {
         await this.state.storage.put("viewerAuthed", false);
-        const agent = this.getSocket("agent");
-        if (agent?.readyState === WebSocket.OPEN) {
-          agent.send(JSON.stringify({ type: "closed", error: "viewer disconnected" }));
-        }
+      }
+      // Always tell the agent about viewer churn so the host can show a
+      // live count; the message carries the post-disconnect count so the
+      // agent can render "(N still active)" or "Last viewer disconnected".
+      const agent = this.getSocket("agent");
+      if (agent?.readyState === WebSocket.OPEN) {
+        agent.send(JSON.stringify({
+          type: "closed",
+          error: "viewer disconnected",
+          count: remaining.length,
+        }));
       }
     }
   }
@@ -234,7 +239,14 @@ export class SessionRoom {
       ws.send(JSON.stringify({ type: "connected" }));
       const att = agent.deserializeAttachment() as Attachment;
       if (att?.authed) {
-        agent.send(JSON.stringify({ type: "connected" }));
+        // Live viewer count so the host can show "(N active)".
+        agent.send(JSON.stringify({
+          type: "connected",
+          count: this.getSockets("viewer").filter(v => {
+            const a = v.deserializeAttachment() as Attachment;
+            return a?.authed;
+          }).length,
+        }));
       }
     } else {
       ws.send(JSON.stringify({ type: "agent_offline" }));
