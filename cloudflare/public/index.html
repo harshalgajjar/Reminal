@@ -642,7 +642,14 @@
       const out = new Uint8Array(nonce.length + ct.byteLength);
       out.set(nonce);
       out.set(new Uint8Array(ct), nonce.length);
-      return btoa(String.fromCharCode(...out));
+      // Chunked because a spread (`...out`) blows the call stack for
+      // large ciphertexts (chunked file uploads can produce ~256 KB).
+      let binary = '';
+      const stride = 0x1000;
+      for (let i = 0; i < out.length; i += stride) {
+        binary += String.fromCharCode.apply(null, out.subarray(i, i + stride));
+      }
+      return btoa(binary);
     }
 
     async function decrypt(key, encoded) {
