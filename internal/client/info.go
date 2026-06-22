@@ -60,6 +60,11 @@ func printActiveBanner(a *session.Active) {
 	fmt.Printf("  Open:     %s\n", a.OpenURL)
 	fmt.Printf("  Connect:  reminal connect %s %s\n", a.ID, a.PIN)
 	fmt.Printf("  Started:  %s (PID %d)\n", a.StartedAt.Format(time.RFC3339), a.PID)
+	if a.Viewers > 0 {
+		fmt.Printf("  Viewers:  %d currently attached\n", a.Viewers)
+	} else {
+		fmt.Println("  Viewers:  none currently attached")
+	}
 	fmt.Println()
 	fmt.Println("  Scan to join from your phone:")
 	fmt.Println()

@@ -59,6 +59,9 @@ type Agent struct {
 	// treats it the same as a graceful shutdown signal so defers still run.
 	hostEscape chan struct{}
 
+	// startedAt is set once in Run() and used to keep session.Active's
+	// started_at stable when we rewrite the file on viewer-count changes.
+	startedAt time.Time
 	// paused is set by `reminal stop` (via SIGUSR1). When set, the main
 	// reconnect loop stops trying to reach the relay and the local shell
 	// keeps running on the host terminal as a plain interactive session.
@@ -116,14 +119,10 @@ func (a *Agent) Run() error {
 	fmt.Println()
 
 	// Record this session for `reminal info`. Best-effort: failures here
-	// shouldn't break agent startup.
-	_ = session.WriteActive(session.Active{
-		ID:        a.sessionID,
-		PIN:       a.pin,
-		OpenURL:   fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID),
-		PID:       os.Getpid(),
-		StartedAt: time.Now(),
-	})
+	// shouldn't break agent startup. startedAt is stored on the Agent so
+	// later viewer-count rewrites keep the same value.
+	a.startedAt = time.Now()
+	_ = session.WriteActive(a.activeRecord(0))
 	defer func() { _ = session.ClearActive() }()
 
 	// Pass REMINAL_SESSION into the spawned shell so `reminal info` run
@@ -279,6 +278,30 @@ func (a *Agent) syncSizeToPTY() {
 	_ = a.term.Resize(uint16(cols), uint16(rows))
 }
 
+// activeRecord builds the session.Active value the agent writes to
+// ~/.reminal/active.json. Used at startup and on every viewer-count
+// transition so `reminal info` and the attach-to-existing prompt see a
+// live count.
+func (a *Agent) activeRecord(viewers int) session.Active {
+	return session.Active{
+		ID:        a.sessionID,
+		PIN:       a.pin,
+		OpenURL:   fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID),
+		PID:       os.Getpid(),
+		StartedAt: a.startedAt,
+		Viewers:   viewers,
+	}
+}
+
+// updateActiveViewers refreshes the on-disk viewer count. No-op when paused
+// (active.json is intentionally absent during pause).
+func (a *Agent) updateActiveViewers(viewers int) {
+	if a.paused.Load() {
+		return
+	}
+	_ = session.WriteActive(a.activeRecord(viewers))
+}
+
 // pause is invoked from the SIGUSR1 handler when the user runs
 // `reminal stop`. It closes the live WS (if any) so the relay sees us go
 // offline immediately, clears the on-disk session record so attach can't
@@ -416,6 +439,14 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) error {
 	select {
 	case <-shellExit:
 		return nil
+	case <-a.hostEscape:
+		// Host pressed Ctrl-]; close the live conn so the reader goroutine
+		// returns immediately rather than blocking on its next read until
+		// readDeadline fires (which would otherwise freeze pumpHostStdin
+		// has already exited, and the user's local terminal would feel
+		// dead for up to 60s).
+		_ = conn.Close()
+		return nil
 	case err := <-readerDone:
 		return err
 	case err := <-senderDone:
@@ -494,6 +525,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				agentNotify("  [%s] Remote viewer connected\n",
 					time.Now().Format("15:04:05"))
 			}
+			a.updateActiveViewers(msg.Count)
 		case protocol.TypeClosed:
 			if msg.Count > 0 {
 				agentNotify("  [%s] Viewer disconnected (%d still active)\n",
@@ -502,6 +534,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				agentNotify("  [%s] Last viewer disconnected\n",
 					time.Now().Format("15:04:05"))
 			}
+			a.updateActiveViewers(msg.Count)
 		case protocol.TypeAgentOffline, protocol.TypeAgentOnline:
 			// Informational only on the agent side.
 		case protocol.TypeError:

@@ -19,6 +19,10 @@ type Active struct {
 	OpenURL   string    `json:"open_url"`
 	PID       int       `json:"pid"`
 	StartedAt time.Time `json:"started_at"`
+	// Viewers is the live count of currently-attached viewers (updated by
+	// the agent on every connect/disconnect event from the relay). Read
+	// by `reminal info` and the "attach to existing?" prompt.
+	Viewers int `json:"viewers,omitempty"`
 }
 
 func activePath() (string, error) {

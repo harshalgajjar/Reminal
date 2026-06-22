@@ -161,9 +161,13 @@ func main() {
 	if existing, err := session.ReadActive(); err == nil && os.Getenv("REMINAL_NEW") != "1" {
 		if term.IsTerminal(int(os.Stdin.Fd())) {
 			age := time.Since(existing.StartedAt).Round(time.Second)
+			viewers := ""
+			if existing.Viewers > 0 {
+				viewers = fmt.Sprintf(", %d viewer(s) attached", existing.Viewers)
+			}
 			fmt.Fprintf(os.Stderr,
-				"A reminal session is already running here: %s (started %v ago, PID %d)\n",
-				existing.ID, age, existing.PID)
+				"A reminal session is already running here: %s (started %v ago, PID %d%s)\n",
+				existing.ID, age, existing.PID, viewers)
 			fmt.Fprint(os.Stderr, "Attach to it instead of starting a new session? (Y/n) ")
 			reader := bufio.NewReader(os.Stdin)
 			line, _ := reader.ReadString('\n')
