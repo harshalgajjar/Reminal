@@ -109,6 +109,17 @@ func (a *Agent) Run() error {
 
 	pty.HandleSignals()
 
+	sessionStart := time.Now()
+	// Deferred so it runs on every clean exit path — shell exit, agent
+	// errors, signal-driven shutdown. Neutral wording ("session ended")
+	// covers both shell-typed-exit and user-killed-reminal cases.
+	defer func() {
+		fmt.Printf("\n  [%s] Session ended · ran for %v\n",
+			time.Now().Format("15:04:05"),
+			time.Since(sessionStart).Round(time.Second))
+		fmt.Println("  Run `reminal` again to start a new session.")
+	}()
+
 	shellExit := make(chan struct{})
 	go func() {
 		a.pumpPTY()
