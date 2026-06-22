@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/reminal/reminal/internal/client"
@@ -14,10 +15,16 @@ import (
 	"golang.org/x/term"
 )
 
-// version is the running build's version, set via -ldflags "-X main.version=..."
-// in scripts/build.sh and the release workflow. Dev builds keep "dev" so the
-// updater skips the version check and prompt.
-var version = "dev"
+// version, buildDate, and commit are stamped at build time via
+//   -ldflags "-X main.version=… -X main.buildDate=… -X main.commit=…"
+// in scripts/build.sh and the release workflow. Dev builds keep their
+// placeholder values so the updater skips the upgrade prompt and version
+// --verbose still shows something readable.
+var (
+	version   = "dev"
+	buildDate = "unknown"
+	commit    = "unknown"
+)
 
 func main() {
 	if len(os.Args) > 1 {
@@ -33,7 +40,11 @@ func main() {
 			}
 			return
 		case "version", "-v", "--version":
-			fmt.Println(version)
+			if len(os.Args) > 2 && (os.Args[2] == "--verbose" || os.Args[2] == "-v") {
+				printVersionInfo()
+			} else {
+				fmt.Println(version)
+			}
 			return
 		case "upgrade":
 			if err := updater.Upgrade(version); err != nil {
@@ -152,7 +163,7 @@ Usage:
   reminal completion <bash|zsh|fish>       Print shell completion script (source it in your shell rc)
   reminal upgrade                          Upgrade to the latest release
   reminal relay [port]                     Start local relay server (dev only)
-  reminal version                          Print version
+  reminal version [--verbose]              Print version (--verbose adds build date / commit / go version)
   reminal help                             Show this help
 
   reminal --connect <session-or-url>       Long-form alias of "reminal connect ..."
@@ -179,6 +190,17 @@ Examples:
   reminal connect ABC12345                                          # PIN prompted
   reminal connect "https://reminal-relay.reminal.workers.dev/?s=ABC12345#p=482916"
 `)
+}
+
+// printVersionInfo prints a multi-line build-detail block — version,
+// build date, commit, Go version, OS/arch — for bug reports and CI logs.
+// Triggered by `reminal version --verbose`.
+func printVersionInfo() {
+	fmt.Printf("reminal %s\n", version)
+	fmt.Printf("  built:   %s\n", buildDate)
+	fmt.Printf("  commit:  %s\n", commit)
+	fmt.Printf("  go:      %s\n", runtime.Version())
+	fmt.Printf("  os/arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 }
 
 // runConnect is the shared body of both `reminal connect <target> [pin]`
