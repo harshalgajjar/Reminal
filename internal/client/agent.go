@@ -106,7 +106,12 @@ func NewAgent(version string) (*Agent, error) {
 
 func (a *Agent) Run() error {
 	fmt.Println()
-	fmt.Printf("  reminal — remote terminal · v%s\n", a.version)
+	// Green "HOST" badge sits inline at the top so even on macOS
+	// Terminal.app — where we deliberately don't tint the cursor
+	// (window-wide leak) — there's still an unmistakable visual cue that
+	// THIS terminal is the source agent, not a viewer attached to one.
+	fmt.Printf("  reminal — remote terminal · v%s · \x1b[1;32m[HOST]\x1b[0m %s\n",
+		a.version, a.sessionID)
 	fmt.Println()
 	fmt.Printf("  Session:  %s\n", a.sessionID)
 	fmt.Printf("  PIN:      %s\n", a.pin)
@@ -114,7 +119,7 @@ func (a *Agent) Run() error {
 	fmt.Printf("  Connect:  reminal connect %s %s\n", a.sessionID, a.pin)
 	fmt.Println()
 	a.printQR()
-	fmt.Println("  This terminal IS the shared shell — type away. Remote viewers can join in parallel.")
+	fmt.Println("  \x1b[1;32mHOST:\x1b[0m This terminal IS the shared shell — type away. Remote viewers join in parallel.")
 	fmt.Println("  Press Ctrl-] to stop reminal · `reminal info` shows the join details again")
 	fmt.Println()
 
