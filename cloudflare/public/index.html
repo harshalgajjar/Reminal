@@ -569,7 +569,14 @@
       });
     });
 
-    window.addEventListener('resize', () => { fitAddon.fit(); if (agentLive) sendResize(); });
+    const refit = () => { fitAddon.fit(); if (agentLive) sendResize(); };
+    window.addEventListener('resize', refit);
+    // iOS doesn't fire window.resize when the soft keyboard pops, leaving
+    // xterm.js sized to the full viewport while half of it is covered.
+    // visualViewport fires for keyboard show/hide, URL bar collapse, etc.
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', refit);
+    }
     connectBtn.addEventListener('click', () => {
       // Three button modes:
       //   - "Connect" (idle/disconnected): start a new connection
