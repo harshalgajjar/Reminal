@@ -406,6 +406,21 @@ export class SessionRoom {
     }));
 
     const out = await promise;
+
+    // Rewrite absolute-path redirects so they stay under /p/<id>/.
+    // Upstream apps don't know we're behind a prefix, so they emit
+    // headers like `Location: /folder/` which the browser would otherwise
+    // resolve to the relay root (404). Path-relative + absolute-URL
+    // redirects are passed through unchanged.
+    const prefix = `/p/${sessionId}`;
+    for (const key of Object.keys(out.headers)) {
+      if (key.toLowerCase() !== "location") continue;
+      const v = out.headers[key];
+      if (v && v.startsWith("/") && !v.startsWith(prefix + "/") && !v.startsWith("//")) {
+        out.headers[key] = prefix + v;
+      }
+    }
+
     return new Response(out.body as BodyInit, { status: out.status, headers: out.headers });
   }
 
