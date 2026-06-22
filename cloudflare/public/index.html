@@ -2,8 +2,18 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>reminal</title>
+  <meta name="theme-color" content="#0d1117">
+  <!-- iOS "Add to Home Screen": fullscreen, black status bar, no Safari chrome. -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="reminal">
+  <!-- Inline SVG favicon + apple-touch-icon: small, no extra asset request,
+       no broken-image placeholder if a relay strips the path. -->
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;utf8,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'&gt;&lt;rect width='100' height='100' rx='18' fill='%230d1117'/&gt;&lt;text x='50' y='66' text-anchor='middle' font-family='Menlo,monospace' font-size='52' font-weight='700' fill='%2358a6ff'&gt;re&lt;/text&gt;&lt;/svg&gt;">
+  <!-- Inline manifest (data URL) so we don't need a separate hosted file. -->
+  <link rel="manifest" href="data:application/manifest+json;charset=utf-8,%7B%22name%22%3A%22reminal%22%2C%22short_name%22%3A%22reminal%22%2C%22start_url%22%3A%22.%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%230d1117%22%2C%22theme_color%22%3A%22%230d1117%22%2C%22orientation%22%3A%22any%22%7D">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -664,6 +674,7 @@
         refreshTabTitle();
         sessionId = realId;
       }
+      if (typeof releaseWakeLock === 'function') releaseWakeLock();
     }
 
     function setBtnDisconnect() {
@@ -816,6 +827,7 @@
           // can pick this session from the Recent dropdown later.
           rememberSession(sessionId, pinValue);
           refreshTabTitle();
+          acquireWakeLock();
           break;
         case 'connected':
         case 'agent_online':
@@ -1176,6 +1188,30 @@
       const label = entry?.name ? entry.name : sessionId.toUpperCase();
       document.title = 'reminal · ' + label;
     }
+
+    // ---- Screen Wake Lock ----
+    // While connected and watching long output, the phone screen would
+    // otherwise dim and lock after the OS idle timeout — the WebSocket
+    // also gets paused/killed and the user misses live output. Request
+    // a screen wake lock when we connect; release on disconnect.
+    // Auto-re-request on visibilitychange because iOS Safari drops the
+    // lock when the tab loses visibility, even briefly.
+    let wakeLock = null;
+    async function acquireWakeLock() {
+      if (!('wakeLock' in navigator)) return;
+      try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      } catch (_) { /* permission denied, low-power mode, etc. */ }
+    }
+    function releaseWakeLock() {
+      if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && agentLive && !wakeLock) {
+        acquireWakeLock();
+      }
+    });
 
     // ---- Share session (QR + link, mintable from the phone itself) ----
     // Phone-only workflow: a viewer wants to invite a second person and
