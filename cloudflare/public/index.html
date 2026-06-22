@@ -125,12 +125,65 @@
     @media (pointer: coarse), (max-width: 720px) {
       #keybar { display: flex; }
     }
+
+    /* Recent-sessions dropdown lives in the header next to the inputs. */
+    #recents { position: relative; }
+    #recents > summary {
+      list-style: none;
+      cursor: pointer;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      font-size: 14px;
+      padding: 6px 12px;
+      user-select: none;
+    }
+    #recents > summary::-webkit-details-marker { display: none; }
+    #recents > summary:hover { background: #30363d; }
+    #recents[open] > summary { background: #30363d; }
+    .recents-list {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 4px;
+      min-width: 280px;
+      max-width: 380px;
+      z-index: 10;
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    }
+    .recents-empty { padding: 12px; color: #8b949e; font-size: 13px; text-align: center; }
+    .recents-row {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 8px; border-radius: 4px;
+      cursor: pointer; color: #e6edf3;
+    }
+    .recents-row:hover { background: #21262d; }
+    .recents-row .label { flex: 1; min-width: 0; }
+    .recents-row .name { font-size: 13px; font-weight: 500; }
+    .recents-row .meta { font-size: 11px; color: #8b949e; font-family: monospace; }
+    .recents-row .name.placeholder { color: #8b949e; font-style: italic; font-weight: 400; }
+    .recents-row .row-btn {
+      background: transparent; border: none; color: #8b949e;
+      padding: 4px 6px; font-size: 13px; cursor: pointer; border-radius: 4px;
+    }
+    .recents-row .row-btn:hover { background: #30363d; color: #e6edf3; }
+    /* When connected, the inputs collapse but the recents dropdown stays
+       useful: rename the current session, hop to another one. */
   </style>
 </head>
 <body>
   <header>
     <h1><span>re</span>minal</h1>
     <div id="session-form">
+      <details id="recents">
+        <summary>Recent ▾</summary>
+        <div class="recents-list" id="recents-list"></div>
+      </details>
       <input id="session-input" placeholder="Session" maxlength="8" autocomplete="off" spellcheck="false">
       <input id="pin-input" placeholder="PIN" maxlength="8" inputmode="numeric" autocomplete="off" spellcheck="false">
       <button id="connect-btn">Connect</button>
@@ -179,6 +232,118 @@
     if (initialPin) {
       pinInput.value = initialPin;
       history.replaceState(null, '', location.pathname + location.search);
+    }
+
+    // ---- Recent sessions history (localStorage, cross-tab, cross-session) ----
+    // Each entry: { id, pin, name, lastSeen }. Capped at 10 most-recent so
+    // the dropdown stays manageable. We keep PINs here knowingly — same
+    // model as `sessionStorage` for the current session; user can clear
+    // via the "Forget" button on any row.
+    const HISTORY_KEY = 'reminal:history';
+    const HISTORY_MAX = 10;
+    function loadHistory() {
+      try {
+        const raw = localStorage.getItem(HISTORY_KEY);
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr : [];
+      } catch (_) { return []; }
+    }
+    function saveHistory(list) {
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); } catch (_) {}
+    }
+    function rememberSession(id, pin) {
+      if (!id || !pin) return;
+      const list = loadHistory();
+      const existingIdx = list.findIndex(e => e.id === id);
+      const existing = existingIdx >= 0 ? list[existingIdx] : null;
+      const entry = {
+        id: id.toUpperCase(),
+        pin: pin,
+        name: existing?.name || '',
+        lastSeen: Date.now(),
+      };
+      if (existingIdx >= 0) list.splice(existingIdx, 1);
+      list.unshift(entry);
+      saveHistory(list.slice(0, HISTORY_MAX));
+      renderRecents();
+    }
+    function renameSession(id, name) {
+      const list = loadHistory();
+      const e = list.find(x => x.id === id);
+      if (!e) return;
+      e.name = name;
+      saveHistory(list);
+      renderRecents();
+    }
+    function forgetSession(id) {
+      saveHistory(loadHistory().filter(e => e.id !== id));
+      renderRecents();
+    }
+    function fmtAgo(ts) {
+      const s = Math.floor((Date.now() - ts) / 1000);
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+      return Math.floor(s / 86400) + 'd ago';
+    }
+    function renderRecents() {
+      const list = loadHistory();
+      const root = document.getElementById('recents-list');
+      if (!root) return;
+      if (list.length === 0) {
+        root.innerHTML = '<div class="recents-empty">No recent sessions yet — connect once and it\'ll show up here.</div>';
+        return;
+      }
+      root.innerHTML = '';
+      for (const e of list) {
+        const row = document.createElement('div');
+        row.className = 'recents-row';
+        row.title = 'Click to connect';
+        const label = document.createElement('div');
+        label.className = 'label';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'name' + (e.name ? '' : ' placeholder');
+        nameEl.textContent = e.name || '(unnamed session)';
+        const metaEl = document.createElement('div');
+        metaEl.className = 'meta';
+        metaEl.textContent = e.id + ' · ' + fmtAgo(e.lastSeen);
+        label.appendChild(nameEl);
+        label.appendChild(metaEl);
+        const renameBtn = document.createElement('button');
+        renameBtn.className = 'row-btn';
+        renameBtn.title = 'Rename';
+        renameBtn.textContent = '✎';
+        renameBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const next = prompt('Name for ' + e.id + ':', e.name || '');
+          if (next !== null) renameSession(e.id, next.trim());
+        });
+        const forgetBtn = document.createElement('button');
+        forgetBtn.className = 'row-btn';
+        forgetBtn.title = 'Forget this session';
+        forgetBtn.textContent = '✕';
+        forgetBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (confirm('Forget ' + (e.name || e.id) + '?')) forgetSession(e.id);
+        });
+        row.appendChild(label);
+        row.appendChild(renameBtn);
+        row.appendChild(forgetBtn);
+        row.addEventListener('click', () => {
+          // Fill inputs and start a connection to this remembered session.
+          sessionInput.value = e.id;
+          pinInput.value = e.pin;
+          document.getElementById('recents').open = false;
+          if (sessionId && sessionId !== e.id) {
+            // Switching to a different session — close the live one first
+            // so its socket releases cleanly before we dial a new one.
+            userDisconnect();
+          }
+          startConnect();
+        });
+        root.appendChild(row);
+      }
     }
 
     // Restore the PIN from sessionStorage if we previously authed this same
@@ -478,6 +643,9 @@
           // Auth succeeded — remember the PIN for this tab so a refresh
           // doesn't bounce the user back to the login form.
           saveCred(sessionId, pinValue);
+          // Also add to the persistent localStorage history so the user
+          // can pick this session from the Recent dropdown later.
+          rememberSession(sessionId, pinValue);
           break;
         case 'connected':
         case 'agent_online':
@@ -628,6 +796,10 @@
     });
     sessionInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') startConnect(); });
     pinInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') startConnect(); });
+
+    // Populate the Recent dropdown on load so the user sees their saved
+    // sessions even before clicking it.
+    renderRecents();
 
     // If the QR code provided both session and PIN, just connect.
     if (initialSession && initialPin) {
