@@ -32,7 +32,9 @@
       border: 1px solid #30363d;
       border-radius: 6px;
       color: #e6edf3;
-      font-size: 14px;
+      /* 16px+ on iOS Safari prevents the auto-zoom-on-focus that turns
+         tapping the PIN box into a viewport jump. */
+      font-size: 16px;
       padding: 6px 10px;
     }
     #session-input { width: 120px; text-transform: uppercase; letter-spacing: 0.1em; }
@@ -88,6 +90,11 @@
     }
     #overlay.visible { display: flex; }
     #overlay span { background: #161b22; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; }
+
+    /* Once connected, the session/PIN inputs are dead weight — collapse
+       them to reclaim screen real estate (a big deal on phones). The
+       Connect button stays visible (it doubles as Disconnect when live). */
+    body.connected #session-form input { display: none; }
 
     /* Mobile-only soft-key bar. Phones/tablets have no Esc, Tab, Ctrl,
        arrows on the system keyboard — without these reminal is unusable
@@ -322,12 +329,16 @@
       connectBtn.textContent = 'Connect';
       connectBtn.disabled = false;
       connectBtn.classList.remove('danger');
+      document.body.classList.remove('connected');
     }
 
     function setBtnDisconnect() {
       connectBtn.textContent = 'Disconnect';
       connectBtn.disabled = false;
       connectBtn.classList.add('danger');
+      // Collapse the session/PIN inputs out of the header so the terminal
+      // gets the freed vertical space (real estate is precious on phones).
+      document.body.classList.add('connected');
     }
 
     function setBtnBusy(label) {
