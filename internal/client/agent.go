@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -57,6 +58,16 @@ type Agent struct {
 	// hostEscape closes when the host user presses Ctrl-]; the main loop
 	// treats it the same as a graceful shutdown signal so defers still run.
 	hostEscape chan struct{}
+
+	// paused is set by `reminal stop` (via SIGUSR1). When set, the main
+	// reconnect loop stops trying to reach the relay and the local shell
+	// keeps running on the host terminal as a plain interactive session.
+	paused atomic.Bool
+	// currentConnMu guards currentConn so the SIGUSR1 handler can close
+	// the live WS the moment a pause is requested, instead of waiting up
+	// to readDeadline (60s) for the read to time out.
+	currentConnMu sync.Mutex
+	currentConn   *websocket.Conn
 }
 
 func NewAgent(version string) (*Agent, error) {
@@ -175,23 +186,25 @@ func (a *Agent) Run() error {
 	// behavior is to die immediately on these signals, skipping defers and
 	// leaving stale ~/.reminal/active.json + orphaned caffeinate.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
 	defer signal.Stop(sigCh)
 	go func() {
 		first := true
 		for sig := range sigCh {
+			if sig == syscall.SIGUSR1 {
+				// `reminal stop` — stop broadcasting, keep the local
+				// shell running. Doesn't count against the force-exit
+				// budget; SIGINT/SIGTERM still need a double-tap.
+				a.pause()
+				continue
+			}
 			if !first {
-				// Second signal — user is impatient or cleanup is stuck.
-				// Bail without further niceties; the process exits with
-				// the conventional Ctrl-C status (128 + SIGINT).
 				fmt.Fprintln(os.Stderr, "\n  Force exit.")
 				os.Exit(130)
 			}
 			first = false
 			agentNotify("\n  [%s] %s received, shutting down… (press again to force exit)\n",
 				time.Now().Format("15:04:05"), sig)
-			// Closing the PTY makes pumpPTY's Read return EOF, which
-			// closes shellExit and unwinds Run() through its defers.
 			_ = term.Close()
 		}
 	}()
@@ -206,6 +219,18 @@ func (a *Agent) Run() error {
 		default:
 		}
 
+		// Paused via `reminal stop`: don't touch the relay; just sit and
+		// let the PTY pumps continue serving the host terminal as a
+		// plain local shell until shell exit / Ctrl-].
+		if a.paused.Load() {
+			select {
+			case <-shellExit:
+				return nil
+			case <-a.hostEscape:
+				return nil
+			}
+		}
+
 		start := time.Now()
 		err := a.runConnection(shellExit)
 		select {
@@ -214,6 +239,12 @@ func (a *Agent) Run() error {
 		case <-a.hostEscape:
 			return nil
 		default:
+		}
+
+		// runConnection returned because pause() closed the WS — don't
+		// log "Reconnecting…" or burn through backoff cycles.
+		if a.paused.Load() {
+			continue
 		}
 
 		if err == nil {
@@ -246,6 +277,26 @@ func (a *Agent) syncSizeToPTY() {
 		return
 	}
 	_ = a.term.Resize(uint16(cols), uint16(rows))
+}
+
+// pause is invoked from the SIGUSR1 handler when the user runs
+// `reminal stop`. It closes the live WS (if any) so the relay sees us go
+// offline immediately, clears the on-disk session record so attach can't
+// reach a non-broadcasting agent, and flips the paused flag so the main
+// reconnect loop stops trying. The PTY pumps keep running, so the host
+// terminal continues working as a plain local shell.
+func (a *Agent) pause() {
+	if !a.paused.CompareAndSwap(false, true) {
+		return // already paused
+	}
+	_ = session.ClearActive()
+	a.currentConnMu.Lock()
+	if a.currentConn != nil {
+		_ = a.currentConn.Close()
+	}
+	a.currentConnMu.Unlock()
+	agentNotify("\n  [%s] Sharing stopped. Local shell continues — type `exit` or Ctrl-] to quit.\n",
+		time.Now().Format("15:04:05"))
 }
 
 // agentNotify writes a one-line dim status to stdout. Used for operational
@@ -328,6 +379,16 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) error {
 		return fmt.Errorf("dial relay: %w", err)
 	}
 	defer conn.Close()
+	// Track the live conn so `reminal stop` (SIGUSR1) can close it
+	// immediately rather than waiting for the next read deadline.
+	a.currentConnMu.Lock()
+	a.currentConn = conn
+	a.currentConnMu.Unlock()
+	defer func() {
+		a.currentConnMu.Lock()
+		a.currentConn = nil
+		a.currentConnMu.Unlock()
+	}()
 
 	if err := a.authenticate(conn); err != nil {
 		return err

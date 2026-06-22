@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/reminal/reminal/internal/client"
@@ -118,6 +119,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "stop":
+			if err := runStop(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -192,6 +199,7 @@ Usage:
   reminal                                  Share this terminal (works out of the box)
   reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
   reminal attach                           Re-connect to the agent running on this machine (no copy-paste)
+  reminal stop                             Stop broadcasting (kicks viewers, keeps your local shell running)
   reminal info [--json]                    Reprint session ID / PIN / URL / QR for the running agent (or JSON)
   reminal qr                               Print just the join QR for the running agent (for a second screen)
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
@@ -241,6 +249,27 @@ func printVersionInfo() {
 	fmt.Printf("  go:      %s\n", runtime.Version())
 	fmt.Printf("  os/arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Println("  bugs:    https://github.com/harshalgajjar/Reminal/issues")
+}
+
+// runStop tells the agent running on this machine to stop broadcasting to
+// the relay (closes the WS, clears active.json, kicks any viewers) while
+// keeping its PTY pumps alive — the host's terminal continues working as a
+// plain local shell. Useful when you've returned to your laptop and don't
+// need the remote-share open anymore but want to keep the shell session.
+func runStop() error {
+	a, err := session.ReadActive()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.New("no active reminal session to stop")
+		}
+		return err
+	}
+	if err := syscall.Kill(a.PID, syscall.SIGUSR1); err != nil {
+		return fmt.Errorf("signal PID %d: %w", a.PID, err)
+	}
+	fmt.Printf("Sent stop to reminal (PID %d) — session %s. The local shell continues.\n",
+		a.PID, a.ID)
+	return nil
 }
 
 // runAttach finds the agent running on this machine (via ~/.reminal/

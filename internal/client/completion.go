@@ -38,7 +38,7 @@ _reminal_complete() {
         cword=$COMP_CWORD
     }
 
-    local subcommands="connect attach relay version upgrade info qr doctor completion help"
+    local subcommands="connect attach stop relay version upgrade info qr doctor completion help"
     local flags="--connect --pin --verbose -v"
 
     case "${prev}" in
@@ -73,6 +73,7 @@ _reminal() {
     subcommands=(
         'connect:Connect to a remote session (positional <id-or-url> [pin])'
         'attach:Re-connect to the agent running on this machine'
+        'stop:Stop broadcasting (keeps the local shell running)'
         'relay:Start a local relay server (dev only)'
         'version:Print version'
         'upgrade:Upgrade to the latest release'
@@ -114,6 +115,7 @@ complete -c reminal -f
 # Subcommands (only valid as the first non-flag argument).
 complete -c reminal -n '__fish_use_subcommand' -a 'connect'    -d 'Connect to a remote session (positional <id-or-url> [pin])'
 complete -c reminal -n '__fish_use_subcommand' -a 'attach'     -d 'Re-connect to the agent running on this machine'
+complete -c reminal -n '__fish_use_subcommand' -a 'stop'       -d 'Stop broadcasting (keeps the local shell running)'
 complete -c reminal -n '__fish_use_subcommand' -a 'relay'      -d 'Start a local relay server (dev only)'
 complete -c reminal -n '__fish_use_subcommand' -a 'version'    -d 'Print version'
 complete -c reminal -n '__fish_use_subcommand' -a 'upgrade'    -d 'Upgrade to the latest release'

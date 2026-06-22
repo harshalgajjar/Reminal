@@ -545,13 +545,25 @@
       setBtnConnect();
     }
 
+    // Serialize all outbound keystrokes/keybar presses into a single chain.
+    // Without this, two fast onData calls would each `await encrypt()` in
+    // parallel and the Web Crypto API doesn't guarantee promise-resolution
+    // order matches call order — so the bytes could land on the WS in the
+    // wrong sequence and the remote shell would see e.g. "clra" instead of
+    // "clear", running a bogus prefix as a command and leaving "ar" typed
+    // at the resulting prompt.
+    let sendChain = Promise.resolve();
     async function sendInput(data) {
       if (!agentLive) return; // typing into nothing while agent is offline
-      const bytes = new TextEncoder().encode(data);
-      let binary = '';
-      bytes.forEach(b => binary += String.fromCharCode(b));
-      await send({ type: 'data', data: btoa(binary) });
-      bytesSent += bytes.byteLength;
+      const result = sendChain.then(async () => {
+        const bytes = new TextEncoder().encode(data);
+        let binary = '';
+        bytes.forEach(b => binary += String.fromCharCode(b));
+        await send({ type: 'data', data: btoa(binary) });
+        bytesSent += bytes.byteLength;
+      });
+      sendChain = result.catch(() => {}); // keep chain alive on errors
+      return result;
     }
     term.onData(sendInput);
 
