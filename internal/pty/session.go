@@ -15,9 +15,10 @@ type Session struct {
 	cmd  *exec.Cmd
 }
 
-func Start(shell string) (*Session, error) {
+func Start(shell string, env ...string) (*Session, error) {
 	cmd := exec.Command(shell)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = append(cmd.Env, env...)
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {

@@ -10,17 +10,48 @@ import (
 	"github.com/reminal/reminal/internal/session"
 )
 
-// ShowActiveInfo reprints the join details for the currently running agent,
-// for users who lost the original banner (cleared the terminal, scrolled past,
-// etc). Returns an error if no live agent is recorded. The active record is
-// considered stale if its PID is no longer alive — those are pruned in
-// session.ReadActive, so a successful return guarantees a real running agent.
+// ShowActiveInfo reprints the join details for the session the user is
+// "in" right now. Resolution order:
+//
+//  1. If REMINAL_SESSION is set (the agent injects it into the spawned shell)
+//     AND ~/.reminal/active.json matches, we show that record — works
+//     whether the user is at the agent's host terminal or attached over
+//     `reminal connect` from the same machine.
+//  2. If REMINAL_SESSION is set but doesn't match the local record (e.g.
+//     the user is on a different machine, connected via the relay), we
+//     show the session ID we know — the PIN/URL aren't ours to print.
+//  3. Otherwise we fall back to the local active.json (the original
+//     behaviour) so `reminal info` from a fresh terminal still works.
 func ShowActiveInfo() error {
+	envID := os.Getenv("REMINAL_SESSION")
+	if envID != "" {
+		a, err := session.ReadActive()
+		if err == nil && a.ID == envID {
+			printActiveBanner(a)
+			return nil
+		}
+		// We're inside a session that isn't recorded on this machine.
+		// The PIN lives on the host; surface what we can and tell the
+		// user where to look for the rest.
+		fmt.Println()
+		fmt.Println("  reminal — remote terminal")
+		fmt.Println()
+		fmt.Printf("  Session:  %s\n", envID)
+		fmt.Println("  (this shell is connected to a session whose host is on another machine —")
+		fmt.Println("   run `reminal info` on the host to see the PIN and join URL)")
+		fmt.Println()
+		return nil
+	}
+
 	a, err := loadActive()
 	if err != nil {
 		return err
 	}
+	printActiveBanner(a)
+	return nil
+}
 
+func printActiveBanner(a *session.Active) {
 	fmt.Println()
 	fmt.Println("  reminal — remote terminal")
 	fmt.Println()
@@ -35,7 +66,6 @@ func ShowActiveInfo() error {
 	joinURL := fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN)
 	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
 	fmt.Println()
-	return nil
 }
 
 // ShowActiveInfoJSON prints the active session as a one-line JSON object on

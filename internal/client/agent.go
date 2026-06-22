@@ -115,7 +115,11 @@ func (a *Agent) Run() error {
 	})
 	defer func() { _ = session.ClearActive() }()
 
-	term, err := pty.Start(a.shell)
+	// Pass REMINAL_SESSION into the spawned shell so `reminal info` run
+	// from inside this session can show THIS session's details (rather
+	// than fall back to ~/.reminal/active.json, which gets ambiguous with
+	// multiple agents or attach-vs-source contexts).
+	term, err := pty.Start(a.shell, "REMINAL_SESSION="+a.sessionID)
 	if err != nil {
 		return fmt.Errorf("start shell: %w", err)
 	}
@@ -133,6 +137,8 @@ func (a *Agent) Run() error {
 		oldState, terr := xterm.MakeRaw(int(os.Stdin.Fd()))
 		if terr == nil {
 			defer xterm.Restore(int(os.Stdin.Fd()), oldState)
+			setHostIndicator(a.sessionID)
+			defer clearHostIndicator()
 			a.localActive = true
 			a.syncSizeToPTY()
 			go a.pumpHostStdin()
