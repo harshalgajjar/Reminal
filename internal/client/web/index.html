@@ -17,19 +17,32 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    /* 100dvh follows the dynamic viewport (URL bar shrinks/expands).
+       --kb-offset is the height the soft keyboard is currently covering
+       — kept up-to-date by a visualViewport listener so the layout
+       always stops at the top of the keyboard, not behind it.
+       --keybar-h tracks the floating mobile key-bar so the terminal
+       above it never sits underneath. overscroll-behavior stops the
+       page from bouncing or triggering pull-to-refresh inside the
+       terminal — a frequent mobile pain point. */
+    html, body { overscroll-behavior: contain; }
     body {
       background: #0d1117;
       color: #e6edf3;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      height: 100vh;
+      height: 100dvh;
       display: flex;
       flex-direction: column;
+      padding-bottom: calc(var(--kb-offset, 0px) + var(--keybar-h, 0px));
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
     }
     header {
       display: flex;
       align-items: center;
       gap: 12px;
       padding: 12px 16px;
+      padding-top: max(12px, env(safe-area-inset-top));
       border-bottom: 1px solid #21262d;
       background: #161b22;
       flex-wrap: wrap;
@@ -111,7 +124,10 @@
 
     /* Mobile-only soft-key bar. Phones/tablets have no Esc, Tab, Ctrl,
        arrows on the system keyboard — without these reminal is unusable
-       for shell editing on mobile, which is the killer feature vs ssh. */
+       for shell editing on mobile, which is the killer feature vs ssh.
+       On mobile the bar is *fixed* and floats above the soft keyboard:
+       --kb-offset (set from visualViewport) lifts it so it sits flush
+       against the keyboard top instead of being hidden behind it. */
     #keybar {
       display: none;
       flex-wrap: wrap;
@@ -132,22 +148,55 @@
       min-width: 44px;   /* iOS HIG min tap target */
       min-height: 36px;
       cursor: pointer;
+      flex: 0 0 auto;
+      /* Cancel iOS double-tap-to-zoom and the gray flash on tap so
+         repeat-press feels native. */
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
     }
     #keybar button:active { background: #30363d; }
     /* Touch devices and narrow screens get the bar; desktop with mouse hides it. */
     @media (pointer: coarse), (max-width: 720px) {
-      #keybar { display: flex; }
+      #keybar {
+        display: flex;
+        position: fixed;
+        left: 0; right: 0;
+        bottom: var(--kb-offset, 0px);
+        z-index: 60;
+        /* Single horizontal row that scrolls instead of wrapping. */
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        /* Horizontal-only scroll, never hijacked by vertical gestures. */
+        touch-action: pan-x;
+        padding-left: max(8px, env(safe-area-inset-left));
+        padding-right: max(8px, env(safe-area-inset-right));
+        padding-bottom: max(6px, env(safe-area-inset-bottom));
+      }
+      #keybar::-webkit-scrollbar { display: none; }
+      /* Collapsed: still floating, just thinner — toggle remains tappable. */
+      #keybar.collapsed { padding: 4px 8px; }
     }
     /* Collapsed state — only the toggle button is visible; all keys hidden. */
     #keybar.collapsed > :not(#keybar-toggle) { display: none; }
-    #keybar.collapsed { padding: 2px 8px; }
-    #keybar-toggle { margin-left: auto; }
+    #keybar-toggle {
+      /* Pinned to the right edge of the visible scroll viewport so the
+         user never has to swipe to find "hide bar". */
+      position: sticky;
+      right: 0;
+      background: #161b22;
+      box-shadow: -8px 0 8px -4px #161b22;
+    }
 
     /* Jump-to-bottom pill — appears bottom-right when the user has
        scrolled up and new output is arriving above. Tap → jump to live. */
     #jump-bottom {
       position: absolute;
-      bottom: 16px; right: 16px;
+      bottom: calc(16px + var(--jump-bottom-extra, 0px));
+      right: 16px;
       display: none;
       background: #1f6feb;
       color: #fff;
@@ -339,25 +388,33 @@
       <button id="preview-close">Close</button>
     </div>
   </div>
+  <!-- Keybar order optimised for mobile shell flow:
+       arrows first (used every prompt), then Tab/Esc/Backspace, then
+       common Ctrl-* shortcuts in order of frequency, then symbols,
+       then UI controls. Arrows + Backspace are marked data-repeat so
+       a long press auto-repeats — essential for paging history or
+       deleting a line one char at a time. -->
   <div id="keybar">
-    <button data-key="esc">Esc</button>
+    <button data-key="up" data-repeat title="Previous in history">↑</button>
+    <button data-key="down" data-repeat title="Next in history">↓</button>
+    <button data-key="left" data-repeat title="Cursor left">←</button>
+    <button data-key="right" data-repeat title="Cursor right">→</button>
     <button data-key="tab">Tab</button>
+    <button data-key="esc">Esc</button>
+    <button data-key="backspace" data-repeat title="Backspace">⌫</button>
+    <button data-key="ctrl-c" title="Interrupt">^C</button>
+    <button data-key="ctrl-d" title="EOF / logout">^D</button>
+    <button data-key="ctrl-r" title="Reverse history search">^R</button>
     <button data-key="ctrl-a" title="Start of line">^A</button>
     <button data-key="ctrl-e" title="End of line">^E</button>
-    <button data-key="ctrl-r" title="Reverse history search">^R</button>
     <button data-key="ctrl-u" title="Clear line">^U</button>
     <button data-key="ctrl-w" title="Delete word back">^W</button>
     <button data-key="ctrl-k" title="Kill to end of line">^K</button>
-    <button data-key="ctrl-c" title="Interrupt">^C</button>
-    <button data-key="ctrl-d" title="EOF / logout">^D</button>
     <button data-key="ctrl-z" title="Suspend">^Z</button>
     <button data-key="ctrl-l" title="Clear screen">^L</button>
     <button data-key="pipe">|</button>
     <button data-key="tilde">~</button>
-    <button data-key="up">↑</button>
-    <button data-key="down">↓</button>
-    <button data-key="left">←</button>
-    <button data-key="right">→</button>
+    <button id="kb-focus-btn" title="Show keyboard">⌨</button>
     <button id="font-down-btn" title="Smaller font">A−</button>
     <button id="font-up-btn" title="Larger font">A+</button>
     <button id="copy-btn" title="Copy selection to clipboard">Copy</button>
@@ -1003,12 +1060,13 @@
       'ctrl-u': '\x15', // clear line
       'ctrl-w': '\x17', // delete word back
       'ctrl-z': '\x1a', // suspend
-      pipe:     '|',
-      tilde:    '~',
-      up:       '\x1b[A',
-      down:     '\x1b[B',
-      right:    '\x1b[C',
-      left:     '\x1b[D',
+      pipe:       '|',
+      tilde:      '~',
+      up:         '\x1b[A',
+      down:       '\x1b[B',
+      right:      '\x1b[C',
+      left:       '\x1b[D',
+      backspace:  '\x7f', // DEL — what virtually every shell reads as Backspace
     };
     // Tab close / page hide: send a clean WebSocket close frame so the relay
     // sees us go away immediately, instead of waiting for TCP keepalive /
@@ -1025,14 +1083,63 @@
     window.addEventListener('pagehide', gracefulClose);
     window.addEventListener('beforeunload', gracefulClose);
 
+    // Keybar buttons: single-tap sends one keystroke. Buttons tagged
+    // data-repeat (arrows, backspace) hold-to-repeat — phones don't
+    // have a key-repeat OS layer, so navigating bash history or
+    // deleting a long line is otherwise hopeless. Touch-cancel on
+    // significant finger movement so swiping the bar to scroll never
+    // starts a repeat.
+    const REPEAT_DELAY_MS = 360;
+    const REPEAT_INTERVAL_MS = 55;
+    const REPEAT_CANCEL_PX = 12;
     document.querySelectorAll('#keybar button').forEach(btn => {
       if (!btn.dataset.key) return; // skip non-key buttons (Upload, etc.)
-      btn.addEventListener('click', async () => {
-        const seq = keyMap[btn.dataset.key];
-        if (seq) await sendInput(seq);
-        term.focus();
+      const seq = keyMap[btn.dataset.key];
+      if (!seq) return;
+      const fire = () => sendInput(seq);
+      if (!('repeat' in btn.dataset)) {
+        // No-repeat keys: plain click + refocus terminal so the soft
+        // keyboard stays open after the press.
+        btn.addEventListener('click', () => { fire(); term.focus(); });
+        return;
+      }
+      let delayTimer, repeatTimer, startX, startY, fired;
+      const startRepeat = () => { repeatTimer = setInterval(fire, REPEAT_INTERVAL_MS); };
+      const begin = (x, y) => {
+        startX = x; startY = y; fired = false;
+        fire(); fired = true;
+        delayTimer = setTimeout(startRepeat, REPEAT_DELAY_MS);
+      };
+      const cancel = () => {
+        clearTimeout(delayTimer);
+        clearInterval(repeatTimer);
+        delayTimer = repeatTimer = null;
+      };
+      btn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        const t = e.touches[0];
+        begin(t.clientX, t.clientY);
+      }, { passive: false });
+      btn.addEventListener('touchmove', (e) => {
+        const t = e.touches[0];
+        if (Math.abs(t.clientX - startX) > REPEAT_CANCEL_PX ||
+            Math.abs(t.clientY - startY) > REPEAT_CANCEL_PX) cancel();
       });
+      btn.addEventListener('touchend', cancel);
+      btn.addEventListener('touchcancel', cancel);
+      // Mouse path for desktop / hybrid devices.
+      btn.addEventListener('mousedown', (e) => { e.preventDefault(); begin(e.clientX, e.clientY); });
+      btn.addEventListener('mouseup', cancel);
+      btn.addEventListener('mouseleave', cancel);
+      // Click also fires on touchend/mouseup; swallow it since begin()
+      // already fired the first keystroke.
+      btn.addEventListener('click', (e) => { if (fired) e.preventDefault(); });
     });
+    // ⌨ button: explicitly focus xterm so the soft keyboard opens. iOS
+    // sometimes hides the keyboard when you tap a non-input element and
+    // there's no easy way to bring it back without a dedicated control.
+    const kbFocusBtn = document.getElementById('kb-focus-btn');
+    if (kbFocusBtn) kbFocusBtn.addEventListener('click', () => term.focus());
 
     // fireNotification handles TypeNotify messages from the agent. Falls
     // back gracefully when the browser denied permission, doesn't support
@@ -1157,7 +1264,11 @@
       keybar.classList.toggle('collapsed', hidden);
       keybarToggle.textContent = hidden ? '⌨' : '≡';
       keybarToggle.title = hidden ? 'Show key bar' : 'Hide key bar';
-      try { fitAddon.fit(); if (agentLive) sendResize(); } catch (_) {}
+      try {
+        if (typeof syncViewport === 'function') syncViewport();
+        fitAddon.fit();
+        if (agentLive) sendResize();
+      } catch (_) {}
     }
     keybarToggle.addEventListener('click', () => {
       const hiddenNow = keybar.classList.contains('collapsed');
@@ -1539,14 +1650,40 @@
         (imageFiles.length === 1 ? '' : 's') + ' (auto-delete in 1h)\x1b[0m\r\n');
     });
 
-    const refit = () => { fitAddon.fit(); if (agentLive) sendResize(); };
+    // syncViewport keeps two CSS vars in sync with the dynamic viewport:
+    //  --kb-offset  height the soft keyboard is currently covering
+    //  --keybar-h   measured height of the floating mobile key-bar
+    // The first lifts the key-bar above the keyboard; the second pads
+    // the body so the terminal never sits underneath the key-bar.
+    function syncViewport() {
+      const vv = window.visualViewport;
+      const kbOff = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+      document.documentElement.style.setProperty('--kb-offset', kbOff + 'px');
+      const isMobileKeybar = matchMedia('(pointer: coarse), (max-width: 720px)').matches;
+      const keybarH = isMobileKeybar && keybar.offsetHeight ? keybar.offsetHeight : 0;
+      document.documentElement.style.setProperty('--keybar-h', keybarH + 'px');
+      // Lift the jump-to-bottom pill so it never hides behind the bar.
+      document.documentElement.style.setProperty('--jump-bottom-extra', isMobileKeybar ? '8px' : '0px');
+    }
+    const refit = () => { syncViewport(); fitAddon.fit(); if (agentLive) sendResize(); };
     window.addEventListener('resize', refit);
     // iOS doesn't fire window.resize when the soft keyboard pops, leaving
     // xterm.js sized to the full viewport while half of it is covered.
     // visualViewport fires for keyboard show/hide, URL bar collapse, etc.
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', refit);
+      window.visualViewport.addEventListener('scroll', syncViewport);
     }
+    syncViewport();
+
+    // Tap-to-focus: on mobile, tapping an empty area of the terminal
+    // wrapper should always open the soft keyboard, even if xterm.js
+    // didn't see the tap as a cursor-positioning gesture.
+    document.getElementById('terminal-wrap').addEventListener('click', (e) => {
+      // Skip if user clicked on jump-bottom or findbar controls.
+      if (e.target.closest('#jump-bottom, #findbar')) return;
+      term.focus();
+    });
     connectBtn.addEventListener('click', () => {
       // Three button modes:
       //   - "Connect" (idle/disconnected): start a new connection
