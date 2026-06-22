@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"github.com/reminal/reminal/internal/protocol"
 	"github.com/reminal/reminal/internal/pty"
 	"github.com/reminal/reminal/internal/session"
+	xterm "golang.org/x/term"
 )
 
 // scrollbackBytes caps the in-memory replay buffer. 2 MiB is enough for a
@@ -47,6 +49,14 @@ type Agent struct {
 	term      *pty.Session
 
 	writeMu sync.Mutex // serializes WS writes; safe across sender/reader goroutines
+
+	// localActive gates whether pumpPTY echoes shell output to the host's
+	// stdout. Set when Run() puts the local terminal into raw-attached mode
+	// so the user can drive the shell from the agent's terminal directly.
+	localActive bool
+	// hostEscape closes when the host user presses Ctrl-]; the main loop
+	// treats it the same as a graceful shutdown signal so defers still run.
+	hostEscape chan struct{}
 }
 
 func NewAgent(version string) (*Agent, error) {
@@ -68,14 +78,15 @@ func NewAgent(version string) (*Agent, error) {
 	}
 
 	return &Agent{
-		sessionID: id,
-		pin:       pin,
-		pinHash:   pinHash,
-		webURL:    config.WebURL(),
-		shell:     config.Shell(),
-		version:   version,
-		box:       box,
-		buf:       newScrollback(scrollbackBytes),
+		sessionID:  id,
+		pin:        pin,
+		pinHash:    pinHash,
+		webURL:     config.WebURL(),
+		shell:      config.Shell(),
+		version:    version,
+		box:        box,
+		buf:        newScrollback(scrollbackBytes),
+		hostEscape: make(chan struct{}),
 	}, nil
 }
 
@@ -89,8 +100,8 @@ func (a *Agent) Run() error {
 	fmt.Printf("  Connect:  reminal connect %s %s\n", a.sessionID, a.pin)
 	fmt.Println()
 	a.printQR()
-	fmt.Println("  Waiting for connection... (Ctrl+C to stop)")
-	fmt.Println("  (Lost track of the PIN? Run `reminal info` in another terminal.)")
+	fmt.Println("  This terminal IS the shared shell — type away. Remote viewers can join in parallel.")
+	fmt.Println("  Press Ctrl-] to stop reminal · `reminal info` shows the join details again")
 	fmt.Println()
 
 	// Record this session for `reminal info`. Best-effort: failures here
@@ -112,6 +123,29 @@ func (a *Agent) Run() error {
 	a.term = term
 
 	pty.HandleSignals()
+
+	// Attach the host's local terminal to the PTY: raw mode, mirror PTY
+	// output to stdout, pump host stdin to the PTY, follow SIGWINCH. This
+	// turns `reminal` from a "display only" host into the same kind of
+	// interactive shell `reminal connect` provides — no second terminal
+	// needed, and remote viewers still join the same PTY in parallel.
+	if xterm.IsTerminal(int(os.Stdin.Fd())) {
+		oldState, terr := xterm.MakeRaw(int(os.Stdin.Fd()))
+		if terr == nil {
+			defer xterm.Restore(int(os.Stdin.Fd()), oldState)
+			a.localActive = true
+			a.syncSizeToPTY()
+			go a.pumpHostStdin()
+			winCh := make(chan os.Signal, 1)
+			signal.Notify(winCh, syscall.SIGWINCH)
+			defer signal.Stop(winCh)
+			go func() {
+				for range winCh {
+					a.syncSizeToPTY()
+				}
+			}()
+		}
+	}
 
 	sessionStart := time.Now()
 	// Deferred so it runs on every clean exit path — shell exit, agent
@@ -161,6 +195,8 @@ func (a *Agent) Run() error {
 		select {
 		case <-shellExit:
 			return nil
+		case <-a.hostEscape:
+			return nil
 		default:
 		}
 
@@ -168,6 +204,8 @@ func (a *Agent) Run() error {
 		err := a.runConnection(shellExit)
 		select {
 		case <-shellExit:
+			return nil
+		case <-a.hostEscape:
 			return nil
 		default:
 		}
@@ -183,6 +221,8 @@ func (a *Agent) Run() error {
 		select {
 		case <-shellExit:
 			return nil
+		case <-a.hostEscape:
+			return nil
 		case <-time.After(backoff):
 		}
 		backoff *= 2
@@ -190,6 +230,16 @@ func (a *Agent) Run() error {
 			backoff = maxBackoff
 		}
 	}
+}
+
+// syncSizeToPTY copies the host terminal's current size into the PTY so the
+// shell sees the correct cols/rows. Called on startup and on every SIGWINCH.
+func (a *Agent) syncSizeToPTY() {
+	cols, rows, err := xterm.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return
+	}
+	_ = a.term.Resize(uint16(cols), uint16(rows))
 }
 
 // agentNotify writes a one-line dim status to stdout. Used for operational
@@ -219,10 +269,45 @@ func (a *Agent) pumpPTY() {
 	for {
 		n, err := a.term.Read(buf)
 		if n > 0 {
+			// Mirror to the host's stdout so the user typing at the agent
+			// terminal sees the shell's output as if they had run it
+			// directly. The same bytes go into scrollback for remote viewers.
+			if a.localActive {
+				_, _ = os.Stdout.Write(buf[:n])
+			}
 			enc, encErr := a.box.Encrypt(buf[:n])
 			if encErr == nil {
 				a.buf.Append(enc)
 			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// pumpHostStdin reads the agent's local terminal stdin and writes each chunk
+// straight into the PTY — making the host terminal an interactive shell, same
+// as a `reminal connect` session would be. Ctrl-] (telnet's traditional
+// escape) signals shutdown via hostEscape; the byte itself is not forwarded.
+func (a *Agent) pumpHostStdin() {
+	buf := make([]byte, 4096)
+	for {
+		n, err := os.Stdin.Read(buf)
+		if n > 0 {
+			if i := bytes.IndexByte(buf[:n], escapeKey); i >= 0 {
+				if i > 0 {
+					_, _ = a.term.Write(buf[:i])
+				}
+				select {
+				case <-a.hostEscape:
+					// already signalled
+				default:
+					close(a.hostEscape)
+				}
+				return
+			}
+			_, _ = a.term.Write(buf[:n])
 		}
 		if err != nil {
 			return
