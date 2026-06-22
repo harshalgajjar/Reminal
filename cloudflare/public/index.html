@@ -126,6 +126,44 @@
       #keybar { display: flex; }
     }
 
+    /* Image preview modal — full-viewport overlay so a phone-sized
+       screen makes the image take the whole screen, comfortable to view. */
+    #preview {
+      position: fixed; inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      display: none;
+      align-items: center; justify-content: center;
+      flex-direction: column; gap: 12px;
+      padding: 16px;
+      z-index: 100;
+    }
+    #preview.visible { display: flex; }
+    #preview .frame {
+      max-width: 100%; max-height: 80vh;
+      display: flex; align-items: center; justify-content: center;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 8px;
+      overflow: auto;
+    }
+    #preview img { max-width: 100%; max-height: 78vh; display: block; object-fit: contain; }
+    #preview .meta { color: #c9d1d9; font-size: 13px; font-family: monospace; }
+    #preview .actions { display: flex; gap: 8px; }
+    #preview .actions button {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 8px 16px;
+      cursor: pointer;
+    }
+    #preview .actions button:hover { background: #30363d; }
+    #preview .actions button.primary { background: #238636; border-color: #2ea043; }
+    #preview .actions button.primary:hover { background: #2ea043; }
+
     /* Recent-sessions dropdown lives in the header next to the inputs. */
     #recents { position: relative; }
     #recents > summary {
@@ -193,6 +231,14 @@
   <div id="terminal-wrap">
     <div id="terminal"></div>
     <div id="overlay"><span id="overlay-text">Connecting…</span></div>
+  </div>
+  <div id="preview">
+    <div class="frame"><img id="preview-img" alt=""></div>
+    <div class="meta" id="preview-meta"></div>
+    <div class="actions">
+      <button id="preview-save" class="primary">Save</button>
+      <button id="preview-close">Close</button>
+    </div>
   </div>
   <div id="keybar">
     <button data-key="esc">Esc</button>
@@ -831,15 +877,61 @@
       }
     }
 
-    // triggerDownload turns a base64 file payload from the agent into a
-    // local download via a Blob + a hidden anchor click. Works on every
-    // modern browser including iOS Safari (which honors the download attr
-    // for same-origin blobs). A 1-line dim notice lands in the terminal so
-    // the user knows it happened without a popup.
+    // Map common image extensions to MIME types so Blob() gets the right
+    // type for the <img src> path. Anything not here falls through to the
+    // download path.
+    const IMG_MIME = {
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+      gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+      bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif',
+    };
+    function imageMimeFor(name) {
+      const m = (name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
+      return m ? IMG_MIME[m[1]] : null;
+    }
+
+    // showImagePreview renders the downloaded file in a fullscreen modal
+    // with Save / Close. On phones this is what you actually want — the
+    // image fills the screen, you can pinch-zoom, and Save still works.
+    let previewObjectURL = null;
+    function showImagePreview(name, blob) {
+      if (previewObjectURL) URL.revokeObjectURL(previewObjectURL);
+      previewObjectURL = URL.createObjectURL(blob);
+      const overlay = document.getElementById('preview');
+      const img = document.getElementById('preview-img');
+      const meta = document.getElementById('preview-meta');
+      img.src = previewObjectURL;
+      img.alt = name;
+      meta.textContent = name + ' · ' + humanBytes(blob.size);
+      overlay.classList.add('visible');
+      document.getElementById('preview-save').onclick = () => {
+        const a = document.createElement('a');
+        a.href = previewObjectURL;
+        a.download = name || 'image';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      };
+    }
+    document.getElementById('preview-close').addEventListener('click', () => {
+      document.getElementById('preview').classList.remove('visible');
+      if (previewObjectURL) { URL.revokeObjectURL(previewObjectURL); previewObjectURL = null; }
+    });
+
+    // triggerDownload routes images to the inline preview modal (better
+    // phone UX — no need to leave the page) and everything else to a
+    // standard Blob + hidden-anchor download.
     function triggerDownload(name, b64) {
       const bin = atob(b64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const mime = imageMimeFor(name);
+      if (mime) {
+        const blob = new Blob([bytes], { type: mime });
+        showImagePreview(name, blob);
+        term.write('\r\n\x1b[2m[reminal] previewing ' + name + ' (' + humanBytes(bytes.length) + ')\x1b[0m\r\n');
+        return;
+      }
       const url = URL.createObjectURL(new Blob([bytes]));
       const a = document.createElement('a');
       a.href = url;
@@ -847,7 +939,7 @@
       document.body.appendChild(a);
       a.click();
       setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
-      term.write('\r\n\x1b[2m[reminal] downloaded ' + (name || 'file') + ' (' + bytes.length + ' bytes)\x1b[0m\r\n');
+      term.write('\r\n\x1b[2m[reminal] downloaded ' + (name || 'file') + ' (' + humanBytes(bytes.length) + ')\x1b[0m\r\n');
     }
 
     // ---- File upload: drag-drop + button picker ----
