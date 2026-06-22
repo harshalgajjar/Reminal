@@ -343,6 +343,8 @@
     <button data-key="down">↓</button>
     <button data-key="left">←</button>
     <button data-key="right">→</button>
+    <button id="font-down-btn" title="Smaller font">A−</button>
+    <button id="font-up-btn" title="Larger font">A+</button>
     <button id="copy-btn" title="Copy selection to clipboard">Copy</button>
     <button id="paste-btn" title="Paste from clipboard">Paste</button>
     <button id="find-btn" title="Search scrollback">Find</button>
@@ -418,6 +420,7 @@
       e.name = name;
       saveHistory(list);
       renderRecents();
+      if (typeof refreshTabTitle === 'function') refreshTabTitle();
     }
     function forgetSession(id) {
       saveHistory(loadHistory().filter(e => e.id !== id));
@@ -522,10 +525,23 @@
       }
     }
 
+    // Persisted user-preferred font size (default 14). Tablets/phones with
+    // different DPIs render the same px size very differently; let the
+    // user dial it via A− / A+ on the keybar.
+    const FONT_KEY = 'reminal:fontSize';
+    const FONT_MIN = 9;
+    const FONT_MAX = 28;
+    let initialFontSize = 14;
+    try {
+      const stored = parseInt(localStorage.getItem(FONT_KEY) || '', 10);
+      if (Number.isFinite(stored) && stored >= FONT_MIN && stored <= FONT_MAX) {
+        initialFontSize = stored;
+      }
+    } catch (_) {}
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      fontSize: 14,
+      fontSize: initialFontSize,
       scrollback: 10000,
       theme: {
         background: '#0d1117', foreground: '#e6edf3', cursor: '#58a6ff',
@@ -640,6 +656,14 @@
       connectBtn.disabled = false;
       connectBtn.classList.remove('danger');
       document.body.classList.remove('connected');
+      // Reset the tab title so a disconnected pane in the browser strip
+      // doesn't pretend to still be live.
+      if (typeof refreshTabTitle === 'function') {
+        const realId = sessionId;
+        sessionId = '';
+        refreshTabTitle();
+        sessionId = realId;
+      }
     }
 
     function setBtnDisconnect() {
@@ -791,6 +815,7 @@
           // Also add to the persistent localStorage history so the user
           // can pick this session from the Recent dropdown later.
           rememberSession(sessionId, pinValue);
+          refreshTabTitle();
           break;
         case 'connected':
         case 'agent_online':
@@ -1119,6 +1144,39 @@
       if (reverse) searchAddon.findPrevious(q, findOpts);
       else searchAddon.findNext(q, findOpts);
     }
+    // ---- Font size +/− ----
+    function setFontSize(px) {
+      const clamped = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
+      term.options.fontSize = clamped;
+      try { localStorage.setItem(FONT_KEY, String(clamped)); } catch (_) {}
+      // Refit after font change so the cols/rows recompute and the agent
+      // gets the right PTY size for the new visible terminal.
+      fitAddon.fit();
+      if (agentLive) sendResize();
+    }
+    document.getElementById('font-up-btn').addEventListener('click', () => {
+      setFontSize(term.options.fontSize + 2);
+    });
+    document.getElementById('font-down-btn').addEventListener('click', () => {
+      setFontSize(term.options.fontSize - 2);
+    });
+
+    // ---- Dynamic browser tab title ----
+    // Without this, every reminal tab in the browser strip reads
+    // "reminal" — impossible to tell sessions apart in a multi-tab world.
+    // Use the saved name from the recents dropdown if set; otherwise the
+    // raw session ID. Resets to bare "reminal" on disconnect.
+    function refreshTabTitle() {
+      if (!sessionId) {
+        document.title = 'reminal';
+        return;
+      }
+      const list = loadHistory();
+      const entry = list.find(e => e.id === sessionId.toUpperCase());
+      const label = entry?.name ? entry.name : sessionId.toUpperCase();
+      document.title = 'reminal · ' + label;
+    }
+
     // ---- Share session (QR + link, mintable from the phone itself) ----
     // Phone-only workflow: a viewer wants to invite a second person and
     // doesn't want to walk back to the host terminal to type `reminal info`.
