@@ -222,7 +222,7 @@ func runConnect(target, pinArg string) error {
 	const maxAttempts = 3
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if resolvedPin == "" {
-			p, err := readPIN()
+			p, err := readPIN(sessionID)
 			if err != nil {
 				return err
 			}
@@ -274,12 +274,19 @@ func parseConnectTarget(target string) (sessionID, pin string) {
 }
 
 // readPIN prompts on stderr and reads the PIN from stdin with echo disabled.
-// Errors if stdin isn't a TTY since there's no one to prompt.
-func readPIN() (string, error) {
+// Errors if stdin isn't a TTY since there's no one to prompt. sessionID is
+// echoed in the prompt so the user can confirm they're authenticating to the
+// session they meant — a typo'd session ID with the right PIN burns lockout
+// budget against the wrong relay room.
+func readPIN(sessionID string) (string, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return "", errors.New("PIN required — pass --pin or run interactively")
 	}
-	fmt.Fprint(os.Stderr, "PIN: ")
+	if sessionID != "" {
+		fmt.Fprintf(os.Stderr, "PIN for %s: ", sessionID)
+	} else {
+		fmt.Fprint(os.Stderr, "PIN: ")
+	}
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
