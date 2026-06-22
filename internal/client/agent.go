@@ -453,6 +453,13 @@ func (a *Agent) pause() {
 		_ = a.currentConn.Close()
 	}
 	a.currentConnMu.Unlock()
+	// Drop the [HOST] terminal chrome — Run()'s defer only fires on real
+	// shutdown, but here Run() keeps going (local shell continues), so
+	// without this the green cursor + "(host)" title would lie about
+	// our state until the user finally types `exit`.
+	if a.localActive {
+		clearHostIndicator()
+	}
 	agentNotify("\n  [%s] Sharing stopped. Local shell continues — type `exit` or Ctrl-] to quit.\n",
 		time.Now().Format("15:04:05"))
 }
