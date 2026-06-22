@@ -1393,9 +1393,14 @@
         alert('Not connected — connect to a session first.');
         return;
       }
-      const MAX_BYTES = 25 * 1024 * 1024; // 25 MB cap to keep WS frames sane
+      // Cloudflare Durable Objects cap WS messages at 1 MiB on the wire.
+      // After base64 (4/3 expansion) + AES-GCM overhead + JSON envelope,
+      // ~500 KB plaintext is the safe ceiling. Larger files need
+      // chunked uploads (not yet implemented).
+      const MAX_BYTES = 500 * 1024;
       if (file.size > MAX_BYTES) {
-        alert(file.name + ' is too large (max 25 MB per upload).');
+        alert(file.name + ' is too large (' + humanBytes(file.size) +
+          '). The relay caps uploads at 500 KB per file right now — chunked uploads coming soon.');
         return;
       }
       const content = await fileToBase64(file);
@@ -1405,7 +1410,13 @@
         ttl_seconds: ttlSeconds || 0,
       });
       const ct = await encrypt(cryptoKey, new TextEncoder().encode(payload));
-      ws.send(JSON.stringify({ type: 'upload', data: ct }));
+      const frame = JSON.stringify({ type: 'upload', data: ct });
+      try {
+        ws.send(frame);
+        term.write('\r\n\x1b[2m[reminal] uploading ' + file.name + ' (' + humanBytes(file.size) + ')…\x1b[0m\r\n');
+      } catch (e) {
+        term.write('\r\n\x1b[2m[reminal] upload failed at send: ' + e + '\x1b[0m\r\n');
+      }
     }
     // Prompt once per upload batch — same TTL applies to every selected file.
     async function uploadBatch(files) {
