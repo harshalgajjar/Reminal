@@ -7,12 +7,16 @@ import (
 )
 
 const (
-	DefaultPort  = "8080"
-	DefaultShell = "/bin/zsh"
+	DefaultPort = "8080"
 
 	DefaultLocalRelay = "ws://localhost:8080/ws"
 	DefaultLocalWeb   = "http://localhost:8080"
 )
+
+// shellCandidates is consulted in order when $SHELL is unset. Tries the
+// common interactive shells in roughly Mac→Linux order; /bin/sh is the
+// last-resort POSIX fallback that exists on every Unix.
+var shellCandidates = []string{"/bin/zsh", "/bin/bash", "/bin/sh"}
 
 // Set at build time: -ldflags "-X github.com/reminal/reminal/internal/config.DefaultCloudRelay=wss://..."
 var (
@@ -50,5 +54,13 @@ func Shell() string {
 	if v := os.Getenv("SHELL"); v != "" {
 		return v
 	}
-	return DefaultShell
+	// $SHELL unset (rare on interactive terminals, common in cron / systemd
+	// service contexts). Probe the candidate list and return the first that
+	// exists; falling back to /bin/sh which is POSIX-required.
+	for _, candidate := range shellCandidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return "/bin/sh"
 }
