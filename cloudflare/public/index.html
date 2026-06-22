@@ -88,6 +88,36 @@
     }
     #overlay.visible { display: flex; }
     #overlay span { background: #161b22; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; }
+
+    /* Mobile-only soft-key bar. Phones/tablets have no Esc, Tab, Ctrl,
+       arrows on the system keyboard — without these reminal is unusable
+       for shell editing on mobile, which is the killer feature vs ssh. */
+    #keybar {
+      display: none;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding: 6px 8px;
+      background: #161b22;
+      border-top: 1px solid #21262d;
+    }
+    #keybar button {
+      background: #21262d;
+      color: #e6edf3;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: Menlo, Monaco, "Courier New", monospace;
+      font-size: 14px;
+      font-weight: 500;
+      min-width: 44px;   /* iOS HIG min tap target */
+      min-height: 36px;
+      cursor: pointer;
+    }
+    #keybar button:active { background: #30363d; }
+    /* Touch devices and narrow screens get the bar; desktop with mouse hides it. */
+    @media (pointer: coarse), (max-width: 720px) {
+      #keybar { display: flex; }
+    }
   </style>
 </head>
 <body>
@@ -103,6 +133,20 @@
   <div id="terminal-wrap">
     <div id="terminal"></div>
     <div id="overlay"><span id="overlay-text">Connecting…</span></div>
+  </div>
+  <div id="keybar">
+    <button data-key="esc">Esc</button>
+    <button data-key="tab">Tab</button>
+    <button data-key="ctrl-c">^C</button>
+    <button data-key="ctrl-d">^D</button>
+    <button data-key="ctrl-z">^Z</button>
+    <button data-key="ctrl-l">^L</button>
+    <button data-key="pipe">|</button>
+    <button data-key="tilde">~</button>
+    <button data-key="up">↑</button>
+    <button data-key="down">↓</button>
+    <button data-key="left">←</button>
+    <button data-key="right">→</button>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
@@ -473,13 +517,39 @@
       setBtnConnect();
     }
 
-    term.onData(async (data) => {
+    async function sendInput(data) {
       if (!agentLive) return; // typing into nothing while agent is offline
       const bytes = new TextEncoder().encode(data);
       let binary = '';
       bytes.forEach(b => binary += String.fromCharCode(b));
       await send({ type: 'data', data: btoa(binary) });
       bytesSent += bytes.byteLength;
+    }
+    term.onData(sendInput);
+
+    // Mobile soft-key map. Values are the literal byte sequences the
+    // remote shell expects — same as what xterm.js would emit for the
+    // matching keypress on a hardware keyboard.
+    const keyMap = {
+      esc:    '\x1b',
+      tab:    '\t',
+      'ctrl-c': '\x03',
+      'ctrl-d': '\x04',
+      'ctrl-z': '\x1a',
+      'ctrl-l': '\x0c',
+      pipe:   '|',
+      tilde:  '~',
+      up:     '\x1b[A',
+      down:   '\x1b[B',
+      right:  '\x1b[C',
+      left:   '\x1b[D',
+    };
+    document.querySelectorAll('#keybar button').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const seq = keyMap[btn.dataset.key];
+        if (seq) await sendInput(seq);
+        term.focus();
+      });
     });
 
     window.addEventListener('resize', () => { fitAddon.fit(); if (agentLive) sendResize(); });
