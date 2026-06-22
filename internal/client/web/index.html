@@ -207,6 +207,8 @@
     <button data-key="down">↓</button>
     <button data-key="left">←</button>
     <button data-key="right">→</button>
+    <button id="upload-btn" title="Upload file to host's ~/Downloads/reminal/">⇪ Upload</button>
+    <input type="file" id="upload-input" multiple style="display:none">
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
@@ -768,11 +770,95 @@
     window.addEventListener('beforeunload', gracefulClose);
 
     document.querySelectorAll('#keybar button').forEach(btn => {
+      if (!btn.dataset.key) return; // skip non-key buttons (Upload, etc.)
       btn.addEventListener('click', async () => {
         const seq = keyMap[btn.dataset.key];
         if (seq) await sendInput(seq);
         term.focus();
       });
+    });
+
+    // ---- File upload: drag-drop + button picker ----
+    // Reads each file as base64, wraps as {name, content}, encrypts, and
+    // sends as TypeUpload. Agent writes to ~/Downloads/reminal/ and broadcasts
+    // a notice line that lands in every viewer's terminal.
+    async function fileToBase64(file) {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+    // Parse human TTL string ("5m", "1h", "1d", "never") to seconds.
+    // 0 means "keep forever". Invalid input → default to keep forever
+    // (silent — explicit confirmation already happened in the prompt).
+    function parseTTL(input) {
+      const s = (input || '').trim().toLowerCase();
+      if (!s || s === 'never' || s === '0' || s === 'n') return 0;
+      const m = s.match(/^(\d+)([smhd])$/);
+      if (!m) return 0;
+      const n = parseInt(m[1], 10);
+      switch (m[2]) {
+        case 's': return n;
+        case 'm': return n * 60;
+        case 'h': return n * 3600;
+        case 'd': return n * 86400;
+      }
+      return 0;
+    }
+    async function uploadFile(file, ttlSeconds) {
+      if (!authed || !cryptoKey) {
+        alert('Not connected — connect to a session first.');
+        return;
+      }
+      const MAX_BYTES = 25 * 1024 * 1024; // 25 MB cap to keep WS frames sane
+      if (file.size > MAX_BYTES) {
+        alert(file.name + ' is too large (max 25 MB per upload).');
+        return;
+      }
+      const content = await fileToBase64(file);
+      const payload = JSON.stringify({
+        name: file.name,
+        content,
+        ttl_seconds: ttlSeconds || 0,
+      });
+      const ct = await encrypt(cryptoKey, new TextEncoder().encode(payload));
+      ws.send(JSON.stringify({ type: 'upload', data: ct }));
+    }
+    // Prompt once per upload batch — same TTL applies to every selected file.
+    async function uploadBatch(files) {
+      if (files.length === 0) return;
+      const ttlStr = prompt(
+        'Upload ' + files.length + ' file' + (files.length === 1 ? '' : 's') +
+          ' to host\'s ~/Downloads/reminal/.\n\nAuto-delete after? (e.g. 5m, 1h, 1d, or "never")',
+        '1h'
+      );
+      if (ttlStr === null) return; // user cancelled
+      const ttl = parseTTL(ttlStr);
+      for (const f of files) await uploadFile(f, ttl);
+    }
+    const uploadInput = document.getElementById('upload-input');
+    document.getElementById('upload-btn').addEventListener('click', () => uploadInput.click());
+    uploadInput.addEventListener('change', async () => {
+      await uploadBatch(Array.from(uploadInput.files));
+      uploadInput.value = '';
+    });
+    // Desktop drag-and-drop: drop files anywhere on the terminal area.
+    const termWrap = document.getElementById('terminal-wrap');
+    ['dragenter', 'dragover'].forEach(ev => termWrap.addEventListener(ev, (e) => {
+      e.preventDefault();
+      termWrap.style.outline = '2px dashed #58a6ff';
+    }));
+    ['dragleave', 'drop'].forEach(ev => termWrap.addEventListener(ev, () => {
+      termWrap.style.outline = '';
+    }));
+    termWrap.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      if (!e.dataTransfer) return;
+      await uploadBatch(Array.from(e.dataTransfer.files));
     });
 
     const refit = () => { fitAddon.fit(); if (agentLive) sendResize(); };

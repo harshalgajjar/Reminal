@@ -24,6 +24,9 @@ const (
 	TypeResume       MessageType = "resume"
 	TypeAgentOnline  MessageType = "agent_online"
 	TypeAgentOffline MessageType = "agent_offline"
+	// TypeUpload carries an encrypted file from a viewer to the agent.
+	// Payload (after decrypt) is JSON: {"name": "...", "content": "<base64>"}.
+	TypeUpload MessageType = "upload"
 )
 
 type Message struct {

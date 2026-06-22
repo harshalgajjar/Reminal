@@ -2,11 +2,14 @@ package client
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -307,6 +310,127 @@ func (a *Agent) updateActiveViewers(viewers int) {
 	_ = session.WriteActive(a.activeRecord(viewers))
 }
 
+// handleUpload decrypts a TypeUpload message, writes the file to
+// ~/Downloads/reminal/, and broadcasts a notice line to all viewers
+// (including the host's own terminal). Best-effort: any error is reported
+// via the same notice channel so the user sees what went wrong.
+func (a *Agent) handleUpload(encData string) {
+	plaintext, err := a.box.Decrypt(encData)
+	if err != nil {
+		a.broadcastNotice(fmt.Sprintf("upload failed: decrypt: %v", err))
+		return
+	}
+	var payload struct {
+		Name       string `json:"name"`
+		Content    string `json:"content"` // base64
+		TTLSeconds int    `json:"ttl_seconds"`
+	}
+	if err := json.Unmarshal(plaintext, &payload); err != nil {
+		a.broadcastNotice(fmt.Sprintf("upload failed: parse: %v", err))
+		return
+	}
+	if payload.Name == "" {
+		a.broadcastNotice("upload failed: missing filename")
+		return
+	}
+	// Strip path components — accept only a basename to prevent the
+	// viewer from writing outside the upload dir.
+	safe := filepath.Base(payload.Name)
+	if safe == "." || safe == "/" || safe == "" {
+		a.broadcastNotice("upload failed: invalid filename")
+		return
+	}
+	raw, err := base64.StdEncoding.DecodeString(payload.Content)
+	if err != nil {
+		a.broadcastNotice(fmt.Sprintf("upload failed: bad base64: %v", err))
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		a.broadcastNotice(fmt.Sprintf("upload failed: %v", err))
+		return
+	}
+	dir := filepath.Join(home, "Downloads", "reminal")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		a.broadcastNotice(fmt.Sprintf("upload failed: mkdir: %v", err))
+		return
+	}
+	path := uniquePath(filepath.Join(dir, safe))
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		a.broadcastNotice(fmt.Sprintf("upload failed: write: %v", err))
+		return
+	}
+	if payload.TTLSeconds > 0 {
+		ttl := time.Duration(payload.TTLSeconds) * time.Second
+		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · auto-delete in %s",
+			path, humanByteSize(len(raw)), ttl))
+		// Schedule deletion. AfterFunc runs in its own goroutine; if the
+		// agent process exits before it fires, the file stays — but the
+		// dedicated ~/Downloads/reminal/ directory makes cleanup obvious.
+		time.AfterFunc(ttl, func() {
+			if err := os.Remove(path); err != nil {
+				if os.IsNotExist(err) {
+					return // user already deleted it; quietly skip
+				}
+				a.broadcastNotice(fmt.Sprintf("auto-delete failed for %s: %v", path, err))
+				return
+			}
+			a.broadcastNotice(fmt.Sprintf("auto-deleted %s (TTL %s expired)", path, ttl))
+		})
+	} else {
+		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · kept forever", path, humanByteSize(len(raw))))
+	}
+}
+
+// uniquePath returns the first non-existing variant of p — appends -2, -3,
+// etc. before the extension if the file already exists.
+func uniquePath(p string) string {
+	if _, err := os.Stat(p); err != nil {
+		return p
+	}
+	ext := filepath.Ext(p)
+	base := strings.TrimSuffix(p, ext)
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s-%d%s", base, i, ext)
+		if _, err := os.Stat(candidate); err != nil {
+			return candidate
+		}
+	}
+}
+
+// humanByteSize renders an int as 1.2 KB / 47.93 MB style for human display.
+func humanByteSize(n int) string {
+	const (
+		kb = 1000
+		mb = 1000 * kb
+		gb = 1000 * mb
+	)
+	switch {
+	case n < kb:
+		return fmt.Sprintf("%d B", n)
+	case n < mb:
+		return fmt.Sprintf("%.2f KB", float64(n)/kb)
+	case n < gb:
+		return fmt.Sprintf("%.2f MB", float64(n)/mb)
+	default:
+		return fmt.Sprintf("%.2f GB", float64(n)/gb)
+	}
+}
+
+// broadcastNotice writes a one-line dim status to the host's stdout AND
+// appends it to the scrollback (so every connected viewer sees it too).
+// Used for out-of-band agent events like file uploads.
+func (a *Agent) broadcastNotice(text string) {
+	line := fmt.Sprintf("\r\n\x1b[2m[reminal] %s\x1b[0m\r\n", text)
+	if a.localActive {
+		_, _ = os.Stdout.Write([]byte(line))
+	}
+	if enc, err := a.box.Encrypt([]byte(line)); err == nil {
+		a.buf.Append(enc)
+	}
+}
+
 // pause is invoked from the SIGUSR1 handler when the user runs
 // `reminal stop`. It closes the live WS (if any) so the relay sees us go
 // offline immediately, clears the on-disk session record so attach can't
@@ -522,6 +646,8 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// FromSeq is the highest seq the viewer has received. We replay
 			// everything with Seq > FromSeq, so the next seq to send is FromSeq+1.
 			pushCursor(cursorCh, msg.FromSeq+1)
+		case protocol.TypeUpload:
+			a.handleUpload(msg.Data)
 		case protocol.TypeConnected:
 			if msg.Count > 0 {
 				agentNotify("  [%s] Viewer connected (%d active)\n",
