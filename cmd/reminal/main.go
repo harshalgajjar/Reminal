@@ -183,6 +183,31 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "expose":
+			port := 0
+			public := false
+			for _, a := range os.Args[2:] {
+				switch a {
+				case "--public":
+					public = true
+				default:
+					if !strings.HasPrefix(a, "-") && port == 0 {
+						if _, err := fmt.Sscanf(a, "%d", &port); err != nil || port <= 0 {
+							fmt.Fprintf(os.Stderr, "reminal expose: %q is not a valid port number\n", a)
+							os.Exit(2)
+						}
+					}
+				}
+			}
+			if port == 0 {
+				fmt.Fprintln(os.Stderr, "usage: reminal expose <port> [--public]")
+				os.Exit(2)
+			}
+			if err := runExpose(port, public); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "kill":
 			idArg := ""
 			yes := false
@@ -221,10 +246,34 @@ func main() {
 	verboseLong := flag.Bool("verbose", false, "alias for -v")
 	headless := flag.Bool("headless", false, "run without owning the host terminal — for spawned background sessions; users normally invoke this via `reminal new`")
 	handshakeFD := flag.Int("handshake-fd", 0, "fd inherited from `reminal new` for the credentials handshake (internal)")
+	exposeHeadless := flag.Bool("expose-headless", false, "run as a headless port-forwarder; users normally invoke this via `reminal expose <port>`")
+	exposePort := flag.Int("expose-port", 0, "local TCP port to forward (used with --expose-headless)")
+	exposePublic := flag.Bool("expose-public", false, "skip PIN gate on the port forward (used with --expose-headless)")
 	flag.Parse()
 
 	if *verbose || *verboseLong {
 		os.Setenv("REMINAL_DEBUG", "1")
+	}
+
+	// Headless port-forwarder path. Like the shell --headless path
+	// below, but spins up a Tunnel instead of an Agent. Internal flag —
+	// users invoke this indirectly via `reminal expose <port>`.
+	if *exposeHeadless {
+		tun, err := client.NewTunnel(client.TunnelOptions{
+			Port:        *exposePort,
+			Public:      *exposePublic,
+			HandshakeFD: *handshakeFD,
+			Version:     version,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := tun.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Headless agent path: skip the upgrade prompt + the
@@ -295,11 +344,12 @@ func printHelp() {
 Usage:
   reminal                                  Share this terminal (works out of the box)
   reminal new                              Spawn a fresh background session (detached — survives this terminal closing)
+  reminal expose <port> [--public]         Forward a local HTTP port to a public URL (PIN-protected by default)
   reminal list                             List every reminal session running on this machine
   reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
   reminal attach [id]                      Re-connect to a local agent as a viewer (no copy-paste). id required if multiple
-  reminal stop [id] [-y]                   Stop broadcasting (kicks viewers, keeps shell alive). Explains consequences first
-  reminal kill [id] [-y]                   Fully terminate a session (irreversible — kills shell + disconnects viewers)
+  reminal stop [id-or-port] [-y]           Stop the reminal layer (kicks viewers / disables URL — your shell/server keeps running)
+  reminal kill [id] [-y]                   Fully terminate a shell session (irreversible — kills shell + disconnects viewers)
   reminal send <file>                      Push a file to every connected viewer (web client auto-downloads)
   reminal notify <message>                 Push a notification to viewers (browser notification on web)
   reminal connections                      List currently attached viewers with connect time
@@ -468,8 +518,9 @@ func runSend(path string) error {
 	return nil
 }
 
-// resolveActive picks a target session from the supplied id arg. When
-// no arg is given the resolution order is:
+// resolveActive picks a target session from the supplied arg, which may
+// be either a session ID, a port number (for port-forwards), or empty.
+// Resolution order when no arg is given:
 //  1. REMINAL_SESSION env var (set by the agent inside the shared shell
 //     — "this terminal" is the most natural default for any command
 //     typed at the host's own prompt).
@@ -477,22 +528,35 @@ func runSend(path string) error {
 //  3. Otherwise: print the list and require the caller to disambiguate
 //     so `reminal stop`/`kill`/`attach` never silently target the
 //     wrong agent.
-func resolveActive(idArg string) (*session.Active, error) {
-	idArg = strings.ToUpper(strings.TrimSpace(idArg))
+func resolveActive(arg string) (*session.Active, error) {
+	arg = strings.TrimSpace(arg)
 	all, err := session.ReadAllActive()
 	if err != nil {
 		return nil, err
 	}
 	if len(all) == 0 {
-		return nil, errors.New("no active reminal session on this machine — start one with `reminal` or `reminal new`")
+		return nil, errors.New("no active reminal session on this machine — start one with `reminal`, `reminal new`, or `reminal expose <port>`")
 	}
-	if idArg != "" {
+	if arg != "" {
+		// All-digit arg → look up by port (for port-forwards).
+		if isAllDigits(arg) {
+			var port int
+			if _, err := fmt.Sscanf(arg, "%d", &port); err == nil {
+				for i := range all {
+					if all[i].IsPort() && all[i].Port == port {
+						return &all[i], nil
+					}
+				}
+				return nil, fmt.Errorf("no port forward on port %d (running: %s)", port, joinIDs(all))
+			}
+		}
+		upper := strings.ToUpper(arg)
 		for i := range all {
-			if all[i].ID == idArg {
+			if all[i].ID == upper {
 				return &all[i], nil
 			}
 		}
-		return nil, fmt.Errorf("no active session with id %q (running: %s)", idArg, joinIDs(all))
+		return nil, fmt.Errorf("no active session with id %q (running: %s)", arg, joinIDs(all))
 	}
 	if inside := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION"))); inside != "" {
 		for i := range all {
@@ -510,9 +574,25 @@ func resolveActive(idArg string) (*session.Active, error) {
 func joinIDs(all []session.Active) string {
 	ids := make([]string, len(all))
 	for i, a := range all {
-		ids[i] = a.ID
+		if a.IsPort() {
+			ids[i] = fmt.Sprintf("%s (port %d)", a.ID, a.Port)
+		} else {
+			ids[i] = a.ID
+		}
 	}
 	return strings.Join(ids, ", ")
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // runStop tells the agent running on this machine to stop broadcasting to
@@ -532,6 +612,29 @@ func runStop(idArg string, yes bool) error {
 		}
 		return err
 	}
+
+	// Port forwards: tearing down the relay layer IS the whole job —
+	// there's nothing for the user's underlying server to "keep running"
+	// from our perspective. SIGTERM the tunnel process; it'll clean up
+	// its own active record.
+	if a.IsPort() {
+		fmt.Printf("\n  This will stop the public proxy to localhost:%d.\n", a.Port)
+		fmt.Printf("    · The URL %s stops working immediately.\n", a.OpenURL)
+		fmt.Printf("    · Your localhost:%d server keeps running — nothing is killed.\n", a.Port)
+		fmt.Printf("    · You can re-expose anytime with: reminal expose %d\n", a.Port)
+		fmt.Println()
+		if !yes && term.IsTerminal(int(os.Stdin.Fd())) {
+			fmt.Print("  Press Enter to continue, Ctrl-C to cancel: ")
+			_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		}
+		if err := syscall.Kill(a.PID, syscall.SIGTERM); err != nil {
+			return fmt.Errorf("signal PID %d: %w", a.PID, err)
+		}
+		fmt.Printf("  Stopped port-forward %s (port %d, PID %d).\n", a.ID, a.Port, a.PID)
+		return nil
+	}
+
+	// Shell sessions: SIGUSR1 = pause broadcasting, keep the shell alive.
 	fmt.Printf("\n  This will pause session %s.\n", a.ID)
 	if a.Viewers > 0 {
 		fmt.Printf("    · %d connected viewer(s) will be disconnected.\n", a.Viewers)
@@ -571,6 +674,23 @@ func runAttach(idArg string) error {
 	return client.Connect(a.ID, a.PIN)
 }
 
+// runExpose spawns a detached port-forwarder for the given local port
+// and prints the public URL + PIN + QR in the calling terminal. Refuses
+// to double-spawn for a port that's already exposed.
+func runExpose(port int, public bool) error {
+	if existing, err := session.ReadActiveByPort(port); err == nil {
+		fmt.Printf("Port %d is already exposed: %s\n", port, existing.OpenURL)
+		fmt.Printf("To replace it: reminal stop %d  (then re-run reminal expose %d)\n", port, port)
+		return nil
+	}
+	sp, err := client.SpawnTunnel(port, public)
+	if err != nil {
+		return err
+	}
+	client.PrintSpawnedTunnel(sp, port, public, version)
+	return nil
+}
+
 // runNew spawns a fresh headless reminal in the background and prints
 // its credentials in the calling terminal. Behaves exactly like opening
 // a new terminal and typing `reminal` — except the shell runs detached,
@@ -587,39 +707,49 @@ func runNew() error {
 	return nil
 }
 
-// runList prints one line per running reminal agent on this host.
+// runList prints one line per running reminal agent on this host —
+// shell sessions and port-forwards together, with a mode column so
+// the user can tell them apart at a glance.
 func runList() error {
 	all, err := session.ReadAllActive()
 	if err != nil {
 		return err
 	}
 	if len(all) == 0 {
-		fmt.Println("No reminal sessions running. Start one with `reminal` or `reminal new`.")
+		fmt.Println("No reminal sessions running. Start one with:")
+		fmt.Println("  reminal                # share this terminal")
+		fmt.Println("  reminal new            # share a background terminal")
+		fmt.Println("  reminal expose <port>  # share a local HTTP port")
 		return nil
 	}
 	fmt.Printf("%d session(s) running:\n\n", len(all))
 	now := time.Now()
 	for _, a := range all {
-		mode := "foreground"
-		if a.Headless {
+		var mode string
+		switch {
+		case a.IsPort():
+			mode = fmt.Sprintf("port:%d", a.Port)
+		case a.Headless:
 			mode = "headless"
+		default:
+			mode = "foreground"
 		}
 		age := now.Sub(a.StartedAt).Round(time.Second)
 		viewers := ""
-		if a.Viewers > 0 {
+		if a.Viewers > 0 && !a.IsPort() {
 			noun := "viewer"
 			if a.Viewers != 1 {
 				noun = "viewers"
 			}
 			viewers = fmt.Sprintf(", %d %s", a.Viewers, noun)
 		}
-		fmt.Printf("  %s  · %-10s · PID %-6d · up %v%s\n", a.ID, mode, a.PID, age, viewers)
+		fmt.Printf("  %s  · %-12s · PID %-6d · up %v%s\n", a.ID, mode, a.PID, age, viewers)
 		fmt.Printf("           %s\n", a.OpenURL)
 	}
 	fmt.Println()
-	fmt.Println("  reminal attach <id>    drive a session from this terminal")
-	fmt.Println("  reminal stop <id>      pause broadcasting (keeps shell alive)")
-	fmt.Println("  reminal kill <id>      fully terminate the session")
+	fmt.Println("  reminal attach <id>            drive a shell session from this terminal")
+	fmt.Println("  reminal stop <id-or-port>      stop the reminal layer (leaves your shell/server alone)")
+	fmt.Println("  reminal kill <id>              fully terminate a shell session (destroys the shell)")
 	return nil
 }
 

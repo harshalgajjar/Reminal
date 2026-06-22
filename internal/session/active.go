@@ -18,21 +18,58 @@ import (
 // recover the join details.
 //
 // Multiple agents can run on the same host concurrently — each gets its
-// own active-<id>.json so `reminal list` can enumerate them.
+// own active-<id>.json so `reminal list` can enumerate them. Kind tells
+// shell agents and port-forwarders apart.
 type Active struct {
 	ID        string    `json:"id"`
 	PIN       string    `json:"pin"`
 	OpenURL   string    `json:"open_url"`
 	PID       int       `json:"pid"`
 	StartedAt time.Time `json:"started_at"`
+	// Kind distinguishes shell sessions ("" or "shell") from port
+	// forwards ("port"). Empty means shell for back-compat with
+	// records written before port-forwarding existed.
+	Kind string `json:"kind,omitempty"`
+	// Port is the local TCP port being forwarded. Set only when
+	// Kind == "port"; zero otherwise.
+	Port int `json:"port,omitempty"`
 	// Headless is true when the agent was spawned with --headless (no
 	// host terminal attached). Surfaced by `reminal list` so the user
-	// can tell foreground vs. background sessions apart.
+	// can tell foreground vs. background sessions apart. Port forwards
+	// are always headless — Headless is unset for them since Kind=="port"
+	// already implies it.
 	Headless bool `json:"headless,omitempty"`
 	// Viewers is the live count of currently-attached viewers (updated by
 	// the agent on every connect/disconnect event from the relay). Read
 	// by `reminal info` and the "attach to existing?" prompt.
 	Viewers int `json:"viewers,omitempty"`
+}
+
+// KindShell + KindPort are the canonical values of Active.Kind. New
+// records always write one of these. Legacy records (pre-port-forward)
+// with empty Kind are treated as KindShell.
+const (
+	KindShell = "shell"
+	KindPort  = "port"
+)
+
+// IsPort reports whether this record is a port forward.
+func (a Active) IsPort() bool { return a.Kind == KindPort }
+
+// ReadActiveByPort returns the running port-forward bound to the given
+// local port, or os.ErrNotExist if none. Scans ~/.reminal/ — cheap, the
+// list is always small.
+func ReadActiveByPort(port int) (*Active, error) {
+	all, err := ReadAllActive()
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].IsPort() && all[i].Port == port {
+			return &all[i], nil
+		}
+	}
+	return nil, os.ErrNotExist
 }
 
 // activeDir returns ~/.reminal/. Created on demand by WriteActive.

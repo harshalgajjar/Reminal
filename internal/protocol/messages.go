@@ -5,6 +5,12 @@ type Role string
 const (
 	RoleAgent  Role = "agent"
 	RoleViewer Role = "viewer"
+	// RoleTunnel is used by `reminal expose <port>`. The agent connects to
+	// the relay with this role, registers a local port, then receives HTTP
+	// tunnel-request frames and replies with tunnel responses. Distinct
+	// from RoleAgent so shell broadcasts and HTTP tunneling never get
+	// crossed in the relay's per-session state.
+	RoleTunnel Role = "tunnel"
 )
 
 type MessageType string
@@ -35,6 +41,27 @@ const (
 	// every viewer ("build done", "tests passed"). Payload after decrypt
 	// is JSON: {"message": "..."}.
 	TypeNotify MessageType = "notify"
+
+	// ---- Port-forward tunneling (RoleTunnel sessions) ----
+	// These payloads are NOT end-to-end encrypted — the Worker needs to
+	// route URL paths and serve a PIN gate, so it has to read them. Same
+	// trust model as ngrok / cloudflared: the relay sees your HTTP.
+
+	// TypeTunnelRegister is sent by the agent once on connect to declare
+	// the local port it's proxying. Payload (Data, JSON):
+	//   {"port": 3000, "pin_hash": "<bcrypt>", "public": false}
+	// "public": true skips the PIN gate (use with care).
+	TypeTunnelRegister MessageType = "tunnel_register"
+	// TypeTunnelReq is the relay→agent envelope for a single incoming HTTP
+	// request. Payload (Data, JSON):
+	//   {"req_id":"abc","method":"GET","url":"/path?q=1",
+	//    "headers":{"User-Agent":"...", ...}, "body":"<base64>"}
+	TypeTunnelReq MessageType = "tunnel_req"
+	// TypeTunnelResp is the agent→relay reply. Payload (Data, JSON):
+	//   {"req_id":"abc","status":200,
+	//    "headers":{"Content-Type":"text/html", ...},
+	//    "body":"<base64>"}
+	TypeTunnelResp MessageType = "tunnel_resp"
 )
 
 type Message struct {

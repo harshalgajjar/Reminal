@@ -1,4 +1,4 @@
-import type { Attachment } from "./types";
+import type { Attachment, TunnelMeta } from "./types";
 
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 5 * 60 * 1000;
@@ -7,8 +7,25 @@ const LOCKOUT_MS = 5 * 60 * 1000;
 // same agent a chance to reattach across a network blip.
 const ORPHAN_TTL_MS = 10 * 60 * 1000;
 
+// Per-tunnel-request timeout. If the tunnel agent doesn't reply in this
+// window we 504 — covers the local server hanging or the WS dying
+// mid-request.
+const TUNNEL_REQ_TIMEOUT_MS = 30 * 1000;
+
+// Cookie name scoped per-session so multiple port-forwards can each
+// have their own auth state in a single browser.
+const AUTH_COOKIE_PREFIX = "reminal_auth_";
+const COOKIE_MAX_AGE = 30 * 24 * 3600; // 30 days
+
 export class SessionRoom {
   private state: DurableObjectState;
+  // pendingTunnelReqs lives in DO instance memory; a request keeps the
+  // DO awake until it resolves or times out, so the map never has to
+  // survive hibernation.
+  private pendingTunnelReqs: Map<string, {
+    resolve: (resp: { status: number; headers: Record<string, string>; body: Uint8Array }) => void;
+    timeout: ReturnType<typeof setTimeout>;
+  }> = new Map();
 
   constructor(state: DurableObjectState) {
     this.state = state;
@@ -17,32 +34,36 @@ export class SessionRoom {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
+
+    // /p/<id>/... — port-forward HTTP proxy. Handled before the
+    // WS-upgrade branch since the visitor's browser never sends
+    // Upgrade: websocket for plain GETs.
+    if (parts[0] === "p") {
+      return this.handleTunnelHttp(request, url);
+    }
+
+    // /ws/<id>/<role> — WebSocket upgrade path (agent / viewer / tunnel).
     const role = parts[2]?.toLowerCase();
 
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("Expected WebSocket", { status: 426 });
     }
 
-    if (role !== "agent" && role !== "viewer") {
+    if (role !== "agent" && role !== "viewer" && role !== "tunnel") {
       return new Response("invalid role", { status: 400 });
     }
 
     const meta = await this.loadMeta();
 
-    // Decide whether to accept; if rejecting, fall through to the accept-then-
-    // close path below so the client sees a structured {type:"error"} message
-    // and treats it as fatal instead of looping on a handshake failure.
     let rejectReason: string | null = null;
     if (role === "viewer") {
-      // Allow viewer to attach as long as the room was set up by an
-      // authenticated agent — even if the agent is briefly offline.
-      // Multiple viewers per session are explicitly supported so a user
-      // can keep phone + laptop attached at the same time.
       if (!meta.agentAuthed) {
         rejectReason = "session not found or not ready";
       }
-    } else if (this.getSocket("agent")) {
+    } else if (role === "agent" && this.getSocket("agent")) {
       rejectReason = "another agent is already connected to this session";
+    } else if (role === "tunnel" && this.getSocket("tunnel")) {
+      rejectReason = "another tunnel is already connected to this session";
     }
 
     const pair = new WebSocketPair();
@@ -57,8 +78,7 @@ export class SessionRoom {
       return new Response(null, { status: 101, webSocket: client });
     }
 
-    // Cancel any pending orphan-cleanup alarm now that someone is here.
-    if (role === "agent") {
+    if (role === "agent" || role === "tunnel") {
       await this.state.storage.deleteAlarm();
     }
 
@@ -69,11 +89,11 @@ export class SessionRoom {
     const attachment = ws.deserializeAttachment() as Attachment;
 
     if (typeof message === "string") {
-      let parsed: { type?: string; pin?: string; pin_hash?: string } | null = null;
+      let parsed: any = null;
       try {
         parsed = JSON.parse(message);
       } catch {
-        // encrypted payload — fall through to forward
+        // not JSON — fall through (no encrypted-binary path for tunnel)
       }
 
       if (parsed) {
@@ -90,7 +110,21 @@ export class SessionRoom {
           ws.send(JSON.stringify({ type: "pong" }));
           return;
         }
-        // data / resize / resume / unknown control — forward to the other side
+
+        // ---- Tunnel-specific control messages ----
+        if (attachment.role === "tunnel") {
+          if (parsed.type === "tunnel_register") {
+            await this.handleTunnelRegister(parsed.data ?? "");
+            return;
+          }
+          if (parsed.type === "tunnel_resp") {
+            this.handleTunnelResp(parsed.data ?? "");
+            return;
+          }
+          // tunnel sockets don't broadcast to viewers; ignore anything else.
+          return;
+        }
+        // shell-session control (data / resize / etc.) — fall through to forward
       }
     }
 
@@ -100,49 +134,38 @@ export class SessionRoom {
     }
 
     if (attachment.role === "agent") {
-      // Broadcast agent output (data, resize) to every authed viewer.
       for (const v of this.getSockets("viewer")) {
         const att = v.deserializeAttachment() as Attachment;
         if (att?.authed && v.readyState === WebSocket.OPEN) {
           v.send(message);
         }
       }
-    } else {
+    } else if (attachment.role === "viewer") {
       const agent = this.getSocket("agent");
       if (agent?.readyState === WebSocket.OPEN) {
         agent.send(message);
       }
     }
+    // tunnel sockets don't pass through opaque messages.
   }
 
   async webSocketClose(ws: WebSocket) {
     const attachment = ws.deserializeAttachment() as Attachment;
-
-    // Rejected sockets were accepted only to deliver an error and close;
-    // they don't represent a real presence change, so skip cleanup.
-    if (attachment.rejected) {
-      return;
-    }
+    if (attachment.rejected) return;
 
     if (attachment.role === "agent") {
-      // Notify every authed viewer that the agent is temporarily gone,
-      // but keep the room and credentials so the agent can reattach.
       for (const v of this.getSockets("viewer")) {
         const att = v.deserializeAttachment() as Attachment;
         if (att?.authed && v.readyState === WebSocket.OPEN) {
           v.send(JSON.stringify({ type: "agent_offline" }));
         }
       }
-      // Schedule cleanup if the agent never returns.
       await this.state.storage.setAlarm(Date.now() + ORPHAN_TTL_MS);
     } else if (attachment.role === "viewer") {
       const remaining = this.getSockets("viewer").filter(v => v !== ws);
       if (remaining.length === 0) {
         await this.state.storage.put("viewerAuthed", false);
       }
-      // Always tell the agent about viewer churn so the host can show a
-      // live count; the message carries the post-disconnect count so the
-      // agent can render "(N still active)" or "Last viewer disconnected".
       const agent = this.getSocket("agent");
       if (agent?.readyState === WebSocket.OPEN) {
         agent.send(JSON.stringify({
@@ -151,20 +174,28 @@ export class SessionRoom {
           count: remaining.length,
         }));
       }
+    } else if (attachment.role === "tunnel") {
+      // Fail any in-flight tunnel requests so visitors get a clear 503
+      // rather than hanging until the per-request timeout.
+      for (const [, entry] of this.pendingTunnelReqs) {
+        clearTimeout(entry.timeout);
+        entry.resolve({
+          status: 502,
+          headers: { "Content-Type": "text/plain" },
+          body: new TextEncoder().encode("reminal: tunnel disconnected\n"),
+        });
+      }
+      this.pendingTunnelReqs.clear();
+      await this.state.storage.setAlarm(Date.now() + ORPHAN_TTL_MS);
     }
   }
 
   async webSocketError(ws: WebSocket) {
-    // Treat errors like a clean close for cleanup purposes.
     return this.webSocketClose(ws);
   }
 
   async alarm() {
-    // Orphan-room TTL: if the agent never reattached, kick the viewer and
-    // wipe storage. If the agent is back, we leave everything alone.
-    if (this.getSocket("agent")) {
-      return;
-    }
+    if (this.getSocket("agent") || this.getSocket("tunnel")) return;
     for (const v of this.getSockets("viewer")) {
       if (v.readyState === WebSocket.OPEN) {
         v.send(JSON.stringify({ type: "closed", error: "agent session expired" }));
@@ -173,6 +204,8 @@ export class SessionRoom {
     }
     await this.state.storage.deleteAll();
   }
+
+  // ---- auth ----
 
   private async handleAuth(
     ws: WebSocket,
@@ -188,58 +221,52 @@ export class SessionRoom {
       return "too many failed attempts — try again in a few minutes";
     }
 
-    if (attachment.role === "agent") {
+    if (attachment.role === "agent" || attachment.role === "tunnel") {
       if (!msg.pin_hash) {
         return "pin_hash required";
       }
-      // For a reattach, the agent must present the same pin_hash that
-      // originally created the room. This prevents hijacking.
       const storedPinHash = (await this.state.storage.get<string>("pinHash")) ?? "";
       if (storedPinHash && storedPinHash !== msg.pin_hash) {
         return "session credentials mismatch";
       }
       await this.state.storage.put("pinHash", msg.pin_hash);
-      await this.state.storage.put("agentAuthed", true);
+      if (attachment.role === "agent") {
+        await this.state.storage.put("agentAuthed", true);
+      }
       await this.resetFailures();
-      ws.serializeAttachment({ role: "agent", authed: true } satisfies Attachment);
+      ws.serializeAttachment({ role: attachment.role, authed: true } satisfies Attachment);
       ws.send(JSON.stringify({ type: "auth_ok" }));
 
-      // Tell every authed viewer that the agent is back.
-      for (const v of this.getSockets("viewer")) {
-        const att = v.deserializeAttachment() as Attachment;
-        if (att?.authed && v.readyState === WebSocket.OPEN) {
-          v.send(JSON.stringify({ type: "agent_online" }));
+      if (attachment.role === "agent") {
+        for (const v of this.getSockets("viewer")) {
+          const att = v.deserializeAttachment() as Attachment;
+          if (att?.authed && v.readyState === WebSocket.OPEN) {
+            v.send(JSON.stringify({ type: "agent_online" }));
+          }
         }
       }
       return null;
     }
 
-    if (!msg.pin) {
-      return "pin required";
-    }
+    // viewer
+    if (!msg.pin) return "pin required";
     const pinHash = (await this.state.storage.get<string>("pinHash")) ?? "";
-    if (!pinHash) {
-      return "session not ready";
-    }
-
+    if (!pinHash) return "session not ready";
     const { compare } = await import("bcryptjs");
     if (!(await compare(msg.pin, pinHash))) {
       await this.recordFailure();
       return "incorrect PIN";
     }
-
     await this.state.storage.put("viewerAuthed", true);
     await this.resetFailures();
     ws.serializeAttachment({ role: "viewer", authed: true } satisfies Attachment);
     ws.send(JSON.stringify({ type: "auth_ok" }));
 
-    // Tell the viewer the current presence of the agent.
     const agent = this.getSocket("agent");
     if (agent?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "connected" }));
       const att = agent.deserializeAttachment() as Attachment;
       if (att?.authed) {
-        // Live viewer count so the host can show "(N active)".
         agent.send(JSON.stringify({
           type: "connected",
           count: this.getSockets("viewer").filter(v => {
@@ -254,12 +281,177 @@ export class SessionRoom {
     return null;
   }
 
+  // ---- tunnel: register + request/response correlation ----
+
+  private async handleTunnelRegister(dataJSON: string) {
+    let info: { port?: number; pin_hash?: string; public?: boolean } = {};
+    try {
+      info = JSON.parse(dataJSON);
+    } catch {
+      return;
+    }
+    const port = typeof info.port === "number" ? info.port : 0;
+    const pinHash = info.pin_hash ?? "";
+    const isPublic = !!info.public;
+    if (!port || !pinHash) return;
+
+    // Generate a per-session signing key for the auth cookie HMAC. New
+    // each registration so a stale cookie from a prior session-ID reuse
+    // doesn't accidentally grant access.
+    const keyBytes = new Uint8Array(32);
+    crypto.getRandomValues(keyBytes);
+    const signingKey = toHex(keyBytes);
+
+    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey };
+    await this.state.storage.put("tunnelMeta", meta);
+  }
+
+  private handleTunnelResp(dataJSON: string) {
+    let resp: any = null;
+    try {
+      resp = JSON.parse(dataJSON);
+    } catch {
+      return;
+    }
+    const reqID = resp?.req_id;
+    if (!reqID) return;
+    const entry = this.pendingTunnelReqs.get(reqID);
+    if (!entry) return;
+    clearTimeout(entry.timeout);
+    this.pendingTunnelReqs.delete(reqID);
+
+    const body = typeof resp.body === "string" ? base64ToBytes(resp.body) : new Uint8Array();
+    entry.resolve({
+      status: typeof resp.status === "number" ? resp.status : 502,
+      headers: resp.headers ?? {},
+      body,
+    });
+  }
+
+  // ---- tunnel: HTTP proxy ----
+
+  private async handleTunnelHttp(request: Request, url: URL): Promise<Response> {
+    const parts = url.pathname.split("/").filter(Boolean); // ["p", "<id>", ...rest]
+    const sessionId = (parts[1] ?? "").toUpperCase();
+    const rest = "/" + parts.slice(2).join("/");
+
+    const meta = (await this.state.storage.get<TunnelMeta>("tunnelMeta")) ?? null;
+    if (!meta) {
+      return new Response(notFoundPage(), {
+        status: 404,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
+    // POST /p/<id>/__auth — submit PIN.
+    if (rest === "/__auth" && request.method === "POST") {
+      return this.handleTunnelAuth(request, sessionId, meta);
+    }
+
+    // Public tunnels skip the gate entirely.
+    if (!meta.public) {
+      const cookies = parseCookies(request.headers.get("Cookie") ?? "");
+      const cookieVal = cookies[AUTH_COOKIE_PREFIX + sessionId] ?? "";
+      const expected = await hmacHex(meta.signingKey, "ok");
+      if (cookieVal !== expected) {
+        const wantTo = url.pathname + url.search;
+        return new Response(pinGatePage(sessionId, wantTo, ""), {
+          status: 200,
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+    }
+
+    // Forward to the tunnel WS.
+    const tunnel = this.getSocket("tunnel");
+    if (!tunnel || tunnel.readyState !== WebSocket.OPEN) {
+      return new Response("reminal: tunnel offline\n", {
+        status: 503,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
+
+    const reqID = crypto.randomUUID();
+    const bodyBytes = await request.arrayBuffer();
+    const headers: Record<string, string> = {};
+    request.headers.forEach((v, k) => {
+      const lk = k.toLowerCase();
+      // The agent re-adds X-Forwarded-* itself; we shouldn't trust
+      // what Cloudflare passed (already added cf-* headers etc.).
+      if (lk === "cookie") return; // don't leak the reminal auth cookie to the user's app
+      headers[k] = v;
+    });
+
+    const promise = new Promise<{ status: number; headers: Record<string, string>; body: Uint8Array }>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.pendingTunnelReqs.delete(reqID);
+        resolve({
+          status: 504,
+          headers: { "Content-Type": "text/plain" },
+          body: new TextEncoder().encode("reminal: upstream timeout\n"),
+        });
+      }, TUNNEL_REQ_TIMEOUT_MS);
+      this.pendingTunnelReqs.set(reqID, { resolve, timeout });
+    });
+
+    tunnel.send(JSON.stringify({
+      type: "tunnel_req",
+      data: JSON.stringify({
+        req_id: reqID,
+        method: request.method,
+        url: rest + (url.search ?? ""),
+        headers,
+        body: bytesToBase64(new Uint8Array(bodyBytes)),
+      }),
+    }));
+
+    const out = await promise;
+    return new Response(out.body as BodyInit, { status: out.status, headers: out.headers });
+  }
+
+  private async handleTunnelAuth(request: Request, sessionId: string, meta: TunnelMeta): Promise<Response> {
+    const form = await request.formData();
+    const pin = String(form.get("pin") ?? "");
+    const to = String(form.get("to") ?? `/p/${sessionId}/`);
+
+    const m = await this.loadMeta();
+    if (m.lockedUntil && Date.now() < m.lockedUntil) {
+      return new Response(pinGatePage(sessionId, to, "Too many failed attempts — try again in a few minutes."), {
+        status: 429,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+
+    const { compare } = await import("bcryptjs");
+    if (!pin || !(await compare(pin, meta.pinHash))) {
+      await this.recordFailure();
+      return new Response(pinGatePage(sessionId, to, "Incorrect PIN."), {
+        status: 401,
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+    }
+    await this.resetFailures();
+
+    const cookieVal = await hmacHex(meta.signingKey, "ok");
+    const cookie =
+      `${AUTH_COOKIE_PREFIX}${sessionId}=${cookieVal}; ` +
+      `Path=/p/${sessionId}/; ` +
+      `Max-Age=${COOKIE_MAX_AGE}; ` +
+      `HttpOnly; Secure; SameSite=Lax`;
+    // Defensive: only redirect within /p/<id>/.
+    const safeTo = to.startsWith(`/p/${sessionId}/`) ? to : `/p/${sessionId}/`;
+    return new Response(null, {
+      status: 302,
+      headers: { Location: safeTo, "Set-Cookie": cookie },
+    });
+  }
+
+  // ---- helpers ----
+
   private getSocket(role: string): WebSocket | null {
     for (const ws of this.state.getWebSockets()) {
       const att = ws.deserializeAttachment() as Attachment;
-      if (att?.role === role && !att.rejected) {
-        return ws;
-      }
+      if (att?.role === role && !att.rejected) return ws;
     }
     return null;
   }
@@ -268,9 +460,7 @@ export class SessionRoom {
     const out: WebSocket[] = [];
     for (const ws of this.state.getWebSockets()) {
       const att = ws.deserializeAttachment() as Attachment;
-      if (att?.role === role && !att.rejected) {
-        out.push(ws);
-      }
+      if (att?.role === role && !att.rejected) out.push(ws);
     }
     return out;
   }
@@ -304,4 +494,124 @@ export class SessionRoom {
     await this.state.storage.put("failedAttempts", 0);
     await this.state.storage.delete("lockedUntil");
   }
+}
+
+// ---- shared crypto / encoding helpers ----
+
+async function hmacHex(keyHex: string, message: string): Promise<string> {
+  const keyBytes = fromHex(keyHex);
+  const key = await crypto.subtle.importKey(
+    "raw", keyBytes.buffer as ArrayBuffer, { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const data = new TextEncoder().encode(message);
+  const sig = await crypto.subtle.sign("HMAC", key, data.buffer as ArrayBuffer);
+  return toHex(new Uint8Array(sig));
+}
+
+function toHex(b: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < b.length; i++) s += b[i].toString(16).padStart(2, "0");
+  return s;
+}
+
+function fromHex(s: string): Uint8Array {
+  const out = new Uint8Array(s.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function bytesToBase64(b: Uint8Array): string {
+  let s = "";
+  const stride = 0x1000;
+  for (let i = 0; i < b.length; i += stride) {
+    s += String.fromCharCode.apply(null, Array.from(b.subarray(i, i + stride)));
+  }
+  return btoa(s);
+}
+
+function parseCookies(header: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    out[part.slice(0, eq).trim()] = decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return out;
+}
+
+// ---- HTML pages ----
+
+function pinGatePage(sessionId: string, to: string, errorMsg: string): string {
+  const escTo = escapeHtml(to);
+  const escErr = errorMsg ? `<p class="err">${escapeHtml(errorMsg)}</p>` : "";
+  // Inline page; reads URL fragment (#p=NNNNNN) and auto-submits so the
+  // QR-code / quick-link flow is one-tap. Fragment never leaves the
+  // browser (referer / logs are safe).
+  return `<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reminal — PIN required</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+       min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .card{background:#161b22;border:1px solid #21262d;border-radius:12px;padding:24px;max-width:360px;width:100%}
+  h1{font-size:18px;font-weight:600;margin-bottom:4px}
+  h1 span{color:#58a6ff}
+  p.sub{color:#8b949e;font-size:13px;margin-bottom:16px}
+  p.err{color:#f85149;font-size:13px;margin-bottom:12px}
+  input{width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;
+        font-size:18px;font-family:Menlo,Monaco,monospace;letter-spacing:0.15em;padding:10px 12px;margin-bottom:12px}
+  input:focus{outline:none;border-color:#58a6ff}
+  button{width:100%;background:#238636;border:none;border-radius:6px;color:#fff;font-size:14px;
+         font-weight:500;padding:10px;cursor:pointer}
+  button:hover{background:#2ea043}
+  .foot{margin-top:16px;font-size:11px;color:#6e7681}
+</style>
+</head><body>
+<form class="card" method="POST" action="/p/${sessionId}/__auth" id="f">
+  <h1><span>re</span>minal</h1>
+  <p class="sub">PIN required to reach <code>${sessionId}</code></p>
+  ${escErr}
+  <input type="hidden" name="to" value="${escTo}">
+  <input name="pin" type="text" inputmode="numeric" autocomplete="off" autofocus placeholder="PIN" required>
+  <button type="submit">Continue</button>
+  <p class="foot">A reminal port forward sits behind this page.</p>
+</form>
+<script>
+  // Auto-fill from URL fragment (#p=NNNNNN) and submit. Fragments never
+  // leave the browser, so links can safely embed the PIN.
+  (function(){
+    var m = (location.hash || '').match(/[#&]p=([^&]+)/);
+    if (!m) return;
+    var pin = decodeURIComponent(m[1]);
+    var f = document.getElementById('f');
+    f.pin.value = pin;
+    history.replaceState(null, '', location.pathname + location.search);
+    f.submit();
+  })();
+</script>
+</body></html>`;
+}
+
+function notFoundPage(): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>Not found</title>
+<style>body{background:#0d1117;color:#8b949e;font-family:-apple-system,sans-serif;padding:48px;text-align:center}</style>
+</head><body><h1>reminal</h1><p>No port forward at this address.</p></body></html>`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]!));
 }
