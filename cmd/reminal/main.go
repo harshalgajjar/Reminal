@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/reminal/reminal/internal/client"
 	"github.com/reminal/reminal/internal/keepawake"
@@ -145,6 +147,31 @@ func main() {
 		return
 	}
 
+	// If an agent is already running on this machine, prefer attaching to
+	// it over silently spawning a second one (which would orphan the first
+	// — different ID/PIN, scrollback split, viewer confusion). Skipped if
+	// REMINAL_NEW=1 is set or if stdin isn't a TTY (no one to prompt).
+	if existing, err := session.ReadActive(); err == nil && os.Getenv("REMINAL_NEW") != "1" {
+		if term.IsTerminal(int(os.Stdin.Fd())) {
+			age := time.Since(existing.StartedAt).Round(time.Second)
+			fmt.Fprintf(os.Stderr,
+				"A reminal session is already running here: %s (started %v ago, PID %d)\n",
+				existing.ID, age, existing.PID)
+			fmt.Fprint(os.Stderr, "Attach to it instead of starting a new session? (Y/n) ")
+			reader := bufio.NewReader(os.Stdin)
+			line, _ := reader.ReadString('\n')
+			resp := strings.ToLower(strings.TrimSpace(line))
+			if resp == "" || resp == "y" || resp == "yes" {
+				if err := runAttach(); err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					os.Exit(1)
+				}
+				return
+			}
+			fmt.Fprintln(os.Stderr, "Starting a new session — the previous one (above) is now orphaned.")
+		}
+	}
+
 	agent, err := client.NewAgent(version)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -190,6 +217,7 @@ Environment:
   REMINAL_LOCAL          Set to 1 to use localhost relay (with reminal relay)
   REMINAL_NO_KEEP_AWAKE  Set to 1 to let the host sleep while reminal runs
   REMINAL_DEBUG          Set to 1 to append raw error detail to status lines
+  REMINAL_NEW            Set to 1 to skip the "attach to existing?" prompt and always start a new session
   SHELL                  Shell to run (default: $SHELL, falls back to zsh / bash / sh)
 
 Examples:
