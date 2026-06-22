@@ -189,6 +189,9 @@ Examples:
   reminal connect ABC12345 482916
   reminal connect ABC12345                                          # PIN prompted
   reminal connect "https://reminal-relay.reminal.workers.dev/?s=ABC12345#p=482916"
+  reminal doctor                                                    # confirm relay reachability etc.
+
+Bug reports + feature requests: https://github.com/harshalgajjar/Reminal/issues
 `)
 }
 
@@ -201,6 +204,7 @@ func printVersionInfo() {
 	fmt.Printf("  commit:  %s\n", commit)
 	fmt.Printf("  go:      %s\n", runtime.Version())
 	fmt.Printf("  os/arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Println("  bugs:    https://github.com/harshalgajjar/Reminal/issues")
 }
 
 // runConnect is the shared body of both `reminal connect <target> [pin]`

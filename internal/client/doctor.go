@@ -44,6 +44,8 @@ func Doctor(currentVersion string) error {
 		fmt.Println("  Mostly good — warnings above are non-blocking but worth a look.")
 	case levelFail:
 		fmt.Println("  Something needs fixing. Address the FAIL lines above.")
+		fmt.Println("  Stuck? Open an issue with this output:")
+		fmt.Println("    https://github.com/harshalgajjar/Reminal/issues")
 	}
 	fmt.Println()
 	if worst == levelFail {
