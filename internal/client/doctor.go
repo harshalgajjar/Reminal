@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/reminal/reminal/internal/config"
+	"github.com/reminal/reminal/internal/protocol"
 	"github.com/reminal/reminal/internal/session"
 	"golang.org/x/term"
 )
@@ -67,6 +69,7 @@ func allChecks(currentVersion string) []check {
 	return []check{
 		{"Version", func() (level, string) { return checkVersion(currentVersion) }},
 		{"Relay", checkRelay},
+		{"WebSocket", checkRelayWS},
 		{"Terminal", checkTerminal},
 		{"Shell", checkShell},
 		{"Active session", checkActiveSession},
@@ -143,6 +146,27 @@ func checkRelay() (level, string) {
 		return levelFail, fmt.Sprintf("%s — relay returned %s (%v)", url, resp.Status, elapsed)
 	}
 	return levelOK, fmt.Sprintf("%s — reachable, %v", url, elapsed)
+}
+
+// checkRelayWS confirms the relay accepts a WebSocket upgrade. Many corporate
+// proxies pass plain HTTPS but strip the Upgrade header (or sit behind a
+// load balancer that does), which would make checkRelay green but reminal
+// hang at "Connecting…" forever. We dial a dummy session ID and accept any
+// outcome other than a transport-layer failure as proof that WS works —
+// the relay is expected to immediately close with "session not found" since
+// AAAAAAAA isn't a real session.
+func checkRelayWS() (level, string) {
+	url := config.SessionWS("AAAAAAAA", string(protocol.RoleViewer))
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = 3 * time.Second
+	start := time.Now()
+	conn, _, err := dialer.Dial(url, nil)
+	if err != nil {
+		return levelFail, fmt.Sprintf("%s — upgrade failed: %v", url, err)
+	}
+	elapsed := time.Since(start).Round(time.Millisecond)
+	_ = conn.Close()
+	return levelOK, fmt.Sprintf("upgrade OK (%v) — relay accepts WS connections", elapsed)
 }
 
 func checkTerminal() (level, string) {
