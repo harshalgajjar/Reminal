@@ -118,8 +118,9 @@ func (a *Agent) Run() error {
 	// errors, signal-driven shutdown. Neutral wording ("session ended")
 	// covers both shell-typed-exit and user-killed-reminal cases.
 	defer func() {
-		agentNotify("\n  [%s] Session ended · ran for %v\n  Run `reminal` again to start a new session.\n",
+		agentNotify("\n  [%s] Session ended (v%s) · ran for %v\n  Run `reminal` again to start a new session.\n",
 			time.Now().Format("15:04:05"),
+			a.version,
 			time.Since(sessionStart).Round(time.Second))
 	}()
 
