@@ -42,7 +42,19 @@ func main() {
 			}
 			return
 		case "info":
-			if err := client.ShowActiveInfo(); err != nil {
+			jsonOut := false
+			for _, a := range os.Args[2:] {
+				if a == "--json" || a == "-j" {
+					jsonOut = true
+				}
+			}
+			var err error
+			if jsonOut {
+				err = client.ShowActiveInfoJSON()
+			} else {
+				err = client.ShowActiveInfo()
+			}
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
@@ -128,7 +140,7 @@ func printHelp() {
 Usage:
   reminal                                  Share this terminal (works out of the box)
   reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
-  reminal info                             Reprint session ID / PIN / URL / QR for the running agent
+  reminal info [--json]                    Reprint session ID / PIN / URL / QR for the running agent (or JSON)
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
   reminal completion <bash|zsh|fish>       Print shell completion script (source it in your shell rc)
   reminal upgrade                          Upgrade to the latest release
