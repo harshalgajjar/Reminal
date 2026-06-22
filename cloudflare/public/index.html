@@ -1537,6 +1537,16 @@
     // sessions even before clicking it.
     renderRecents();
 
+    // Close the recents <details> on any outside click. Native <details>
+    // doesn't have this behavior — only the summary toggles it — so a
+    // dropdown left open after picking a row would shadow the terminal.
+    document.addEventListener('click', (e) => {
+      const recents = document.getElementById('recents');
+      if (recents && recents.open && !recents.contains(e.target)) {
+        recents.open = false;
+      }
+    });
+
     // If the QR code provided both session and PIN, just connect.
     if (initialSession && initialPin) {
       startConnect();

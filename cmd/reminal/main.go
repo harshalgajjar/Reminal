@@ -152,6 +152,14 @@ func main() {
 			printHelp()
 			return
 		}
+		// Anything that looks like a subcommand attempt (doesn't start
+		// with "-") but didn't match any case is a typo. Bailing here
+		// prevents the silent fall-through to agent mode that would
+		// spawn a second agent on top of an existing one.
+		if !strings.HasPrefix(os.Args[1], "-") {
+			fmt.Fprintf(os.Stderr, "reminal: unknown command %q\nRun `reminal help` for available commands.\n", os.Args[1])
+			os.Exit(2)
+		}
 	}
 
 	connect := flag.String("connect", "", "session ID or full relay URL to connect to (URL may include #p=PIN)")
@@ -182,6 +190,20 @@ func main() {
 	// — different ID/PIN, scrollback split, viewer confusion). Skipped if
 	// REMINAL_NEW=1 is set or if stdin isn't a TTY (no one to prompt).
 	if existing, err := session.ReadActive(); err == nil && os.Getenv("REMINAL_NEW") != "1" {
+		// If we're already INSIDE this session's shared shell (REMINAL_SESSION
+		// is the env var the agent injects when it spawns its PTY), attaching
+		// would create an output feedback loop: viewer stdout goes back into
+		// the PTY, pumpPTY broadcasts it, viewer renders it, broadcast again,
+		// ad infinitum. Refuse + point at the obvious fix.
+		if os.Getenv("REMINAL_SESSION") == existing.ID {
+			fmt.Fprintf(os.Stderr,
+				"You're already inside reminal session %s (this shell IS the shared shell).\n",
+				existing.ID)
+			fmt.Fprintln(os.Stderr, "  To stop sharing:        reminal stop")
+			fmt.Fprintln(os.Stderr, "  To see join info / QR:  reminal info")
+			fmt.Fprintln(os.Stderr, "  To attach from another shell, open a new terminal first.")
+			os.Exit(2)
+		}
 		if term.IsTerminal(int(os.Stdin.Fd())) {
 			age := time.Since(existing.StartedAt).Round(time.Second)
 			viewers := ""
@@ -385,6 +407,9 @@ func runAttach() error {
 		}
 		return err
 	}
+	if os.Getenv("REMINAL_SESSION") == a.ID {
+		return fmt.Errorf("already inside session %s — attaching would loop viewer output back through the PTY; open a different terminal first", a.ID)
+	}
 	return client.Connect(a.ID, a.PIN)
 }
 
@@ -398,6 +423,9 @@ func runConnect(target, pinArg string) error {
 	sessionID, urlPin := parseConnectTarget(target)
 	if sessionID == "" {
 		return errors.New("needs a session ID or a relay URL containing ?s=<ID>")
+	}
+	if os.Getenv("REMINAL_SESSION") == sessionID {
+		return fmt.Errorf("already inside session %s — connecting from this shell would loop viewer output back through the PTY; open a different terminal first", sessionID)
 	}
 	// Precedence: explicit pin arg > PIN extracted from URL > interactive prompt.
 	resolvedPin := pinArg

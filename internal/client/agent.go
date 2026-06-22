@@ -65,6 +65,13 @@ type Agent struct {
 	// startedAt is set once in Run() and used to keep session.Active's
 	// started_at stable when we rewrite the file on viewer-count changes.
 	startedAt time.Time
+	// viewersMu guards viewers — the in-memory list of connect timestamps,
+	// one per currently-attached viewer. We can't perfectly identify which
+	// viewer disconnected (relay only sends a count delta), so we use a
+	// truncate-from-end approximation: append on connect, drop newest on
+	// disconnect. Imperfect but useful enough for `reminal clients`.
+	viewersMu sync.Mutex
+	viewers   []time.Time
 	// paused is set by `reminal stop` (via SIGUSR1). When set, the main
 	// reconnect loop stops trying to reach the relay and the local shell
 	// keeps running on the host terminal as a plain interactive session.
