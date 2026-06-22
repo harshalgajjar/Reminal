@@ -42,7 +42,7 @@ jobs:
           VERSION="${VERSION#v}"
           BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           SHORT_COMMIT="${COMMIT:0:7}"
-          CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.commit=${SHORT_COMMIT} -X github.com/reminal/reminal/internal/config.DefaultCloudRelay=wss://reminal-relay.reminal.workers.dev/ws -X github.com/reminal/reminal/internal/config.DefaultCloudWeb=https://reminal-relay.reminal.workers.dev" -o reminal ./cmd/reminal
+          CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.commit=${SHORT_COMMIT} -X github.com/reminal/reminal/internal/config.DefaultCloudRelay=wss://reminal-relay.futuristic.workers.dev/ws -X github.com/reminal/reminal/internal/config.DefaultCloudWeb=https://reminal-relay.futuristic.workers.dev" -o reminal ./cmd/reminal
           ARCHIVE="reminal_${VERSION}_${GOOS}_${GOARCH}.tar.gz"
           tar czf "${ARCHIVE}" reminal
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"

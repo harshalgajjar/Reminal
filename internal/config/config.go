@@ -19,9 +19,13 @@ const (
 var shellCandidates = []string{"/bin/zsh", "/bin/bash", "/bin/sh"}
 
 // Set at build time: -ldflags "-X github.com/reminal/reminal/internal/config.DefaultCloudRelay=wss://..."
+// Pointed at the futuristic.workers.dev subdomain (harshalg98@gmail.com's
+// Cloudflare account) since v0.6.3 — the original reminal.workers.dev
+// subdomain on the other account got persistently throttled by
+// Cloudflare's workers.dev edge anti-abuse rules.
 var (
-	DefaultCloudRelay = "wss://reminal-relay.reminal.workers.dev/ws"
-	DefaultCloudWeb   = "https://reminal-relay.reminal.workers.dev"
+	DefaultCloudRelay = "wss://reminal-relay.futuristic.workers.dev/ws"
+	DefaultCloudWeb   = "https://reminal-relay.futuristic.workers.dev"
 )
 
 func RelayWS() string {

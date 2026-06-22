@@ -2,6 +2,10 @@ name = "reminal-relay"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
+# Pinned so `wrangler deploy` errors out instead of silently shipping
+# to whichever Cloudflare account happens to be logged in. Belongs to
+# harshalg98@gmail.com (the everything-account).
+account_id = "0cd85a1166e44b17571b7457040d18ae"
 
 [durable_objects]
 bindings = [
