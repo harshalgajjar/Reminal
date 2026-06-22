@@ -356,12 +356,23 @@ func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) error {
 			if err != nil {
 				continue
 			}
+			// With multiple viewers, a late-joiner's resume request can
+			// cause the agent to replay scrollback that we've already
+			// seen. Skip anything with a seq <= our high-water mark.
 			if msg.Seq > 0 {
+				skip := false
 				for {
 					cur := atomic.LoadUint64(&v.lastSeq)
-					if msg.Seq <= cur || atomic.CompareAndSwapUint64(&v.lastSeq, cur, msg.Seq) {
+					if msg.Seq <= cur {
+						skip = true
 						break
 					}
+					if atomic.CompareAndSwapUint64(&v.lastSeq, cur, msg.Seq) {
+						break
+					}
+				}
+				if skip {
+					continue
 				}
 			}
 			if _, err := os.Stdout.Write(data); err != nil {

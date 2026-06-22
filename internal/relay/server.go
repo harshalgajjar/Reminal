@@ -32,7 +32,7 @@ type peer struct {
 
 type room struct {
 	agent   *peer
-	viewer  *peer
+	viewers []*peer
 	auth    authState
 	cleanup *time.Timer
 	mu      sync.Mutex
@@ -84,7 +84,7 @@ func (s *Server) HandleSessionWS(w http.ResponseWriter, r *http.Request, session
 
 func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *websocket.Conn) {
 	defer conn.Close()
-	defer s.detach(sessionID, role)
+	defer s.detach(sessionID, role, conn)
 
 	for {
 		_, raw, err := conn.ReadMessage()
@@ -123,7 +123,13 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 			p.authed = true
 			// Compute presence flags for notifications after unlock.
 			agentOnline := r.agent != nil && r.agent.authed
-			viewerOnline := r.viewer != nil && r.viewer.authed
+			anyViewerOnline := false
+			for _, v := range r.viewers {
+				if v.authed {
+					anyViewerOnline = true
+					break
+				}
+			}
 			r.mu.Unlock()
 
 			s.writeTo(p, protocol.Message{Type: protocol.TypeAuthOK})
@@ -139,9 +145,9 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 					s.writeTo(p, protocol.Message{Type: protocol.TypeAgentOffline})
 				}
 			case protocol.RoleAgent:
-				// If a viewer was already waiting, tell them the agent is back.
-				if viewerOnline {
-					s.notifyPeer(sessionID, protocol.RoleViewer, protocol.Message{Type: protocol.TypeAgentOnline})
+				// If any viewers were already waiting, tell them the agent is back.
+				if anyViewerOnline {
+					s.broadcastViewers(sessionID, protocol.Message{Type: protocol.TypeAgentOnline})
 				}
 			}
 			continue
@@ -157,15 +163,13 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 	}
 }
 
+// peer returns the agent peer when role == RoleAgent. Callers wanting all
+// viewers should iterate r.viewers directly under r.mu.
 func (r *room) peer(role protocol.Role) *peer {
-	switch role {
-	case protocol.RoleAgent:
+	if role == protocol.RoleAgent {
 		return r.agent
-	case protocol.RoleViewer:
-		return r.viewer
-	default:
-		return nil
 	}
+	return nil
 }
 
 func (s *Server) handleAuthLocked(r *room, role protocol.Role, msg protocol.Message) string {
@@ -200,7 +204,6 @@ func (s *Server) handleAuthLocked(r *room, role protocol.Role, msg protocol.Mess
 			r.auth.recordFailure()
 			return "incorrect PIN"
 		}
-		r.auth.viewerAuthed = true
 		r.auth.resetFailures()
 		return ""
 	}
@@ -252,7 +255,7 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 			}
 			registered = true
 			s.notifyPeer(sessionID, protocol.RoleAgent, protocol.Message{Type: protocol.TypeConnected})
-			s.notifyPeer(sessionID, protocol.RoleViewer, protocol.Message{Type: protocol.TypeConnected})
+			s.broadcastViewers(sessionID, protocol.Message{Type: protocol.TypeConnected})
 
 		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume:
 			if !registered {
@@ -266,7 +269,7 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 	}
 
 	if registered {
-		s.detach(sessionID, role)
+		s.detach(sessionID, role, conn)
 	}
 }
 
@@ -309,17 +312,14 @@ func (s *Server) attach(sessionID string, role protocol.Role, conn *websocket.Co
 		if !r.auth.agentAuthed {
 			return false, "session not found or not ready"
 		}
-		if r.viewer != nil {
-			return false, "another viewer is already connected to this session"
-		}
-		r.viewer = p
+		r.viewers = append(r.viewers, p)
 	default:
 		return false, "invalid role"
 	}
 	return true, ""
 }
 
-func (s *Server) detach(sessionID string, role protocol.Role) {
+func (s *Server) detach(sessionID string, role protocol.Role, conn *websocket.Conn) {
 	r := s.getRoom(sessionID)
 	if r == nil {
 		return
@@ -329,8 +329,10 @@ func (s *Server) detach(sessionID string, role protocol.Role) {
 	switch role {
 	case protocol.RoleAgent:
 		r.agent = nil
-		if r.viewer != nil && r.viewer.authed {
-			s.writeTo(r.viewer, protocol.Message{Type: protocol.TypeAgentOffline})
+		for _, v := range r.viewers {
+			if v.authed {
+				s.writeTo(v, protocol.Message{Type: protocol.TypeAgentOffline})
+			}
 		}
 		// Schedule TTL cleanup. If the agent reattaches before it fires,
 		// attach() cancels this timer.
@@ -340,21 +342,26 @@ func (s *Server) detach(sessionID string, role protocol.Role) {
 		sid := sessionID
 		r.cleanup = time.AfterFunc(orphanTTL, func() { s.expireRoom(sid) })
 	case protocol.RoleViewer:
-		r.viewer = nil
-		r.auth.viewerAuthed = false
-		if r.agent != nil && r.agent.authed {
+		for i, v := range r.viewers {
+			if v.conn == conn {
+				r.viewers = append(r.viewers[:i], r.viewers[i+1:]...)
+				break
+			}
+		}
+		if r.agent != nil && r.agent.authed && len(r.viewers) == 0 {
+			// Only tell the agent when the LAST viewer leaves; mid-fleet
+			// churn is noise on the host terminal.
 			s.writeTo(r.agent, protocol.Message{Type: protocol.TypeClosed, Error: "viewer disconnected"})
 		}
 	}
-	empty := r.agent == nil && r.viewer == nil && r.cleanup == nil
+	empty := r.agent == nil && len(r.viewers) == 0 && r.cleanup == nil
 	r.mu.Unlock()
 
 	if empty {
 		s.mu.Lock()
-		// Re-check under the global lock; another goroutine may have re-populated.
 		if existing, ok := s.rooms[sessionID]; ok && existing == r {
 			r.mu.Lock()
-			stillEmpty := r.agent == nil && r.viewer == nil && r.cleanup == nil
+			stillEmpty := r.agent == nil && len(r.viewers) == 0 && r.cleanup == nil
 			r.mu.Unlock()
 			if stillEmpty {
 				delete(s.rooms, sessionID)
@@ -380,17 +387,17 @@ func (s *Server) expireRoom(sessionID string) {
 		r.mu.Unlock()
 		return
 	}
-	var viewerConn *websocket.Conn
-	if r.viewer != nil {
-		s.writeTo(r.viewer, protocol.Message{Type: protocol.TypeClosed, Error: "agent session expired"})
-		viewerConn = r.viewer.conn
-		r.viewer = nil
+	viewerConns := make([]*websocket.Conn, 0, len(r.viewers))
+	for _, v := range r.viewers {
+		s.writeTo(v, protocol.Message{Type: protocol.TypeClosed, Error: "agent session expired"})
+		viewerConns = append(viewerConns, v.conn)
 	}
+	r.viewers = nil
 	r.cleanup = nil
 	r.mu.Unlock()
 
-	if viewerConn != nil {
-		_ = viewerConn.Close()
+	for _, c := range viewerConns {
+		_ = c.Close()
 	}
 
 	s.mu.Lock()
@@ -424,19 +431,46 @@ func (s *Server) forward(sessionID string, from protocol.Role, msg protocol.Mess
 		r.mu.Unlock()
 		return
 	}
-	var target *peer
+	var targets []*peer
 	switch from {
 	case protocol.RoleAgent:
-		target = r.viewer
+		// Broadcast agent output to every authed viewer.
+		for _, v := range r.viewers {
+			if v.authed {
+				targets = append(targets, v)
+			}
+		}
 	case protocol.RoleViewer:
-		target = r.agent
+		if r.agent != nil && r.agent.authed {
+			targets = []*peer{r.agent}
+		}
 	}
 	r.mu.Unlock()
 
-	if target == nil || !target.authed {
+	for _, t := range targets {
+		s.writeTo(t, msg)
+	}
+}
+
+// broadcastViewers sends msg to every authed viewer in the room. Used for
+// presence transitions (agent_online/agent_offline) — agent_offline goes via
+// detach()'s direct write loop since it has the room lock already.
+func (s *Server) broadcastViewers(sessionID string, msg protocol.Message) {
+	r := s.getRoom(sessionID)
+	if r == nil {
 		return
 	}
-	s.writeTo(target, msg)
+	r.mu.Lock()
+	targets := make([]*peer, 0, len(r.viewers))
+	for _, v := range r.viewers {
+		if v.authed {
+			targets = append(targets, v)
+		}
+	}
+	r.mu.Unlock()
+	for _, t := range targets {
+		s.writeTo(t, msg)
+	}
 }
 
 func (s *Server) write(conn *websocket.Conn, msg protocol.Message) {

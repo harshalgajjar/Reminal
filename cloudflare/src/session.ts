@@ -36,10 +36,10 @@ export class SessionRoom {
     if (role === "viewer") {
       // Allow viewer to attach as long as the room was set up by an
       // authenticated agent — even if the agent is briefly offline.
+      // Multiple viewers per session are explicitly supported so a user
+      // can keep phone + laptop attached at the same time.
       if (!meta.agentAuthed) {
         rejectReason = "session not found or not ready";
-      } else if (this.getSocket("viewer")) {
-        rejectReason = "another viewer is already connected to this session";
       }
     } else if (this.getSocket("agent")) {
       rejectReason = "another agent is already connected to this session";
@@ -99,10 +99,19 @@ export class SessionRoom {
       return;
     }
 
-    const targetRole = attachment.role === "agent" ? "viewer" : "agent";
-    const target = this.getSocket(targetRole);
-    if (target?.readyState === WebSocket.OPEN) {
-      target.send(message);
+    if (attachment.role === "agent") {
+      // Broadcast agent output (data, resize) to every authed viewer.
+      for (const v of this.getSockets("viewer")) {
+        const att = v.deserializeAttachment() as Attachment;
+        if (att?.authed && v.readyState === WebSocket.OPEN) {
+          v.send(message);
+        }
+      }
+    } else {
+      const agent = this.getSocket("agent");
+      if (agent?.readyState === WebSocket.OPEN) {
+        agent.send(message);
+      }
     }
   }
 
@@ -116,19 +125,26 @@ export class SessionRoom {
     }
 
     if (attachment.role === "agent") {
-      // Notify the viewer (if any) that the agent is temporarily gone,
+      // Notify every authed viewer that the agent is temporarily gone,
       // but keep the room and credentials so the agent can reattach.
-      const viewer = this.getSocket("viewer");
-      if (viewer?.readyState === WebSocket.OPEN) {
-        viewer.send(JSON.stringify({ type: "agent_offline" }));
+      for (const v of this.getSockets("viewer")) {
+        const att = v.deserializeAttachment() as Attachment;
+        if (att?.authed && v.readyState === WebSocket.OPEN) {
+          v.send(JSON.stringify({ type: "agent_offline" }));
+        }
       }
       // Schedule cleanup if the agent never returns.
       await this.state.storage.setAlarm(Date.now() + ORPHAN_TTL_MS);
     } else if (attachment.role === "viewer") {
-      await this.state.storage.put("viewerAuthed", false);
-      const agent = this.getSocket("agent");
-      if (agent?.readyState === WebSocket.OPEN) {
-        agent.send(JSON.stringify({ type: "closed", error: "viewer disconnected" }));
+      // Only tell the agent when the LAST viewer leaves; mid-fleet
+      // viewer churn would be noise on the host terminal.
+      const remaining = this.getSockets("viewer").filter(v => v !== ws);
+      if (remaining.length === 0) {
+        await this.state.storage.put("viewerAuthed", false);
+        const agent = this.getSocket("agent");
+        if (agent?.readyState === WebSocket.OPEN) {
+          agent.send(JSON.stringify({ type: "closed", error: "viewer disconnected" }));
+        }
       }
     }
   }
@@ -144,10 +160,11 @@ export class SessionRoom {
     if (this.getSocket("agent")) {
       return;
     }
-    const viewer = this.getSocket("viewer");
-    if (viewer?.readyState === WebSocket.OPEN) {
-      viewer.send(JSON.stringify({ type: "closed", error: "agent session expired" }));
-      viewer.close(1000, "expired");
+    for (const v of this.getSockets("viewer")) {
+      if (v.readyState === WebSocket.OPEN) {
+        v.send(JSON.stringify({ type: "closed", error: "agent session expired" }));
+        v.close(1000, "expired");
+      }
     }
     await this.state.storage.deleteAll();
   }
@@ -182,12 +199,11 @@ export class SessionRoom {
       ws.serializeAttachment({ role: "agent", authed: true } satisfies Attachment);
       ws.send(JSON.stringify({ type: "auth_ok" }));
 
-      // If a viewer is already authed and waiting, tell them the agent is back.
-      const viewer = this.getSocket("viewer");
-      if (viewer?.readyState === WebSocket.OPEN) {
-        const att = viewer.deserializeAttachment() as Attachment;
-        if (att?.authed) {
-          viewer.send(JSON.stringify({ type: "agent_online" }));
+      // Tell every authed viewer that the agent is back.
+      for (const v of this.getSockets("viewer")) {
+        const att = v.deserializeAttachment() as Attachment;
+        if (att?.authed && v.readyState === WebSocket.OPEN) {
+          v.send(JSON.stringify({ type: "agent_online" }));
         }
       }
       return null;
@@ -229,11 +245,22 @@ export class SessionRoom {
   private getSocket(role: string): WebSocket | null {
     for (const ws of this.state.getWebSockets()) {
       const att = ws.deserializeAttachment() as Attachment;
-      if (att?.role === role) {
+      if (att?.role === role && !att.rejected) {
         return ws;
       }
     }
     return null;
+  }
+
+  private getSockets(role: string): WebSocket[] {
+    const out: WebSocket[] = [];
+    for (const ws of this.state.getWebSockets()) {
+      const att = ws.deserializeAttachment() as Attachment;
+      if (att?.role === role && !att.rejected) {
+        out.push(ws);
+      }
+    }
+    return out;
   }
 
   private async loadMeta() {
