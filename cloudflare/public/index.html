@@ -192,6 +192,19 @@
     let backoffMs = 1000;
     const MAX_BACKOFF_MS = 30000;
     let connectedAt = 0;
+    // helloShown gates the one-time "Connected · AES-256-GCM end-to-end" line
+    // written into the terminal; bytesSent/Received feed the summary line on
+    // disconnect. Mirrors the terminal viewer's helloOnce + counters.
+    let helloShown = false;
+    let bytesSent = 0;
+    let bytesReceived = 0;
+
+    function humanBytes(n) {
+      if (n < 1000) return n + ' B';
+      if (n < 1000000) return (n / 1000).toFixed(2) + ' KB';
+      if (n < 1000000000) return (n / 1000000).toFixed(2) + ' MB';
+      return (n / 1000000000).toFixed(2) + ' GB';
+    }
 
     async function deriveKey(sessionId, pin) {
       const enc = new TextEncoder();
@@ -403,6 +416,10 @@
           setStatus('Connected to ' + sessionId, 'connected');
           hideOverlay();
           setBtnDisconnect();
+          if (!helloShown) {
+            helloShown = true;
+            term.write('\x1b[2m[reminal] Connected to ' + sessionId + ' · AES-256-GCM end-to-end\x1b[0m\r\n');
+          }
           sendResume();
           fitAddon.fit();
           sendResize();
@@ -421,6 +438,7 @@
             const bytes = await decrypt(cryptoKey, msg.data);
             if (typeof msg.seq === 'number' && msg.seq > lastSeq) lastSeq = msg.seq;
             term.write(bytes);
+            bytesReceived += bytes.byteLength;
           } catch (_) { /* decrypt failure: skip */ }
           break;
         }
@@ -446,6 +464,10 @@
       if (ws) { try { ws.close(); } catch (_) {} ws = null; }
       authed = false;
       agentLive = false;
+      if (helloShown && connectedAt) {
+        const dur = Math.max(1, Math.round((Date.now() - connectedAt) / 1000));
+        term.write('\x1b[2m[reminal] Disconnected from ' + sessionId + ' after ' + dur + 's · sent ' + humanBytes(bytesSent) + ' · received ' + humanBytes(bytesReceived) + '\x1b[0m\r\n');
+      }
       setStatus('Disconnected');
       hideOverlay();
       setBtnConnect();
@@ -457,6 +479,7 @@
       let binary = '';
       bytes.forEach(b => binary += String.fromCharCode(b));
       await send({ type: 'data', data: btoa(binary) });
+      bytesSent += bytes.byteLength;
     });
 
     window.addEventListener('resize', () => { fitAddon.fit(); if (agentLive) sendResize(); });
