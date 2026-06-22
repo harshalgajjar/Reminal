@@ -244,10 +244,16 @@
   <div id="keybar">
     <button data-key="esc">Esc</button>
     <button data-key="tab">Tab</button>
-    <button data-key="ctrl-c">^C</button>
-    <button data-key="ctrl-d">^D</button>
-    <button data-key="ctrl-z">^Z</button>
-    <button data-key="ctrl-l">^L</button>
+    <button data-key="ctrl-a" title="Start of line">^A</button>
+    <button data-key="ctrl-e" title="End of line">^E</button>
+    <button data-key="ctrl-r" title="Reverse history search">^R</button>
+    <button data-key="ctrl-u" title="Clear line">^U</button>
+    <button data-key="ctrl-w" title="Delete word back">^W</button>
+    <button data-key="ctrl-k" title="Kill to end of line">^K</button>
+    <button data-key="ctrl-c" title="Interrupt">^C</button>
+    <button data-key="ctrl-d" title="EOF / logout">^D</button>
+    <button data-key="ctrl-z" title="Suspend">^Z</button>
+    <button data-key="ctrl-l" title="Clear screen">^L</button>
     <button data-key="pipe">|</button>
     <button data-key="tilde">~</button>
     <button data-key="up">↑</button>
@@ -808,18 +814,24 @@
     // remote shell expects — same as what xterm.js would emit for the
     // matching keypress on a hardware keyboard.
     const keyMap = {
-      esc:    '\x1b',
-      tab:    '\t',
-      'ctrl-c': '\x03',
-      'ctrl-d': '\x04',
-      'ctrl-z': '\x1a',
-      'ctrl-l': '\x0c',
-      pipe:   '|',
-      tilde:  '~',
-      up:     '\x1b[A',
-      down:   '\x1b[B',
-      right:  '\x1b[C',
-      left:   '\x1b[D',
+      esc:      '\x1b',
+      tab:      '\t',
+      'ctrl-a': '\x01', // start of line
+      'ctrl-c': '\x03', // interrupt
+      'ctrl-d': '\x04', // EOF
+      'ctrl-e': '\x05', // end of line
+      'ctrl-k': '\x0b', // kill to end of line
+      'ctrl-l': '\x0c', // clear screen
+      'ctrl-r': '\x12', // reverse history search
+      'ctrl-u': '\x15', // clear line
+      'ctrl-w': '\x17', // delete word back
+      'ctrl-z': '\x1a', // suspend
+      pipe:     '|',
+      tilde:    '~',
+      up:       '\x1b[A',
+      down:     '\x1b[B',
+      right:    '\x1b[C',
+      left:     '\x1b[D',
     };
     // Tab close / page hide: send a clean WebSocket close frame so the relay
     // sees us go away immediately, instead of waiting for TCP keepalive /
