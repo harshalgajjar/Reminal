@@ -584,6 +584,21 @@
       right:  '\x1b[C',
       left:   '\x1b[D',
     };
+    // Tab close / page hide: send a clean WebSocket close frame so the relay
+    // sees us go away immediately, instead of waiting for TCP keepalive /
+    // read-deadline to time out. Without this, the agent would think this
+    // viewer was still attached for tens of seconds after the user closed
+    // the tab — wrong viewer count on the host, late "viewer disconnected"
+    // line. pagehide is the reliable signal on mobile Safari where
+    // beforeunload often doesn't fire.
+    function gracefulClose() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try { ws.close(1000, 'page closed'); } catch (_) {}
+      }
+    }
+    window.addEventListener('pagehide', gracefulClose);
+    window.addEventListener('beforeunload', gracefulClose);
+
     document.querySelectorAll('#keybar button').forEach(btn => {
       btn.addEventListener('click', async () => {
         const seq = keyMap[btn.dataset.key];
