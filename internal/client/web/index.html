@@ -126,6 +126,43 @@
       #keybar { display: flex; }
     }
 
+    /* Floating search bar — Cmd/Ctrl+F or the "Find" key on the keybar.
+       Sits over the top of the terminal so it's reachable from any
+       scroll position and doesn't reflow xterm.js. */
+    #findbar {
+      position: absolute;
+      top: 8px; right: 16px;
+      display: none;
+      align-items: center; gap: 6px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 6px 8px;
+      z-index: 50;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+    #findbar.visible { display: flex; }
+    #findbar input {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      color: #e6edf3;
+      font-size: 14px;
+      padding: 4px 8px;
+      width: 200px;
+    }
+    #findbar button {
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      color: #e6edf3;
+      font-size: 13px;
+      padding: 4px 8px;
+      cursor: pointer;
+    }
+    #findbar button:hover { background: #30363d; }
+    #findbar .count { font-size: 12px; color: #8b949e; min-width: 60px; font-variant-numeric: tabular-nums; }
+
     /* Image preview modal — full-viewport overlay so a phone-sized
        screen makes the image take the whole screen, comfortable to view. */
     #preview {
@@ -232,6 +269,13 @@
   <div id="terminal-wrap">
     <div id="terminal"></div>
     <div id="overlay"><span id="overlay-text">Connecting…</span></div>
+    <div id="findbar">
+      <input id="find-input" type="search" placeholder="Find in scrollback" autocomplete="off">
+      <span class="count" id="find-count"></span>
+      <button id="find-prev" title="Previous match (Shift+Enter)">↑</button>
+      <button id="find-next" title="Next match (Enter)">↓</button>
+      <button id="find-close" title="Close (Esc)">✕</button>
+    </div>
   </div>
   <div id="preview">
     <div class="frame" id="preview-frame"></div>
@@ -260,12 +304,14 @@
     <button data-key="down">↓</button>
     <button data-key="left">←</button>
     <button data-key="right">→</button>
+    <button id="find-btn" title="Search scrollback">Find</button>
     <button id="upload-btn" title="Upload file to host's ~/Downloads/reminal/">⇪ Upload</button>
     <input type="file" id="upload-input" multiple style="display:none">
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js"></script>
   <script>
     const statusEl = document.getElementById('status');
     const sessionInput = document.getElementById('session-input');
@@ -446,6 +492,8 @@
     });
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
+    const searchAddon = new SearchAddon.SearchAddon();
+    term.loadAddon(searchAddon);
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
 
@@ -966,6 +1014,66 @@
       setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
       term.write('\r\n\x1b[2m[reminal] downloaded ' + (name || 'file') + ' (' + humanBytes(bytes.length) + ')\x1b[0m\r\n');
     }
+
+    // ---- Find in scrollback ----
+    // xterm-addon-search highlights matches and scrolls them into view.
+    // Bound to Cmd/Ctrl+F (desktop) and a "Find" key in the keybar
+    // (mobile). Esc closes. Enter / Shift+Enter walk forward / back.
+    const findbar = document.getElementById('findbar');
+    const findInput = document.getElementById('find-input');
+    const findCount = document.getElementById('find-count');
+    const findOpts = {
+      caseSensitive: false,
+      wholeWord: false,
+      regex: false,
+      decorations: {
+        matchBackground: '#1f6feb',
+        activeMatchBackground: '#388bfd',
+        matchOverviewRuler: '#1f6feb',
+        activeMatchColorOverviewRuler: '#388bfd',
+      },
+    };
+    if (searchAddon.onDidChangeResults) {
+      searchAddon.onDidChangeResults((e) => {
+        findCount.textContent = e.resultCount === 0 ? 'no matches'
+          : (e.resultIndex + 1) + '/' + e.resultCount;
+      });
+    }
+    function openFind() {
+      findbar.classList.add('visible');
+      findInput.focus();
+      findInput.select();
+    }
+    function closeFind() {
+      findbar.classList.remove('visible');
+      searchAddon.clearDecorations();
+      term.focus();
+    }
+    function findNext(reverse) {
+      const q = findInput.value;
+      if (!q) return;
+      if (reverse) searchAddon.findPrevious(q, findOpts);
+      else searchAddon.findNext(q, findOpts);
+    }
+    document.getElementById('find-btn').addEventListener('click', openFind);
+    document.getElementById('find-prev').addEventListener('click', () => findNext(true));
+    document.getElementById('find-next').addEventListener('click', () => findNext(false));
+    document.getElementById('find-close').addEventListener('click', closeFind);
+    findInput.addEventListener('input', () => findNext(false));
+    findInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); findNext(e.shiftKey); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+    });
+    // Desktop keyboard shortcut. xterm.js's customKeyEventHandler runs
+    // before the terminal processes the key, so we can intercept Cmd/Ctrl+F.
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type === 'keydown' && (ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') {
+        ev.preventDefault();
+        openFind();
+        return false;
+      }
+      return true;
+    });
 
     // ---- File upload: drag-drop + button picker ----
     // Reads each file as base64, wraps as {name, content}, encrypts, and
