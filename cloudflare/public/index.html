@@ -126,6 +126,26 @@
       #keybar { display: flex; }
     }
 
+    /* Jump-to-bottom pill — appears bottom-right when the user has
+       scrolled up and new output is arriving above. Tap → jump to live. */
+    #jump-bottom {
+      position: absolute;
+      bottom: 16px; right: 16px;
+      display: none;
+      background: #1f6feb;
+      color: #fff;
+      border: none;
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      z-index: 40;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+    #jump-bottom.visible { display: block; }
+    #jump-bottom:hover { background: #388bfd; }
+
     /* Floating search bar — Cmd/Ctrl+F or the "Find" key on the keybar.
        Sits over the top of the terminal so it's reachable from any
        scroll position and doesn't reflow xterm.js. */
@@ -269,6 +289,7 @@
   <div id="terminal-wrap">
     <div id="terminal"></div>
     <div id="overlay"><span id="overlay-text">Connecting…</span></div>
+    <button id="jump-bottom" title="Jump to bottom">↓ Jump to bottom</button>
     <div id="findbar">
       <input id="find-input" type="search" placeholder="Find in scrollback" autocomplete="off">
       <span class="count" id="find-count"></span>
@@ -1016,6 +1037,28 @@
       setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
       term.write('\r\n\x1b[2m[reminal] downloaded ' + (name || 'file') + ' (' + humanBytes(bytes.length) + ')\x1b[0m\r\n');
     }
+
+    // ---- Jump to bottom pill ----
+    // When the user scrolls up to read older output, new lines keep
+    // arriving at the bottom (good — we don't yank them back). But once
+    // they want to follow the live output again, swiping all the way back
+    // is annoying on a phone. Show a floating button whenever they're not
+    // at the bottom; tap to jump.
+    const jumpBtn = document.getElementById('jump-bottom');
+    function updateJumpBtn() {
+      // term.buffer.active.viewportY is the top line of the viewport;
+      // baseY is the top of the last screen. Equal → we're at bottom.
+      const buf = term.buffer.active;
+      if (buf.viewportY < buf.baseY) jumpBtn.classList.add('visible');
+      else jumpBtn.classList.remove('visible');
+    }
+    term.onScroll(updateJumpBtn);
+    term.onLineFeed(updateJumpBtn);
+    jumpBtn.addEventListener('click', () => {
+      term.scrollToBottom();
+      jumpBtn.classList.remove('visible');
+      term.focus();
+    });
 
     // ---- Find in scrollback ----
     // xterm-addon-search highlights matches and scrolls them into view.
