@@ -28,9 +28,14 @@ import (
 const (
 	repo     = "harshalgajjar/Reminal"
 	cacheTTL = 24 * time.Hour
-	// httpTimeout caps the synchronous version check so a slow network never
-	// blocks the agent banner for more than this.
-	httpTimeout = 2 * time.Second
+	// httpTimeoutBackground caps the on-start version check so a slow
+	// network never blocks the agent banner for more than this. Cache hits
+	// don't go through this; only the first launch / 24h refresh does.
+	httpTimeoutBackground = 2 * time.Second
+	// httpTimeoutInteractive applies to explicit `reminal upgrade` — the
+	// user is at the keyboard waiting, so a longer ceiling is appropriate
+	// (mobile networks regularly take 5-10s for the GitHub API to respond).
+	httpTimeoutInteractive = 15 * time.Second
 )
 
 type cacheEntry struct {
@@ -58,7 +63,7 @@ func CheckAndPromptOnStart(currentVersion string) {
 		return
 	}
 
-	latestTag, assetURL, err := check(currentVersion)
+	latestTag, assetURL, err := check(currentVersion, httpTimeoutBackground)
 	if err != nil || latestTag == "" {
 		return
 	}
@@ -89,7 +94,7 @@ func CheckAndPromptOnStart(currentVersion string) {
 func Upgrade(currentVersion string) error {
 	// Bypass the cache so explicit `reminal upgrade` always hits the network.
 	clearCache()
-	latestTag, assetURL, err := check(currentVersion)
+	latestTag, assetURL, err := check(currentVersion, httpTimeoutInteractive)
 	if err != nil {
 		return fmt.Errorf("check for updates: %w", err)
 	}
@@ -125,8 +130,10 @@ func shouldCheck(currentVersion string) bool {
 
 // check returns the latest release tag and the asset download URL for this
 // OS/arch, or ("", "", nil) if the running version is already current.
-// Result is cached at ~/.reminal/version-check.json for cacheTTL.
-func check(currentVersion string) (latestTag, assetURL string, err error) {
+// Result is cached at ~/.reminal/version-check.json for cacheTTL. The
+// timeout caps how long the network fetch can take — short for background
+// on-start checks, long for explicit `reminal upgrade`.
+func check(currentVersion string, timeout time.Duration) (latestTag, assetURL string, err error) {
 	if entry, ok := readCache(); ok && time.Since(entry.CheckedAt) < cacheTTL {
 		if newer(currentVersion, entry.LatestTag) {
 			return entry.LatestTag, entry.AssetURL, nil
@@ -134,7 +141,7 @@ func check(currentVersion string) (latestTag, assetURL string, err error) {
 		return "", "", nil
 	}
 
-	rel, err := fetchLatestRelease()
+	rel, err := fetchLatestRelease(timeout)
 	if err != nil {
 		return "", "", err
 	}
@@ -150,8 +157,8 @@ func check(currentVersion string) (latestTag, assetURL string, err error) {
 	return rel.TagName, url, nil
 }
 
-func fetchLatestRelease() (*release, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
+func fetchLatestRelease(timeout time.Duration) (*release, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET",
 		"https://api.github.com/repos/"+repo+"/releases/latest", nil)
