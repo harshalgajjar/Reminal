@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -124,6 +126,32 @@ func (a *Agent) Run() error {
 	go func() {
 		a.pumpPTY()
 		close(shellExit)
+	}()
+
+	// Trap SIGINT/SIGTERM so the process exits via the normal return path
+	// (defers fire: ClearActive, exit summary, keepawake stop). Default Go
+	// behavior is to die immediately on these signals, skipping defers and
+	// leaving stale ~/.reminal/active.json + orphaned caffeinate.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	go func() {
+		first := true
+		for sig := range sigCh {
+			if !first {
+				// Second signal — user is impatient or cleanup is stuck.
+				// Bail without further niceties; the process exits with
+				// the conventional Ctrl-C status (128 + SIGINT).
+				fmt.Fprintln(os.Stderr, "\n  Force exit.")
+				os.Exit(130)
+			}
+			first = false
+			fmt.Printf("\n  [%s] %s received, shutting down… (press again to force exit)\n",
+				time.Now().Format("15:04:05"), sig)
+			// Closing the PTY makes pumpPTY's Read return EOF, which
+			// closes shellExit and unwinds Run() through its defers.
+			_ = term.Close()
+		}
 	}()
 
 	backoff := initialBackoff
