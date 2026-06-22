@@ -1412,9 +1412,12 @@
       return 0;
     }
     // Base64-encode an arbitrary Uint8Array slice without copying.
+    // Stride kept small (0x1000 = 4096 args per `apply`) because iOS
+    // Safari throws "Maximum call stack size exceeded" once the argument
+    // count gets near 2^15 — passing a full 32K-byte view tripped that.
     function bytesToBase64(bytes) {
       let binary = '';
-      const stride = 0x8000;
+      const stride = 0x1000;
       for (let i = 0; i < bytes.length; i += stride) {
         binary += String.fromCharCode.apply(null, bytes.subarray(i, i + stride));
       }
