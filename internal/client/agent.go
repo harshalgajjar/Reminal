@@ -72,6 +72,12 @@ type Agent struct {
 	// disconnect. Imperfect but useful enough for `reminal clients`.
 	viewersMu sync.Mutex
 	viewers   []time.Time
+	// pendingUploads holds in-flight chunked uploads keyed by upload_id.
+	// Each viewer's upload arrives as a sequence of TypeUpload messages
+	// (chunked because Cloudflare DOs cap WS frames at 1 MiB); we
+	// reassemble in this map and finalize when all chunks have arrived.
+	uploadsMu      sync.Mutex
+	pendingUploads map[string]*pendingUpload
 	// paused is set by `reminal stop` (via SIGUSR1). When set, the main
 	// reconnect loop stops trying to reach the relay and the local shell
 	// keeps running on the host terminal as a plain interactive session.
@@ -102,15 +108,16 @@ func NewAgent(version string) (*Agent, error) {
 	}
 
 	return &Agent{
-		sessionID:  id,
-		pin:        pin,
-		pinHash:    pinHash,
-		webURL:     config.WebURL(),
-		shell:      config.Shell(),
-		version:    version,
-		box:        box,
-		buf:        newScrollback(scrollbackBytes),
-		hostEscape: make(chan struct{}),
+		sessionID:      id,
+		pin:            pin,
+		pinHash:        pinHash,
+		webURL:         config.WebURL(),
+		shell:          config.Shell(),
+		version:        version,
+		box:            box,
+		buf:            newScrollback(scrollbackBytes),
+		hostEscape:     make(chan struct{}),
+		pendingUploads: make(map[string]*pendingUpload),
 	}, nil
 }
 
@@ -361,10 +368,35 @@ func (a *Agent) snapshotViewers() []time.Time {
 	return out
 }
 
-// handleUpload decrypts a TypeUpload message, writes the file to
-// ~/Downloads/reminal/, and broadcasts a notice line to all viewers
-// (including the host's own terminal). Best-effort: any error is reported
-// via the same notice channel so the user sees what went wrong.
+// pendingUpload buffers in-flight chunks for a single multi-part upload.
+// One entry per upload_id; deleted on completion or after the staleTimer
+// fires (no new chunk within uploadStaleTimeout).
+type pendingUpload struct {
+	name       string
+	ttlSeconds int
+	total      int               // total chunks expected
+	chunks     map[int][]byte    // index -> decoded bytes
+	startedAt  time.Time
+	staleTimer *time.Timer
+	// progress notice is sent at the start; final notice on completion
+}
+
+// uploadStaleTimeout drops an upload that goes more than this long
+// without receiving another chunk. Generous enough to survive slow
+// mobile uploads but short enough that crashed viewers don't pin memory.
+const uploadStaleTimeout = 60 * time.Second
+
+// uploadChunkMaxBytes caps decoded chunk size. Web client picks 256 KB
+// chunks to stay well under the Cloudflare DO 1 MiB WS message limit
+// (with base64 + encryption overhead).
+const uploadChunkMaxBytes = 768 * 1024
+
+// handleUpload decrypts a TypeUpload message and either finalizes a
+// single-shot upload (no upload_id) or routes a chunk into the
+// pendingUploads buffer. On the final chunk we write the assembled
+// bytes to ~/Downloads/reminal/ and broadcast a notice to every viewer
+// (including the host terminal). All errors surface via broadcastNotice
+// so the user can see what went wrong.
 func (a *Agent) handleUpload(encData string) {
 	plaintext, err := a.box.Decrypt(encData)
 	if err != nil {
@@ -372,6 +404,9 @@ func (a *Agent) handleUpload(encData string) {
 		return
 	}
 	var payload struct {
+		UploadID   string `json:"upload_id"`
+		Index      int    `json:"index"`
+		Total      int    `json:"total"`
 		Name       string `json:"name"`
 		Content    string `json:"content"` // base64
 		TTLSeconds int    `json:"ttl_seconds"`
@@ -384,19 +419,93 @@ func (a *Agent) handleUpload(encData string) {
 		a.broadcastNotice("upload failed: missing filename")
 		return
 	}
-	// Strip path components — accept only a basename to prevent the
-	// viewer from writing outside the upload dir.
 	safe := filepath.Base(payload.Name)
 	if safe == "." || safe == "/" || safe == "" {
 		a.broadcastNotice("upload failed: invalid filename")
 		return
 	}
-	raw, err := base64.StdEncoding.DecodeString(payload.Content)
+	chunk, err := base64.StdEncoding.DecodeString(payload.Content)
 	if err != nil {
 		a.broadcastNotice(fmt.Sprintf("upload failed: bad base64: %v", err))
 		return
 	}
+	if len(chunk) > uploadChunkMaxBytes {
+		a.broadcastNotice(fmt.Sprintf("upload failed: chunk too large (%d bytes)", len(chunk)))
+		return
+	}
 
+	// Single-shot path: no upload_id (or total==1). Bypass the
+	// pendingUploads map entirely so old clients keep working.
+	if payload.UploadID == "" || payload.Total <= 1 {
+		a.finalizeUpload(safe, chunk, payload.TTLSeconds)
+		return
+	}
+
+	// Chunked path. Validate then add to pending map.
+	if payload.Index < 0 || payload.Index >= payload.Total {
+		a.broadcastNotice(fmt.Sprintf("upload failed: bad chunk index %d/%d", payload.Index, payload.Total))
+		return
+	}
+
+	a.uploadsMu.Lock()
+	up, ok := a.pendingUploads[payload.UploadID]
+	if !ok {
+		up = &pendingUpload{
+			name:       safe,
+			ttlSeconds: payload.TTLSeconds,
+			total:      payload.Total,
+			chunks:     make(map[int][]byte, payload.Total),
+			startedAt:  time.Now(),
+		}
+		id := payload.UploadID
+		up.staleTimer = time.AfterFunc(uploadStaleTimeout, func() {
+			a.uploadsMu.Lock()
+			stale, still := a.pendingUploads[id]
+			if still {
+				delete(a.pendingUploads, id)
+			}
+			a.uploadsMu.Unlock()
+			if still {
+				a.broadcastNotice(fmt.Sprintf("upload %q timed out after %s (%d/%d chunks)",
+					stale.name, uploadStaleTimeout, len(stale.chunks), stale.total))
+			}
+		})
+		a.pendingUploads[payload.UploadID] = up
+		a.broadcastNotice(fmt.Sprintf("receiving %s (%d chunks)…", safe, payload.Total))
+	}
+	// Late chunks reset the stale timer. Duplicates are ignored.
+	if _, dup := up.chunks[payload.Index]; !dup {
+		up.chunks[payload.Index] = chunk
+	}
+	up.staleTimer.Reset(uploadStaleTimeout)
+	complete := len(up.chunks) == up.total
+	if complete {
+		up.staleTimer.Stop()
+		delete(a.pendingUploads, payload.UploadID)
+	}
+	a.uploadsMu.Unlock()
+
+	if !complete {
+		return
+	}
+
+	// Assemble in index order. Total decoded size has already been
+	// bounded per-chunk above, and the web client enforces a max-file
+	// cap — but we still protect against pathological totals.
+	totalBytes := 0
+	for _, c := range up.chunks {
+		totalBytes += len(c)
+	}
+	assembled := make([]byte, 0, totalBytes)
+	for i := 0; i < up.total; i++ {
+		assembled = append(assembled, up.chunks[i]...)
+	}
+	a.finalizeUpload(up.name, assembled, up.ttlSeconds)
+}
+
+// finalizeUpload writes the assembled bytes to ~/Downloads/reminal/ and
+// schedules TTL deletion. Shared by the single-shot and chunked paths.
+func (a *Agent) finalizeUpload(safe string, raw []byte, ttlSeconds int) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		a.broadcastNotice(fmt.Sprintf("upload failed: %v", err))
@@ -412,17 +521,17 @@ func (a *Agent) handleUpload(encData string) {
 		a.broadcastNotice(fmt.Sprintf("upload failed: write: %v", err))
 		return
 	}
-	if payload.TTLSeconds > 0 {
-		ttl := time.Duration(payload.TTLSeconds) * time.Second
+	if ttlSeconds > 0 {
+		ttl := time.Duration(ttlSeconds) * time.Second
 		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · auto-delete in %s",
 			path, humanByteSize(len(raw)), ttl))
-		// Schedule deletion. AfterFunc runs in its own goroutine; if the
-		// agent process exits before it fires, the file stays — but the
-		// dedicated ~/Downloads/reminal/ directory makes cleanup obvious.
+		// AfterFunc runs in its own goroutine; if the agent exits before
+		// it fires, the file remains — the dedicated ~/Downloads/reminal/
+		// directory makes orphans obvious.
 		time.AfterFunc(ttl, func() {
 			if err := os.Remove(path); err != nil {
 				if os.IsNotExist(err) {
-					return // user already deleted it; quietly skip
+					return
 				}
 				a.broadcastNotice(fmt.Sprintf("auto-delete failed for %s: %v", path, err))
 				return
