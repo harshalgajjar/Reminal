@@ -148,6 +148,7 @@
       overflow: auto;
     }
     #preview img { max-width: 100%; max-height: 78vh; display: block; object-fit: contain; }
+    #preview iframe { width: 90vw; height: 78vh; border: 0; background: #fff; }
     #preview .meta { color: #c9d1d9; font-size: 13px; font-family: monospace; }
     #preview .actions { display: flex; gap: 8px; }
     #preview .actions button {
@@ -233,7 +234,7 @@
     <div id="overlay"><span id="overlay-text">Connecting…</span></div>
   </div>
   <div id="preview">
-    <div class="frame"><img id="preview-img" alt=""></div>
+    <div class="frame" id="preview-frame"></div>
     <div class="meta" id="preview-meta"></div>
     <div class="actions">
       <button id="preview-save" class="primary">Save</button>
@@ -877,37 +878,50 @@
       }
     }
 
-    // Map common image extensions to MIME types so Blob() gets the right
-    // type for the <img src> path. Anything not here falls through to the
-    // download path.
-    const IMG_MIME = {
+    // Filename extension → MIME for files the browser can render inline.
+    // Anything not here falls through to a plain download.
+    const PREVIEW_MIME = {
       png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
       gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
       bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif',
+      pdf: 'application/pdf',
     };
-    function imageMimeFor(name) {
+    function previewMimeFor(name) {
       const m = (name || '').toLowerCase().match(/\.([a-z0-9]+)$/);
-      return m ? IMG_MIME[m[1]] : null;
+      return m ? PREVIEW_MIME[m[1]] : null;
     }
 
-    // showImagePreview renders the downloaded file in a fullscreen modal
-    // with Save / Close. On phones this is what you actually want — the
-    // image fills the screen, you can pinch-zoom, and Save still works.
+    // showPreview renders an image or PDF in a fullscreen modal with
+    // Save / Close. On phones this is what you actually want — fills the
+    // screen, pinch-zoom for images, native PDF reader for PDFs, no need
+    // to leave the browser to view a file the host just generated.
     let previewObjectURL = null;
-    function showImagePreview(name, blob) {
+    function showPreview(name, blob, mime) {
       if (previewObjectURL) URL.revokeObjectURL(previewObjectURL);
       previewObjectURL = URL.createObjectURL(blob);
       const overlay = document.getElementById('preview');
-      const img = document.getElementById('preview-img');
+      const frame = document.getElementById('preview-frame');
       const meta = document.getElementById('preview-meta');
-      img.src = previewObjectURL;
-      img.alt = name;
+      // Swap the body element based on kind. Images use <img>; PDFs and
+      // everything previewable-but-not-image goes through <iframe>.
+      frame.innerHTML = '';
+      if (mime.startsWith('image/')) {
+        const img = document.createElement('img');
+        img.src = previewObjectURL;
+        img.alt = name;
+        frame.appendChild(img);
+      } else {
+        const iframe = document.createElement('iframe');
+        iframe.src = previewObjectURL;
+        iframe.title = name;
+        frame.appendChild(iframe);
+      }
       meta.textContent = name + ' · ' + humanBytes(blob.size);
       overlay.classList.add('visible');
       document.getElementById('preview-save').onclick = () => {
         const a = document.createElement('a');
         a.href = previewObjectURL;
-        a.download = name || 'image';
+        a.download = name || 'file';
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -918,17 +932,16 @@
       if (previewObjectURL) { URL.revokeObjectURL(previewObjectURL); previewObjectURL = null; }
     });
 
-    // triggerDownload routes images to the inline preview modal (better
-    // phone UX — no need to leave the page) and everything else to a
-    // standard Blob + hidden-anchor download.
+    // triggerDownload routes previewable files (images, PDFs) to the modal
+    // (better phone UX — no app switch) and everything else to a standard
+    // Blob + hidden-anchor download.
     function triggerDownload(name, b64) {
       const bin = atob(b64);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const mime = imageMimeFor(name);
+      const mime = previewMimeFor(name);
       if (mime) {
-        const blob = new Blob([bytes], { type: mime });
-        showImagePreview(name, blob);
+        showPreview(name, new Blob([bytes], { type: mime }), mime);
         term.write('\r\n\x1b[2m[reminal] previewing ' + name + ' (' + humanBytes(bytes.length) + ')\x1b[0m\r\n');
         return;
       }
@@ -1023,6 +1036,34 @@
       e.preventDefault();
       if (!e.dataTransfer) return;
       await uploadBatch(Array.from(e.dataTransfer.files));
+    });
+    // Paste-to-upload: phone screenshot in the clipboard → paste into the
+    // page → file lands on the host. Default 1h TTL (no prompt — would
+    // break the paste reflex). Text/non-image pastes go to xterm.js's
+    // normal paste handling (this listener only intercepts image kinds).
+    document.addEventListener('paste', async (e) => {
+      if (!authed || !e.clipboardData) return;
+      const imageFiles = [];
+      for (const item of e.clipboardData.items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const f = item.getAsFile();
+          if (f) imageFiles.push(f);
+        }
+      }
+      if (imageFiles.length === 0) return; // not an image paste
+      e.preventDefault();
+      const DEFAULT_PASTE_TTL = 3600; // 1h — phone-pasted screenshots are mostly ephemeral
+      for (const f of imageFiles) {
+        // Phone clipboard images often come in as "image.png" with no
+        // useful name. Stamp a timestamp so concurrent pastes don't collide.
+        const stamped = f.name && f.name !== 'image.png'
+          ? f.name
+          : 'paste-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
+        const renamed = new File([f], stamped, { type: f.type });
+        await uploadFile(renamed, DEFAULT_PASTE_TTL);
+      }
+      term.write('\r\n\x1b[2m[reminal] pasted ' + imageFiles.length + ' image' +
+        (imageFiles.length === 1 ? '' : 's') + ' (auto-delete in 1h)\x1b[0m\r\n');
     });
 
     const refit = () => { fitAddon.fit(); if (agentLive) sendResize(); };
