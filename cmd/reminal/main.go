@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -148,6 +149,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "connections":
+			if err := runConnections(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -251,6 +258,7 @@ Usage:
   reminal stop                             Stop broadcasting (kicks viewers, keeps your local shell running)
   reminal send <file>                      Push a file to every connected viewer (web client auto-downloads)
   reminal notify <message>                 Push a notification to viewers (browser notification on web)
+  reminal connections                      List currently attached viewers with connect time
   reminal info [--json]                    Reprint session ID / PIN / URL / QR for the running agent (or JSON)
   reminal qr                               Print just the join QR for the running agent (for a second screen)
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
@@ -302,6 +310,43 @@ func printVersionInfo() {
 	fmt.Println("  bugs:    https://github.com/harshalgajjar/Reminal/issues")
 }
 
+// runConnections asks the local agent for its live viewer list and prints
+// a short human-readable table: total count + each viewer's connect age.
+// The list is best-effort (the relay only sends count deltas, so the
+// agent can't perfectly identify which viewer left when one disconnects).
+func runConnections() error {
+	a, err := session.ReadActive()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.New("no active reminal session on this machine")
+		}
+		return err
+	}
+	payload, err := sendControl(a.PID, "connections")
+	if err != nil {
+		return err
+	}
+	var stamps []time.Time
+	if err := json.Unmarshal([]byte(payload), &stamps); err != nil {
+		return fmt.Errorf("parse agent reply: %w", err)
+	}
+	if len(stamps) == 0 {
+		fmt.Printf("Session %s has no viewers attached.\n", a.ID)
+		return nil
+	}
+	noun := "viewer"
+	if len(stamps) != 1 {
+		noun = "viewers"
+	}
+	fmt.Printf("Session %s · %d %s attached:\n", a.ID, len(stamps), noun)
+	now := time.Now()
+	for _, t := range stamps {
+		age := now.Sub(t).Round(time.Second)
+		fmt.Printf("  · joined %v ago (at %s)\n", age, t.Format("15:04:05"))
+	}
+	return nil
+}
+
 // runNotify fires a one-shot notification to every connected viewer. Useful
 // at the tail of a long pipeline so a phone-toting user gets pinged:
 //   $ make build && reminal notify "build done"
@@ -316,34 +361,41 @@ func runNotify(message string) error {
 		}
 		return err
 	}
-	return sendControl(a.PID, "notify "+message)
+	_, err = sendControl(a.PID, "notify "+message)
+	return err
 }
 
-// sendControl is shared dial-and-send helper for the agent's Unix control
-// socket. Used by `reminal send` and `reminal notify`.
-func sendControl(pid int, cmd string) error {
+// sendControl is the shared dial-and-send helper for the agent's Unix
+// control socket. Used by every `reminal <verb>` that needs the agent to
+// take action. Returns the payload after "ok " on success, "" if the
+// reply is just "ok\n", or an error if the reply starts with "error:".
+func sendControl(pid int, cmd string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return err
+		return "", err
 	}
 	sock := filepath.Join(home, ".reminal", fmt.Sprintf("agent-%d.sock", pid))
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
-		return fmt.Errorf("connect to agent: %w", err)
+		return "", fmt.Errorf("connect to agent: %w", err)
 	}
 	defer conn.Close()
 	if _, err := fmt.Fprintln(conn, cmd); err != nil {
-		return err
+		return "", err
 	}
 	reply, err := bufio.NewReader(conn).ReadString('\n')
 	if err != nil {
-		return err
+		return "", err
 	}
-	reply = strings.TrimSpace(reply)
-	if reply != "ok" {
-		return fmt.Errorf("agent: %s", reply)
+	reply = strings.TrimRight(reply, "\r\n")
+	switch {
+	case reply == "ok":
+		return "", nil
+	case strings.HasPrefix(reply, "ok "):
+		return strings.TrimPrefix(reply, "ok "), nil
+	default:
+		return "", fmt.Errorf("agent: %s", strings.TrimSpace(strings.TrimPrefix(reply, "error:")))
 	}
-	return nil
 }
 
 // runSend connects to the local agent's control socket and asks it to
@@ -366,7 +418,7 @@ func runSend(path string) error {
 	if _, err := os.Stat(abs); err != nil {
 		return err
 	}
-	if err := sendControl(a.PID, "send "+abs); err != nil {
+	if _, err := sendControl(a.PID, "send "+abs); err != nil {
 		return err
 	}
 	fmt.Printf("Sent %s to viewers.\n", filepath.Base(abs))

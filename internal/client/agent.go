@@ -323,6 +323,44 @@ func (a *Agent) updateActiveViewers(viewers int) {
 	_ = session.WriteActive(a.activeRecord(viewers))
 }
 
+// syncViewerList reconciles the in-memory viewer connect-timestamp list to
+// the new count broadcast by the relay. We can't perfectly identify which
+// viewer left (the relay only sends a delta), so the approximation:
+//   - on a connect event, append now() and truncate from the end if we
+//     somehow over-counted
+//   - on a disconnect event, drop newest entries until len matches count
+// The oldest connect timestamps stay accurate; the newest may be a bit off
+// but `reminal connections` is "good enough for the host to see who's
+// watching", not a precise audit log.
+func (a *Agent) syncViewerList(targetCount int, isConnect bool) {
+	a.viewersMu.Lock()
+	defer a.viewersMu.Unlock()
+	if isConnect {
+		a.viewers = append(a.viewers, time.Now())
+	}
+	if targetCount < 0 {
+		targetCount = 0
+	}
+	if len(a.viewers) > targetCount {
+		a.viewers = a.viewers[:targetCount]
+	}
+	// On disconnect events, len could already be < targetCount if we missed
+	// a connect — pad with now() so the count still matches. Better than
+	// lying about it being empty.
+	for len(a.viewers) < targetCount {
+		a.viewers = append(a.viewers, time.Now())
+	}
+}
+
+// snapshotViewers returns a copy of the viewer connect-timestamp list.
+func (a *Agent) snapshotViewers() []time.Time {
+	a.viewersMu.Lock()
+	defer a.viewersMu.Unlock()
+	out := make([]time.Time, len(a.viewers))
+	copy(out, a.viewers)
+	return out
+}
+
 // handleUpload decrypts a TypeUpload message, writes the file to
 // ~/Downloads/reminal/, and broadcasts a notice line to all viewers
 // (including the host's own terminal). Best-effort: any error is reported
@@ -677,6 +715,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 					time.Now().Format("15:04:05"))
 			}
 			a.updateActiveViewers(msg.Count)
+			a.syncViewerList(msg.Count, true)
 		case protocol.TypeClosed:
 			if msg.Count > 0 {
 				agentNotify("  [%s] Viewer disconnected (%d still active)\n",
@@ -686,6 +725,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 					time.Now().Format("15:04:05"))
 			}
 			a.updateActiveViewers(msg.Count)
+			a.syncViewerList(msg.Count, false)
 		case protocol.TypeAgentOffline, protocol.TypeAgentOnline:
 			// Informational only on the agent side.
 		case protocol.TypeError:

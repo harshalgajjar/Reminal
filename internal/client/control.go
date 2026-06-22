@@ -97,6 +97,16 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			return
 		}
 		_, _ = fmt.Fprintln(conn, "ok")
+	case line == "connections":
+		// Return the live viewer connect-timestamp list as JSON on a
+		// single line. CLI side prints it as a human-readable table.
+		snap := a.snapshotViewers()
+		js, err := json.Marshal(snap)
+		if err != nil {
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		_, _ = fmt.Fprintf(conn, "ok %s\n", js)
 	default:
 		_, _ = fmt.Fprintln(conn, "error: unknown command")
 	}
