@@ -41,6 +41,7 @@ type Agent struct {
 	pinHash   string
 	webURL    string
 	shell     string
+	version   string // running binary's version, shown in banner + exit summary
 	box       *crypto.Box
 	buf       *scrollback
 	term      *pty.Session
@@ -48,7 +49,7 @@ type Agent struct {
 	writeMu sync.Mutex // serializes WS writes; safe across sender/reader goroutines
 }
 
-func NewAgent() (*Agent, error) {
+func NewAgent(version string) (*Agent, error) {
 	id, err := session.NewID(8)
 	if err != nil {
 		return nil, err
@@ -72,6 +73,7 @@ func NewAgent() (*Agent, error) {
 		pinHash:   pinHash,
 		webURL:    config.WebURL(),
 		shell:     config.Shell(),
+		version:   version,
 		box:       box,
 		buf:       newScrollback(scrollbackBytes),
 	}, nil
@@ -79,7 +81,7 @@ func NewAgent() (*Agent, error) {
 
 func (a *Agent) Run() error {
 	fmt.Println()
-	fmt.Println("  reminal — remote terminal")
+	fmt.Printf("  reminal — remote terminal · v%s\n", a.version)
 	fmt.Println()
 	fmt.Printf("  Session:  %s\n", a.sessionID)
 	fmt.Printf("  PIN:      %s\n", a.pin)

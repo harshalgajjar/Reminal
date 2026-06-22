@@ -138,7 +138,7 @@ func main() {
 		return
 	}
 
-	agent, err := client.NewAgent()
+	agent, err := client.NewAgent(version)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
