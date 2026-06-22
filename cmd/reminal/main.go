@@ -206,7 +206,9 @@ func printVersionInfo() {
 // runConnect is the shared body of both `reminal connect <target> [pin]`
 // and `reminal --connect <target> --pin <pin>`. pinArg may be empty, in which
 // case we fall back to a PIN embedded in the target URL, and finally to an
-// interactive prompt.
+// interactive prompt. On wrong-PIN errors we re-prompt up to 3 times,
+// matching ssh's password-retry convention; the relay locks out after 5
+// total wrong attempts anyway, so the user can't burn through their budget.
 func runConnect(target, pinArg string) error {
 	sessionID, urlPin := parseConnectTarget(target)
 	if sessionID == "" {
@@ -217,14 +219,29 @@ func runConnect(target, pinArg string) error {
 	if resolvedPin == "" {
 		resolvedPin = urlPin
 	}
-	if resolvedPin == "" {
-		p, err := readPIN()
-		if err != nil {
-			return err
+	const maxAttempts = 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if resolvedPin == "" {
+			p, err := readPIN()
+			if err != nil {
+				return err
+			}
+			resolvedPin = p
 		}
-		resolvedPin = p
+		err := client.Connect(sessionID, resolvedPin)
+		if err == nil {
+			return nil
+		}
+		// Only "incorrect PIN" is recoverable in-process; everything else
+		// (locked out, session gone, network) propagates immediately.
+		if attempt < maxAttempts && strings.Contains(err.Error(), "incorrect PIN") {
+			fmt.Fprintf(os.Stderr, "%v — try again (%d/%d).\n", err, attempt, maxAttempts)
+			resolvedPin = "" // force re-prompt on next iteration
+			continue
+		}
+		return err
 	}
-	return client.Connect(sessionID, resolvedPin)
+	return errors.New("too many failed PIN attempts")
 }
 
 // parseConnectTarget accepts a bare session ID, a relay URL like
