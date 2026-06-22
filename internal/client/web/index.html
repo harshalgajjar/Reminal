@@ -138,6 +138,10 @@
     @media (pointer: coarse), (max-width: 720px) {
       #keybar { display: flex; }
     }
+    /* Collapsed state — only the toggle button is visible; all keys hidden. */
+    #keybar.collapsed > :not(#keybar-toggle) { display: none; }
+    #keybar.collapsed { padding: 2px 8px; }
+    #keybar-toggle { margin-left: auto; }
 
     /* Jump-to-bottom pill — appears bottom-right when the user has
        scrolled up and new output is arriving above. Tap → jump to live. */
@@ -361,6 +365,7 @@
     <button id="find-btn" title="Search scrollback">Find</button>
     <button id="upload-btn" title="Upload file to host's ~/Downloads/reminal/">⇪ Upload</button>
     <input type="file" id="upload-input" multiple style="display:none">
+    <button id="keybar-toggle" title="Hide / show the key bar">≡</button>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
@@ -1099,6 +1104,28 @@
       setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
       term.write('\r\n\x1b[2m[reminal] downloaded ' + (name || 'file') + ' (' + humanBytes(bytes.length) + ')\x1b[0m\r\n');
     }
+
+    // ---- Keybar toggle (collapse / expand) ----
+    // Some workflows want max terminal area — landscape, reading a long
+    // log, etc. Toggle hides every key except the toggle itself; state
+    // persists in localStorage. Refit after a change so xterm reclaims
+    // the freed space.
+    const KEYBAR_HIDDEN_KEY = 'reminal:keybarHidden';
+    const keybar = document.getElementById('keybar');
+    const keybarToggle = document.getElementById('keybar-toggle');
+    function applyKeybarState() {
+      const hidden = localStorage.getItem(KEYBAR_HIDDEN_KEY) === '1';
+      keybar.classList.toggle('collapsed', hidden);
+      keybarToggle.textContent = hidden ? '⌨' : '≡';
+      keybarToggle.title = hidden ? 'Show key bar' : 'Hide key bar';
+      try { fitAddon.fit(); if (agentLive) sendResize(); } catch (_) {}
+    }
+    keybarToggle.addEventListener('click', () => {
+      const hiddenNow = keybar.classList.contains('collapsed');
+      localStorage.setItem(KEYBAR_HIDDEN_KEY, hiddenNow ? '0' : '1');
+      applyKeybarState();
+    });
+    applyKeybarState();
 
     // ---- Jump to bottom pill ----
     // When the user scrolls up to read older output, new lines keep
