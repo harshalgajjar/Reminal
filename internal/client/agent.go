@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -87,6 +89,17 @@ type Agent struct {
 	// to readDeadline (60s) for the read to time out.
 	currentConnMu sync.Mutex
 	currentConn   *websocket.Conn
+
+	// viewerSizeMu guards viewerMinCols / viewerMinRows — the smallest
+	// (cols, rows) any attached viewer has reported since the last time
+	// the viewer count hit 0. Used to compute min(host, viewers) for the
+	// PTY size so multi-viewer setups render correctly without flapping.
+	// Zero = "no viewer size known", meaning host's size wins.
+	viewerSizeMu   sync.Mutex
+	viewerMinCols  uint16
+	viewerMinRows  uint16
+	lastAppliedCol uint16
+	lastAppliedRow uint16
 
 	// headless disables every interaction with the host terminal: no raw
 	// mode, no host indicator (cursor color / window title / banner),
@@ -387,12 +400,76 @@ const rateLimitMinWait = 10 * time.Minute
 
 // syncSizeToPTY copies the host terminal's current size into the PTY so the
 // shell sees the correct cols/rows. Called on startup and on every SIGWINCH.
+// Falls through applyEffectiveSize so the viewer-min logic still clamps
+// the PTY to the smallest attached viewer.
 func (a *Agent) syncSizeToPTY() {
-	cols, rows, err := xterm.GetSize(int(os.Stdout.Fd()))
-	if err != nil {
+	a.applyEffectiveSize()
+}
+
+// recordViewerSize tracks the smallest (cols, rows) any viewer has
+// reported this session — anti-flap measure so the PTY size doesn't
+// bounce around as visualViewport events fire on phones (keyboard
+// toggle, orientation change, URL-bar hide). Reset to (0, 0) by
+// resetViewerSize() when the viewer count drops to 0.
+func (a *Agent) recordViewerSize(cols, rows uint16) {
+	if cols == 0 || rows == 0 {
 		return
 	}
-	_ = a.term.Resize(uint16(cols), uint16(rows))
+	a.viewerSizeMu.Lock()
+	defer a.viewerSizeMu.Unlock()
+	if a.viewerMinCols == 0 || cols < a.viewerMinCols {
+		a.viewerMinCols = cols
+	}
+	if a.viewerMinRows == 0 || rows < a.viewerMinRows {
+		a.viewerMinRows = rows
+	}
+}
+
+// resetViewerSize clears the viewer min — called when the last viewer
+// leaves, so a fresh single viewer joining later can grow the PTY back
+// up to its size instead of being pinned at whatever a long-gone phone
+// once requested.
+func (a *Agent) resetViewerSize() {
+	a.viewerSizeMu.Lock()
+	a.viewerMinCols = 0
+	a.viewerMinRows = 0
+	a.viewerSizeMu.Unlock()
+}
+
+// applyEffectiveSize resizes the PTY to min(host_size, viewer_min).
+// Safe to call from any path that thinks the size might have changed
+// (host SIGWINCH, viewer resize, viewer count drop). It dedups against
+// the last applied size so repeated calls are cheap.
+func (a *Agent) applyEffectiveSize() {
+	if a.term == nil {
+		return
+	}
+	var hostCols, hostRows uint16
+	if c, r, err := xterm.GetSize(int(os.Stdout.Fd())); err == nil {
+		hostCols, hostRows = uint16(c), uint16(r)
+	}
+	a.viewerSizeMu.Lock()
+	vc, vr := a.viewerMinCols, a.viewerMinRows
+	a.viewerSizeMu.Unlock()
+
+	cols, rows := hostCols, hostRows
+	if vc > 0 && (cols == 0 || vc < cols) {
+		cols = vc
+	}
+	if vr > 0 && (rows == 0 || vr < rows) {
+		rows = vr
+	}
+	if cols == 0 || rows == 0 {
+		return
+	}
+	a.viewerSizeMu.Lock()
+	last := a.lastAppliedCol == cols && a.lastAppliedRow == rows
+	a.lastAppliedCol, a.lastAppliedRow = cols, rows
+	a.viewerSizeMu.Unlock()
+	if last {
+		return
+	}
+	_ = a.term.Resize(cols, rows)
 }
 
 // writeHandshake emits the agent's credentials to the parent process's
@@ -638,10 +715,20 @@ func (a *Agent) finalizeUpload(safe string, raw []byte, ttlSeconds int) {
 		a.broadcastNotice(fmt.Sprintf("upload failed: write: %v", err))
 		return
 	}
+
+	// Best-effort: copy the absolute path to the host's clipboard so the
+	// user can paste it straight into whatever app needs it (Claude Code,
+	// `cat`, image-handling commands, etc.). Silent no-op if no clipboard
+	// tool is available (headless Linux without xclip/wl-copy).
+	clipNote := ""
+	if copyToClipboard(path) {
+		clipNote = " · path copied to clipboard"
+	}
+
 	if ttlSeconds > 0 {
 		ttl := time.Duration(ttlSeconds) * time.Second
-		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · auto-delete in %s",
-			path, humanByteSize(len(raw)), ttl))
+		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · auto-delete in %s%s",
+			path, humanByteSize(len(raw)), ttl, clipNote))
 		// AfterFunc runs in its own goroutine; if the agent exits before
 		// it fires, the file remains — the dedicated ~/Downloads/reminal/
 		// directory makes orphans obvious.
@@ -656,8 +743,49 @@ func (a *Agent) finalizeUpload(safe string, raw []byte, ttlSeconds int) {
 			a.broadcastNotice(fmt.Sprintf("auto-deleted %s (TTL %s expired)", path, ttl))
 		})
 	} else {
-		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · kept forever", path, humanByteSize(len(raw))))
+		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · kept forever%s",
+			path, humanByteSize(len(raw)), clipNote))
 	}
+}
+
+// copyToClipboard puts `text` onto the host's clipboard via whichever
+// tool the platform provides. Returns true on success, false otherwise
+// (no tool found, exec error). Best-effort by design — clipboard is a
+// nice-to-have for uploads, not a hard requirement.
+func copyToClipboard(text string) bool {
+	var candidates [][]string
+	switch runtime.GOOS {
+	case "darwin":
+		candidates = [][]string{{"pbcopy"}}
+	case "linux":
+		// Wayland first (`wl-copy`), then X11 (`xclip`), then `xsel`.
+		candidates = [][]string{
+			{"wl-copy"},
+			{"xclip", "-selection", "clipboard"},
+			{"xsel", "--clipboard", "--input"},
+		}
+	default:
+		return false
+	}
+	for _, cmd := range candidates {
+		if _, err := exec.LookPath(cmd[0]); err != nil {
+			continue
+		}
+		c := exec.Command(cmd[0], cmd[1:]...)
+		stdin, err := c.StdinPipe()
+		if err != nil {
+			continue
+		}
+		if err := c.Start(); err != nil {
+			continue
+		}
+		_, _ = stdin.Write([]byte(text))
+		_ = stdin.Close()
+		if err := c.Wait(); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // uniquePath returns the first non-existing variant of p — appends -2, -3,
@@ -926,25 +1054,26 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				return err
 			}
 		case protocol.TypeResize:
-			// When the host's local terminal is driving the PTY, that
-			// size is authoritative — viewer resizes would otherwise
-			// fight with each other (every web client sends a resize on
-			// each visualViewport change, e.g. iOS keyboard toggle) and
-			// corrupt the host's display by flapping the PTY size on
-			// every keystroke. We can't easily compute a per-viewer
-			// minimum from the relay's opaque forwarding, so the
-			// pragmatic rule is "host wins when present".
-			if a.localActive {
-				continue
-			}
 			plaintext, err := a.box.Decrypt(msg.Data)
 			if err != nil {
 				continue
 			}
 			var rs protocol.Message
-			if json.Unmarshal(plaintext, &rs) == nil {
-				_ = a.term.Resize(rs.Cols, rs.Rows)
+			if json.Unmarshal(plaintext, &rs) != nil || rs.Cols == 0 || rs.Rows == 0 {
+				continue
 			}
+			// "Smallest viewer wins" — every web client sends its own
+			// size on every visualViewport change (iOS keyboard toggle,
+			// orientation, etc.). If we honoured each one, the PTY
+			// would flap between viewer sizes on every keystroke and
+			// corrupt the host's display. Instead we shrink the PTY
+			// monotonically to fit the smallest attached viewer; on the
+			// host's local terminal that means some right-edge whitespace,
+			// but everyone (phone + laptop) sees correctly formatted
+			// content. Reset happens when viewer count drops to 0
+			// (handled in TypeClosed below).
+			a.recordViewerSize(rs.Cols, rs.Rows)
+			a.applyEffectiveSize()
 		case protocol.TypeResume:
 			// FromSeq is the highest seq the viewer has received. We replay
 			// everything with Seq > FromSeq, so the next seq to send is FromSeq+1.
@@ -968,6 +1097,12 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			} else {
 				agentNotify("  [%s] Last viewer disconnected\n",
 					time.Now().Format("15:04:05"))
+				// Reset the viewer-min so a fresh viewer joining
+				// later can grow the PTY back to its size, instead
+				// of staying pinned at whatever a long-gone phone
+				// once asked for.
+				a.resetViewerSize()
+				a.applyEffectiveSize()
 			}
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, false)
