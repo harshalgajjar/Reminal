@@ -1,7 +1,7 @@
 class Reminal < Formula
   desc "Remote terminal access — secure, zero-config alternative to SSH"
   homepage "https://github.com/harshalgajjar/Reminal"
-  version "0.7.13"
+  version "0.7.14"
   license "MIT"
 
   head do
@@ -10,18 +10,18 @@ class Reminal < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/harshalgajjar/Reminal/releases/download/v0.7.13/reminal_0.7.13_darwin_arm64.tar.gz"
+      url "https://github.com/harshalgajjar/Reminal/releases/download/v0.7.14/reminal_0.7.14_darwin_arm64.tar.gz"
       sha256 "cbe4dd97bc564133678dd3c69428def804b84c0c08eaec20b9cff3b43235d7e5"
     end
     on_intel do
-      url "https://github.com/harshalgajjar/Reminal/releases/download/v0.7.13/reminal_0.7.13_darwin_amd64.tar.gz"
+      url "https://github.com/harshalgajjar/Reminal/releases/download/v0.7.14/reminal_0.7.14_darwin_amd64.tar.gz"
       sha256 "ff6d4f14a69abd9235fdbbfb1099bd2bab3705fa5e58df7d19264d1b5fb76d93"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/harshalgajjar/Reminal/releases/download/v0.7.13/reminal_0.7.13_linux_arm64.tar.gz"
+      url "https://github.com/harshalgajjar/Reminal/releases/download/v0.7.14/reminal_0.7.14_linux_arm64.tar.gz"
       sha256 "eea55d3d57ef8f1ad052ec0ab4331fdce5df4e9fcd1418288deb7a02f36da45a"
     end
   end

@@ -1082,14 +1082,23 @@
         }
         case 'data': {
           if (!cryptoKey) break;
-          // Skip any data chunk whose seq we've already rendered. Without
-          // this guard, anything that delivered the same message twice
-          // (an orphaned WS connection from a race during reconnect, a
-          // late-joiner's resume replay arriving alongside our own
-          // current stream, a relay glitch) would render duplicates —
-          // user sees "cclear" instead of "clear". Same dedup the Go
-          // viewer has had since v0.4.1.
-          if (typeof msg.seq === 'number' && msg.seq <= lastSeq) break;
+          // Dedup by seq to drop accidental duplicates (orphaned WS races
+          // on reconnect, late-joiner replay overlapping live stream).
+          // BUT: a hot-restart of the source agent rebuilds the seq
+          // counter from zero. After such a restart the viewer's
+          // lastSeq is way past anything the new agent will ever emit,
+          // so naive dedup would silently swallow every incoming
+          // message until the new counter happened to climb past
+          // lastSeq — could be never. We detect "agent restarted" by
+          // seq going dramatically backward (or seq 1 explicitly) and
+          // reset lastSeq before processing.
+          if (typeof msg.seq === 'number') {
+            if (msg.seq === 1 || msg.seq + 32 < lastSeq) {
+              lastSeq = 0;
+            } else if (msg.seq <= lastSeq) {
+              break;
+            }
+          }
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             if (typeof msg.seq === 'number' && msg.seq > lastSeq) lastSeq = msg.seq;

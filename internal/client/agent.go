@@ -1298,7 +1298,16 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 		case protocol.TypeResume:
 			// FromSeq is the highest seq the viewer has received. We replay
 			// everything with Seq > FromSeq, so the next seq to send is FromSeq+1.
-			pushCursor(cursorCh, msg.FromSeq+1)
+			// If the viewer's seq is past anything we've ever emitted (most
+			// commonly after a hot-restart, where this process started with a
+			// zero seq counter while the viewer kept its tally from the
+			// previous incarnation), reset to 0 so the viewer sees all our
+			// new output instead of being silently filtered.
+			cursor := msg.FromSeq + 1
+			if cursor > a.buf.NextSeq() {
+				cursor = 0
+			}
+			pushCursor(cursorCh, cursor)
 		case protocol.TypeUpload:
 			a.handleUpload(msg.Data)
 		case protocol.TypeConnected:

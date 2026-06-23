@@ -60,6 +60,17 @@ func (s *scrollback) From(fromSeq uint64) []scrollEntry {
 	return out
 }
 
+// NextSeq returns the seq the next Append() will assign. Used to detect
+// "viewer is asking us to resume from a seq we've never reached" — i.e.
+// the viewer was talking to a previous agent incarnation and its
+// lastSeq is far past anything we know about (most commonly after a
+// hot-restart where the new agent's counter starts from zero).
+func (s *scrollback) NextSeq() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nextSeq + 1
+}
+
 // Notify returns a channel that receives a struct{} whenever Append happens.
 // It is buffered to depth 1 and edge-triggered: a sender that misses a tick
 // just loops back and reads the buffer again, so no data is lost.
