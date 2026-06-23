@@ -194,7 +194,7 @@ func (a *Agent) Run() error {
 		fmt.Println()
 		a.printQR()
 		fmt.Println("  \x1b[1;32mHOST:\x1b[0m This terminal IS the shared shell — type away. Remote viewers join in parallel.")
-		fmt.Println("  Press Ctrl-] to stop reminal · `reminal info` shows the join details again")
+		fmt.Println("  Press Ctrl-] to stop sharing (shell keeps running · Ctrl-] again to fully exit) · `reminal info` reprints join info")
 		fmt.Println()
 	}
 
@@ -1003,25 +1003,43 @@ func (a *Agent) pumpPTY() {
 // pumpHostStdin reads the agent's local terminal stdin and writes each chunk
 // straight into the PTY — making the host terminal an interactive shell, same
 // as a `reminal connect` session would be. Ctrl-] (telnet's traditional
-// escape) signals shutdown via hostEscape; the byte itself is not forwarded.
+// escape) is intercepted: the byte itself is not forwarded, and the first
+// press pauses sharing (closes the WS, kicks viewers) while keeping the
+// local shell intact. A second press while already paused fully exits
+// reminal. This way the user can stop broadcasting without losing the
+// long-running command they have going inside the shell.
 func (a *Agent) pumpHostStdin() {
 	buf := make([]byte, 4096)
 	for {
 		n, err := os.Stdin.Read(buf)
 		if n > 0 {
-			if i := bytes.IndexByte(buf[:n], escapeKey); i >= 0 {
+			data := buf[:n]
+			if i := bytes.IndexByte(data, escapeKey); i >= 0 {
+				// Flush bytes before the escape to the PTY.
 				if i > 0 {
-					_, _ = a.term.Write(buf[:i])
+					_, _ = a.term.Write(data[:i])
 				}
-				select {
-				case <-a.hostEscape:
-					// already signalled
-				default:
-					close(a.hostEscape)
+				if a.paused.Load() {
+					// Second Ctrl-] (already paused) — fully exit.
+					select {
+					case <-a.hostEscape:
+					default:
+						close(a.hostEscape)
+					}
+					return
 				}
-				return
+				// First Ctrl-]: stop broadcasting but keep the
+				// host terminal + PTY + running processes alive.
+				a.pause()
+				// Continue pumping any bytes that came AFTER the
+				// escape (likely none — Ctrl-] is usually pressed
+				// solo — but handle the edge case anyway).
+				if rest := data[i+1:]; len(rest) > 0 {
+					_, _ = a.term.Write(rest)
+				}
+			} else {
+				_, _ = a.term.Write(data)
 			}
-			_, _ = a.term.Write(buf[:n])
 		}
 		if err != nil {
 			return
