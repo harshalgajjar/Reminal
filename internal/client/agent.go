@@ -115,6 +115,21 @@ type Agent struct {
 	// this fd and closes it once startup is complete, then the parent
 	// process exits and the child detaches.
 	handshakeFD int
+	// resumed marks this Agent as taking over an already-running PTY
+	// from a previous binary image via syscall.Exec hot-restart. When
+	// true, Run() skips spawning a fresh shell and uses a.term as-is.
+	resumed bool
+	// hostOldState is the cooked-mode terminal state captured by
+	// xterm.MakeRaw when Run() entered raw mode. Used by the hot-restart
+	// path to restore the terminal before Exec'ing the new binary, so
+	// the new agent's MakeRaw catches the right "previous" state for
+	// its own restore-on-exit.
+	hostOldState *xterm.State
+	// stopControlFn is the cancel function returned by listenControl().
+	// Hot-restart calls it explicitly so the new image can re-bind the
+	// same control socket (PID is preserved across Exec, so the path
+	// is the same).
+	stopControlFn func()
 }
 
 // AgentOptions configures startup behaviour. Zero-value runs the
@@ -129,6 +144,12 @@ type AgentOptions struct {
 	// complete, then closes. Used by `reminal new` to learn the
 	// spawned child's credentials before exiting. Zero means none.
 	HandshakeFD int
+	// Resume, if non-nil, signals that this Agent is taking over an
+	// already-running PTY from a previous binary image via the
+	// hot-restart path. The session ID, PIN, and PTY are reused
+	// verbatim instead of being freshly generated, so viewers
+	// reconnect to the same session URL.
+	Resume *ResumeState
 }
 
 // NewAgent builds a foreground agent (no host-terminal isolation).
@@ -140,6 +161,37 @@ func NewAgent(version string) (*Agent, error) {
 // NewAgentWith builds an agent with the given options. Headless mode is
 // the only non-foreground variant today.
 func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
+	if opts.Resume != nil {
+		// Hot-restart path: reuse the previous binary's session ID +
+		// PIN so viewers reconnect seamlessly. PIN hash is re-derived
+		// (cheap) rather than threaded through env.
+		r := opts.Resume
+		box, err := crypto.NewBox(r.SessionID, r.PIN)
+		if err != nil {
+			return nil, err
+		}
+		pinHash, err := session.HashPIN(r.PIN)
+		if err != nil {
+			return nil, err
+		}
+		return &Agent{
+			sessionID:      r.SessionID,
+			pin:            r.PIN,
+			pinHash:        pinHash,
+			webURL:         config.WebURL(),
+			shell:          config.Shell(),
+			version:        version,
+			box:            box,
+			buf:            newScrollback(scrollbackBytes),
+			hostEscape:     make(chan struct{}),
+			pendingUploads: make(map[string]*pendingUpload),
+			term:           r.PTY,
+			startedAt:      r.StartedAt,
+			resumed:        true,
+			headless:       opts.Headless,
+			handshakeFD:    opts.HandshakeFD,
+		}, nil
+	}
 	id, err := session.NewID(8)
 	if err != nil {
 		return nil, err
@@ -178,7 +230,7 @@ func (a *Agent) Run() error {
 	// agents have no terminal — credentials are delivered to the parent
 	// `reminal new` process via the handshake fd and from there printed
 	// to the user's calling shell.
-	if !a.headless {
+	if !a.headless && !a.resumed {
 		fmt.Println()
 		// Green "HOST" badge sits inline at the top so even on macOS
 		// Terminal.app — where we deliberately don't tint the cursor
@@ -199,9 +251,12 @@ func (a *Agent) Run() error {
 	}
 
 	// Record this session for `reminal info`. Best-effort: failures here
-	// shouldn't break agent startup. startedAt is stored on the Agent so
-	// later viewer-count rewrites keep the same value.
-	a.startedAt = time.Now()
+	// shouldn't break agent startup. startedAt is stored on the Agent
+	// (preserved across hot-restart) so later viewer-count rewrites
+	// keep the same value.
+	if !a.resumed {
+		a.startedAt = time.Now()
+	}
 	_ = session.WriteActive(a.activeRecord(0))
 	defer func() { _ = session.ClearActive(a.sessionID) }()
 
@@ -209,18 +264,26 @@ func (a *Agent) Run() error {
 	// other future sibling commands) can talk to us locally without going
 	// through the relay.
 	stopControl := a.listenControl()
+	a.stopControlFn = stopControl
 	defer stopControl()
 
 	// Pass REMINAL_SESSION into the spawned shell so `reminal info` run
 	// from inside this session can show THIS session's details (rather
 	// than fall back to ~/.reminal/active.json, which gets ambiguous with
 	// multiple agents or attach-vs-source contexts).
-	term, err := pty.Start(a.shell, "REMINAL_SESSION="+a.sessionID)
-	if err != nil {
-		return fmt.Errorf("start shell: %w", err)
+	// Skipped on hot-restart resume: the shell is already running inside
+	// the inherited PTY; we just need to take over reading + writing.
+	if !a.resumed {
+		term, err := pty.Start(a.shell, "REMINAL_SESSION="+a.sessionID)
+		if err != nil {
+			return fmt.Errorf("start shell: %w", err)
+		}
+		defer term.Close()
+		a.term = term
+	} else {
+		// term was set in NewAgentWith from ResumeState.PTY.
+		defer a.term.Close()
 	}
-	defer term.Close()
-	a.term = term
 
 	pty.HandleSignals()
 
@@ -237,6 +300,7 @@ func (a *Agent) Run() error {
 	if !a.headless && xterm.IsTerminal(int(os.Stdin.Fd())) {
 		oldState, terr := xterm.MakeRaw(int(os.Stdin.Fd()))
 		if terr == nil {
+			a.hostOldState = oldState
 			defer xterm.Restore(int(os.Stdin.Fd()), oldState)
 			setHostIndicator(a.sessionID)
 			defer clearHostIndicator()
@@ -305,7 +369,7 @@ func (a *Agent) Run() error {
 			first = false
 			agentNotify("\n  [%s] %s received, shutting down… (press again to force exit)\n",
 				time.Now().Format("15:04:05"), sig)
-			_ = term.Close()
+			_ = a.term.Close()
 		}
 	}()
 
@@ -807,6 +871,16 @@ func (a *Agent) finalizeUpload(uploadID, safe string, raw []byte, ttlSeconds int
 	} else {
 		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · kept forever%s",
 			path, humanByteSize(len(raw)), clipNote))
+	}
+}
+
+// stopControlListener tears down the per-agent Unix control socket so a
+// follow-up process (the new image after a hot-restart Exec) can re-bind
+// the same path. Safe to call multiple times.
+func (a *Agent) stopControlListener() {
+	if a.stopControlFn != nil {
+		a.stopControlFn()
+		a.stopControlFn = nil
 	}
 }
 

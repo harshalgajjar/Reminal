@@ -34,6 +34,26 @@ var (
 )
 
 func main() {
+	// Hot-restart resume path. The previous binary image hit
+	// syscall.Exec on us with REMINAL_RESUME=1 + session credentials in
+	// env + the PTY master inherited as fd 3. Take over without
+	// spawning a new shell or generating a new session ID.
+	if resume, err := client.LoadResumeState(); err != nil {
+		fmt.Fprintf(os.Stderr, "resume error: %v\n", err)
+		os.Exit(1)
+	} else if resume != nil {
+		agent, err := client.NewAgentWith(version, client.AgentOptions{Resume: resume})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "resume error: %v\n", err)
+			os.Exit(1)
+		}
+		if err := agent.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "relay":
@@ -179,6 +199,12 @@ func main() {
 			return
 		case "list", "ls":
 			if err := runList(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "restart":
+			if err := runRestart(); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
@@ -357,7 +383,8 @@ Usage:
   reminal qr                               Print just the join QR for the running agent (for a second screen)
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
   reminal completion <bash|zsh|fish>       Print shell completion script (source it in your shell rc)
-  reminal upgrade                          Upgrade to the latest release
+  reminal upgrade                          Upgrade to the latest release (download new binary)
+  reminal restart                          Hot-swap the running agent into the latest binary on disk (shell stays alive)
   reminal relay [port]                     Start local relay server (dev only)
   reminal version [--verbose]              Print version (--verbose adds build date / commit / go version)
   reminal help                             Show this help
@@ -672,6 +699,26 @@ func runAttach(idArg string) error {
 		return fmt.Errorf("already inside session %s — attaching would loop viewer output back through the PTY; open a different terminal first", a.ID)
 	}
 	return client.Connect(a.ID, a.PIN)
+}
+
+// runRestart asks the local agent to hot-swap into the binary that's
+// currently on disk, preserving its PTY (and thus the shell + running
+// processes) plus session ID/PIN. Used after `reminal upgrade` so the
+// upgrade actually takes effect on the running agent without needing
+// physical access to kill + relaunch it.
+func runRestart() error {
+	a, err := resolveActive("")
+	if err != nil {
+		return err
+	}
+	if a.IsPort() {
+		return fmt.Errorf("session %s is a port forward — restart is for shell agents only", a.ID)
+	}
+	if _, err := sendControl(a.PID, "restart"); err != nil {
+		return fmt.Errorf("ask agent to restart: %w", err)
+	}
+	fmt.Printf("Asked reminal (PID %d, session %s) to hot-restart. Viewers will briefly disconnect.\n", a.PID, a.ID)
+	return nil
 }
 
 // runExpose spawns a detached port-forwarder for the given local port

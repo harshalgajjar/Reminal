@@ -28,6 +28,18 @@ func Start(shell string, env ...string) (*Session, error) {
 	return &Session{ptmx: ptmx, cmd: cmd}, nil
 }
 
+// Attach wraps an already-open PTY master fd as a Session. Used by the
+// hot-restart path (syscall.Exec into a new binary) to take over the
+// existing shell without re-spawning it. The shell process continues
+// running unaware of the swap because its parent PID is preserved
+// across Exec and its controlling terminal — the slave side of this
+// PTY — is untouched. cmd is left nil; the new process didn't spawn
+// the shell so there's no Cmd to Wait on. EOF on the master fd
+// signals shell exit instead.
+func Attach(ptmx *os.File) *Session {
+	return &Session{ptmx: ptmx, cmd: nil}
+}
+
 func (s *Session) Read(p []byte) (int, error) {
 	return s.ptmx.Read(p)
 }
@@ -46,6 +58,13 @@ func (s *Session) Wait() error {
 
 func (s *Session) Close() error {
 	return s.ptmx.Close()
+}
+
+// Fd returns the underlying file descriptor of the PTY master. Used by
+// the hot-restart path to pass the open PTY to the new binary across a
+// syscall.Exec boundary.
+func (s *Session) Fd() uintptr {
+	return s.ptmx.Fd()
 }
 
 func (s *Session) CopyFrom(r io.Reader, done chan<- struct{}) {

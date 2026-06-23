@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/reminal/reminal/internal/protocol"
 )
@@ -97,6 +98,24 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			return
 		}
 		_, _ = fmt.Fprintln(conn, "ok")
+	case line == "restart":
+		// Hot-restart: ack the CLI first (so it doesn't see the WS
+		// vanish before getting a response), then schedule the Exec
+		// in a goroutine so this handler can return cleanly.
+		_, _ = fmt.Fprintln(conn, "ok")
+		_ = conn.Close()
+		go func() {
+			// Tiny delay so the CLI's "ok" line is flushed to the
+			// pipe before we replace our process image.
+			time.Sleep(50 * time.Millisecond)
+			if err := a.executeRestart(); err != nil {
+				// Exec failed — we're still alive. Surface the
+				// failure to viewers + host so the user knows
+				// they need to manually restart.
+				a.broadcastNotice("restart failed: " + err.Error())
+			}
+		}()
+		return
 	case line == "connections":
 		// Return the live viewer connect-timestamp list as JSON on a
 		// single line. CLI side prints it as a human-readable table.
