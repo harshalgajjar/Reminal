@@ -60,11 +60,16 @@ export class SessionRoom {
       if (!meta.agentAuthed) {
         rejectReason = "session not found or not ready";
       }
-    } else if (role === "agent" && this.getSocket("agent")) {
-      rejectReason = "another agent is already connected to this session";
-    } else if (role === "tunnel" && this.getSocket("tunnel")) {
-      rejectReason = "another tunnel is already connected to this session";
     }
+    // NB: for role === "agent" / "tunnel" we DON'T eagerly reject on
+    // the presence of an existing socket. After a network blip the
+    // Cloudflare DO may still hold the dead WS in its sockets list
+    // until webSocketClose fires (sometimes seconds later), and
+    // rejecting the genuine reconnect attempt locked the user out
+    // for the full backoff cycle on every wake-from-sleep. Instead
+    // we accept the new socket, do the PIN-hash check in handleAuth,
+    // and evict any prior socket of the same role once we've proven
+    // the new one is the same agent reconnecting (not an impostor).
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
@@ -228,6 +233,22 @@ export class SessionRoom {
       const storedPinHash = (await this.state.storage.get<string>("pinHash")) ?? "";
       if (storedPinHash && storedPinHash !== msg.pin_hash) {
         return "session credentials mismatch";
+      }
+      // PIN matches → this is the legitimate agent (or tunnel)
+      // reclaiming the session. Evict any prior socket of the same
+      // role: it's a stale WS that the DO hasn't yet noticed is dead
+      // (the close handler races slower than the genuine reconnect
+      // after a sleep/wake or network blip). Without this eviction
+      // the user gets "another agent is already connected" on every
+      // wake until the dead socket times out — sometimes 30+ seconds.
+      for (const prior of this.getSockets(attachment.role)) {
+        if (prior === ws) continue;
+        const att = prior.deserializeAttachment() as Attachment;
+        if (att?.rejected) continue;
+        try {
+          prior.send(JSON.stringify({ type: "error", error: "superseded by a fresh agent connection" }));
+          prior.close(4000, "superseded");
+        } catch { /* already closing — best-effort */ }
       }
       await this.state.storage.put("pinHash", msg.pin_hash);
       if (attachment.role === "agent") {

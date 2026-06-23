@@ -822,6 +822,21 @@ func runConnect(target, pinArg string) error {
 	if os.Getenv("REMINAL_SESSION") == sessionID {
 		return fmt.Errorf("already inside session %s — connecting from this shell would loop viewer output back through the PTY; open a different terminal first", sessionID)
 	}
+	// Refuse to connect to ANY remote reminal from inside a shell that
+	// is itself being broadcast by a local reminal agent. Otherwise the
+	// remote session's content streams through the local PTY and gets
+	// re-broadcast to every viewer of the local session — both a
+	// privacy leak and visually chaotic. The user needs to either stop
+	// the local broadcast first or use a different terminal that
+	// isn't behind reminal.
+	if inside := os.Getenv("REMINAL_SESSION"); inside != "" && inside != sessionID {
+		if active, err := session.ReadActiveByID(inside); err == nil && active != nil {
+			return fmt.Errorf(
+				"this shell is being broadcast by your local reminal (session %s) — connecting to %s would mirror it to your viewers.\n  Run `reminal stop` first to stop broadcasting, or open a separate terminal (not behind reminal) for `reminal connect`",
+				inside, sessionID,
+			)
+		}
+	}
 	// Precedence: explicit pin arg > PIN extracted from URL > interactive prompt.
 	resolvedPin := pinArg
 	if resolvedPin == "" {
