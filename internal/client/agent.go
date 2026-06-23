@@ -961,8 +961,22 @@ func (a *Agent) pause() {
 // exit summary) so they read as background metadata against the shell's own
 // output rather than competing content. Initial banner stays at full
 // brightness because that's the info the user actively needs to see.
+//
+// Always emits CRLF line endings — most agentNotify calls happen while
+// the host terminal is in raw mode (set by Run's MakeRaw), where a bare
+// LF moves the cursor down without returning to column 0, producing a
+// staircase where each subsequent line is indented further right than
+// the last. The defer order also means the exit-summary notify runs
+// BEFORE xterm.Restore, so even the final "session ended" line needs
+// this treatment. Writing CRLF in cooked mode is harmless — the tty
+// driver tolerates the extra CR.
 func agentNotify(format string, args ...interface{}) {
-	fmt.Printf("\x1b[2m"+format+"\x1b[0m", args...)
+	s := fmt.Sprintf(format, args...)
+	// Normalise any pre-existing \r\n to \n first, then expand back to
+	// \r\n, so callers can write either and we always emit the right one.
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\n", "\r\n")
+	fmt.Print("\x1b[2m" + s + "\x1b[0m")
 }
 
 // printQR renders a scannable QR for the join URL with the PIN in the URL
