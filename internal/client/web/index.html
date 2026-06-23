@@ -767,6 +767,36 @@
       connectBtn.classList.remove('danger');
     }
 
+    // Batch incoming terminal data so a refresh-replay (hundreds of
+    // small TypeData frames arriving in <100ms) renders as a single
+    // term.write() — not as N animated scrolls. Single-keystroke echo
+    // is still <16ms perceived latency (one frame), well below any
+    // human noticeable threshold.
+    const pendingChunks = [];
+    let flushScheduled = false;
+    function enqueueData(bytes) {
+      pendingChunks.push(bytes);
+      if (flushScheduled) return;
+      flushScheduled = true;
+      requestAnimationFrame(() => {
+        flushScheduled = false;
+        if (pendingChunks.length === 0) return;
+        // Concatenate all buffered chunks into one Uint8Array so
+        // xterm.js processes the whole burst as one write. Avoids the
+        // per-write overhead that was making refreshes feel slow.
+        let total = 0;
+        for (const c of pendingChunks) total += c.byteLength;
+        const merged = new Uint8Array(total);
+        let off = 0;
+        for (const c of pendingChunks) {
+          merged.set(c instanceof Uint8Array ? c : new Uint8Array(c), off);
+          off += c.byteLength;
+        }
+        pendingChunks.length = 0;
+        term.write(merged);
+      });
+    }
+
     async function send(msg) {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       if (authed && cryptoKey && (msg.type === 'data' || msg.type === 'resize')) {
@@ -977,7 +1007,15 @@
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             if (typeof msg.seq === 'number' && msg.seq > lastSeq) lastSeq = msg.seq;
-            term.write(bytes);
+            // Batch into the per-frame write queue instead of writing
+            // each chunk immediately. On refresh the agent dumps the
+            // entire 2 MiB scrollback as ~500 separate TypeData frames;
+            // calling term.write() once per frame made xterm.js render
+            // between each one, producing the multi-second "scrolling
+            // through every line" effect. enqueueData coalesces all
+            // chunks received within an animation frame into a single
+            // term.write() call.
+            enqueueData(bytes);
             bytesReceived += bytes.byteLength;
           } catch (_) { /* decrypt failure: skip */ }
           break;

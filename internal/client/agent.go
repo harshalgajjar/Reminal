@@ -926,6 +926,17 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				return err
 			}
 		case protocol.TypeResize:
+			// When the host's local terminal is driving the PTY, that
+			// size is authoritative — viewer resizes would otherwise
+			// fight with each other (every web client sends a resize on
+			// each visualViewport change, e.g. iOS keyboard toggle) and
+			// corrupt the host's display by flapping the PTY size on
+			// every keystroke. We can't easily compute a per-viewer
+			// minimum from the relay's opaque forwarding, so the
+			// pragmatic rule is "host wins when present".
+			if a.localActive {
+				continue
+			}
 			plaintext, err := a.box.Decrypt(msg.Data)
 			if err != nil {
 				continue
