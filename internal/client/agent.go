@@ -162,22 +162,20 @@ func NewAgent(version string) (*Agent, error) {
 // the only non-foreground variant today.
 func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 	if opts.Resume != nil {
-		// Hot-restart path: reuse the previous binary's session ID +
-		// PIN so viewers reconnect seamlessly. PIN hash is re-derived
-		// (cheap) rather than threaded through env.
+		// Hot-restart path: reuse the previous binary's session ID,
+		// PIN, AND the previously-registered pin_hash so the relay
+		// recognises us as the same agent. Re-hashing would generate
+		// a different bcrypt digest (random salt per call) which the
+		// relay would reject with "session credentials mismatch".
 		r := opts.Resume
 		box, err := crypto.NewBox(r.SessionID, r.PIN)
-		if err != nil {
-			return nil, err
-		}
-		pinHash, err := session.HashPIN(r.PIN)
 		if err != nil {
 			return nil, err
 		}
 		return &Agent{
 			sessionID:      r.SessionID,
 			pin:            r.PIN,
-			pinHash:        pinHash,
+			pinHash:        r.PinHash,
 			webURL:         config.WebURL(),
 			shell:          config.Shell(),
 			version:        version,

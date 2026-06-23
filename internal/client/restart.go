@@ -48,6 +48,14 @@ const (
 	envResume          = "REMINAL_RESUME"
 	envResumeSessionID = "REMINAL_RESUME_SESSION_ID"
 	envResumePIN       = "REMINAL_RESUME_PIN"
+	// envResumePinHash carries the ORIGINAL bcrypt hash, not a freshly
+	// re-derived one — bcrypt is non-deterministic (random salt per
+	// call), and the relay compares the agent-reported pin_hash for
+	// strict equality against the value it captured at first connect.
+	// A fresh hash from the same PIN would fail the equality check
+	// ("session credentials mismatch") and the resumed agent would
+	// loop forever trying to reconnect.
+	envResumePinHash   = "REMINAL_RESUME_PIN_HASH"
 	envResumeStartedAt = "REMINAL_RESUME_STARTED_AT"
 	// Always 3 — first ExtraFile after stdio. Kept as a constant in
 	// case we ever pass more inherited fds.
@@ -60,6 +68,11 @@ const (
 type ResumeState struct {
 	SessionID string
 	PIN       string
+	// PinHash is the bcrypt hash the relay already has registered for
+	// this session. We can't re-derive it (bcrypt has a random salt
+	// per call) and the relay does a string-equality check, so we
+	// have to pass the original through.
+	PinHash   string
 	StartedAt time.Time
 	PTY       *pty.Session
 }
@@ -76,8 +89,9 @@ func LoadResumeState() (*ResumeState, error) {
 	}
 	id := os.Getenv(envResumeSessionID)
 	pin := os.Getenv(envResumePIN)
-	if id == "" || pin == "" {
-		return nil, errors.New("resume requested but session id / pin missing")
+	pinHash := os.Getenv(envResumePinHash)
+	if id == "" || pin == "" || pinHash == "" {
+		return nil, errors.New("resume requested but session id / pin / pin_hash missing")
 	}
 	startedAtUnix, _ := strconv.ParseInt(os.Getenv(envResumeStartedAt), 10, 64)
 	startedAt := time.Unix(startedAtUnix, 0)
@@ -98,11 +112,13 @@ func LoadResumeState() (*ResumeState, error) {
 	_ = os.Unsetenv(envResume)
 	_ = os.Unsetenv(envResumeSessionID)
 	_ = os.Unsetenv(envResumePIN)
+	_ = os.Unsetenv(envResumePinHash)
 	_ = os.Unsetenv(envResumeStartedAt)
 
 	return &ResumeState{
 		SessionID: id,
 		PIN:       pin,
+		PinHash:   pinHash,
 		StartedAt: startedAt,
 		PTY:       pty.Attach(ptyFile),
 	}, nil
@@ -119,11 +135,15 @@ func (a *Agent) executeRestart() error {
 	}
 
 	// Tell the new image who we are. PTY survives via fd inheritance;
-	// everything else is in env.
+	// everything else is in env. pinHash MUST be the original bcrypt
+	// the relay already has registered — re-deriving would generate
+	// a different salt/digest and the relay would reject the resumed
+	// agent with "session credentials mismatch".
 	env := append(os.Environ(),
 		envResume+"=1",
 		envResumeSessionID+"="+a.sessionID,
 		envResumePIN+"="+a.pin,
+		envResumePinHash+"="+a.pinHash,
 		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
 	)
 
