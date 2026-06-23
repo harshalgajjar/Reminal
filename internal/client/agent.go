@@ -274,7 +274,20 @@ func (a *Agent) Run() error {
 	// Skipped on hot-restart resume: the shell is already running inside
 	// the inherited PTY; we just need to take over reading + writing.
 	if !a.resumed {
-		term, err := pty.Start(a.shell, "REMINAL_SESSION="+a.sessionID)
+		// Inject the session ID, PIN, and join URL into the shell's
+		// env so `reminal info` works from anywhere — including the
+		// (rare) case where the shell is on a different machine than
+		// the agent (e.g. someone SSH-ed into the agent's host, started
+		// reminal there, then ran a viewer that lands them in yet
+		// another nested shell). PIN-in-env is fine: anyone in the
+		// shell already has full shell access; the PIN is for joining
+		// the shell they're already in.
+		openURL := fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID)
+		term, err := pty.Start(a.shell,
+			"REMINAL_SESSION="+a.sessionID,
+			"REMINAL_SESSION_PIN="+a.pin,
+			"REMINAL_SESSION_URL="+openURL,
+		)
 		if err != nil {
 			return fmt.Errorf("start shell: %w", err)
 		}
