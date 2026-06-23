@@ -11,18 +11,18 @@ class Reminal < Formula
   on_macos do
     on_arm do
       url "https://github.com/harshalgajjar/Reminal/releases/download/v0.7.6/reminal_0.7.6_darwin_arm64.tar.gz"
-      sha256 "41680c82a5e8392c5f69b8038f232b0fa19e9b5025903878f860cc96d10ce129"
+      sha256 "b3b90dfc1f21812a635dfcdd369ca568754edeb558ae23aa4fb2bce02c92a922"
     end
     on_intel do
       url "https://github.com/harshalgajjar/Reminal/releases/download/v0.7.6/reminal_0.7.6_darwin_amd64.tar.gz"
-      sha256 "60ac968a09b72ba9a475716c9279322d2f269a7c7a3a03197b7377c3e5177031"
+      sha256 "febd6d7a9a913bc13571bbda81766001683644d05cb61c764701fc17ddb13765"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/harshalgajjar/Reminal/releases/download/v0.7.6/reminal_0.7.6_linux_arm64.tar.gz"
-      sha256 "5200c56678756c41fe8ec7175826a3d84c72dea6ce44676b2f3f2473c8d1bcd8"
+      sha256 "a974d9467a41905db0ef7b96ab120600fd5e6dc48785dc665ba543502cccf5ba"
     end
   end
 
