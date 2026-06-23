@@ -631,7 +631,7 @@ func (a *Agent) handleUpload(encData string) {
 	// Single-shot path: no upload_id (or total==1). Bypass the
 	// pendingUploads map entirely so old clients keep working.
 	if payload.UploadID == "" || payload.Total <= 1 {
-		a.finalizeUpload(safe, chunk, payload.TTLSeconds)
+		a.finalizeUpload(payload.UploadID, safe, chunk, payload.TTLSeconds)
 		return
 	}
 
@@ -694,12 +694,15 @@ func (a *Agent) handleUpload(encData string) {
 	for i := 0; i < up.total; i++ {
 		assembled = append(assembled, up.chunks[i]...)
 	}
-	a.finalizeUpload(up.name, assembled, up.ttlSeconds)
+	a.finalizeUpload(payload.UploadID, up.name, assembled, up.ttlSeconds)
 }
 
 // finalizeUpload writes the assembled bytes to ~/Downloads/reminal/ and
 // schedules TTL deletion. Shared by the single-shot and chunked paths.
-func (a *Agent) finalizeUpload(safe string, raw []byte, ttlSeconds int) {
+// uploadID is the originating viewer's upload ID — when present, we
+// broadcast a TypeUploadAck so the viewer can auto-paste the path into
+// the shell at the cursor.
+func (a *Agent) finalizeUpload(uploadID, safe string, raw []byte, ttlSeconds int) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		a.broadcastNotice(fmt.Sprintf("upload failed: %v", err))
@@ -722,8 +725,15 @@ func (a *Agent) finalizeUpload(safe string, raw []byte, ttlSeconds int) {
 	// tool is available (headless Linux without xclip/wl-copy).
 	clipNote := ""
 	if copyToClipboard(path) {
-		clipNote = " · path copied to clipboard"
+		clipNote = " · path copied to host clipboard"
 	}
+
+	// Tell the originating viewer the resolved path so it can auto-type
+	// it at the shell cursor — the part the user is actually here for
+	// (uploading from a phone, then needing the path in `cat`, `claude`,
+	// etc., is otherwise painful to copy off the terminal on a small
+	// screen). Broadcast — non-originating viewers ignore via upload_id.
+	a.broadcastUploadAck(uploadID, path)
 
 	if ttlSeconds > 0 {
 		ttl := time.Duration(ttlSeconds) * time.Second
@@ -746,6 +756,37 @@ func (a *Agent) finalizeUpload(safe string, raw []byte, ttlSeconds int) {
 		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · kept forever%s",
 			path, humanByteSize(len(raw)), clipNote))
 	}
+}
+
+// broadcastUploadAck tells viewers an upload completed, scoped by the
+// originating upload_id. Sent over the same encrypted channel as
+// TypeNotify / TypeDownload. Non-originating viewers will see the
+// message but ignore it (their pendingUploadIDs set doesn't contain
+// this ID). Best-effort: no error path — if we can't send, the viewer
+// just sees the in-band "[reminal] uploaded ..." notice and selects
+// the path manually as before.
+func (a *Agent) broadcastUploadAck(uploadID, path string) {
+	if uploadID == "" {
+		return
+	}
+	payload, err := json.Marshal(struct {
+		UploadID string `json:"upload_id"`
+		Path     string `json:"path"`
+	}{UploadID: uploadID, Path: path})
+	if err != nil {
+		return
+	}
+	enc, err := a.box.Encrypt(payload)
+	if err != nil {
+		return
+	}
+	a.currentConnMu.Lock()
+	conn := a.currentConn
+	a.currentConnMu.Unlock()
+	if conn == nil {
+		return
+	}
+	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeUploadAck, Data: enc})
 }
 
 // copyToClipboard puts `text` onto the host's clipboard via whichever

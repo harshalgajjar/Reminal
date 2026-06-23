@@ -41,6 +41,14 @@ const (
 	// every viewer ("build done", "tests passed"). Payload after decrypt
 	// is JSON: {"message": "..."}.
 	TypeNotify MessageType = "notify"
+	// TypeUploadAck is sent by the agent after a viewer-initiated upload
+	// is written to disk. Broadcast to all viewers (so the originator
+	// gets it back), but only the viewer whose upload_id matches will
+	// react — by auto-typing the resolved absolute path into the shell
+	// at the cursor, the way pasting a filename works on a desktop
+	// terminal. Payload after decrypt is JSON:
+	//   {"upload_id":"...", "path":"/Users/.../Downloads/reminal/foo.png"}
+	TypeUploadAck MessageType = "upload_ack"
 
 	// ---- Port-forward tunneling (RoleTunnel sessions) ----
 	// These payloads are NOT end-to-end encrypted — the Worker needs to

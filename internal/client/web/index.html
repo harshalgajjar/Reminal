@@ -318,6 +318,23 @@
       z-index: 10;
       box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
     }
+    /* On phones the Recent button can sit anywhere in the wrapped
+       header, and a `right: 0` anchor often pushed the dropdown off
+       the left edge of the viewport. Float it as a viewport-anchored
+       panel instead so it always fits. */
+    @media (pointer: coarse), (max-width: 720px) {
+      .recents-list {
+        position: fixed;
+        top: auto;
+        left: max(8px, env(safe-area-inset-left));
+        right: max(8px, env(safe-area-inset-right));
+        margin-top: 8px;
+        min-width: 0;
+        max-width: none;
+        max-height: 70vh;
+        overflow-y: auto;
+      }
+    }
     .recents-empty { padding: 12px; color: #8b949e; font-size: 13px; text-align: center; }
     .recents-row {
       display: flex; align-items: center; gap: 6px;
@@ -325,6 +342,18 @@
       cursor: pointer; color: #e6edf3;
     }
     .recents-row:hover { background: #21262d; }
+    /* Active session: subtle blue tint + a left rail so the user can
+       see at a glance which row maps to the terminal they're looking
+       at right now. */
+    .recents-row.is-current {
+      background: rgba(56, 139, 253, 0.12);
+      box-shadow: inset 3px 0 0 #1f6feb;
+    }
+    .recents-row.is-current:hover { background: rgba(56, 139, 253, 0.2); }
+    .recents-row.is-current .meta::after {
+      content: ' · current';
+      color: #58a6ff;
+    }
     .recents-row .label { flex: 1; min-width: 0; }
     .recents-row .name { font-size: 13px; font-weight: 500; }
     .recents-row .meta { font-size: 11px; color: #8b949e; font-family: monospace; }
@@ -518,8 +547,9 @@
       root.innerHTML = '';
       for (const e of list) {
         const row = document.createElement('div');
-        row.className = 'recents-row';
-        row.title = 'Click to connect';
+        const isCurrent = !!sessionId && e.id === sessionId;
+        row.className = 'recents-row' + (isCurrent ? ' is-current' : '');
+        row.title = isCurrent ? 'This is the session you\'re viewing' : 'Click to connect';
         const label = document.createElement('div');
         label.className = 'label';
         const nameEl = document.createElement('div');
@@ -654,6 +684,9 @@
     let bytesSent = 0;
     let bytesReceived = 0;
     let lastDialMs = 0; // measured from new WebSocket() to ws.onopen
+    // Upload IDs THIS viewer originated — used to filter the agent's
+    // upload_ack broadcast so only the originator auto-pastes the path.
+    const pendingUploadIDs = new Set();
 
     function humanBytes(n) {
       if (n < 1000) return n + ' B';
@@ -957,6 +990,8 @@
           setStatus('Connected to ' + sessionId, 'connected');
           hideOverlay();
           setBtnDisconnect();
+          // Update the recents highlight so the current row is marked.
+          renderRecents();
           if (!helloShown) {
             helloShown = true;
             const ht = lastDialMs > 0 ? ' · handshake ' + lastDialMs + 'ms' : '';
@@ -991,6 +1026,33 @@
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));
             fireNotification(payload.message || '');
+          } catch (_) {}
+          break;
+        }
+        case 'upload_ack': {
+          // Auto-paste the resolved absolute path into the shell at the
+          // cursor — the part the user is actually here for after
+          // uploading from a phone. We only react if the upload_id is
+          // one WE submitted: every viewer sees the broadcast but only
+          // the originator's pendingUploadIDs set has the match.
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            if (!payload.upload_id || !pendingUploadIDs.has(payload.upload_id)) break;
+            pendingUploadIDs.delete(payload.upload_id);
+            const path = payload.path || '';
+            if (!path) break;
+            // Quote the path if it contains shell-meaningful chars so
+            // a `cat /path with spaces/foo.png` actually works without
+            // the user having to add quotes themselves.
+            const needsQuotes = /[\s"'`$\\!*?(){}[\]<>|&;]/.test(path);
+            const quoted = needsQuotes ? `'${path.replace(/'/g, `'\\''`)}'` : path;
+            await sendInput(quoted);
+            // Best-effort: also stash in the phone's clipboard so the
+            // user can paste it elsewhere (e.g. into the next message
+            // in a different app).
+            try { await navigator.clipboard.writeText(path); } catch (_) {}
           } catch (_) {}
           break;
         }
@@ -1058,6 +1120,8 @@
       setStatus('Disconnected');
       hideOverlay();
       setBtnConnect();
+      // Clear "current" highlight in recents now that we're not bound.
+      renderRecents();
     }
 
     // Serialize all outbound keystrokes/keybar presses into a single chain.
@@ -1601,6 +1665,9 @@
       const uploadId =
         (self.crypto && self.crypto.randomUUID && self.crypto.randomUUID()) ||
         ('u-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
+      // Remember the upload_id so the agent's upload_ack handler knows
+      // we're the originator and can auto-type the path into our shell.
+      pendingUploadIDs.add(uploadId);
       term.write('\r\n\x1b[2m[reminal] uploading ' + file.name + ' (' +
         humanBytes(file.size) + ', ' + total + ' chunk' + (total === 1 ? '' : 's') + ')…\x1b[0m\r\n');
       try {
