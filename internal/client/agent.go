@@ -470,6 +470,40 @@ func (a *Agent) applyEffectiveSize() {
 		return
 	}
 	_ = a.term.Resize(cols, rows)
+	// Tell every viewer the new PTY size so their xterm.js matches.
+	// Without this, the agent shrinks the PTY for a small viewer (e.g.,
+	// phone joining a desktop session), the shell formats output for
+	// the new size, but the original-large viewer is still rendering
+	// at its old size — cursor-positioning escape codes land in the
+	// wrong column and the display goes garbled. Broadcasting keeps
+	// every screen in sync with what the shell actually thinks.
+	a.broadcastSize(cols, rows)
+}
+
+// broadcastSize publishes the PTY's current (cols, rows) to every
+// attached viewer. They mirror it via term.resize() so cursor escape
+// sequences land at the right positions. Best-effort: no return value,
+// no retry — if the WS is mid-reconnect the next applyEffectiveSize()
+// (triggered on resume) will catch them up.
+func (a *Agent) broadcastSize(cols, rows uint16) {
+	if cols == 0 || rows == 0 {
+		return
+	}
+	payload, err := json.Marshal(protocol.Message{Cols: cols, Rows: rows})
+	if err != nil {
+		return
+	}
+	enc, err := a.box.Encrypt(payload)
+	if err != nil {
+		return
+	}
+	a.currentConnMu.Lock()
+	conn := a.currentConn
+	a.currentConnMu.Unlock()
+	if conn == nil {
+		return
+	}
+	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeResize, Data: enc})
 }
 
 // writeHandshake emits the agent's credentials to the parent process's
@@ -1115,6 +1149,17 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// (handled in TypeClosed below).
 			a.recordViewerSize(rs.Cols, rs.Rows)
 			a.applyEffectiveSize()
+			// If the PTY size didn't actually change but the sender
+			// asked for something different, still tell them (and
+			// everyone) the authoritative size — otherwise a viewer
+			// that grew its own viewport keeps rendering at the wrong
+			// width while the shell formats for the unchanged PTY.
+			a.viewerSizeMu.Lock()
+			pc, pr := a.lastAppliedCol, a.lastAppliedRow
+			a.viewerSizeMu.Unlock()
+			if pc > 0 && pr > 0 && (pc != rs.Cols || pr != rs.Rows) {
+				a.broadcastSize(pc, pr)
+			}
 		case protocol.TypeResume:
 			// FromSeq is the highest seq the viewer has received. We replay
 			// everything with Seq > FromSeq, so the next seq to send is FromSeq+1.
@@ -1131,6 +1176,15 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			}
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, true)
+			// Re-publish the PTY size so the freshly-joined viewer
+			// can size its xterm.js to match. Existing viewers
+			// no-op this since they're already at the right size.
+			a.viewerSizeMu.Lock()
+			pc, pr := a.lastAppliedCol, a.lastAppliedRow
+			a.viewerSizeMu.Unlock()
+			if pc > 0 && pr > 0 {
+				a.broadcastSize(pc, pr)
+			}
 		case protocol.TypeClosed:
 			if msg.Count > 0 {
 				agentNotify("  [%s] Viewer disconnected (%d still active)\n",

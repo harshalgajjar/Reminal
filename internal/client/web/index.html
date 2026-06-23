@@ -1029,6 +1029,26 @@
           } catch (_) {}
           break;
         }
+        case 'resize': {
+          // Agent telling us its effective PTY size. We mirror it so
+          // cursor-positioning escape codes the shell emits land in
+          // the same column on every screen. Without this, a larger
+          // viewer (iPad, desktop) keeps rendering at its viewport
+          // size while the agent shrinks the PTY to fit a smaller
+          // viewer (phone), and absolute-position escapes go
+          // misaligned → garbled text.
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            const c = parseInt(payload.cols, 10);
+            const r = parseInt(payload.rows, 10);
+            if (c > 0 && r > 0 && (c !== term.cols || r !== term.rows)) {
+              term.resize(c, r);
+            }
+          } catch (_) {}
+          break;
+        }
         case 'upload_ack': {
           // Auto-paste the resolved absolute path into the shell at the
           // cursor — the part the user is actually here for after
