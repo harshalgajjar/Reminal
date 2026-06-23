@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/reminal/reminal/internal/pty"
+	"golang.org/x/sys/unix"
 	xterm "golang.org/x/term"
 )
 
@@ -170,7 +171,10 @@ func (a *Agent) executeRestart() error {
 // it's already there, no-op. Also clears O_CLOEXEC so Exec inherits it.
 func dupToFD3(src int) error {
 	if src != 3 {
-		if err := syscall.Dup2(src, 3); err != nil {
+		// unix.Dup2 wraps either the legacy dup2 (macOS, x86_64
+		// Linux) or modern dup3(..., 0) (arm64 Linux, where dup2
+		// was retired).
+		if err := unix.Dup2(src, 3); err != nil {
 			return err
 		}
 	}
