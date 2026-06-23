@@ -90,14 +90,16 @@ type Agent struct {
 	currentConnMu sync.Mutex
 	currentConn   *websocket.Conn
 
-	// viewerSizeMu guards viewerMinCols / viewerMinRows — the smallest
-	// (cols, rows) any attached viewer has reported since the last time
-	// the viewer count hit 0. Used to compute min(host, viewers) for the
-	// PTY size so multi-viewer setups render correctly without flapping.
-	// Zero = "no viewer size known", meaning host's size wins.
+	// viewerSizeMu guards viewerMinCols / viewerMinRows / viewerCount —
+	// the size-tracking state recordViewerSize uses to decide whether to
+	// mirror a viewer's reported size verbatim (single-viewer case) or
+	// monotonically shrink (multi-viewer case, where any one viewer
+	// growing must not drag everyone else's display past their own
+	// smallest). Zero size = "no viewer size known", host wins.
 	viewerSizeMu   sync.Mutex
 	viewerMinCols  uint16
 	viewerMinRows  uint16
+	viewerCount    int
 	lastAppliedCol uint16
 	lastAppliedRow uint16
 
@@ -406,17 +408,32 @@ func (a *Agent) syncSizeToPTY() {
 	a.applyEffectiveSize()
 }
 
-// recordViewerSize tracks the smallest (cols, rows) any viewer has
-// reported this session — anti-flap measure so the PTY size doesn't
-// bounce around as visualViewport events fire on phones (keyboard
-// toggle, orientation change, URL-bar hide). Reset to (0, 0) by
-// resetViewerSize() when the viewer count drops to 0.
+// recordViewerSize tracks the size we should clamp the PTY to.
+//
+//   - When there's exactly one viewer (the common case — your phone),
+//     we track its current size verbatim. That lets the PTY grow back
+//     when the soft keyboard collapses or the device rotates wider —
+//     no ratchet, no "freed space below stays unused" bug.
+//   - When 2+ viewers are attached, we fall back to the smallest seen
+//     since the multi-viewer state started: any one viewer growing its
+//     own viewport mustn't drag everyone else's display larger than the
+//     smallest can render.
+//
+// resetViewerSize() clears state when the viewer count drops to 0.
 func (a *Agent) recordViewerSize(cols, rows uint16) {
 	if cols == 0 || rows == 0 {
 		return
 	}
 	a.viewerSizeMu.Lock()
 	defer a.viewerSizeMu.Unlock()
+	if a.viewerCount <= 1 {
+		// Single viewer (or unknown count, treated the same) — mirror
+		// its current size, including grows.
+		a.viewerMinCols = cols
+		a.viewerMinRows = rows
+		return
+	}
+	// Multi-viewer: monotonically shrink only.
 	if a.viewerMinCols == 0 || cols < a.viewerMinCols {
 		a.viewerMinCols = cols
 	}
@@ -433,6 +450,7 @@ func (a *Agent) resetViewerSize() {
 	a.viewerSizeMu.Lock()
 	a.viewerMinCols = 0
 	a.viewerMinRows = 0
+	a.viewerCount = 0
 	a.viewerSizeMu.Unlock()
 }
 
@@ -1176,12 +1194,13 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			}
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, true)
+			a.viewerSizeMu.Lock()
+			a.viewerCount = msg.Count
+			pc, pr := a.lastAppliedCol, a.lastAppliedRow
+			a.viewerSizeMu.Unlock()
 			// Re-publish the PTY size so the freshly-joined viewer
 			// can size its xterm.js to match. Existing viewers
 			// no-op this since they're already at the right size.
-			a.viewerSizeMu.Lock()
-			pc, pr := a.lastAppliedCol, a.lastAppliedRow
-			a.viewerSizeMu.Unlock()
 			if pc > 0 && pr > 0 {
 				a.broadcastSize(pc, pr)
 			}
@@ -1199,6 +1218,18 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				a.resetViewerSize()
 				a.applyEffectiveSize()
 			}
+			a.viewerSizeMu.Lock()
+			a.viewerCount = msg.Count
+			// Going from 2+ → 1 also unlocks the ratchet: the lone
+			// remaining viewer should be able to grow back. We don't
+			// know its size yet, but on its next resize message
+			// recordViewerSize will mirror it verbatim because
+			// viewerCount == 1.
+			if msg.Count == 1 {
+				a.viewerMinCols = 0
+				a.viewerMinRows = 0
+			}
+			a.viewerSizeMu.Unlock()
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, false)
 		case protocol.TypeAgentOffline, protocol.TypeAgentOnline:

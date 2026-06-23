@@ -25,7 +25,11 @@
        above it never sits underneath. overscroll-behavior stops the
        page from bouncing or triggering pull-to-refresh inside the
        terminal — a frequent mobile pain point. */
-    html, body { overscroll-behavior: contain; }
+    /* overflow:hidden pins the document to the viewport — the keybar is
+       position:fixed and the body would otherwise grow past 100dvh on
+       any kb-offset drift, producing a second (page-level) scrollbar
+       on top of xterm.js's scrollback scrollbar. */
+    html, body { overscroll-behavior: contain; overflow: hidden; }
     body {
       background: #0d1117;
       color: #e6edf3;
