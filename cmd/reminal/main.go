@@ -771,6 +771,11 @@ func runList() error {
 	}
 	fmt.Printf("%d session(s) running:\n\n", len(all))
 	now := time.Now()
+	// REMINAL_SESSION marks the session whose shell is running this
+	// command — the agent injects it into the spawned shell. Tagging
+	// the matching row "[current]" is the safety net the user asked
+	// for so `reminal kill` against the wrong id is harder to fat-finger.
+	currentID := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
 	for _, a := range all {
 		var mode string
 		switch {
@@ -790,7 +795,16 @@ func runList() error {
 			}
 			viewers = fmt.Sprintf(", %d %s", a.Viewers, noun)
 		}
-		fmt.Printf("  %s  · %-12s · PID %-6d · up %v%s\n", a.ID, mode, a.PID, age, viewers)
+		// "[current]" suffix marks the session whose shell we're in
+		// right now — useful when scanning the list before running
+		// `reminal kill <id>` so you don't accidentally tear down the
+		// terminal you're sitting in.
+		currentTag := ""
+		if a.ID == currentID {
+			currentTag = "  \x1b[1;32m[current — this shell]\x1b[0m"
+		}
+		fmt.Printf("  %s  · %-12s · PID %-6d · up %v%s%s\n",
+			a.ID, mode, a.PID, age, viewers, currentTag)
 		fmt.Printf("           %s\n", a.OpenURL)
 	}
 	fmt.Println()
