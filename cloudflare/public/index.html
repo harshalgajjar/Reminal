@@ -2375,22 +2375,16 @@
         (imageFiles.length === 1 ? '' : 's') + ' (auto-delete in 1h)\x1b[0m\r\n');
     });
 
-    // syncViewport keeps two CSS vars in sync with the dynamic viewport:
-    //  --kb-offset  height the soft keyboard is currently covering
-    //  --keybar-h   measured height of the floating mobile key-bar
-    // The first lifts the key-bar above the keyboard; the second pads
-    // the body so the terminal never sits underneath the key-bar.
-    // syncViewport publishes the three CSS variables that the layout
-    // depends on, so the position:fixed terminal-wrap and keybar can
-    // size themselves correctly:
-    //   --kb-offset   how much of the layout viewport the soft
-    //                 keyboard is currently covering (0 on Android
-    //                 Chrome with interactive-widget=resizes-content
-    //                 since the layout viewport itself shrinks; on
-    //                 iOS it's innerHeight - visualViewport.height).
+    // syncViewport publishes three CSS variables the layout depends on:
+    //   --kb-offset   how much of the layout viewport the soft keyboard
+    //                 covers (0 on Android Chrome with
+    //                 interactive-widget=resizes-content; positive on
+    //                 iOS, where it lifts the keybar above the keyboard).
     //   --keybar-h    measured height of the floating mobile key bar.
-    //   --header-h    measured height of the page header so the
-    //                 terminal sits right below it.
+    //   --header-h    measured height of the page header.
+    // pinTerminalWrap (below) is the authoritative sizer for the
+    // terminal area; the CSS vars exist for the keybar's own positioning
+    // and as a fallback if pinTerminalWrap somehow can't run.
     function syncViewport() {
       const vv = window.visualViewport;
       const kbOff = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
@@ -2518,7 +2512,12 @@
     // is a cheap belt-and-suspenders.
     document.addEventListener('focusout', () => setTimeout(refitSoon, 100), true);
     document.addEventListener('focusin', () => setTimeout(refitSoon, 100), true);
-    syncViewport();
+    // Initial layout — run the full pipeline (syncViewport +
+    // pinTerminalWrap + fitAddon.fit) so xterm renders into the
+    // correctly-sized container from the first frame, not the
+    // CSS-var-defaults that line 671's fitAddon.fit() picked up
+    // before pinTerminalWrap ran.
+    refit();
 
     // Tap-to-focus: on mobile, tapping an empty area of the terminal
     // wrapper should always open the soft keyboard, even if xterm.js
