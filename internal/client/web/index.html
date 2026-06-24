@@ -25,16 +25,24 @@
        above it never sits underneath. overscroll-behavior stops the
        page from bouncing or triggering pull-to-refresh inside the
        terminal — a frequent mobile pain point. */
-    /* Lock the document so iOS Safari can't scroll the page itself on
-       top of xterm's scrollback (overflow:hidden alone wasn't enough
-       — Safari still scrolls the layout viewport once xterm's internal
-       scroll exhausts, giving a "scroll twice to actually reach the
-       end" feel). position:fixed inset:0 fully pins the body. */
+    /* overscroll-behavior + overflow:hidden is enough on Android Chrome
+       and desktop. iOS Safari needs an extra `position: fixed; inset: 0`
+       to actually pin the document (otherwise the layout viewport scrolls
+       on top of xterm's scrollback) — but applying that pin universally
+       breaks Android Chrome's `interactive-widget=resizes-content`
+       reflow: the body freezes at the keyboard-open viewport size and
+       doesn't grow back when the keyboard closes, leaving the bottom
+       half of the screen empty. Scope the iOS-only pin via @supports
+       on a webkit-callout property no other engine implements. */
     html, body {
       overscroll-behavior: contain;
       overflow: hidden;
-      position: fixed;
-      inset: 0;
+    }
+    @supports (-webkit-touch-callout: none) {
+      html, body {
+        position: fixed;
+        inset: 0;
+      }
     }
     body {
       background: #0d1117;
@@ -2413,6 +2421,25 @@
     // is a cheap belt-and-suspenders.
     document.addEventListener('focusout', () => setTimeout(refitSoon, 100), true);
     document.addEventListener('focusin', () => setTimeout(refitSoon, 100), true);
+    // Defensive poll — on some Android Chrome / Samsung Internet
+    // builds neither visualViewport.resize nor window.resize fires
+    // reliably on keyboard close, leaving the terminal stuck small
+    // even though the visible area has grown. Polling at 400ms costs
+    // a microscopic amount of CPU and turns "sometimes broken" into
+    // "always recovers within a frame". Auto-pauses when the tab is
+    // hidden to avoid burning battery in the background.
+    let lastVVH = window.visualViewport ? window.visualViewport.height : 0;
+    let lastIH = window.innerHeight;
+    setInterval(() => {
+      if (document.hidden) return;
+      const vvh = window.visualViewport ? window.visualViewport.height : 0;
+      const ih = window.innerHeight;
+      if (vvh !== lastVVH || ih !== lastIH) {
+        lastVVH = vvh;
+        lastIH = ih;
+        refitSoon();
+      }
+    }, 400);
     syncViewport();
 
     // Tap-to-focus: on mobile, tapping an empty area of the terminal
