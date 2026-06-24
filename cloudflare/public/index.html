@@ -1065,6 +1065,12 @@
       return u;
     }
 
+    // KEX_TIMEOUT_MS bounds how long we wait for the agent's kex_resp
+    // before assuming the message got dropped (relay blip, agent stall)
+    // and retrying. Without this the viewer would hang forever on a
+    // black screen with no error if the response went missing.
+    const KEX_TIMEOUT_MS = 10000;
+    let kexTimer = 0;
     async function sendKexInit() {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       if (cryptoKey || kexInFlight) return;
@@ -1093,6 +1099,28 @@
         ex_id: kexExID,
         data: u8ToBase64(blinded),
       }));
+      // Arm a watchdog: if completeKex doesn't clear it within
+      // KEX_TIMEOUT_MS, the handshake response is presumed lost.
+      // Clear state and retry once on a fresh ws if still connected,
+      // otherwise surface an error so the user isn't stuck staring at
+      // a blank terminal.
+      if (kexTimer) clearTimeout(kexTimer);
+      kexTimer = setTimeout(() => {
+        kexTimer = 0;
+        if (cryptoKey) return; // raced with a late response
+        kexEphKeyPair = null;
+        kexMask = null;
+        kexExID = null;
+        kexExIDBytes = null;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          // One automatic retry. If it fails again the user will see
+          // the second timeout fire and the status banner.
+          setStatus('Handshake timed out — retrying…', 'warn connecting');
+          sendKexInit().catch(() => {});
+        } else {
+          setStatus('Handshake timed out', 'error');
+        }
+      }, KEX_TIMEOUT_MS);
       } finally {
         kexInFlight = false;
       }
@@ -1154,6 +1182,8 @@
       kexEphKeyPair = null;
       kexMask = null;
       kexExIDBytes = null;
+      // Handshake done; cancel the watchdog so it doesn't retry.
+      if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
     }
 
     // startSessionFlow runs the one-time "hello" line plus the
