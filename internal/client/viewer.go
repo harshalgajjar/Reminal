@@ -527,12 +527,23 @@ func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) error {
 			atomic.AddUint64(&v.bytesReceived, uint64(len(data)))
 		case protocol.TypeConnected, protocol.TypeAgentOnline:
 			if !agentLive.Swap(true) {
-				v.notify("Agent reconnected.")
+				// Agent reattached. The new process image (after a
+				// `reminal restart` hot-exec) keeps the session ID
+				// and PIN but generates a fresh sessionKey — our
+				// cached AES box is now decrypting against a dead
+				// key, so every subsequent data frame fails silently
+				// and the terminal appears frozen. Closing the WS
+				// here makes runConnection's outer reconnect loop
+				// dial a fresh socket, which re-runs the EKE and
+				// picks up the new sessionKey transparently.
+				v.notify("Agent reconnected — re-keying.")
 				if n := atomic.SwapUint64(&v.droppedChunks, 0); n > 0 {
 					v.notify(fmt.Sprintf("%d input chunk(s) dropped while the agent was offline — retype if needed.", n))
 				}
+				return nil
 			}
-			// Re-sync after agent reattach.
+			// Same-agent reattach (no offline→online edge): just
+			// re-sync resume position + viewport.
 			_ = v.sendResume(conn)
 			v.sendResizeNow(conn)
 		case protocol.TypeAgentOffline:

@@ -1481,11 +1481,18 @@
           break;
         case 'connected':
         case 'agent_online':
-          // The agent just came (back) online. If we already EKE-ed
-          // this WS, we're good to start streaming. If our kex_init
-          // was sent while the agent was offline (the relay drops
-          // those silently), re-send it now so we can complete the
-          // handshake.
+          // The agent just came (back) online. The reattaching agent
+          // might be a different process image than the one we
+          // originally EKE-ed with — `reminal restart` hot-execs the
+          // binary, which keeps the session ID + PIN but generates a
+          // fresh sessionKey (see internal/client/agent.go: "session
+          // encryption key is NOT carried across the exec"). If we
+          // keep our old cryptoKey we'll silently fail to decrypt
+          // everything the new process emits, which presents as the
+          // terminal "hanging" after Agent reconnected.
+          //
+          // Always re-EKE on the offline→online edge. Harmless if it
+          // turned out to be the same agent — we just refresh our K.
           {
             const wasLive = agentLive;
             agentLive = true;
@@ -1495,18 +1502,18 @@
             hideOverlay();
             setBtnDisconnect();
             renderRecents();
-            if (!cryptoKey && !kexEphKeyPair) {
-              // We have neither a session key nor an in-flight
-              // handshake — kex_init must have been dropped while
-              // the agent was offline. Retry.
+            if (!wasLive) {
+              // Treat any reattach as potentially a new process.
+              // Clear handshake state and re-run the EKE.
+              cryptoKey = null;
+              kexEphKeyPair = null;
+              kexMask = null;
+              kexExID = null;
+              kexExIDBytes = null;
               try { await sendKexInit(); } catch (_) {}
-            } else if (!wasLive) {
-              // Agent reattached on an existing connection but we
-              // never finished EKE (kex_init still in flight without
-              // a reply). Re-issue so the new agent picks it up.
-              if (!cryptoKey) {
-                try { await sendKexInit(); } catch (_) {}
-              }
+            } else if (!cryptoKey && !kexEphKeyPair) {
+              // First-ever connect on this WS — initiate the EKE.
+              try { await sendKexInit(); } catch (_) {}
             }
             startSessionFlow();
           }
