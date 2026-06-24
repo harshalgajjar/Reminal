@@ -274,11 +274,19 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 	// One-time "Connected …" line on the first successful connect. Trust
 	// signal (encryption named explicitly), diagnostic (handshake time so
 	// users know if the relay is sluggish), and UX (Ctrl-] hint repeated).
+	// On reconnect we print a SHORTER but UNMISSABLE confirmation so the
+	// user doesn't have to guess "is it back?" — without this they'd see
+	// only the reconnect-attempt notices and have to type-and-hope.
+	isReconnect := !v.connectTime.IsZero()
 	v.helloOnce.Do(func() {
 		v.connectTime = time.Now()
 		v.notify(fmt.Sprintf("Connected to %s · handshake %v · AES-256-GCM end-to-end · Ctrl-] to disconnect",
 			v.sessionID, dialTime.Round(time.Millisecond)))
 	})
+	if isReconnect {
+		v.notify(fmt.Sprintf("Reconnected to %s — back online. Press Enter to refresh the prompt.",
+			v.sessionID))
+	}
 
 	// If we dropped any stdin bytes while reconnecting, surface that now —
 	// the user needs to know to retype anything important. Reset on every

@@ -175,9 +175,18 @@ func (a *Agent) broadcastFile(path string) error {
 	if info.IsDir() {
 		return errors.New("directories aren't supported (try tar first)")
 	}
-	const maxBytes = 25 * 1024 * 1024
+	// Cloudflare Durable Objects cap each WS message at 1 MiB on the
+	// wire. After base64 expansion (≈4/3×), AES-GCM nonce/tag, JSON
+	// envelope, and the encrypted wrap base64, ~500 KB raw is the
+	// safe ceiling. Larger files were being silently dropped by the
+	// relay — agent's writeMsg returned no error but the viewer
+	// never saw the message. Chunked downloads (similar to the
+	// chunked uploads added in v0.5.6) would lift this; for now,
+	// hard-cap and surface a clear error.
+	const maxBytes = 500 * 1024
 	if info.Size() > maxBytes {
-		return fmt.Errorf("file too large (%d bytes; max %d)", info.Size(), maxBytes)
+		return fmt.Errorf("file too large for relay (%d bytes; max %d). Chunked downloads not yet implemented — tar+split the file, or upload from viewer side instead",
+			info.Size(), maxBytes)
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {

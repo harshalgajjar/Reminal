@@ -1368,6 +1368,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, true)
 			a.viewerSizeMu.Lock()
+			prevCount := a.viewerCount
 			a.viewerCount = msg.Count
 			pc, pr := a.lastAppliedCol, a.lastAppliedRow
 			a.viewerSizeMu.Unlock()
@@ -1376,20 +1377,20 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// no-op this since they're already at the right size.
 			if pc > 0 && pr > 0 {
 				a.broadcastSize(pc, pr)
-				// Force the shell to repaint its prompt by nudging
-				// SIGWINCH (resize to +1 row then back). Without
-				// this, a reconnecting viewer sees a blank terminal
-				// — the prompt was drawn before the disconnect,
-				// scrolled out of the agent's replay window, and the
-				// shell has no reason to repaint on its own. Most
-				// shells (bash, zsh, fish) redraw the current input
-				// line on every WINCH, which is exactly what we want
-				// here. TUI apps that absolute-position also repaint
-				// on WINCH so they recover too. The two-step toggle
-				// guarantees the kernel actually emits the signal
-				// (TIOCSWINSZ no-ops when the size hasn't changed).
-				_ = a.term.Resize(pc, pr+1)
-				_ = a.term.Resize(pc, pr)
+				// Force the shell to repaint its prompt on the
+				// 0→1+ transition only. That covers the true
+				// reattach case (sole viewer dropped, came back)
+				// where the prompt was drawn before the disconnect
+				// and might have scrolled out of the resume window.
+				// Gating on prevCount==0 avoids flickering TUI
+				// apps (claude code, vim) for existing viewers when
+				// a SECOND viewer joins — they don't need the
+				// repaint, and React/Ink-based UIs re-render the
+				// whole screen on every WINCH.
+				if prevCount == 0 {
+					_ = a.term.Resize(pc, pr+1)
+					_ = a.term.Resize(pc, pr)
+				}
 			}
 		case protocol.TypeClosed:
 			if msg.Count > 0 {
