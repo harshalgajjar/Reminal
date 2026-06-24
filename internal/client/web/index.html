@@ -2405,18 +2405,32 @@
       document.documentElement.style.setProperty('--jump-bottom-extra', isMobileKeybar ? '8px' : '0px');
     }
     const refit = () => { syncViewport(); fitAddon.fit(); if (agentLive) sendResize(); };
-    // refitSoon coalesces a burst of resize events (Android Chrome and
-    // iOS Safari both fire several per keyboard animation) into a
-    // single fitAddon.fit() per animation frame. xterm's fit math is
-    // most accurate after layout settles, so coalescing also avoids
-    // locking in a stale measurement mid-animation.
+    // refitSoon trailing-edge-debounces a burst of resize signals.
+    // Android Chrome and iOS Safari fire visualViewport.resize and
+    // ResizeObserver many times during the soft-keyboard animation
+    // (200–300ms total), each at an intermediate size. A bare rAF
+    // only coalesces within ONE frame — bursts spanning multiple
+    // frames each ran their own fitAddon, locking in a stale
+    // mid-animation measurement that the eye saw as a flicker before
+    // the final refit settled things. setTimeout with a delay
+    // longer than the keyboard animation means we ONLY fit after the
+    // final event lands. We also keep a 0ms rAF for the
+    // common "single event, layout already settled" case so a window
+    // resize on desktop still feels instant.
     let refitFrame = 0;
+    let refitTimer = 0;
+    const REFIT_SETTLE_MS = 140;
     function refitSoon() {
-      if (refitFrame) cancelAnimationFrame(refitFrame);
-      refitFrame = requestAnimationFrame(() => {
-        refitFrame = 0;
-        refit();
-      });
+      // Cancel any pending fast path; the trailing-edge timer wins.
+      if (refitFrame) { cancelAnimationFrame(refitFrame); refitFrame = 0; }
+      if (refitTimer) clearTimeout(refitTimer);
+      refitTimer = setTimeout(() => {
+        refitTimer = 0;
+        refitFrame = requestAnimationFrame(() => {
+          refitFrame = 0;
+          refit();
+        });
+      }, REFIT_SETTLE_MS);
     }
     window.addEventListener('resize', refitSoon);
     if (window.visualViewport) {
