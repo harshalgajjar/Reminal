@@ -682,21 +682,43 @@
     // Defang the hidden helper textarea that xterm.js routes keystrokes
     // through. Without this, Android Chrome's IME (Gboard etc.) treats
     // each shell command as an English word — autocorrect rewrites it
-    // on space and the typed text gets replaced with gibberish. Also
-    // turns off the iOS auto-capitalise that would uppercase the first
-    // letter of every command. The attributes have to be set on the
-    // element xterm creates internally; setting them on the wrapper
-    // div has no effect on the input behaviour.
+    // on space and the typed text gets replaced with gibberish.
+    //
+    // The HTML attributes alone aren't enough: Gboard infamously
+    // ignores autocorrect="off" in many cases. We need three layers:
+    //
+    //   1. The attributes (worst-case opt-out).
+    //   2. inputmode="url" — the URL keyboard has no autocorrect
+    //      built-in. Layout differs slightly from QWERTY-with-text
+    //      (extra `/` `:` symbols on the main row, no smart period)
+    //      but it never composes or autocorrects. This is the same
+    //      trick Termius / Blink / a-Shell use for the same problem.
+    //   3. beforeinput interceptor — suppress the specific event
+    //      types Gboard fires when it tries to REPLACE typed text
+    //      (insertReplacementText / insertFromComposition). xterm's
+    //      own input handler still receives the genuine keystrokes
+    //      that came BEFORE the replacement attempt.
     const helperTA = document.querySelector('.xterm-helper-textarea');
     if (helperTA) {
       helperTA.setAttribute('autocorrect', 'off');
       helperTA.setAttribute('autocomplete', 'off');
-      helperTA.setAttribute('autocapitalize', 'off');
+      helperTA.setAttribute('autocapitalize', 'none');
       helperTA.setAttribute('spellcheck', 'false');
-      // inputmode=text (rather than the default) plus enterkeyhint=done
-      // nudges some Android keyboards toward a non-composing mode.
-      helperTA.setAttribute('inputmode', 'text');
+      helperTA.setAttribute('inputmode', 'url');
       helperTA.setAttribute('enterkeyhint', 'done');
+      // Intercept autocorrect/replacement events at beforeinput so the
+      // typed text never gets clobbered. Capture phase + preventDefault
+      // stops the replacement from reaching xterm's listener.
+      helperTA.addEventListener('beforeinput', (e) => {
+        switch (e.inputType) {
+          case 'insertReplacementText':
+          case 'insertFromComposition':
+          case 'historyUndo':
+          case 'historyRedo':
+            e.preventDefault();
+            break;
+        }
+      }, true);
     }
 
     // Connection state machine
