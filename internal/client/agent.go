@@ -546,10 +546,23 @@ func (a *Agent) resetViewerSize() {
 	a.viewerSizeMu.Unlock()
 }
 
-// applyEffectiveSize resizes the PTY to min(host_size, viewer_min).
-// Safe to call from any path that thinks the size might have changed
-// (host SIGWINCH, viewer resize, viewer count drop). It dedups against
-// the last applied size so repeated calls are cheap.
+// applyEffectiveSize resizes the PTY to the right dimensions for the
+// currently attached viewer(s).
+//
+//   - Single viewer (count <= 1): mirror that viewer's size verbatim,
+//     even if the local host terminal is smaller. The host's terminal
+//     emulator can scroll past anything the PTY emits beyond its own
+//     dimensions, which is the standard trade-off. Without this, a
+//     phone connecting to a laptop session with a narrower terminal
+//     window was capped at the laptop's rows — keyboard-collapse left
+//     a big empty area at the bottom of the phone, because the agent
+//     refused to grow the PTY past the host's row count.
+//   - Multiple viewers: take min(host, viewer-min) so every screen can
+//     render the shell's output correctly. Sacrificing some right-edge
+//     whitespace on the laptop is worth not garbling every phone.
+//
+// Safe to call from any path that thinks the size might have changed.
+// Dedups against the last applied size so repeated calls are cheap.
 func (a *Agent) applyEffectiveSize() {
 	if a.term == nil {
 		return
@@ -560,14 +573,22 @@ func (a *Agent) applyEffectiveSize() {
 	}
 	a.viewerSizeMu.Lock()
 	vc, vr := a.viewerMinCols, a.viewerMinRows
+	soloViewer := a.viewerCount == 1
 	a.viewerSizeMu.Unlock()
 
-	cols, rows := hostCols, hostRows
-	if vc > 0 && (cols == 0 || vc < cols) {
-		cols = vc
-	}
-	if vr > 0 && (rows == 0 || vr < rows) {
-		rows = vr
+	var cols, rows uint16
+	if soloViewer && vc > 0 && vr > 0 {
+		// Solo viewer drives. Host's terminal scrolls if needed.
+		cols, rows = vc, vr
+	} else {
+		// Multi-viewer (or no viewer): min(host, viewers).
+		cols, rows = hostCols, hostRows
+		if vc > 0 && (cols == 0 || vc < cols) {
+			cols = vc
+		}
+		if vr > 0 && (rows == 0 || vr < rows) {
+			rows = vr
+		}
 	}
 	if cols == 0 || rows == 0 {
 		return
