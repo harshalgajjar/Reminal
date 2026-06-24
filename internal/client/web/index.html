@@ -2456,6 +2456,10 @@
       }, REFIT_SETTLE_MS);
     }
     window.addEventListener('resize', refitSoon);
+    // orientationchange is fired by older Android Chrome when window.resize
+    // sometimes isn't (the resize firing on rotation has been flaky for
+    // years). Cheap to hook even on devices that fire both.
+    window.addEventListener('orientationchange', refitSoon);
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', refitSoon);
       window.visualViewport.addEventListener('scroll', syncViewport);
@@ -2486,14 +2490,24 @@
     // burn battery in the background.
     let lastVVH = window.visualViewport ? window.visualViewport.height : 0;
     let lastIH = window.innerHeight;
+    let lastIW = window.innerWidth;
     let lastKBTop = keybar ? keybar.getBoundingClientRect().top : 0;
+    let lastTWW = 0;
     setInterval(() => {
       if (document.hidden) return;
       const vvh = window.visualViewport ? window.visualViewport.height : 0;
       const ih = window.innerHeight;
+      const iw = window.innerWidth;
       const kbTop = keybar ? keybar.getBoundingClientRect().top : 0;
-      if (vvh !== lastVVH || ih !== lastIH || kbTop !== lastKBTop) {
-        lastVVH = vvh; lastIH = ih; lastKBTop = kbTop;
+      const tw = document.getElementById('terminal-wrap');
+      const tww = tw ? tw.offsetWidth : 0;
+      // Trigger on ANY dimension drift — width changes (rotation,
+      // sidebar collapse) historically went undetected because both
+      // visualViewport.resize and ResizeObserver could miss them on
+      // some Android Chrome builds, leaving xterm pinned to the
+      // first-load cols even after the container grew.
+      if (vvh !== lastVVH || ih !== lastIH || iw !== lastIW || kbTop !== lastKBTop || tww !== lastTWW) {
+        lastVVH = vvh; lastIH = ih; lastIW = iw; lastKBTop = kbTop; lastTWW = tww;
         refitSoon();
       }
     }, 400);
