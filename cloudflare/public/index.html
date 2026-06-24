@@ -48,11 +48,27 @@
       background: #0d1117;
       color: #e6edf3;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      height: 100dvh;
+      /* --app-h is driven by JS (syncViewport) from
+         window.visualViewport.height / window.innerHeight on every
+         poll tick. 100dvh used to be the source, but Android Chrome
+         intermittently fails to recompute `dvh` after the soft
+         keyboard closes — leaving the body frozen at the
+         keyboard-open height even though innerHeight has grown back.
+         Reading the measurement ourselves and assigning it to a
+         custom property is the only thing that's reliable across
+         Chrome / Samsung Internet / Firefox / Safari. */
+      height: var(--app-h, 100dvh);
       width: 100vw;
       display: flex;
       flex-direction: column;
-      padding-bottom: calc(var(--kb-offset, 0px) + var(--keybar-h, 0px));
+      /* Body height already equals the visible viewport (visualViewport.height
+         on iOS, shrunken layout viewport on Android Chrome) — so the only
+         thing left to pad for is the floating mobile keybar that overlays
+         the bottom of the body. --kb-offset is no longer needed here; the
+         keybar's own `bottom: var(--kb-offset)` keeps it above the iOS
+         keyboard, and on Android (interactive-widget=resizes-content)
+         kb-offset is 0 anyway. */
+      padding-bottom: var(--keybar-h, 0px);
       padding-left: env(safe-area-inset-left);
       padding-right: env(safe-area-inset-right);
     }
@@ -2375,6 +2391,18 @@
     // the body so the terminal never sits underneath the key-bar.
     function syncViewport() {
       const vv = window.visualViewport;
+      // Body height tracks visualViewport.height (the visible-area
+      // height excluding any soft keyboard). Falls back to innerHeight
+      // on browsers without visualViewport. Setting it as a CSS var
+      // sidesteps Android Chrome's bug where `dvh` doesn't recompute
+      // on keyboard close.
+      const appH = vv ? vv.height : window.innerHeight;
+      document.documentElement.style.setProperty('--app-h', appH + 'px');
+      // Also set body.style.height directly: some Android Chrome
+      // builds don't always trigger layout when a custom property
+      // referenced by `height:` updates. Writing the inline style
+      // forces the reflow regardless.
+      if (document.body) document.body.style.height = appH + 'px';
       const kbOff = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
       document.documentElement.style.setProperty('--kb-offset', kbOff + 'px');
       const isMobileKeybar = matchMedia('(pointer: coarse), (max-width: 720px)').matches;
