@@ -179,8 +179,9 @@ SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to confi
 | **Ephemeral credentials** | Session ID and PIN exist only while `reminal` is running. Ctrl+C and they are gone forever. |
 | **Dual-factor by design** | An attacker needs both the session ID (~1 trillion combinations) and the 6-digit PIN. Knowing one is useless. |
 | **Lockout on abuse** | Five wrong PINs trigger a 5-minute lockout. PIN guessing is not viable. |
-| **End-to-end encryption** | AES-256-GCM. Keys derived from PIN + session ID via HKDF — never sent to the relay. |
-| **Relay-blind** | Cloudflare Workers route ciphertext. Even with full control of the relay, nobody sees your terminal. |
+| **End-to-end encryption** | AES-256-GCM with a fresh random 256-bit session key per agent run. Distributed to each viewer via a PIN-authenticated X25519 handshake (EKE-style) — the relay never sees the key or anything offline-brute-forceable from it. |
+| **Forward-secret handshake** | Each WebSocket connection runs its own ephemeral X25519 exchange. Even if a future attacker recovers the PIN, recorded ciphertext stays unreadable. |
+| **Relay-blind** | Cloudflare Workers route ciphertext. A relay that records traffic cannot recover the session key offline — wrong PIN guesses are detectable only by attempting a full handshake online (one shot each, bounded by the 5-strike lockout). |
 | **TLS in transit** | WSS / TLS on every hop in production. |
 
 ### Best practices

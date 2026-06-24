@@ -30,6 +30,17 @@ const (
 	TypeResume       MessageType = "resume"
 	TypeAgentOnline  MessageType = "agent_online"
 	TypeAgentOffline MessageType = "agent_offline"
+	// TypeKexInit is the viewer's opening message of the PIN-authenticated
+	// X25519 handshake. Carries the viewer's ephemeral public key, blinded
+	// by XOR-ing with HKDF(PIN). ExID is a random per-handshake
+	// correlation ID the viewer picks; the agent echoes it in TypeKexResp
+	// so the originating viewer can recognise the response among the
+	// agent's broadcasts. See internal/crypto/kex.go for the construction.
+	TypeKexInit MessageType = "kex_init"
+	// TypeKexResp is the agent's reply to a TypeKexInit. Carries the
+	// agent's blinded ephemeral public key plus the wrapped session key
+	// (AES-256-GCM under HKDF(ECDH-shared, salt=ex_id)).
+	TypeKexResp MessageType = "kex_resp"
 	// TypeUpload carries an encrypted file from a viewer to the agent.
 	// Payload (after decrypt) is JSON: {"name": "...", "content": "<base64>"}.
 	TypeUpload MessageType = "upload"
@@ -88,4 +99,10 @@ type Message struct {
 	// event (TypeConnected / TypeClosed) to the agent, so the host can
 	// show "(N active)" without tracking churn itself.
 	Count int `json:"count,omitempty"`
+	// ExID is the per-handshake correlation ID used by TypeKexInit /
+	// TypeKexResp. Hex-encoded so it's safe to read off the wire.
+	ExID string `json:"ex_id,omitempty"`
+	// Wrap carries the AES-GCM-wrapped session key in TypeKexResp,
+	// base64-encoded.
+	Wrap string `json:"wrap,omitempty"`
 }

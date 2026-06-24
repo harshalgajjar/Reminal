@@ -985,22 +985,185 @@
       return h + 'h' + (mm > 0 ? mm + 'm' : '');
     }
 
-    async function deriveKey(sessionId, pin) {
+    // ---- v2 key exchange (EKE-style PIN-authenticated X25519) ----
+    //
+    // v1 derived the session AES key directly from (PIN, sessionID) via
+    // HKDF. The sessionID is the relay's routing key, so the secret part
+    // was just the 6-digit PIN — about 20 bits, offline-brute-forceable
+    // by anyone who recorded a ciphertext frame. (See GitHub issue #1.)
+    //
+    // v2 replaces that with a per-connection X25519 handshake. Both the
+    // host and the browser generate an ephemeral keypair, XOR-mask their
+    // public key with HKDF(PIN), and exchange the masked bytes. They
+    // unblind with their own copy of the PIN, run ECDH, derive a wrap
+    // key from the shared secret, and the host uses it to AES-GCM-wrap
+    // a random 256-bit session key. Without the PIN, the masked keys
+    // are indistinguishable from random — there's nothing to grind
+    // against offline. See internal/crypto/kex.go for the canonical
+    // construction.
+    //
+    // Per-handshake state. All four are reset by openSocket() on every
+    // reconnect; completeKex clears the ephemeral private material as
+    // soon as the wrap is decrypted.
+    let kexExID = '';            // hex, matched against the agent's reply
+    let kexExIDBytes = null;     // raw bytes — used as HKDF salt for wrap key
+    let kexEphKeyPair = null;    // X25519 ephemeral keypair
+    let kexMask = null;          // 32-byte PIN-derived XOR mask
+    // Guard against concurrent sendKexInit calls. ws.onmessage events
+    // for 'auth_ok' and 'connected' can interleave at their first await
+    // (both fire before either assigns kexEphKeyPair). Without this
+    // flag they each generate a separate ephemeral keypair, send two
+    // kex_inits, and the agent does twice the work — harmless, but
+    // ugly. Set synchronously at the top of sendKexInit.
+    let kexInFlight = false;
+
+    async function derivePinMask(pin) {
       const enc = new TextEncoder();
-      const baseKey = await crypto.subtle.importKey(
+      const ikm = await crypto.subtle.importKey(
         'raw', enc.encode(pin), 'HKDF', false, ['deriveBits']
       );
       const bits = await crypto.subtle.deriveBits(
         {
           name: 'HKDF',
           hash: 'SHA-256',
-          salt: enc.encode(sessionId.toUpperCase()),
-          info: enc.encode('reminal-v1'),
+          salt: enc.encode('reminal-blind-v2'),
+          info: enc.encode('reminal-kex-v2'),
         },
-        baseKey,
-        256
+        ikm,
+        256,
       );
-      return crypto.subtle.importKey('raw', bits, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+      return new Uint8Array(bits);
+    }
+
+    // u8ToBase64 / base64ToU8 mirror the encrypt/decrypt helpers'
+    // chunking so we don't blow the call stack on large keys (here
+    // the inputs are tiny — 32-48 bytes — but keeping one idiom).
+    function u8ToBase64(u) {
+      let binary = '';
+      const stride = 0x1000;
+      for (let i = 0; i < u.length; i += stride) {
+        binary += String.fromCharCode.apply(null, u.subarray(i, i + stride));
+      }
+      return btoa(binary);
+    }
+    function base64ToU8(b64) {
+      return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    }
+    function hexToU8(h) {
+      const u = new Uint8Array(h.length / 2);
+      for (let i = 0; i < u.length; i++) {
+        u[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+      }
+      return u;
+    }
+
+    async function sendKexInit() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (cryptoKey || kexInFlight) return;
+      kexInFlight = true;
+      try {
+      // Generate a fresh ephemeral keypair per connection — the privkey
+      // is destroyed in completeKex once the wrap is decrypted, which
+      // is what gives the handshake forward secrecy against a future
+      // compromise of the agent's long-lived state.
+      kexEphKeyPair = await crypto.subtle.generateKey(
+        { name: 'X25519' }, true, ['deriveBits']
+      );
+      const myPub = new Uint8Array(
+        await crypto.subtle.exportKey('raw', kexEphKeyPair.publicKey)
+      );
+      kexMask = await derivePinMask(pinValue);
+      const blinded = new Uint8Array(32);
+      for (let i = 0; i < 32; i++) blinded[i] = myPub[i] ^ kexMask[i];
+
+      kexExIDBytes = crypto.getRandomValues(new Uint8Array(16));
+      kexExID = Array.from(kexExIDBytes)
+        .map(b => b.toString(16).padStart(2, '0')).join('');
+
+      ws.send(JSON.stringify({
+        type: 'kex_init',
+        ex_id: kexExID,
+        data: u8ToBase64(blinded),
+      }));
+      } finally {
+        kexInFlight = false;
+      }
+    }
+
+    async function completeKex(msg) {
+      if (!kexEphKeyPair || msg.ex_id !== kexExID) {
+        // Broadcast for a different viewer (the relay fans agent
+        // replies out to everyone on the session) — ignore.
+        return;
+      }
+      const agentBlinded = base64ToU8(msg.data || '');
+      if (agentBlinded.length !== 32) {
+        throw new Error('agent key has bad length');
+      }
+      const agentPubBytes = new Uint8Array(32);
+      for (let i = 0; i < 32; i++) agentPubBytes[i] = agentBlinded[i] ^ kexMask[i];
+      const agentPub = await crypto.subtle.importKey(
+        'raw', agentPubBytes, { name: 'X25519' }, false, []
+      );
+      const shared = await crypto.subtle.deriveBits(
+        { name: 'X25519', public: agentPub },
+        kexEphKeyPair.privateKey,
+        256,
+      );
+      const sharedKey = await crypto.subtle.importKey(
+        'raw', shared, 'HKDF', false, ['deriveBits']
+      );
+      const wrapKeyBits = await crypto.subtle.deriveBits(
+        {
+          name: 'HKDF', hash: 'SHA-256',
+          salt: kexExIDBytes,
+          info: new TextEncoder().encode('reminal-wrap-v2'),
+        },
+        sharedKey,
+        256,
+      );
+      const wrapKey = await crypto.subtle.importKey(
+        'raw', wrapKeyBits, { name: 'AES-GCM' }, false, ['decrypt']
+      );
+      const wrapped = base64ToU8(msg.wrap || '');
+      if (wrapped.length < 12 + 16) throw new Error('wrap too short');
+      const wrapNonce = wrapped.slice(0, 12);
+      const wrapCT = wrapped.slice(12);
+      // AES-GCM tag failure here means the agent and we derived
+      // different wrap keys, which (given the ECDH shared agreed)
+      // means the PIN mask diverged — i.e. wrong PIN or an active
+      // relay MITM that guessed the PIN wrong on this attempt.
+      const sessionKeyRaw = new Uint8Array(
+        await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: wrapNonce }, wrapKey, wrapCT
+        )
+      );
+      cryptoKey = await crypto.subtle.importKey(
+        'raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
+      );
+      // Burn the ephemeral material — nothing downstream should need
+      // it, and holding on makes a long-running tab a juicier target.
+      kexEphKeyPair = null;
+      kexMask = null;
+      kexExIDBytes = null;
+    }
+
+    // startSessionFlow runs the one-time "hello" line plus the
+    // resume/resize handshake the agent needs to start streaming. It's
+    // gated on BOTH cryptoKey (EKE finished) and agentLive (the relay
+    // says the agent is here): the two arrive in arbitrary order and
+    // we have to wait for the slower one.
+    function startSessionFlow() {
+      if (!cryptoKey || !agentLive) return;
+      if (!helloShown) {
+        helloShown = true;
+        const ht = lastDialMs > 0 ? ' · handshake ' + lastDialMs + 'ms' : '';
+        term.write('\x1b[2m[reminal] Connected to ' + sessionId + ht + ' · AES-256-GCM end-to-end\x1b[0m\r\n');
+      }
+      sendResume();
+      fitAddon.fit();
+      sendResize();
+      term.focus();
     }
 
     async function encrypt(key, data) {
@@ -1110,7 +1273,14 @@
 
     async function send(msg) {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      if (authed && cryptoKey && (msg.type === 'data' || msg.type === 'resize')) {
+      if (msg.type === 'data' || msg.type === 'resize') {
+        // Drop rather than leak plaintext: cryptoKey is only null
+        // during the brief window between auth_ok and kex_resp, when
+        // the user shouldn't be able to type anyway (the terminal
+        // isn't focused yet). Sending unencrypted would just get
+        // dropped on the agent side after a failed Decrypt, but
+        // dropping here is cleaner.
+        if (!authed || !cryptoKey) return;
         if (msg.type === 'data') {
           msg = { type: 'data', data: await encrypt(cryptoKey, Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))) };
         } else {
@@ -1172,7 +1342,9 @@
         term.reset();
       }
       pinValue = p;
-      cryptoKey = await deriveKey(sessionId, pinValue);
+      // cryptoKey is established asynchronously by the EKE handshake
+      // (see sendKexInit / completeKex) inside openSocket → ws.onmessage.
+      cryptoKey = null;
       sessionInput.value = sessionId;
       history.replaceState(null, '', '?s=' + sessionId);
       openSocket();
@@ -1198,6 +1370,16 @@
       }
       authed = false;
       agentLive = false;
+      // Every WS connection runs its own EKE handshake — the previous
+      // connection's session key is invalid here (the agent may have
+      // restarted, or it's simply a different K). Clear so we never
+      // accidentally encrypt/decrypt with stale material.
+      cryptoKey = null;
+      kexEphKeyPair = null;
+      kexMask = null;
+      kexExID = '';
+      kexExIDBytes = null;
+      kexInFlight = false;
 
       const fresh = lastSeq === 0;
       setStatus(fresh ? 'Connecting…' : 'Reconnecting…', 'warn connecting');
@@ -1259,26 +1441,67 @@
           rememberSession(sessionId, pinValue);
           refreshTabTitle();
           acquireWakeLock();
+          // Kick off the v2 PIN-authenticated X25519 handshake. The
+          // session AES key is no longer derived from the PIN +
+          // sessionID directly — see the comment block above
+          // derivePinMask. If the agent is offline right now the
+          // relay drops our kex_init; the next agent_online event
+          // re-sends it (see below).
+          try {
+            await sendKexInit();
+          } catch (e) {
+            setStatus('Handshake failed: ' + e.message, 'error');
+            fatal = true;
+            try { ws.close(); } catch (_) {}
+          }
+          break;
+        case 'kex_resp':
+          try {
+            await completeKex(msg);
+          } catch (e) {
+            // AES-GCM tag mismatch lands here. Could be a typo'd PIN
+            // (saved creds went stale, recents row points at the
+            // wrong session) or an active relay MITM that guessed
+            // the PIN wrong. Either way, fatal — reconnecting would
+            // just re-run the same broken handshake.
+            setStatus('Handshake failed: PIN mismatch', 'error');
+            fatal = true;
+            try { ws.close(); } catch (_) {}
+            break;
+          }
+          startSessionFlow();
           break;
         case 'connected':
         case 'agent_online':
-          agentLive = true;
-          connectedAt = Date.now();
-          backoffMs = 1000;
-          setStatus('Connected to ' + sessionId, 'connected');
-          hideOverlay();
-          setBtnDisconnect();
-          // Update the recents highlight so the current row is marked.
-          renderRecents();
-          if (!helloShown) {
-            helloShown = true;
-            const ht = lastDialMs > 0 ? ' · handshake ' + lastDialMs + 'ms' : '';
-            term.write('\x1b[2m[reminal] Connected to ' + sessionId + ht + ' · AES-256-GCM end-to-end\x1b[0m\r\n');
+          // The agent just came (back) online. If we already EKE-ed
+          // this WS, we're good to start streaming. If our kex_init
+          // was sent while the agent was offline (the relay drops
+          // those silently), re-send it now so we can complete the
+          // handshake.
+          {
+            const wasLive = agentLive;
+            agentLive = true;
+            connectedAt = Date.now();
+            backoffMs = 1000;
+            setStatus('Connected to ' + sessionId, 'connected');
+            hideOverlay();
+            setBtnDisconnect();
+            renderRecents();
+            if (!cryptoKey && !kexEphKeyPair) {
+              // We have neither a session key nor an in-flight
+              // handshake — kex_init must have been dropped while
+              // the agent was offline. Retry.
+              try { await sendKexInit(); } catch (_) {}
+            } else if (!wasLive) {
+              // Agent reattached on an existing connection but we
+              // never finished EKE (kex_init still in flight without
+              // a reply). Re-issue so the new agent picks it up.
+              if (!cryptoKey) {
+                try { await sendKexInit(); } catch (_) {}
+              }
+            }
+            startSessionFlow();
           }
-          sendResume();
-          fitAddon.fit();
-          sendResize();
-          term.focus();
           break;
         case 'agent_offline':
           agentLive = false;

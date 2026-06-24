@@ -158,7 +158,8 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 		r.mu.Unlock()
 
 		switch msg.Type {
-		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume:
+		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume,
+			protocol.TypeKexInit, protocol.TypeKexResp:
 			s.forward(sessionID, role, msg)
 		case protocol.TypePing:
 			s.writeTo(p, protocol.Message{Type: protocol.TypePong})
@@ -263,7 +264,8 @@ func (s *Server) handleLegacyConn(conn *websocket.Conn) {
 			})
 			s.broadcastViewers(sessionID, protocol.Message{Type: protocol.TypeConnected})
 
-		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume:
+		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume,
+			protocol.TypeKexInit, protocol.TypeKexResp:
 			if !registered {
 				continue
 			}

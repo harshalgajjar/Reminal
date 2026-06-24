@@ -44,15 +44,16 @@ const (
 )
 
 type Agent struct {
-	sessionID string
-	pin       string
-	pinHash   string
-	webURL    string
-	shell     string
-	version   string // running binary's version, shown in banner + exit summary
-	box       *crypto.Box
-	buf       *scrollback
-	term      *pty.Session
+	sessionID  string
+	pin        string
+	pinHash    string
+	webURL     string
+	shell      string
+	version    string // running binary's version, shown in banner + exit summary
+	box        *crypto.Box
+	sessionKey []byte // 32-byte AES key wrapped per-viewer via EKE; see crypto/kex.go
+	buf        *scrollback
+	term       *pty.Session
 
 	writeMu sync.Mutex // serializes WS writes; safe across sender/reader goroutines
 
@@ -167,8 +168,18 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 		// recognises us as the same agent. Re-hashing would generate
 		// a different bcrypt digest (random salt per call) which the
 		// relay would reject with "session credentials mismatch".
+		//
+		// The session encryption key (sessionKey) is NOT carried
+		// across the exec — the previous process's K is gone with it.
+		// A fresh K is generated below; reconnecting viewers re-run
+		// the EKE handshake on their next WS connection and pick up
+		// the new K transparently.
 		r := opts.Resume
-		box, err := crypto.NewBox(r.SessionID, r.PIN)
+		sessionKey, err := crypto.NewSessionKey()
+		if err != nil {
+			return nil, err
+		}
+		box, err := crypto.NewBox(sessionKey)
 		if err != nil {
 			return nil, err
 		}
@@ -180,6 +191,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			shell:          config.Shell(),
 			version:        version,
 			box:            box,
+			sessionKey:     sessionKey,
 			buf:            newScrollback(scrollbackBytes),
 			hostEscape:     make(chan struct{}),
 			pendingUploads: make(map[string]*pendingUpload),
@@ -198,7 +210,11 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	box, err := crypto.NewBox(id, pin)
+	sessionKey, err := crypto.NewSessionKey()
+	if err != nil {
+		return nil, err
+	}
+	box, err := crypto.NewBox(sessionKey)
 	if err != nil {
 		return nil, err
 	}
@@ -215,6 +231,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 		shell:          config.Shell(),
 		version:        version,
 		box:            box,
+		sessionKey:     sessionKey,
 		buf:            newScrollback(scrollbackBytes),
 		hostEscape:     make(chan struct{}),
 		pendingUploads: make(map[string]*pendingUpload),
@@ -1310,6 +1327,13 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				cursor = 0
 			}
 			pushCursor(cursorCh, cursor)
+		case protocol.TypeKexInit:
+			// A viewer is asking us to run the PIN-authenticated EKE.
+			// handleKexInit broadcasts a TypeKexResp tagged with the
+			// same ex_id; only the originating viewer matches it (and
+			// only that viewer's ephemeral private key can unwrap the
+			// session key inside).
+			a.handleKexInit(conn, msg.ExID, msg.Data)
 		case protocol.TypeUpload:
 			a.handleUpload(msg.Data)
 		case protocol.TypeConnected:
@@ -1418,6 +1442,55 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 		case <-notify:
 		}
 	}
+}
+
+// handleKexInit completes one EKE handshake on behalf of a viewer.
+// Silent on every failure mode (malformed input, low-order point,
+// bad encoding): a malicious or buggy peer can't probe us for
+// distinguishable error replies, and a legitimate viewer that
+// gets no kex_resp will time out and reconnect via the normal path.
+func (a *Agent) handleKexInit(conn *websocket.Conn, exIDHex, dataB64 string) {
+	exID, err := crypto.ParseExID(exIDHex)
+	if err != nil {
+		return
+	}
+	blindedViewer, err := base64.StdEncoding.DecodeString(dataB64)
+	if err != nil || len(blindedViewer) != crypto.PubKeyBytes {
+		return
+	}
+	viewerPub, err := crypto.UnblindPub(blindedViewer, a.pin)
+	if err != nil {
+		return
+	}
+	peerKey, err := crypto.PeerPublicKey(viewerPub)
+	if err != nil {
+		// Low-order or otherwise invalid; could be a wrong PIN on the
+		// peer's side (their mask landed on a bad point) or just a
+		// junk message. Either way, refuse silently.
+		return
+	}
+	eph, err := crypto.NewEphemeralKey()
+	if err != nil {
+		return
+	}
+	shared, err := eph.ECDH(peerKey)
+	if err != nil {
+		return
+	}
+	wrapped, err := crypto.WrapSessionKey(shared, exID, a.sessionKey)
+	if err != nil {
+		return
+	}
+	blindedAgent, err := crypto.BlindPub(eph.PublicKey().Bytes(), a.pin)
+	if err != nil {
+		return
+	}
+	_ = a.writeMsg(conn, protocol.Message{
+		Type: protocol.TypeKexResp,
+		ExID: exIDHex,
+		Data: base64.StdEncoding.EncodeToString(blindedAgent),
+		Wrap: base64.StdEncoding.EncodeToString(wrapped),
+	})
 }
 
 func (a *Agent) writeMsg(conn *websocket.Conn, msg protocol.Message) error {

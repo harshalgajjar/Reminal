@@ -65,11 +65,9 @@ func NewViewer(sessionID, pin string) (*Viewer, error) {
 	if err := session.ValidatePIN(pin); err != nil {
 		return nil, err
 	}
-	box, err := crypto.NewBox(sessionID, pin)
-	if err != nil {
-		return nil, err
-	}
-	return &Viewer{sessionID: sessionID, pin: pin, box: box}, nil
+	// box is established per WebSocket connection via the EKE
+	// handshake in negotiateSessionKey (see runConnection).
+	return &Viewer{sessionID: sessionID, pin: pin}, nil
 }
 
 func Connect(sessionID, pin string) error {
@@ -262,6 +260,17 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 		return &fatalErr{err: err}
 	}
 
+	if err := v.negotiateSessionKey(conn); err != nil {
+		// EKE failures are fatal when the cause is "wrong PIN" (the
+		// AES-GCM unwrap tag rejects). For network/transient failures
+		// we'd ideally reconnect, but since we can't tell them apart
+		// from the wrap error alone, surface as fatal so the user
+		// sees the right message; the auto-reconnect loop in Run()
+		// kicks in for genuinely-transient cases (the conn would
+		// close before we reach this point).
+		return &fatalErr{err: err}
+	}
+
 	// One-time "Connected …" line on the first successful connect. Trust
 	// signal (encryption named explicitly), diagnostic (handshake time so
 	// users know if the relay is sluggish), and UX (Ctrl-] hint repeated).
@@ -336,6 +345,105 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 			if err := v.writeMsg(conn, protocol.Message{Type: protocol.TypePing}); err != nil {
 				return err
 			}
+		}
+	}
+}
+
+// kexTimeout bounds the EKE handshake. Generous enough to survive a
+// slow agent reply over a sluggish relay, short enough that a stuck
+// handshake doesn't pin a user-visible terminal forever.
+const kexTimeout = 15 * time.Second
+
+// negotiateSessionKey runs the v2 PIN-authenticated X25519 handshake.
+// Replaces the deterministic deriveKey(sessionID, pin) used in v1,
+// which gave a relay-recorded ciphertext frame only ~20 bits of
+// secrecy against offline brute force. See internal/crypto/kex.go.
+func (v *Viewer) negotiateSessionKey(conn *websocket.Conn) error {
+	eph, err := crypto.NewEphemeralKey()
+	if err != nil {
+		return fmt.Errorf("kex: keygen: %w", err)
+	}
+	exIDHex, exID, err := crypto.NewExID()
+	if err != nil {
+		return fmt.Errorf("kex: ex_id: %w", err)
+	}
+	blinded, err := crypto.BlindPub(eph.PublicKey().Bytes(), v.pin)
+	if err != nil {
+		return fmt.Errorf("kex: blind: %w", err)
+	}
+	if err := v.writeMsg(conn, protocol.Message{
+		Type: protocol.TypeKexInit,
+		ExID: exIDHex,
+		Data: base64.StdEncoding.EncodeToString(blinded),
+	}); err != nil {
+		return fmt.Errorf("kex: send: %w", err)
+	}
+
+	deadline := time.Now().Add(kexTimeout)
+	for {
+		_ = conn.SetReadDeadline(deadline)
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return fmt.Errorf("kex: %w", err)
+		}
+		var msg protocol.Message
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			continue
+		}
+		switch msg.Type {
+		case protocol.TypeError:
+			return fmt.Errorf("%s", msg.Error)
+		case protocol.TypeKexResp:
+			if msg.ExID != exIDHex {
+				// Broadcast for some other viewer's handshake; ignore.
+				continue
+			}
+			blindedAgent, err := base64.StdEncoding.DecodeString(msg.Data)
+			if err != nil || len(blindedAgent) != crypto.PubKeyBytes {
+				return fmt.Errorf("kex: bad agent key encoding")
+			}
+			agentPub, err := crypto.UnblindPub(blindedAgent, v.pin)
+			if err != nil {
+				return fmt.Errorf("kex: unblind: %w", err)
+			}
+			peerKey, err := crypto.PeerPublicKey(agentPub)
+			if err != nil {
+				return fmt.Errorf("kex: invalid agent key")
+			}
+			shared, err := eph.ECDH(peerKey)
+			if err != nil {
+				return fmt.Errorf("kex: ecdh: %w", err)
+			}
+			wrapped, err := base64.StdEncoding.DecodeString(msg.Wrap)
+			if err != nil {
+				return fmt.Errorf("kex: bad wrap encoding")
+			}
+			sessionKey, err := crypto.UnwrapSessionKey(shared, exID, wrapped)
+			if err != nil {
+				// AES-GCM tag mismatch — the agent and we derived
+				// different wrap keys. With ECDH-shared agreed on,
+				// the only place that can diverge is the PIN
+				// blinding step, so this means PIN mismatch (either
+				// user typo, or an active relay MITM that guessed
+				// the PIN wrong on this attempt).
+				return fmt.Errorf("handshake failed: PIN mismatch or relay tampering")
+			}
+			box, err := crypto.NewBox(sessionKey)
+			if err != nil {
+				return fmt.Errorf("kex: box: %w", err)
+			}
+			v.box = box
+			// Clear the deadline so the normal runReader's own
+			// per-read deadline takes over.
+			_ = conn.SetReadDeadline(time.Time{})
+			return nil
+		default:
+			// TypeConnected / TypeAgentOnline / TypePing etc. can
+			// arrive in this window. The reader loop hasn't started
+			// yet, so we'd otherwise lose them — but they're idempotent
+			// signals the post-EKE setup re-derives (sendResume +
+			// sendResizeNow re-publish viewport, agentLive starts
+			// optimistically), so dropping them here is safe.
 		}
 	}
 }
