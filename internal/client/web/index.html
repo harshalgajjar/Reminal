@@ -679,6 +679,26 @@
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
 
+    // Defang the hidden helper textarea that xterm.js routes keystrokes
+    // through. Without this, Android Chrome's IME (Gboard etc.) treats
+    // each shell command as an English word — autocorrect rewrites it
+    // on space and the typed text gets replaced with gibberish. Also
+    // turns off the iOS auto-capitalise that would uppercase the first
+    // letter of every command. The attributes have to be set on the
+    // element xterm creates internally; setting them on the wrapper
+    // div has no effect on the input behaviour.
+    const helperTA = document.querySelector('.xterm-helper-textarea');
+    if (helperTA) {
+      helperTA.setAttribute('autocorrect', 'off');
+      helperTA.setAttribute('autocomplete', 'off');
+      helperTA.setAttribute('autocapitalize', 'off');
+      helperTA.setAttribute('spellcheck', 'false');
+      // inputmode=text (rather than the default) plus enterkeyhint=done
+      // nudges some Android keyboards toward a non-composing mode.
+      helperTA.setAttribute('inputmode', 'text');
+      helperTA.setAttribute('enterkeyhint', 'done');
+    }
+
     // Connection state machine
     let ws = null;
     let cryptoKey = null;
