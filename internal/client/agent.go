@@ -578,10 +578,12 @@ func (a *Agent) applyEffectiveSize() {
 // sequences land at the right positions. Best-effort: no return value,
 // no retry — if the WS is mid-reconnect the next applyEffectiveSize()
 // (triggered on resume) will catch them up.
+//
+// Sentinel (0, 0) means "tell me your size" — sent when the lone
+// remaining viewer needs to re-report its viewport so the agent can
+// grow the PTY back after the smallest viewer left. Viewers handle
+// it by refitting + sendResize-ing their own viewport dimensions.
 func (a *Agent) broadcastSize(cols, rows uint16) {
-	if cols == 0 || rows == 0 {
-		return
-	}
 	payload, err := json.Marshal(protocol.Message{Cols: cols, Rows: rows})
 	if err != nil {
 		return
@@ -1347,17 +1349,27 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.viewerSizeMu.Lock()
 			a.viewerCount = msg.Count
 			// Going from 2+ → 1 also unlocks the ratchet: the lone
-			// remaining viewer should be able to grow back. We don't
-			// know its size yet, but on its next resize message
-			// recordViewerSize will mirror it verbatim because
-			// viewerCount == 1.
-			if msg.Count == 1 {
+			// remaining viewer should be able to grow back. Clear
+			// viewerMin so recordViewerSize will mirror the lone
+			// viewer's next reported size verbatim.
+			rebroadcast := msg.Count == 1
+			if rebroadcast {
 				a.viewerMinCols = 0
 				a.viewerMinRows = 0
 			}
 			a.viewerSizeMu.Unlock()
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, false)
+			// Ask the lone remaining viewer to re-publish its
+			// viewport size — sentinel (cols=0, rows=0) means
+			// "tell me your size". Without this prompt, the viewer
+			// keeps its xterm at the size dictated by whichever
+			// smaller viewer just left and the PTY can't grow back
+			// (visualViewport events alone don't trigger a fresh
+			// resize when nothing changed locally).
+			if rebroadcast {
+				a.broadcastSize(0, 0)
+			}
 		case protocol.TypeAgentOffline, protocol.TypeAgentOnline:
 			// Informational only on the agent side.
 		case protocol.TypeError:
