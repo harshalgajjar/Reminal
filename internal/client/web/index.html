@@ -709,16 +709,236 @@
       // Intercept autocorrect/replacement events at beforeinput so the
       // typed text never gets clobbered. Capture phase + preventDefault
       // stops the replacement from reaching xterm's listener.
-      helperTA.addEventListener('beforeinput', (e) => {
+      // Samsung Keyboard runs an "autocorrect the previous word" loop
+      // after every non-letter (space, `.`, `/`, `-`, …) that fires a
+      // fresh composition emitting insertCompositionText events that
+      // re-insert the "corrected" word — but the IME's cursor model is
+      // desynced from the textarea, so each insert mutates the middle of
+      // the buffer instead of appending. Result: doubled punctuation
+      // and mangled words. Trace captured with ?debug=1 confirmed.
+      //
+      // Defence: only block insertCompositionText when we detect the
+      // current composition is autocorrect-spawned, not user-typed.
+      // Two cheap signals discriminate the two:
+      //   (A) Composition started <50ms after a non-composing input —
+      //       below human reaction time, so it can't be the user
+      //       starting a new word. This catches the "fires right after
+      //       space" autocorrect pattern.
+      //   (B) The first compositionupdate after compositionstart
+      //       contains MORE than one character — real human typing
+      //       grows composition by one char per keydown ("d" → "da" →
+      //       "dan"). Autocorrect arrives pre-formed ("--dang" → …).
+      // If either fires, this composition is flagged as suspicious and
+      // its insertCompositionText events are dropped. Real backspace,
+      // real letter input, and real composition all pass through
+      // untouched.
+      let lastCommittedData = null;        // last char/word committed via composition OR insertText
+      let lastCommittedAt = -Infinity;
+      let inSuspiciousComposition = false;
+      let compositionFirstUpdateSeen = false;
+      const DUP_WINDOW_LETTER_MS = 60;     // letters: tight, so "letter" still types fast
+      const DUP_WINDOW_PUNCT_MS = 80;      // punctuation: slightly wider; tighter than this lets Samsung dup-fires through, wider feels sluggish for deliberate ".." typing
+      const PUNCT_RX = /^[.,!?;:'"\/\\(){}\[\]<>@#$%^&*\-_+=|`~]$/;
+      const NEW_COMPOSITION_AUTOCORRECT_WINDOW_MS = 50;
+
+      const isHelperTarget = (e) => e.target === helperTA;
+
+      // Phantom-deletion defence. Samsung Keyboard hits us from two
+      // angles around backspace:
+      //   • phantom keydown Backspace bursts with no matching
+      //     beforeinput/input pair, and
+      //   • phantom `input deleteContentBackward` events with NO
+      //     keydown and NO beforeinput at all (the IME mutates the
+      //     textarea behind our back during its autocorrect cascade —
+      //     see events 250–259 in the captured trace).
+      // Both routes end up at sendInput as \x7f bytes that xterm emits
+      // from processing the deletion. So instead of trying to gate the
+      // input events here (Android Chrome treats many of them as
+      // non-cancelable from IME sources anyway), we let xterm do its
+      // thing and gate at the OUTPUT layer: count real Backspace
+      // keydowns and only let \x7f through sendInput when there's a
+      // count to consume. See realBackspacesPending in the sendInput
+      // block above. Counter decays after 100ms so a single phantom
+      // keydown doesn't leak budget into a subsequent phantom deletion
+      // burst.
+      // Minimum interval between Backspace-keydown counter credits.
+      // Samsung's phantom Backspace bursts arrive at sub-millisecond
+      // intervals (40 keydowns in <40ms). Real Backspace input —
+      // single tap OR held autorepeat — is ≥30ms apart. 20ms gives
+      // headroom for autorepeat while still excluding bursts.
+      let lastBackspaceCreditAt = -Infinity;
+      const BS_MIN_INTERVAL_MS = 20;
+
+      document.addEventListener('keydown', (e) => {
+        if (!isHelperTarget(e)) return;
+        if (e.key === 'Backspace') {
+          // NB: helperTA is almost always empty (xterm clears it after
+          // each committed char), so we can't gate on textarea content
+          // — that breaks the user's ability to backspace anything
+          // they previously typed into Claude Code's input buffer.
+          // Use timing instead: anything closer than BS_MIN_INTERVAL_MS
+          // to the previous Backspace credit is part of a phantom burst.
+          const now = performance.now();
+          if (now - lastBackspaceCreditAt < BS_MIN_INTERVAL_MS) return;
+          lastBackspaceCreditAt = now;
+          realBackspacesPending++;
+          setTimeout(() => {
+            if (realBackspacesPending > 0) realBackspacesPending--;
+          }, 100);
+        }
+      }, true);
+
+      // Document-level capture so we run BEFORE xterm's helperTA
+      // listeners (xterm registered first during term.open()).
+      document.addEventListener('beforeinput', (e) => {
+        if (!isHelperTarget(e)) return;
         switch (e.inputType) {
           case 'insertReplacementText':
           case 'insertFromComposition':
           case 'historyUndo':
           case 'historyRedo':
             e.preventDefault();
-            break;
+            e.stopPropagation();
+            return;
+          case 'insertCompositionText':
+            if (inSuspiciousComposition) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+            return;
+          case 'insertText':
+            if (!e.isComposing) {
+              const now = performance.now();
+              // Samsung "smart punctuation": a single tap on `.`, `,`,
+              // `?`, etc. delivers MULTI-CHAR data — typically the
+              // punctuation followed by an auto-space (e.g. d=". ").
+              // Strip everything after the first char and re-inject
+              // just the punctuation via sendInput. Longer multi-char
+              // insertText is paste (e.g. clipboard) — leave alone.
+              if (e.data && e.data.length > 1 && e.data.length <= 3 && PUNCT_RX.test(e.data[0])) {
+                e.preventDefault();
+                e.stopPropagation();
+                sendInput(e.data[0]);
+                lastCommittedData = e.data[0];
+                lastCommittedAt = now;
+                return;
+              }
+              // Dup-fire: a single key tap commits via composition
+              // (compositionend d="?") and THEN immediately fires one OR
+              // MORE duplicate insertText d="?". Block any insertText
+              // within the dup-window of an earlier commit with the same
+              // data. Don't refresh lastCommittedAt on a block — Samsung
+              // sometimes fires multiple dups in sequence. Window is
+              // wider for punctuation than letters: punctuation dup-fires
+              // arrive ~80ms later; letters need a tight window so
+              // "letter" still types fast.
+              const dupWindow = PUNCT_RX.test(e.data) ? DUP_WINDOW_PUNCT_MS : DUP_WINDOW_LETTER_MS;
+              if (e.data === lastCommittedData && (now - lastCommittedAt) < dupWindow) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+              }
+              lastCommittedData = e.data;
+              lastCommittedAt = now;
+            }
+            return;
         }
       }, true);
+
+      document.addEventListener('compositionstart', (e) => {
+        if (!isHelperTarget(e)) return;
+        compositionFirstUpdateSeen = false;
+        const dt = performance.now() - lastCommittedAt;
+        inSuspiciousComposition = dt < NEW_COMPOSITION_AUTOCORRECT_WINDOW_MS;
+      }, true);
+
+      // Pattern that real English almost never has — 3+ consecutive
+      // identical characters. Samsung's "extend the composition with
+      // hallucinated characters" autocorrect produces strings like
+      // "hmmhhmmmm" / "yessss" / "noooo"; this catches them. Trade-off:
+      // intentional emphasis ("hmmm", "okayyy") gets flagged too, but
+      // those aren't useful shell input anyway.
+      const AUTOCORRECT_REPEAT_RX = /(.)\1{2,}/;
+
+      document.addEventListener('compositionupdate', (e) => {
+        if (!isHelperTarget(e)) return;
+        if (!compositionFirstUpdateSeen) {
+          compositionFirstUpdateSeen = true;
+          // Real typing: first update is 1 char ("d"). Autocorrect:
+          // first update arrives multi-char ("--dang", "you're").
+          if ((e.data || '').length > 1) inSuspiciousComposition = true;
+        }
+        // Repeated-char pattern check on every update — catches Samsung
+        // growing a normal-looking composition with hallucinated chars
+        // (single-char growth bypasses the first-update heuristic).
+        if (AUTOCORRECT_REPEAT_RX.test(e.data || '')) {
+          inSuspiciousComposition = true;
+        }
+      }, true);
+
+      document.addEventListener('compositionend', (e) => {
+        if (!isHelperTarget(e)) return;
+        if (inSuspiciousComposition && e.data) {
+          // beforeinput insertCompositionText events are non-cancelable
+          // per spec, so we can't block at the event layer. xterm
+          // processes compositionend synchronously and calls
+          // term.onData. Two suppression mechanisms paired:
+          //   (a) suppressNextDataChunk — exact-string match, dropped
+          //       on first sendInput call (cheap and precise).
+          //   (b) suppressMultiCharUntil — time-windowed multi-char
+          //       drop for SUSPICIOUS_DROP_MS, as a backstop. xterm
+          //       sometimes commits via "\b\b\bnewword" or multi-call
+          //       splits that the exact-match misses.
+          suppressNextDataChunk = e.data;
+          clearTimeout(suppressTimer);
+          suppressTimer = setTimeout(() => { suppressNextDataChunk = null; }, 200);
+          suppressMultiCharUntil = performance.now() + SUSPICIOUS_DROP_MS;
+        }
+        inSuspiciousComposition = false;
+        compositionFirstUpdateSeen = false;
+        if (e.data) {
+          lastCommittedData = e.data;
+          lastCommittedAt = performance.now();
+        }
+      }, true);
+
+      // Debug overlay (?debug=1): mirrors every keystroke / composition
+      // event into a fixed corner panel so we can see exactly which
+      // inputType / data Samsung Keyboard (and other IMEs) emit when
+      // they mangle typed shell commands. Off by default.
+      if (new URLSearchParams(location.search).get('debug') === '1') {
+        const ov = document.createElement('div');
+        ov.style.cssText = [
+          'position:fixed','top:120px','right:6px',
+          'max-width:300px','max-height:42vh','overflow:auto',
+          'background:rgba(0,0,0,0.88)','color:#0f0',
+          'font:11px ui-monospace,SFMono-Regular,Menlo,monospace',
+          'padding:6px 8px','border:1px solid #0f0','border-radius:4px',
+          'z-index:99999','white-space:pre','pointer-events:auto',
+        ].join(';');
+        ov.title = 'tap to clear';
+        document.body.appendChild(ov);
+        const buf = []; let n = 0;
+        const fmt = (label, e) => {
+          const parts = [String(++n).padStart(3, ' '), label];
+          if (e.inputType) parts.push('it=' + e.inputType);
+          if (e.key !== undefined) parts.push('k=' + JSON.stringify(e.key));
+          if (e.keyCode !== undefined && e.keyCode !== 0) parts.push('kc=' + e.keyCode);
+          if ('isComposing' in e) parts.push('ic=' + (e.isComposing ? '1' : '0'));
+          if (e.data !== undefined && e.data !== null) parts.push('d=' + JSON.stringify(e.data));
+          parts.push('v=' + JSON.stringify(helperTA.value));
+          return parts.join(' ');
+        };
+        const log = (label, e) => {
+          buf.push(fmt(label, e));
+          if (buf.length > 40) buf.shift();
+          ov.textContent = buf.join('\n');
+          ov.scrollTop = ov.scrollHeight;
+        };
+        ov.addEventListener('click', () => { buf.length = 0; n = 0; ov.textContent = ''; });
+        ['keydown','beforeinput','input','compositionstart','compositionupdate','compositionend']
+          .forEach(t => helperTA.addEventListener(t, (e) => log(t, e), true));
+      }
     }
 
     // Connection state machine
@@ -1227,7 +1447,74 @@
     // "clear", running a bogus prefix as a command and leaving "ar" typed
     // at the resulting prompt.
     let sendChain = Promise.resolve();
+    // Cross-scope state for the Android-Chrome autocorrect defence up
+    // near term.open(). Two distinct attack pathways to block here:
+    //
+    //   (1) `suppressNextDataChunk` — beforeinput insertCompositionText
+    //       events are non-cancelable per the Input Events spec, so we
+    //       can't preventDefault the autocorrect composition. Instead
+    //       we stage the offending composition's data at compositionend
+    //       time; sendInput drops the matching call when xterm forwards
+    //       the composed text here.
+    //
+    //   (2) `realBackspacesPending` counter — Samsung Keyboard fires
+    //       phantom word-deletions via `input deleteContentBackward`
+    //       with NO matching Backspace keydown and NO beforeinput. xterm
+    //       sees the textarea shrink and emits a BS char per deleted
+    //       char into sendInput. Real Backspace key presses get
+    //       counted on keydown (over in the helperTA defence block);
+    //       each \x7f going through sendInput consumes one count.
+    //       Counter decays after 100ms so phantom keydowns don't leak
+    //       budget to subsequent phantom deletions. \x7f calls with no
+    //       budget drop silently.
+    let suppressNextDataChunk = null;
+    let suppressTimer = 0;
+    let realBackspacesPending = 0;
+    // After a suspicious compositionend, drop ANY multi-char data
+    // xterm tries to forward for the next SUSPICIOUS_DROP_MS. xterm's
+    // composition-commit path doesn't always call sendInput with the
+    // exact composed string — it can send things like "\b\b\bskssiow"
+    // (backspace-and-replace) or split the commit across multiple
+    // calls. Exact-string suppression misses those; a time-windowed
+    // multi-char drop catches them all. Single chars (real typed
+    // letters/spaces and backspaces) still pass through.
+    let suppressMultiCharUntil = -Infinity;
+    const SUSPICIOUS_DROP_MS = 100;
+    // Output-layer dedup. A captured Android-Chrome trace showed a
+    // single beforeinput+input pair for a "." tap but two "."s
+    // arriving at the PTY — xterm.js calls sendInput twice for one
+    // typed character via some IME path. 5ms is far below any legit
+    // typing interval (autorepeat is ~30ms, fast human typing is
+    // ~60ms+), so this filters genuine duplicates only.
+    let lastSendInputData = null;
+    let lastSendInputAt = -Infinity;
     async function sendInput(data) {
+      const now = performance.now();
+      if (data === lastSendInputData && (now - lastSendInputAt) < 5) {
+        return;
+      }
+      lastSendInputData = data;
+      lastSendInputAt = now;
+      // Time-windowed multi-char drop. Real user typing arrives one
+      // char at a time; autocorrect-spawned composition commits arrive
+      // as multi-char strings or backspace-and-replace sequences. If a
+      // suspicious compositionend just fired, anything multi-char in
+      // the next 100ms is autocorrect noise.
+      if (now < suppressMultiCharUntil && data.length > 1) {
+        return;
+      }
+      if (suppressNextDataChunk !== null && data === suppressNextDataChunk) {
+        suppressNextDataChunk = null;
+        clearTimeout(suppressTimer);
+        return;
+      }
+      if (data === '\x7f' || data === '\x08') {
+        if (realBackspacesPending > 0) {
+          realBackspacesPending--;
+        } else {
+          return; // phantom IME-driven backspace; drop
+        }
+      }
       if (!agentLive) return; // typing into nothing while agent is offline
       const result = sendChain.then(async () => {
         const bytes = new TextEncoder().encode(data);
