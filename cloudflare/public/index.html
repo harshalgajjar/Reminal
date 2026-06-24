@@ -1824,40 +1824,43 @@
       document.documentElement.style.setProperty('--jump-bottom-extra', isMobileKeybar ? '8px' : '0px');
     }
     const refit = () => { syncViewport(); fitAddon.fit(); if (agentLive) sendResize(); };
-    // refitSoon coalesces a burst of resize events (visualViewport on
-    // iOS can fire 5+ times per keyboard animation) into a single
-    // fitAddon.fit() per animation frame — both for performance and
-    // because xterm's fit math is most accurate after layout settles.
-    // The deferred re-call covers the case where the FINAL visualViewport
-    // resize event arrives BEFORE the layout has actually stabilised
-    // (a known iOS Safari race during keyboard close): we re-refit
-    // ~350ms later, which is past the keyboard animation duration on
-    // every iOS version. Cheap when nothing changed thanks to dedup.
+    // refitSoon coalesces a burst of resize events (Android Chrome and
+    // iOS Safari both fire several per keyboard animation) into a
+    // single fitAddon.fit() per animation frame. xterm's fit math is
+    // most accurate after layout settles, so coalescing also avoids
+    // locking in a stale measurement mid-animation.
     let refitFrame = 0;
-    let refitTrailingTimer = 0;
     function refitSoon() {
       if (refitFrame) cancelAnimationFrame(refitFrame);
       refitFrame = requestAnimationFrame(() => {
         refitFrame = 0;
         refit();
       });
-      if (refitTrailingTimer) clearTimeout(refitTrailingTimer);
-      refitTrailingTimer = setTimeout(() => {
-        refitTrailingTimer = 0;
-        refit();
-      }, 350);
     }
     window.addEventListener('resize', refitSoon);
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', refitSoon);
       window.visualViewport.addEventListener('scroll', syncViewport);
     }
+    // ResizeObserver on the terminal-wrap is the SOURCE OF TRUTH for
+    // "the box xterm renders into changed size". The various viewport
+    // events (window.resize, visualViewport.resize) fire heuristically
+    // and sometimes get the keyboard-close animation wrong — leaving
+    // a stale small measurement burned into fitAddon and the bottom
+    // half of the page empty. The observer fires whenever the actual
+    // CSS box settles to a new size, regardless of why, so we always
+    // catch the final state.
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(refitSoon);
+      ro.observe(document.getElementById('terminal-wrap'));
+    }
     // Focus / blur fallback: when xterm's hidden textarea loses focus
     // the soft keyboard collapses, but Safari sometimes doesn't fire
-    // visualViewport.resize. Hooking focusout gives us a reliable
-    // signal — schedule a refit a bit later so layout has settled.
-    document.addEventListener('focusout', () => setTimeout(refit, 350), true);
-    document.addEventListener('focusin', () => setTimeout(refit, 350), true);
+    // visualViewport.resize. Schedule a refit a bit later — the
+    // ResizeObserver normally catches it first, but the focus signal
+    // is a cheap belt-and-suspenders.
+    document.addEventListener('focusout', () => setTimeout(refitSoon, 100), true);
+    document.addEventListener('focusin', () => setTimeout(refitSoon, 100), true);
     syncViewport();
 
     // Tap-to-focus: on mobile, tapping an empty area of the terminal
