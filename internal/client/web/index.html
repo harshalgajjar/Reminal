@@ -2404,7 +2404,30 @@
       // Lift the jump-to-bottom pill so it never hides behind the bar.
       document.documentElement.style.setProperty('--jump-bottom-extra', isMobileKeybar ? '8px' : '0px');
     }
-    const refit = () => { syncViewport(); fitAddon.fit(); if (agentLive) sendResize(); };
+    // Directly measure the rendered position of the header and keybar
+    // and pin terminal-wrap between them via inline styles. Bypasses
+    // the CSS-var/calc indirection entirely so it can't go stale.
+    // The keybar's `bottom: var(--kb-offset)` has always worked
+    // reliably; reading keybar.getBoundingClientRect().top inherits
+    // that reliability for the terminal area too.
+    function pinTerminalWrap() {
+      const tw = document.getElementById('terminal-wrap');
+      const hdr = document.querySelector('header');
+      if (!tw || !hdr) return;
+      const headerBottom = hdr.getBoundingClientRect().bottom;
+      let bottomInset = 0;
+      const isMobileKeybar = matchMedia('(pointer: coarse), (max-width: 720px)').matches;
+      if (isMobileKeybar && keybar) {
+        const kbRect = keybar.getBoundingClientRect();
+        // keybar.top is its top edge in viewport coords; the inset
+        // from window.innerHeight gives us how far up from the
+        // bottom we need to stop.
+        bottomInset = Math.max(0, window.innerHeight - kbRect.top);
+      }
+      tw.style.top = headerBottom + 'px';
+      tw.style.bottom = bottomInset + 'px';
+    }
+    const refit = () => { syncViewport(); pinTerminalWrap(); fitAddon.fit(); if (agentLive) sendResize(); };
     // refitSoon trailing-edge-debounces a burst of resize signals.
     // Android Chrome and iOS Safari fire visualViewport.resize and
     // ResizeObserver many times during the soft-keyboard animation
@@ -2454,6 +2477,26 @@
       const hdr = document.querySelector('header');
       if (hdr) ro.observe(hdr);
     }
+    // Defensive poll for the (still real) case where neither
+    // visualViewport.resize nor ResizeObserver fires after a soft-
+    // keyboard close on some Android Chrome / Samsung Internet
+    // builds. Compares vv.height + innerHeight + the keybar's
+    // viewport-top position against last seen and triggers a refit
+    // on any drift. Pauses when the tab is hidden so it doesn't
+    // burn battery in the background.
+    let lastVVH = window.visualViewport ? window.visualViewport.height : 0;
+    let lastIH = window.innerHeight;
+    let lastKBTop = keybar ? keybar.getBoundingClientRect().top : 0;
+    setInterval(() => {
+      if (document.hidden) return;
+      const vvh = window.visualViewport ? window.visualViewport.height : 0;
+      const ih = window.innerHeight;
+      const kbTop = keybar ? keybar.getBoundingClientRect().top : 0;
+      if (vvh !== lastVVH || ih !== lastIH || kbTop !== lastKBTop) {
+        lastVVH = vvh; lastIH = ih; lastKBTop = kbTop;
+        refitSoon();
+      }
+    }, 400);
     // Focus / blur fallback: when xterm's hidden textarea loses focus
     // the soft keyboard collapses, but Safari sometimes doesn't fire
     // visualViewport.resize. Schedule a refit a bit later — the
