@@ -17,58 +17,24 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    /* 100dvh follows the dynamic viewport (URL bar shrinks/expands).
-       --kb-offset is the height the soft keyboard is currently covering
-       — kept up-to-date by a visualViewport listener so the layout
-       always stops at the top of the keyboard, not behind it.
-       --keybar-h tracks the floating mobile key-bar so the terminal
-       above it never sits underneath. overscroll-behavior stops the
-       page from bouncing or triggering pull-to-refresh inside the
-       terminal — a frequent mobile pain point. */
-    /* overscroll-behavior + overflow:hidden is enough on Android Chrome
-       and desktop. iOS Safari needs an extra `position: fixed; inset: 0`
-       to actually pin the document (otherwise the layout viewport scrolls
-       on top of xterm's scrollback) — but applying that pin universally
-       breaks Android Chrome's `interactive-widget=resizes-content`
-       reflow: the body freezes at the keyboard-open viewport size and
-       doesn't grow back when the keyboard closes, leaving the bottom
-       half of the screen empty. Scope the iOS-only pin via @supports
-       on a webkit-callout property no other engine implements. */
+    /* Layout model: header sits in normal flow at the top of body;
+       terminal-wrap and the mobile keybar are position:fixed and
+       anchored to the layout viewport via CSS variables
+       (--header-h, --keybar-h, --kb-offset) that JS keeps in sync.
+       No body height, no `dvh` — the browser only has to keep
+       position:fixed top/bottom honest, which it does reliably
+       across iOS, Android Chrome, and desktop.
+       overscroll-behavior: contain stops the page from bouncing
+       or triggering pull-to-refresh inside the terminal. */
     html, body {
       overscroll-behavior: contain;
       overflow: hidden;
-    }
-    @supports (-webkit-touch-callout: none) {
-      html, body {
-        position: fixed;
-        inset: 0;
-      }
+      margin: 0;
     }
     body {
       background: #0d1117;
       color: #e6edf3;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      /* --app-h is driven by JS (syncViewport) from
-         window.visualViewport.height / window.innerHeight on every
-         poll tick. 100dvh used to be the source, but Android Chrome
-         intermittently fails to recompute `dvh` after the soft
-         keyboard closes — leaving the body frozen at the
-         keyboard-open height even though innerHeight has grown back.
-         Reading the measurement ourselves and assigning it to a
-         custom property is the only thing that's reliable across
-         Chrome / Samsung Internet / Firefox / Safari. */
-      height: var(--app-h, 100dvh);
-      width: 100vw;
-      display: flex;
-      flex-direction: column;
-      /* Body height already equals the visible viewport (visualViewport.height
-         on iOS, shrunken layout viewport on Android Chrome) — so the only
-         thing left to pad for is the floating mobile keybar that overlays
-         the bottom of the body. --kb-offset is no longer needed here; the
-         keybar's own `bottom: var(--kb-offset)` keeps it above the iOS
-         keyboard, and on Android (interactive-widget=resizes-content)
-         kb-offset is 0 anyway. */
-      padding-bottom: var(--keybar-h, 0px);
       padding-left: env(safe-area-inset-left);
       padding-right: env(safe-area-inset-right);
     }
@@ -130,8 +96,26 @@
       0%, 100% { opacity: 0.25; }
       50% { opacity: 1; }
     }
-    #terminal-wrap { flex: 1; padding: 8px; overflow: hidden; position: relative;
-      overscroll-behavior: contain; touch-action: pan-y; }
+    /* Terminal area is anchored directly to the layout viewport via
+       position:fixed + explicit insets — exactly the same approach
+       the keybar uses, which has always worked reliably. top tracks
+       the header's measured height; bottom tracks (kb-offset + keybar-h)
+       so the terminal sits flush above the keybar and never overlaps
+       the keyboard. The browser keeps a position:fixed top/bottom
+       element in sync with viewport changes far more reliably than
+       it keeps `dvh`/`100vh` body height in sync, especially on
+       Android Chrome after a soft-keyboard close. */
+    #terminal-wrap {
+      position: fixed;
+      top: var(--header-h, 60px);
+      left: env(safe-area-inset-left, 0px);
+      right: env(safe-area-inset-right, 0px);
+      bottom: calc(var(--kb-offset, 0px) + var(--keybar-h, 0px));
+      padding: 8px;
+      overflow: hidden;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
+    }
     /* xterm's internal scroll surface gets the same containment so a
        swipe past the top of the scrollback can't escape to the
        page-level URL-bar collapse or pull-to-refresh. */
@@ -2389,25 +2373,27 @@
     //  --keybar-h   measured height of the floating mobile key-bar
     // The first lifts the key-bar above the keyboard; the second pads
     // the body so the terminal never sits underneath the key-bar.
+    // syncViewport publishes the three CSS variables that the layout
+    // depends on, so the position:fixed terminal-wrap and keybar can
+    // size themselves correctly:
+    //   --kb-offset   how much of the layout viewport the soft
+    //                 keyboard is currently covering (0 on Android
+    //                 Chrome with interactive-widget=resizes-content
+    //                 since the layout viewport itself shrinks; on
+    //                 iOS it's innerHeight - visualViewport.height).
+    //   --keybar-h    measured height of the floating mobile key bar.
+    //   --header-h    measured height of the page header so the
+    //                 terminal sits right below it.
     function syncViewport() {
       const vv = window.visualViewport;
-      // Body height tracks visualViewport.height (the visible-area
-      // height excluding any soft keyboard). Falls back to innerHeight
-      // on browsers without visualViewport. Setting it as a CSS var
-      // sidesteps Android Chrome's bug where `dvh` doesn't recompute
-      // on keyboard close.
-      const appH = vv ? vv.height : window.innerHeight;
-      document.documentElement.style.setProperty('--app-h', appH + 'px');
-      // Also set body.style.height directly: some Android Chrome
-      // builds don't always trigger layout when a custom property
-      // referenced by `height:` updates. Writing the inline style
-      // forces the reflow regardless.
-      if (document.body) document.body.style.height = appH + 'px';
       const kbOff = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
       document.documentElement.style.setProperty('--kb-offset', kbOff + 'px');
       const isMobileKeybar = matchMedia('(pointer: coarse), (max-width: 720px)').matches;
       const keybarH = isMobileKeybar && keybar.offsetHeight ? keybar.offsetHeight : 0;
       document.documentElement.style.setProperty('--keybar-h', keybarH + 'px');
+      const headerEl = document.querySelector('header');
+      const headerH = headerEl ? headerEl.offsetHeight : 0;
+      document.documentElement.style.setProperty('--header-h', headerH + 'px');
       // Lift the jump-to-bottom pill so it never hides behind the bar.
       document.documentElement.style.setProperty('--jump-bottom-extra', isMobileKeybar ? '8px' : '0px');
     }
@@ -2441,6 +2427,11 @@
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(refitSoon);
       ro.observe(document.getElementById('terminal-wrap'));
+      // Header can grow/shrink as buttons wrap on narrow screens or
+      // change labels (Connect → Disconnect). Observing it keeps
+      // --header-h fresh so the terminal's `top:` inset stays correct.
+      const hdr = document.querySelector('header');
+      if (hdr) ro.observe(hdr);
     }
     // Focus / blur fallback: when xterm's hidden textarea loses focus
     // the soft keyboard collapses, but Safari sometimes doesn't fire
@@ -2449,13 +2440,11 @@
     // is a cheap belt-and-suspenders.
     document.addEventListener('focusout', () => setTimeout(refitSoon, 100), true);
     document.addEventListener('focusin', () => setTimeout(refitSoon, 100), true);
-    // Defensive poll — on some Android Chrome / Samsung Internet
-    // builds neither visualViewport.resize nor window.resize fires
-    // reliably on keyboard close, leaving the terminal stuck small
-    // even though the visible area has grown. Polling at 400ms costs
-    // a microscopic amount of CPU and turns "sometimes broken" into
-    // "always recovers within a frame". Auto-pauses when the tab is
-    // hidden to avoid burning battery in the background.
+    // Defensive poll — some Android Chrome / Samsung Internet builds
+    // skip the visualViewport.resize event on keyboard close. Polling
+    // every 400ms keeps --kb-offset honest in those cases so the
+    // terminal-wrap's `bottom:` inset doesn't get stuck at the
+    // keyboard-open height. Auto-pauses when the tab is hidden.
     let lastVVH = window.visualViewport ? window.visualViewport.height : 0;
     let lastIH = window.innerHeight;
     setInterval(() => {
