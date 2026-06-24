@@ -2504,23 +2504,6 @@
     // is a cheap belt-and-suspenders.
     document.addEventListener('focusout', () => setTimeout(refitSoon, 100), true);
     document.addEventListener('focusin', () => setTimeout(refitSoon, 100), true);
-    // Defensive poll — some Android Chrome / Samsung Internet builds
-    // skip the visualViewport.resize event on keyboard close. Polling
-    // every 400ms keeps --kb-offset honest in those cases so the
-    // terminal-wrap's `bottom:` inset doesn't get stuck at the
-    // keyboard-open height. Auto-pauses when the tab is hidden.
-    let lastVVH = window.visualViewport ? window.visualViewport.height : 0;
-    let lastIH = window.innerHeight;
-    setInterval(() => {
-      if (document.hidden) return;
-      const vvh = window.visualViewport ? window.visualViewport.height : 0;
-      const ih = window.innerHeight;
-      if (vvh !== lastVVH || ih !== lastIH) {
-        lastVVH = vvh;
-        lastIH = ih;
-        refitSoon();
-      }
-    }, 400);
     syncViewport();
 
     // Tap-to-focus: on mobile, tapping an empty area of the terminal
