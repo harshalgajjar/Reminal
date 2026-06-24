@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>reminal</title>
   <meta name="theme-color" content="#0d1117">
   <!-- iOS "Add to Home Screen": fullscreen, black status bar, no Safari chrome. -->
@@ -25,16 +25,23 @@
        above it never sits underneath. overscroll-behavior stops the
        page from bouncing or triggering pull-to-refresh inside the
        terminal — a frequent mobile pain point. */
-    /* overflow:hidden pins the document to the viewport — the keybar is
-       position:fixed and the body would otherwise grow past 100dvh on
-       any kb-offset drift, producing a second (page-level) scrollbar
-       on top of xterm.js's scrollback scrollbar. */
-    html, body { overscroll-behavior: contain; overflow: hidden; }
+    /* Lock the document so iOS Safari can't scroll the page itself on
+       top of xterm's scrollback (overflow:hidden alone wasn't enough
+       — Safari still scrolls the layout viewport once xterm's internal
+       scroll exhausts, giving a "scroll twice to actually reach the
+       end" feel). position:fixed inset:0 fully pins the body. */
+    html, body {
+      overscroll-behavior: contain;
+      overflow: hidden;
+      position: fixed;
+      inset: 0;
+    }
     body {
       background: #0d1117;
       color: #e6edf3;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       height: 100dvh;
+      width: 100vw;
       display: flex;
       flex-direction: column;
       padding-bottom: calc(var(--kb-offset, 0px) + var(--keybar-h, 0px));
@@ -99,7 +106,12 @@
       0%, 100% { opacity: 0.25; }
       50% { opacity: 1; }
     }
-    #terminal-wrap { flex: 1; padding: 8px; overflow: hidden; position: relative; }
+    #terminal-wrap { flex: 1; padding: 8px; overflow: hidden; position: relative;
+      overscroll-behavior: contain; touch-action: pan-y; }
+    /* xterm's internal scroll surface gets the same containment so a
+       swipe past the top of the scrollback can't escape to the
+       page-level URL-bar collapse or pull-to-refresh. */
+    .xterm-viewport { overscroll-behavior: contain !important; }
     #terminal { height: 100%; }
     .xterm { height: 100%; }
     #overlay {
@@ -1812,14 +1824,40 @@
       document.documentElement.style.setProperty('--jump-bottom-extra', isMobileKeybar ? '8px' : '0px');
     }
     const refit = () => { syncViewport(); fitAddon.fit(); if (agentLive) sendResize(); };
-    window.addEventListener('resize', refit);
-    // iOS doesn't fire window.resize when the soft keyboard pops, leaving
-    // xterm.js sized to the full viewport while half of it is covered.
-    // visualViewport fires for keyboard show/hide, URL bar collapse, etc.
+    // refitSoon coalesces a burst of resize events (visualViewport on
+    // iOS can fire 5+ times per keyboard animation) into a single
+    // fitAddon.fit() per animation frame — both for performance and
+    // because xterm's fit math is most accurate after layout settles.
+    // The deferred re-call covers the case where the FINAL visualViewport
+    // resize event arrives BEFORE the layout has actually stabilised
+    // (a known iOS Safari race during keyboard close): we re-refit
+    // ~350ms later, which is past the keyboard animation duration on
+    // every iOS version. Cheap when nothing changed thanks to dedup.
+    let refitFrame = 0;
+    let refitTrailingTimer = 0;
+    function refitSoon() {
+      if (refitFrame) cancelAnimationFrame(refitFrame);
+      refitFrame = requestAnimationFrame(() => {
+        refitFrame = 0;
+        refit();
+      });
+      if (refitTrailingTimer) clearTimeout(refitTrailingTimer);
+      refitTrailingTimer = setTimeout(() => {
+        refitTrailingTimer = 0;
+        refit();
+      }, 350);
+    }
+    window.addEventListener('resize', refitSoon);
     if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', refit);
+      window.visualViewport.addEventListener('resize', refitSoon);
       window.visualViewport.addEventListener('scroll', syncViewport);
     }
+    // Focus / blur fallback: when xterm's hidden textarea loses focus
+    // the soft keyboard collapses, but Safari sometimes doesn't fire
+    // visualViewport.resize. Hooking focusout gives us a reliable
+    // signal — schedule a refit a bit later so layout has settled.
+    document.addEventListener('focusout', () => setTimeout(refit, 350), true);
+    document.addEventListener('focusin', () => setTimeout(refit, 350), true);
     syncViewport();
 
     // Tap-to-focus: on mobile, tapping an empty area of the terminal
