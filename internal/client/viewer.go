@@ -550,6 +550,24 @@ func (v *Viewer) runReader(conn *websocket.Conn, agentLive *atomic.Bool) error {
 			if agentLive.Swap(false) {
 				v.notify("Agent offline — waiting…")
 			}
+		case protocol.TypeResize:
+			// Agent telling us the PTY's effective size, OR sending a
+			// (0,0) sentinel to ask us to re-publish our own size.
+			// The latter happens when another viewer disconnects and
+			// the agent needs the remaining viewers' dimensions to
+			// decide whether to grow the PTY back.
+			plaintext, err := v.box.Decrypt(msg.Data)
+			if err != nil {
+				continue
+			}
+			var rs protocol.Message
+			if json.Unmarshal(plaintext, &rs) == nil && rs.Cols == 0 && rs.Rows == 0 {
+				v.sendResizeNow(conn)
+			}
+			// Non-zero broadcasts of the agent's authoritative size
+			// are informational for the Go viewer (it always renders
+			// at the local terminal's actual cols/rows, which the
+			// SIGWINCH handler keeps in sync); no action needed.
 		case protocol.TypeClosed:
 			text := msg.Error
 			if text == "" {
