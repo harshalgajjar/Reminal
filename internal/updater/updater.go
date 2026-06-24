@@ -44,15 +44,8 @@ type cacheEntry struct {
 	AssetURL  string    `json:"asset_url"`
 }
 
-type release struct {
-	TagName string  `json:"tag_name"`
-	Assets  []asset `json:"assets"`
-}
-
-type asset struct {
-	Name string `json:"name"`
-	URL  string `json:"browser_download_url"`
-}
+// (release / asset structs removed in favour of fetchLatestTag — see
+// the comment on that function for the rationale.)
 
 // CheckAndPromptOnStart runs the full check + prompt + (optional) apply flow.
 // It is safe to call at the very start of `reminal` or `reminal --connect`;
@@ -141,55 +134,83 @@ func check(currentVersion string, timeout time.Duration) (latestTag, assetURL st
 		return "", "", nil
 	}
 
-	rel, err := fetchLatestRelease(timeout)
+	tag, err := fetchLatestTag(timeout)
 	if err != nil {
 		return "", "", err
 	}
-	url := assetURLFor(rel, runtime.GOOS, runtime.GOARCH)
+	url := assetURLFor(tag, runtime.GOOS, runtime.GOARCH)
 
 	// Always cache the latest tag so we don't refetch within the TTL, even
 	// if no matching asset exists for this platform.
-	writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: rel.TagName, AssetURL: url})
+	writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: tag, AssetURL: url})
 
-	if url == "" || !newer(currentVersion, rel.TagName) {
+	if url == "" || !newer(currentVersion, tag) {
 		return "", "", nil
 	}
-	return rel.TagName, url, nil
+	return tag, url, nil
 }
 
-func fetchLatestRelease(timeout time.Duration) (*release, error) {
+// fetchLatestTag returns the latest release tag (e.g. "v0.8.3") by
+// reading the Location header on a request to the public release URL
+// — github.com/<repo>/releases/latest redirects to /releases/tag/<tag>.
+// This deliberately avoids api.github.com, which rate-limits
+// unauthenticated requests at 60/hour per IP and was tripping users
+// during the day with a "403 Forbidden" instead of a clean upgrade.
+// The web route has separate, much higher anonymous limits and
+// returns the redirect regardless.
+func fetchLatestTag(timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET",
-		"https://api.github.com/repos/"+repo+"/releases/latest", nil)
+		"https://github.com/"+repo+"/releases/latest", nil)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	resp, err := http.DefaultClient.Do(req)
+	// Don't follow the redirect — the Location header IS the answer.
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Timeout: timeout,
+	}
+	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("github api: %s", resp.Status)
+	// 302 is what github currently returns; tolerate the other
+	// redirect codes in case they change.
+	switch resp.StatusCode {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+	default:
+		return "", fmt.Errorf("github web: expected redirect, got %s", resp.Status)
 	}
-	var rel release
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return nil, err
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return "", fmt.Errorf("github web: no Location header")
 	}
-	return &rel, nil
+	// Pull "v0.8.3" out of ".../releases/tag/v0.8.3".
+	idx := strings.LastIndex(loc, "/tag/")
+	if idx < 0 {
+		return "", fmt.Errorf("github web: unexpected redirect target %q", loc)
+	}
+	tag := loc[idx+len("/tag/"):]
+	if tag == "" {
+		return "", fmt.Errorf("github web: empty tag in redirect target %q", loc)
+	}
+	return tag, nil
 }
 
-func assetURLFor(rel *release, goos, goarch string) string {
-	// archive naming matches the CI workflow: reminal_<ver>_<os>_<arch>.tar.gz
-	suffix := fmt.Sprintf("_%s_%s.tar.gz", goos, goarch)
-	for _, a := range rel.Assets {
-		if strings.HasSuffix(a.Name, suffix) {
-			return a.URL
-		}
-	}
-	return ""
+// assetURLFor builds the direct binary-download URL for the given
+// tag + platform. Pattern matches the release-workflow's archive
+// naming (reminal_<ver>_<os>_<arch>.tar.gz). No API call needed —
+// github resolves /releases/download/<tag>/<file> to the CDN-backed
+// asset URL on its own.
+func assetURLFor(tag, goos, goarch string) string {
+	ver := strings.TrimPrefix(tag, "v")
+	return fmt.Sprintf("https://github.com/%s/releases/download/%s/reminal_%s_%s_%s.tar.gz",
+		repo, tag, ver, goos, goarch)
 }
 
 // apply downloads the tarball at url, extracts the reminal binary, and
