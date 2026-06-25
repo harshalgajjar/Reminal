@@ -1977,6 +1977,25 @@
       if (predictions.length > 0 && idx < bytes.length) {
         erasePendingDimChars();
         predictBlockedUntil = now + PREDICT_BLOCK_MS;
+        // erasePendingDimChars leaves the cursor at the START of the
+        // just-erased dim run (CUB n · spaces · CUB n). If we returned
+        // the leftover to be batched, xterm would paint this frame with
+        // the cursor parked at start-of-run and only advance it a frame
+        // later when the rAF flush renders the agent's bytes — a visible
+        // backward cursor jump to the beginning of the dim part. It
+        // fires on EVERY keystroke for shells that rewrite the whole
+        // line on echo (zsh-syntax-highlighting, fish, line editors),
+        // where the echo never matches our per-char prediction. Render
+        // the agent's authoritative bytes synchronously in the SAME turn
+        // so xterm only ever paints the final cursor position. Safe to
+        // write now (not batch): this branch requires predictions to be
+        // non-empty on entry, and a non-empty queue guarantees an empty
+        // pendingChunks — so there's nothing queued ahead to reorder.
+        const leftover = idx === 0 ? bytes : bytes.subarray(idx);
+        if (leftover.byteLength > 0) {
+          try { term.write(leftover); } catch (_) {}
+        }
+        return new Uint8Array(0);
       }
       return idx === 0 ? bytes : bytes.subarray(idx);
     }
