@@ -481,7 +481,15 @@ func runNotify(message string) error {
 		}
 		return err
 	}
-	_, err = sendControl(a.PID, "notify "+message)
+	// Control socket protocol is line-delimited: the agent reads up to
+	// the first '\n'. Any embedded newline would silently truncate the
+	// message ("build failed\nsee log" → just "build failed"). Collapse
+	// CR/LF runs into a single " · " separator so multi-line messages
+	// stay legible without breaking the wire format.
+	flat := strings.Join(strings.FieldsFunc(message, func(r rune) bool {
+		return r == '\n' || r == '\r'
+	}), " · ")
+	_, err = sendControl(a.PID, "notify "+flat)
 	return err
 }
 
@@ -537,6 +545,13 @@ func runSend(path string) error {
 	}
 	if _, err := os.Stat(abs); err != nil {
 		return err
+	}
+	// Control socket protocol is line-delimited; an embedded newline
+	// in the path would be silently truncated by the agent, then
+	// fail with a confusing "no such file" referring to the
+	// truncated prefix. Reject upfront with a clear error.
+	if strings.ContainsAny(abs, "\n\r") {
+		return fmt.Errorf("path contains control characters (rename the file or use a symlink): %q", abs)
 	}
 	if _, err := sendControl(a.PID, "send "+abs); err != nil {
 		return err

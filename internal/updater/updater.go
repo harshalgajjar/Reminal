@@ -196,6 +196,14 @@ func fetchLatestTag(timeout time.Duration) (string, error) {
 		return "", fmt.Errorf("github web: unexpected redirect target %q", loc)
 	}
 	tag := loc[idx+len("/tag/"):]
+	// Strip any query string / fragment / trailing slash GitHub may
+	// add — assetURLFor pastes tag straight into a URL and we don't
+	// want "v0.8.3?utm=foo" turning into a 404.
+	for _, sep := range []string{"?", "#", "/"} {
+		if i := strings.Index(tag, sep); i >= 0 {
+			tag = tag[:i]
+		}
+	}
 	if tag == "" {
 		return "", fmt.Errorf("github web: empty tag in redirect target %q", loc)
 	}
@@ -225,13 +233,19 @@ func apply(url string) error {
 		bin = real
 	}
 
-	resp, err := http.Get(url)
+	// 10-minute ceiling. Big enough that even a slow phone-hotspot
+	// download of a ~10 MB binary completes; small enough that a
+	// hung connection doesn't tie up the user's terminal until they
+	// notice and Ctrl-C. GitHub's CDN is well-behaved, so the
+	// common case is sub-30s.
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download: %s", resp.Status)
+		return fmt.Errorf("download: %s (url: %s)", resp.Status, url)
 	}
 
 	gz, err := gzip.NewReader(resp.Body)

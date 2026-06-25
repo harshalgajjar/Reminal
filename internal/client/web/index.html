@@ -961,12 +961,19 @@
     let fatal = false;        // unrecoverable (bad PIN, session expired); do not auto-reconnect
     let reconnectTimer = null;
     let backoffMs = 1000;
+    let wsPingTimer = 0;
     const MAX_BACKOFF_MS = 30000;
     let connectedAt = 0;
     // helloShown gates the one-time "Connected · AES-256-GCM end-to-end" line
     // written into the terminal; bytesSent/Received feed the summary line on
     // disconnect. Mirrors the terminal viewer's helloOnce + counters.
     let helloShown = false;
+    // Set whenever we drop the live agent (WS close OR agent_offline
+    // notification). Cleared the next time startSessionFlow prints
+    // the "Reconnected" line — so each disconnect/reconnect cycle
+    // surfaces exactly one in-terminal confirmation, no matter how
+    // many WS retries it took to get back.
+    let reconnectMessagePending = false;
     let bytesSent = 0;
     let bytesReceived = 0;
     let lastDialMs = 0; // measured from new WebSocket() to ws.onopen
@@ -1197,6 +1204,15 @@
         helloShown = true;
         const ht = lastDialMs > 0 ? ' · handshake ' + lastDialMs + 'ms' : '';
         term.write('\x1b[2m[reminal] Connected to ' + sessionId + ht + ' · AES-256-GCM end-to-end\x1b[0m\r\n');
+      } else if (reconnectMessagePending) {
+        // We dropped (either WS hiccup or agent_offline transition)
+        // and just came back. Status-bar change alone isn't enough —
+        // users staring at the terminal area don't notice it. Inline
+        // a single dim line so the cursor visibly advances and the
+        // user knows we're live again. Press-Enter hint matches the
+        // Go viewer's behaviour so the prompt redraws.
+        reconnectMessagePending = false;
+        term.write('\r\n\x1b[2m[reminal] Reconnected to ' + sessionId + ' — press Enter to refresh the prompt.\x1b[0m\r\n');
       }
       sendResume();
       fitAddon.fit();
@@ -1286,26 +1302,37 @@
     // human noticeable threshold.
     const pendingChunks = [];
     let flushScheduled = false;
+    function flushPendingChunks() {
+      if (pendingChunks.length === 0) return;
+      let total = 0;
+      for (const c of pendingChunks) total += c.byteLength;
+      if (total === 0) { pendingChunks.length = 0; return; }
+      const merged = new Uint8Array(total);
+      let off = 0;
+      for (const c of pendingChunks) {
+        merged.set(c instanceof Uint8Array ? c : new Uint8Array(c), off);
+        off += c.byteLength;
+      }
+      pendingChunks.length = 0;
+      term.write(merged);
+    }
     function enqueueData(bytes) {
-      pendingChunks.push(bytes);
+      // Skip any prefix the user already saw via local echo (mosh-
+      // style predictive). When predictions match, this prefix is the
+      // shell's actual echo coming back — rendering it would double
+      // the visible character.
+      const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      const after = reconcilePredictions(u8);
+      if (after.byteLength === 0) return;
+      pendingChunks.push(after);
       if (flushScheduled) return;
       flushScheduled = true;
       requestAnimationFrame(() => {
         flushScheduled = false;
-        if (pendingChunks.length === 0) return;
-        // Concatenate all buffered chunks into one Uint8Array so
-        // xterm.js processes the whole burst as one write. Avoids the
-        // per-write overhead that was making refreshes feel slow.
-        let total = 0;
-        for (const c of pendingChunks) total += c.byteLength;
-        const merged = new Uint8Array(total);
-        let off = 0;
-        for (const c of pendingChunks) {
-          merged.set(c instanceof Uint8Array ? c : new Uint8Array(c), off);
-          off += c.byteLength;
-        }
-        pendingChunks.length = 0;
-        term.write(merged);
+        // pendingChunks may have already been drained synchronously
+        // by predictLocalEcho's flushPendingChunks() — that's fine,
+        // flushPendingChunks is a no-op on empty.
+        flushPendingChunks();
       });
     }
 
@@ -1406,6 +1433,10 @@
         } catch (_) {}
         ws = null;
       }
+      // Old socket's ping timer is moot now — its onclose was
+      // nulled out above so its own cleanup won't fire. The next
+      // ws.onopen rearms.
+      if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = 0; }
       authed = false;
       agentLive = false;
       // Every WS connection runs its own EKE handshake — the previous
@@ -1435,6 +1466,20 @@
         // Stash for the one-time "Connected · handshake Xms" line below.
         lastDialMs = Date.now() - dialStart;
         ws.send(JSON.stringify({ type: 'auth', pin: pinValue }));
+        // Heartbeat. Cloudflare Workers keeps the WS alive on its end,
+        // but mobile carriers / NAT timeouts / VPN tunnels can silently
+        // drop an idle socket without surfacing close to either side
+        // — the user types after 5 min of idle, the keystroke vanishes
+        // into the void, and only the next `setTimeout(reconnect)` rescue
+        // path notices. A 30s app-level ping forces traffic through the
+        // tunnel and any drop becomes a concrete ws.onerror/close, which
+        // triggers the existing reconnect logic. Matches the Go viewer's
+        // ping cadence (internal/client/viewer.go:317).
+        if (wsPingTimer) clearInterval(wsPingTimer);
+        wsPingTimer = setInterval(() => {
+          if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          try { ws.send(JSON.stringify({ type: 'ping' })); } catch (_) {}
+        }, 30 * 1000);
       };
 
       ws.onmessage = async (ev) => {
@@ -1447,6 +1492,18 @@
         authed = false;
         agentLive = false;
         ws = null;
+        // Stop the heartbeat — re-armed on the next ws.onopen.
+        if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = 0; }
+        // Drop any pending predictions: the reconnect path will
+        // replay scrollback, which would mismatch and trigger an
+        // erasure sequence at the wrong cursor position.
+        resetPredictionsHard();
+        // Arm the in-terminal reconnect line so startSessionFlow
+        // prints it after the next successful EKE+resume. Gated on
+        // helloShown so we don't print on the very first failed
+        // connect attempt (where there's no prior session to
+        // "reconnect" to).
+        if (helloShown && !manualClose && !fatal) reconnectMessagePending = true;
         if (manualClose) {
           setStatus('Disconnected');
           hideOverlay();
@@ -1554,6 +1611,9 @@
           showOverlay('Agent offline — waiting for it to reconnect…');
           // Keep the WS open; the relay will tell us when the agent is back.
           setBtnDisconnect();
+          // Arm the "Reconnected" terminal line — the agent_offline
+          // path bypasses ws.onclose since the WS itself stays up.
+          if (helloShown) reconnectMessagePending = true;
           break;
         case 'download': {
           if (!cryptoKey) break;
@@ -1598,6 +1658,12 @@
               try { fitAddon.fit(); } catch (_) {}
               if (agentLive) sendResize();
             } else if (c > 0 && r > 0 && (c !== term.cols || r !== term.rows)) {
+              // Erase the visible dim chars FIRST (cursor still sits
+              // at end-of-run pre-resize), then resize. Skipping the
+              // erase orphans the dim chars and the agent's echo
+              // lands past them, leaving the user looking at e.g.
+              // dim "abc" + bright "abc".
+              resetPredictionsSoft();
               term.resize(c, r);
             }
           } catch (_) {}
@@ -1684,6 +1750,9 @@
       manualClose = true;
       cancelReconnect();
       clearCred();
+      // Stop the heartbeat — we null out ws.onclose below to bypass
+      // the auto-reconnect path, so its own clear-interval won't fire.
+      if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = 0; }
       if (ws) {
         try {
           ws.onopen = null;
@@ -1696,6 +1765,10 @@
       }
       authed = false;
       agentLive = false;
+      // Any in-flight predictions are moot once the session ends;
+      // there will be no echo to reconcile against. Drop them so
+      // they can't dim chars into a stale "Disconnected" footer.
+      resetPredictionsHard();
       if (helloShown && connectedAt) {
         const dur = Math.max(1, Math.round((Date.now() - connectedAt) / 1000));
         term.write('\x1b[2m[reminal] Disconnected from ' + sessionId + ' after ' + humanDuration(dur) + ' · sent ' + humanBytes(bytesSent) + ' · received ' + humanBytes(bytesReceived) + '\x1b[0m\r\n');
@@ -1756,6 +1829,158 @@
     // ~60ms+), so this filters genuine duplicates only.
     let lastSendInputData = null;
     let lastSendInputAt = -Infinity;
+    // --- Predictive local echo (mosh-style) ---
+    // For high-RTT sessions (phone over LTE → relay → laptop) the
+    // typing experience is dominated by the round-trip: keystroke →
+    // relay → agent → shell echoes → relay back → render. 200-400ms
+    // feels mushy. We can mask most of that for the common case
+    // (typing into a shell prompt) by rendering predicted echoes
+    // locally and reconciling against the agent's echo when it
+    // arrives. Only predict for single-byte printable ASCII so we
+    // can't accidentally render escape codes; only predict while
+    // predictions are landing (confirmed echo extends the window),
+    // so TUI apps (vim, claude code) that don't echo keystrokes
+    // turn local echo off automatically.
+    const predictions = [];                  // [{ c: charCode, ch: str, t: ms }]
+    let predictBlockedUntil = 0;             // cool-down deadline; predict skipped while < this
+    const PREDICT_BLOCK_MS = 1500;           // cool-down after a stale/mismatch
+    const PREDICT_STALE_MS = 700;            // drop a prediction we never got echo for
+    const PREDICT_MAX_QUEUE = 24;            // safety cap
+    let predictStaleTimer = 0;
+    // The cursor-back+rewrite+cursor-forward sequences we emit only
+    // work on the line we're typing on. If predictions would overflow
+    // to a wrapped second line, promote/erase math breaks because CUB
+    // (\x1b[<n>D) does not cross line boundaries on most terminals.
+    function predictWouldWrap(extra) {
+      try {
+        const buf = term.buffer.active;
+        return (buf.cursorX + extra) >= term.cols;
+      } catch (_) { return true; }
+    }
+    function predictLocalEcho(data) {
+      const now = performance.now();
+      if (now < predictBlockedUntil) return;
+      if (data.length !== 1) return;
+      const c = data.charCodeAt(0);
+      if (c < 0x20 || c > 0x7e) return;     // printable ASCII only
+      if (predictions.length >= PREDICT_MAX_QUEUE) return;
+      if (predictWouldWrap(1)) return;
+      // The rAF batch holds incoming agent data not yet rendered.
+      // If we draw the dim char first and the batch flushes later,
+      // those bytes land AFTER our prediction → cursor offsets get
+      // wrong and the next promote/erase rewrites the wrong cells.
+      // Drain now so cursor sits at the real terminal position before
+      // we overlay anything.
+      flushPendingChunks();
+      // SGR 2 = dim/faint; 22 = normal intensity (un-dim, preserve
+      // color). Confirmed echoes promote each cell to normal so
+      // typing visually transitions in-flight (dim) → synced (bright).
+      // try/catch so a transient xterm.js error doesn't desync our
+      // prediction queue from what's actually on screen.
+      try { term.write('\x1b[2m' + data + '\x1b[22m'); }
+      catch (_) { return; }
+      predictions.push({ c, ch: data, t: now });
+      armStaleTimer();
+    }
+    // Erase the visible dim chars for the predictions we still hold.
+    // Cursor is at end-of-run; walk back N, write N spaces, walk back
+    // N to land at start-of-run. Important: this clears the pending
+    // queue too — every caller treats the predictions as gone.
+    function erasePendingDimChars() {
+      const n = predictions.length;
+      if (n === 0) return;
+      try { term.write('\x1b[' + n + 'D' + ' '.repeat(n) + '\x1b[' + n + 'D'); }
+      catch (_) {}
+      predictions.length = 0;
+    }
+    // Hard-reset for cases where the cursor position is no longer
+    // reliable (disconnect, post-reflow on the agent side) — we can't
+    // safely emit erasure escape codes because we don't know where
+    // the dim chars actually live anymore. Drop the queue and cool
+    // down. Any leftover dim chars on screen get overwritten by the
+    // next agent redraw (which usually comes within a frame).
+    function resetPredictionsHard() {
+      predictions.length = 0;
+      predictBlockedUntil = performance.now() + PREDICT_BLOCK_MS;
+    }
+    // Soft-reset for cases where the cursor IS still at end-of-run
+    // (just before a local resize / fit that we're driving). Erase
+    // the visible dim chars at known-good cursor position, then cool
+    // down. Used in preference to the hard form when we can — leaves
+    // a clean screen instead of orphaned dim chars that would get
+    // double-rendered when the agent's echo finally arrives.
+    function resetPredictionsSoft() {
+      erasePendingDimChars();
+      predictBlockedUntil = performance.now() + PREDICT_BLOCK_MS;
+    }
+    // Drop predictions older than PREDICT_STALE_MS *and* erase their
+    // dim chars from the screen. This is the password-prompt safety
+    // net: if the shell isn't echoing, the predicted chars don't
+    // linger on display. Runs both from a setTimeout (covers the
+    // "user typed then went idle" case) and from reconcile (covers
+    // "echo arrived but only partially matches"). All-or-nothing
+    // erasure keeps cursor math simple — a partial stale-drop would
+    // leave the surviving tail at the wrong column.
+    function dropStalePredictions() {
+      const now = performance.now();
+      if (predictions.length === 0) return false;
+      if (now - predictions[0].t <= PREDICT_STALE_MS) return false;
+      erasePendingDimChars();
+      predictBlockedUntil = now + PREDICT_BLOCK_MS;
+      return true;
+    }
+    function armStaleTimer() {
+      if (predictStaleTimer) return;
+      predictStaleTimer = setTimeout(() => {
+        predictStaleTimer = 0;
+        if (dropStalePredictions() === false && predictions.length > 0) {
+          armStaleTimer();
+        }
+      }, PREDICT_STALE_MS + 50);
+    }
+    // Called on every incoming agent data chunk before xterm renders
+    // it. Consumes any prefix that matches our predictions queue, so
+    // the agent's echo doesn't double-render what we already showed.
+    // Returns the leftover bytes (which xterm renders normally).
+    function reconcilePredictions(bytes) {
+      dropStalePredictions();
+      const now = performance.now();
+      let idx = 0;
+      let confirmedChars = '';
+      while (predictions.length > 0 && idx < bytes.length && bytes[idx] === predictions[0].c) {
+        confirmedChars += predictions[0].ch;
+        predictions.shift();
+        idx++;
+      }
+      // Promote dim → bright. Cursor is at position P (start of run
+      // + total predicted chars drawn so far). Walk back over the
+      // entire predicted run, overwrite the confirmed prefix with
+      // normal intensity, then walk forward past whatever pending
+      // (still-dim) tail remains so the cursor lands back at P.
+      if (confirmedChars.length > 0) {
+        const remaining = predictions.length;
+        const back = confirmedChars.length + remaining;
+        let seq = '\x1b[' + back + 'D' + confirmedChars;
+        if (remaining > 0) seq += '\x1b[' + remaining + 'C';
+        term.write(seq);
+      }
+      // Tail dim chars don't match what the agent actually sent next:
+      // either no match at all (idx === 0, full mismatch — likely a
+      // TUI / password prompt where the shell suppressed echo) or a
+      // partial match where the prefix matched but the agent's next
+      // byte diverges from our remaining predictions (shell aliased a
+      // key, autocompletion shortened input, autocorrect rewrite). In
+      // BOTH cases the leftover dim chars are wrong — erase them
+      // immediately instead of waiting 700ms for the stale-timer, or
+      // they'd render as ghost characters on screen alongside the
+      // agent's authoritative output.
+      if (predictions.length > 0 && idx < bytes.length) {
+        erasePendingDimChars();
+        predictBlockedUntil = now + PREDICT_BLOCK_MS;
+      }
+      return idx === 0 ? bytes : bytes.subarray(idx);
+    }
+
     async function sendInput(data) {
       const now = performance.now();
       if (data === lastSendInputData && (now - lastSendInputAt) < 5) {
@@ -1784,6 +2009,12 @@
         }
       }
       if (!agentLive) return; // typing into nothing while agent is offline
+      // Predict ONLY after all suppression / drop checks have passed.
+      // Predicting earlier would dim-render keystrokes we never sent
+      // (autocorrect suppression, phantom IME backspace, offline drop)
+      // and they'd then linger on screen until the 700ms stale-timer
+      // wiped them — visible noise for the user.
+      predictLocalEcho(data);
       const result = sendChain.then(async () => {
         const bytes = new TextEncoder().encode(data);
         let binary = '';
@@ -2016,11 +2247,19 @@
       keybar.classList.toggle('collapsed', hidden);
       keybarToggle.textContent = hidden ? '⌨' : '≡';
       keybarToggle.title = hidden ? 'Show key bar' : 'Hide key bar';
+      // Route through refitSoon so the inline pin styles get cleared
+      // (otherwise the old keybar height stays baked into
+      // terminal-wrap's bottom inset and the layout is wrong until
+      // the next unrelated resize event). The first call happens
+      // during script bootstrap, before refitSoon's `let` state is
+      // initialized — guard with try/catch so the TDZ error there
+      // can't break initial load.
       try {
-        if (typeof syncViewport === 'function') syncViewport();
-        fitAddon.fit();
-        if (agentLive) sendResize();
-      } catch (_) {}
+        refitSoon();
+      } catch (_) {
+        try { syncViewport(); fitAddon.fit(); if (agentLive) sendResize(); }
+        catch (__) {}
+      }
     }
     keybarToggle.addEventListener('click', () => {
       const hiddenNow = keybar.classList.contains('collapsed');
@@ -2096,10 +2335,11 @@
       const clamped = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
       term.options.fontSize = clamped;
       try { localStorage.setItem(FONT_KEY, String(clamped)); } catch (_) {}
-      // Refit after font change so the cols/rows recompute and the agent
-      // gets the right PTY size for the new visible terminal.
-      fitAddon.fit();
-      if (agentLive) sendResize();
+      // Route through refit so any in-flight dim chars get erased
+      // (cell-width changes can reflow them to new positions) and
+      // pinTerminalWrap's inline styles get re-measured against the
+      // new cell metrics.
+      refit();
     }
     document.getElementById('font-up-btn').addEventListener('click', () => {
       setFontSize(term.options.fontSize + 2);
@@ -2318,6 +2558,12 @@
       // Remember the upload_id so the agent's upload_ack handler knows
       // we're the originator and can auto-type the path into our shell.
       pendingUploadIDs.add(uploadId);
+      // Safety net: if the agent crashes / disconnects between
+      // accepting the upload and sending its ack, the set entry
+      // would sit forever and leak memory across an unbounded
+      // number of failed uploads. Stale-clean after 5 min — well
+      // past any legitimate round-trip even on a slow connection.
+      setTimeout(() => pendingUploadIDs.delete(uploadId), 5 * 60 * 1000);
       term.write('\r\n\x1b[2m[reminal] uploading ' + file.name + ' (' +
         humanBytes(file.size) + ', ' + total + ' chunk' + (total === 1 ? '' : 's') + ')…\x1b[0m\r\n');
       try {
@@ -2341,6 +2587,11 @@
           if (total > 1 && i < total - 1) await new Promise(r => setTimeout(r, 0));
         }
       } catch (e) {
+        // Drop the pending entry: we know the upload won't complete,
+        // and waiting for the 5-min stale-clean would leak the slot
+        // for that whole window. The auto-paste won't fire anyway —
+        // an upload_ack racing in afterwards lands on an empty set.
+        pendingUploadIDs.delete(uploadId);
         term.write('\r\n\x1b[2m[reminal] upload failed at send: ' + e + '\x1b[0m\r\n');
       }
     }
@@ -2451,7 +2702,31 @@
       tw.style.top = headerBottom + 'px';
       tw.style.bottom = bottomInset + 'px';
     }
-    const refit = () => { syncViewport(); pinTerminalWrap(); fitAddon.fit(); if (agentLive) sendResize(); };
+    // Strip the inline overrides set by pinTerminalWrap. We do this
+    // the instant a viewport event fires so the CSS-var path (which
+    // re-resolves automatically) takes over while pinTerminalWrap is
+    // waiting out its trailing-edge debounce. Without this, a stale
+    // bottom-inset measurement from a previous keyboard state can
+    // stick around for hundreds of ms after the keyboard closes,
+    // leaving the empty keyboard region uncovered by the terminal.
+    function unpinTerminalWrap() {
+      const tw = document.getElementById('terminal-wrap');
+      if (!tw) return;
+      tw.style.top = '';
+      tw.style.bottom = '';
+    }
+    const refit = () => {
+      syncViewport();
+      pinTerminalWrap();
+      // Erase visible dim chars BEFORE fit() reflows the buffer:
+      // cursor is at end-of-run now; after fit() the buffer reflows
+      // and the same column may not exist. The "spaces" we write
+      // become legitimately-empty cells that reflow alongside
+      // everything else, leaving no orphans behind.
+      if (term && predictions.length > 0) resetPredictionsSoft();
+      try { fitAddon.fit(); } catch (_) {}
+      if (agentLive) sendResize();
+    };
     // refitSoon trailing-edge-debounces a burst of resize signals.
     // Android Chrome and iOS Safari fire visualViewport.resize and
     // ResizeObserver many times during the soft-keyboard animation
@@ -2466,11 +2741,32 @@
     // resize on desktop still feels instant.
     let refitFrame = 0;
     let refitTimer = 0;
+    let refitTimer2 = 0;
     const REFIT_SETTLE_MS = 140;
+    // Some Android Chrome / Samsung Internet builds animate the
+    // soft-keyboard close for ~400ms but stop firing visualViewport
+    // resize events early. The 140ms trailing-edge timer fires
+    // mid-animation, the 400ms poll misses the final settle (it
+    // happens to sample matching mid-values), and pinTerminalWrap
+    // gets stuck on the keyboard-open inset. The follow-up refit at
+    // ~700ms re-measures once the animation has definitely settled,
+    // catching this case without affecting fast desktops.
+    const REFIT_FOLLOWUP_MS = 700;
     function refitSoon() {
+      // The instant a viewport signal arrives, drop the stale inline
+      // pin so the CSS-var path drives layout while we wait for the
+      // resize burst to settle. Updating CSS vars *now* (via
+      // syncViewport) keeps the keybar's `bottom:var(--kb-offset)`
+      // and terminal-wrap's CSS fallback `bottom:calc(--kb-offset +
+      // --keybar-h)` in sync with the current viewport, so the
+      // visual layout is correct immediately even if pinTerminalWrap
+      // measures something stale on the trailing-edge fit.
+      unpinTerminalWrap();
+      syncViewport();
       // Cancel any pending fast path; the trailing-edge timer wins.
       if (refitFrame) { cancelAnimationFrame(refitFrame); refitFrame = 0; }
       if (refitTimer) clearTimeout(refitTimer);
+      if (refitTimer2) { clearTimeout(refitTimer2); refitTimer2 = 0; }
       refitTimer = setTimeout(() => {
         refitTimer = 0;
         refitFrame = requestAnimationFrame(() => {
@@ -2478,6 +2774,10 @@
           refit();
         });
       }, REFIT_SETTLE_MS);
+      refitTimer2 = setTimeout(() => {
+        refitTimer2 = 0;
+        refit();
+      }, REFIT_FOLLOWUP_MS);
     }
     window.addEventListener('resize', refitSoon);
     // orientationchange is fired by older Android Chrome when window.resize

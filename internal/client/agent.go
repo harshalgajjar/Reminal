@@ -747,6 +747,13 @@ type pendingUpload struct {
 // mobile uploads but short enough that crashed viewers don't pin memory.
 const uploadStaleTimeout = 60 * time.Second
 
+// maxUploadTTLSeconds caps the viewer-supplied TTL on uploads. Past
+// this a time.Duration cast overflows (int64 nanoseconds capped at
+// ~292 years), and even short of overflow there's no meaningful
+// distinction between "kept for a decade" and "kept forever". One
+// year is the longest TTL that still feels like an auto-delete.
+const maxUploadTTLSeconds = 365 * 24 * 60 * 60
+
 // uploadChunkMaxBytes caps decoded chunk size. Web client picks 256 KB
 // chunks to stay well under the Cloudflare DO 1 MiB WS message limit
 // (with base64 + encryption overhead).
@@ -783,6 +790,17 @@ func (a *Agent) handleUpload(encData string) {
 	safe := filepath.Base(payload.Name)
 	if safe == "." || safe == "/" || safe == "" {
 		a.broadcastNotice("upload failed: invalid filename")
+		return
+	}
+	// Strip control characters before the name reaches broadcastNotice
+	// (which renders to the host terminal AND to viewer terminals).
+	// Without this an authenticated viewer could upload a file named
+	// "\x1b[2J" or "\x07\x1b]0;hacked\x07" and disrupt the host's
+	// display every time we log progress. filepath.Base does not
+	// sanitize control bytes — they're legal in POSIX filenames.
+	safe = stripControlChars(safe)
+	if safe == "" {
+		a.broadcastNotice("upload failed: invalid filename (control chars only)")
 		return
 	}
 	chunk, err := base64.StdEncoding.DecodeString(payload.Content)
@@ -861,7 +879,13 @@ func (a *Agent) handleUpload(encData string) {
 	for i := 0; i < up.total; i++ {
 		assembled = append(assembled, up.chunks[i]...)
 	}
-	a.finalizeUpload(payload.UploadID, up.name, assembled, up.ttlSeconds)
+	// finalizeUpload writes the file to disk and broadcasts an ack —
+	// for a 100 MB upload, the disk write alone can take hundreds of
+	// ms on a slow disk. Run it in a goroutine so the WS reader loop
+	// can keep processing the viewer's keystrokes, resizes, and
+	// pings without a perceptible stall right after a big upload.
+	id, name, ttl := payload.UploadID, up.name, up.ttlSeconds
+	go a.finalizeUpload(id, name, assembled, ttl)
 }
 
 // finalizeUpload writes the assembled bytes to ~/Downloads/reminal/ and
@@ -903,6 +927,15 @@ func (a *Agent) finalizeUpload(uploadID, safe string, raw []byte, ttlSeconds int
 	a.broadcastUploadAck(uploadID, path)
 
 	if ttlSeconds > 0 {
+		// Cap at one year. A viewer-supplied ttl_seconds of, say,
+		// 9999999999 would overflow time.Duration (int64 nanoseconds,
+		// max ≈ 292 years) once multiplied by time.Second — time.AfterFunc
+		// would then fire with an undefined duration, potentially
+		// auto-deleting the file immediately. Anything past a year is
+		// indistinguishable from "kept forever" anyway.
+		if ttlSeconds > maxUploadTTLSeconds {
+			ttlSeconds = maxUploadTTLSeconds
+		}
 		ttl := time.Duration(ttlSeconds) * time.Second
 		a.broadcastNotice(fmt.Sprintf("uploaded %s (%s) · auto-delete in %s%s",
 			path, humanByteSize(len(raw)), ttl, clipNote))
@@ -1020,6 +1053,24 @@ func uniquePath(p string) string {
 			return candidate
 		}
 	}
+}
+
+// stripControlChars removes C0 / C1 / DEL bytes from s. Used to sanitize
+// viewer-supplied strings (filenames, names) before they reach a path
+// that renders to a terminal — otherwise a malicious viewer could
+// embed escape sequences in their upload's filename and disrupt the
+// host's display (clear screen, change title, ring bell on a loop) the
+// next time we log a notice mentioning the name.
+func stripControlChars(s string) string {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		b := s[i]
+		if b < 0x20 || b == 0x7f {
+			continue
+		}
+		out = append(out, b)
+	}
+	return string(out)
 }
 
 // humanByteSize renders an int as 1.2 KB / 47.93 MB style for human display.
