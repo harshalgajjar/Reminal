@@ -1884,7 +1884,22 @@
         return (buf.cursorX + extra) >= term.cols;
       } catch (_) { return true; }
     }
+    // Master switch for predictive local echo. Disabled: the dim/bright
+    // "speculative echo" masked latency on high-RTT links, but doing it by
+    // juggling cursor escape codes (CUB/CUF + erase-by-spaces) only stays
+    // correct when the cursor sits exactly where this layer assumes. Real
+    // shells break that constantly — zsh syntax-highlighting rewrites the
+    // whole line on each keystroke (so the echo never matches the per-char
+    // prediction → flicker), and autosuggestions / RPROMPT / themed prompts
+    // emit extra repositioning that drifts the cursor, depositing predicted
+    // chars at scattered columns the cleanup then misses (residue on screen).
+    // Without modelling the full framebuffer (mosh-style) it can't be made
+    // robust, so keystrokes now render only when the shell echoes them —
+    // standard SSH behaviour, no gray text, no flicker, no residue. Flip
+    // back to true to re-enable the experiment.
+    const PREDICT_ENABLED = false;
     function predictLocalEcho(data) {
+      if (!PREDICT_ENABLED) return;
       const now = performance.now();
       if (now < predictBlockedUntil) return;
       if (data.length !== 1) return;
@@ -1970,6 +1985,7 @@
     // the agent's echo doesn't double-render what we already showed.
     // Returns the leftover bytes (which xterm renders normally).
     function reconcilePredictions(bytes) {
+      if (!PREDICT_ENABLED) return bytes;   // nothing predicted → render agent bytes verbatim
       dropStalePredictions();
       const now = performance.now();
       let idx = 0;
