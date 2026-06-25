@@ -91,15 +91,13 @@ type Agent struct {
 	currentConnMu sync.Mutex
 	currentConn   *websocket.Conn
 
-	// viewerSizeMu guards viewerMinCols / viewerMinRows / viewerCount —
-	// the size-tracking state recordViewerSize uses to decide whether to
-	// mirror a viewer's reported size verbatim (single-viewer case) or
-	// monotonically shrink (multi-viewer case, where any one viewer
-	// growing must not drag everyone else's display past their own
-	// smallest). Zero size = "no viewer size known", host wins.
+	// viewerSizeMu guards viewerCols / viewerRows / viewerCount —
+	// the size-tracking state recordViewerSize maintains. viewerCols/Rows
+	// hold the size the most-recently-active viewer reported (latest-resize-
+	// wins); zero size = "no viewer size known", host wins.
 	viewerSizeMu   sync.Mutex
-	viewerMinCols  uint16
-	viewerMinRows  uint16
+	viewerCols     uint16
+	viewerRows     uint16
 	viewerCount    int
 	lastAppliedCol uint16
 	lastAppliedRow uint16
@@ -500,16 +498,23 @@ func (a *Agent) syncSizeToPTY() {
 	a.applyEffectiveSize()
 }
 
-// recordViewerSize tracks the size we should clamp the PTY to.
+// recordViewerSize tracks the size the PTY should take: latest-resize-wins.
 //
-//   - When there's exactly one viewer (the common case — your phone),
-//     we track its current size verbatim. That lets the PTY grow back
-//     when the soft keyboard collapses or the device rotates wider —
-//     no ratchet, no "freed space below stays unused" bug.
-//   - When 2+ viewers are attached, we fall back to the smallest seen
-//     since the multi-viewer state started: any one viewer growing its
-//     own viewport mustn't drag everyone else's display larger than the
-//     smallest can render.
+// The most-recently-active viewer drives the size. A single viewer (the
+// common case — your phone) is mirrored verbatim, so the PTY grows back
+// the moment the soft keyboard collapses or the device rotates.
+//
+// With 2+ viewers we'd ideally use the min of their CURRENT sizes, but the
+// relay forwards viewer resizes without a per-viewer id, so the agent can't
+// tell which viewer a size came from or recompute the min when one grows.
+// The previous "monotonically shrink" workaround never recovered: a phone's
+// keyboard-OPEN height is a transient shrink that became a permanent floor,
+// pinning the phone to ~60% forever after the keyboard closed (and any time
+// a smaller viewer had ever connected). So instead the latest resize wins —
+// whichever screen you're actively using fills correctly, and it recovers
+// instantly when that viewer grows. Other attached viewers render at that
+// size (margins if they're larger, scroll if smaller), which is the right
+// trade for "the screen I'm using is always right".
 //
 // resetViewerSize() clears state when the viewer count drops to 0.
 func (a *Agent) recordViewerSize(cols, rows uint16) {
@@ -517,21 +522,9 @@ func (a *Agent) recordViewerSize(cols, rows uint16) {
 		return
 	}
 	a.viewerSizeMu.Lock()
-	defer a.viewerSizeMu.Unlock()
-	if a.viewerCount <= 1 {
-		// Single viewer (or unknown count, treated the same) — mirror
-		// its current size, including grows.
-		a.viewerMinCols = cols
-		a.viewerMinRows = rows
-		return
-	}
-	// Multi-viewer: monotonically shrink only.
-	if a.viewerMinCols == 0 || cols < a.viewerMinCols {
-		a.viewerMinCols = cols
-	}
-	if a.viewerMinRows == 0 || rows < a.viewerMinRows {
-		a.viewerMinRows = rows
-	}
+	a.viewerCols = cols
+	a.viewerRows = rows
+	a.viewerSizeMu.Unlock()
 }
 
 // resetViewerSize clears the viewer min — called when the last viewer
@@ -540,32 +533,31 @@ func (a *Agent) recordViewerSize(cols, rows uint16) {
 // once requested.
 func (a *Agent) resetViewerSize() {
 	a.viewerSizeMu.Lock()
-	a.viewerMinCols = 0
-	a.viewerMinRows = 0
+	a.viewerCols = 0
+	a.viewerRows = 0
 	a.viewerCount = 0
 	a.viewerSizeMu.Unlock()
 }
 
 // applyEffectiveSize resizes the PTY to the right dimensions for the
-// currently attached viewer(s).
+// currently attached viewer(s). The active viewer's reported size
+// (recordViewerSize, latest-resize-wins) drives the PTY:
 //
-//   - Single viewer (count <= 1): the viewer drives ROWS — even past the
-//     host's row count — so a phone with more vertical space than the
-//     laptop window isn't capped to the host's rows (keyboard-collapse
-//     used to leave a big empty area at the bottom of the phone). The
-//     host's terminal just scrolls past extra rows, which is fine.
+//   - ROWS: the active viewer's rows, NOT capped by the host terminal.
+//     The host just scrolls past any extra rows. This is what lets a tall
+//     phone use its full height even when the host window (or, in a
+//     headless/dev run, the host PTY) is shorter — capping rows to the
+//     host was what left a big empty band at the bottom of the phone,
+//     both on keyboard-collapse and whenever a second viewer joined.
 //
-//     COLUMNS, though, are capped to the host width. A viewer wider than
-//     the host terminal would make the shell pad its output past the
-//     host's right edge; that output is mirrored to BOTH screens, so the
-//     narrower one (the host) wraps it — most visibly stranding zsh's
-//     PROMPT_EOL_MARK (a ghost "%") on its own line after every command.
-//     Rows are the dimension users actually lose to a host cap; matching
-//     columns to the narrower screen costs a wide viewer some right-edge
-//     width but keeps every screen wrap-clean.
-//   - Multiple viewers: take min(host, viewer-min) so every screen can
-//     render the shell's output correctly. Sacrificing some right-edge
-//     whitespace on the laptop is worth not garbling every phone.
+//   - COLUMNS: the active viewer's cols, additionally capped to the host
+//     width. A viewer wider than the host terminal would make the shell
+//     pad output past the host's right edge; that output is mirrored to
+//     BOTH screens, so the narrower host wraps it — most visibly
+//     stranding zsh's PROMPT_EOL_MARK (a ghost "%") on its own line.
+//     Capping columns to the host keeps every screen wrap-clean.
+//
+// With no viewers attached, the PTY simply matches the host terminal.
 //
 // Safe to call from any path that thinks the size might have changed.
 // Dedups against the last applied size so repeated calls are cheap.
@@ -578,28 +570,25 @@ func (a *Agent) applyEffectiveSize() {
 		hostCols, hostRows = uint16(c), uint16(r)
 	}
 	a.viewerSizeMu.Lock()
-	vc, vr := a.viewerMinCols, a.viewerMinRows
-	soloViewer := a.viewerCount == 1
+	vc, vr := a.viewerCols, a.viewerRows
 	a.viewerSizeMu.Unlock()
 
 	var cols, rows uint16
-	if soloViewer && vc > 0 && vr > 0 {
-		// Solo viewer drives rows (host scrolls if shorter). Columns are
-		// capped to the host width so the shell never pads output past
-		// the host terminal's right edge and wraps there (the ghost "%").
+	if vc > 0 && vr > 0 {
+		// A viewer is attached — the active viewer's size drives the PTY.
+		// ROWS are taken as-is; the host terminal scrolls vertically, so a
+		// tall phone is never capped to a short host window (or, in a
+		// headless/dev run, to a tiny host PTY) — that host-row cap was the
+		// multi-viewer "gap" bug. COLS are capped to the host width so the
+		// host terminal never has to wrap the shell's output and strand
+		// zsh's PROMPT_EOL_MARK (the ghost "%").
 		cols, rows = vc, vr
 		if hostCols > 0 && hostCols < cols {
 			cols = hostCols
 		}
 	} else {
-		// Multi-viewer (or no viewer): min(host, viewers).
+		// No viewers attached — match the host terminal.
 		cols, rows = hostCols, hostRows
-		if vc > 0 && (cols == 0 || vc < cols) {
-			cols = vc
-		}
-		if vr > 0 && (rows == 0 || vr < rows) {
-			rows = vr
-		}
 	}
 	if cols == 0 || rows == 0 {
 		return
@@ -1470,14 +1459,14 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			}
 			a.viewerSizeMu.Lock()
 			a.viewerCount = msg.Count
-			// Going from 2+ → 1 also unlocks the ratchet: the lone
-			// remaining viewer should be able to grow back. Clear
-			// viewerMin so recordViewerSize will mirror the lone
-			// viewer's next reported size verbatim.
+			// Going from 2+ → 1: clear the stored size so the PTY won't
+			// linger at whatever the departed viewer last set. Paired with
+			// the broadcastSize(0,0) below, the lone remaining viewer
+			// re-reports its size and drives the PTY afresh.
 			rebroadcast := msg.Count == 1
 			if rebroadcast {
-				a.viewerMinCols = 0
-				a.viewerMinRows = 0
+				a.viewerCols = 0
+				a.viewerRows = 0
 			}
 			a.viewerSizeMu.Unlock()
 			a.updateActiveViewers(msg.Count)

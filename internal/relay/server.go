@@ -103,8 +103,8 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 		}
 
 		r.mu.Lock()
-		p := r.peer(role)
-		if p == nil || p.conn != conn {
+		p := r.peerByConn(role, conn)
+		if p == nil {
 			// our peer slot was taken over or cleared; bail
 			r.mu.Unlock()
 			return
@@ -172,6 +172,26 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 func (r *room) peer(role protocol.Role) *peer {
 	if role == protocol.RoleAgent {
 		return r.agent
+	}
+	return nil
+}
+
+// peerByConn resolves the peer for THIS specific connection, handling
+// viewers (a room holds many, keyed by conn) as well as the agent.
+// peer() can't do this — it returns nil for any viewer role — so a
+// viewer's own read loop could never find itself and bailed before
+// processing its auth message, dropping every browser viewer at connect.
+func (r *room) peerByConn(role protocol.Role, conn *websocket.Conn) *peer {
+	if role == protocol.RoleAgent {
+		if r.agent != nil && r.agent.conn == conn {
+			return r.agent
+		}
+		return nil
+	}
+	for _, v := range r.viewers {
+		if v.conn == conn {
+			return v
+		}
 	}
 	return nil
 }

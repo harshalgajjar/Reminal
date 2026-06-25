@@ -32,6 +32,10 @@ func RunRelay(port string) error {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		// Dev relay: never let a browser cache the page across rebuilds —
+		// the embedded HTML changes on every `go build`, and a stale cached
+		// copy silently masks fixes during local testing.
+		w.Header().Set("Cache-Control", "no-store, must-revalidate")
 		_, _ = w.Write(data)
 	})
 

@@ -30,8 +30,21 @@
       overscroll-behavior: contain;
       overflow: hidden;
       margin: 0;
+      background: #0d1117;
     }
+    /* The whole app is a single flex column: header / terminal / keybar.
+       The terminal flexes to fill whatever space is left, and the keybar
+       (last child) sits at the bottom — which is just above the soft
+       keyboard, because JS keeps body's height equal to the *visual*
+       viewport (see applyViewportHeight). This is the ONLY layout
+       mechanism: no position:fixed, no CSS-var insets, no JS pinning of
+       the terminal box. That keeps a single source of truth and makes the
+       old measure→resize→measure flicker loop structurally impossible. */
     body {
+      height: 100vh;     /* fallback for browsers without dvh */
+      height: 100dvh;    /* dynamic vh: Android (interactive-widget=resizes-content) shrinks it for the keyboard */
+      display: flex;
+      flex-direction: column;
       background: #0d1117;
       color: #e6edf3;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -47,6 +60,7 @@
       border-bottom: 1px solid #21262d;
       background: #161b22;
       flex-wrap: wrap;
+      flex: 0 0 auto;   /* fixed-height flex child; never grows/shrinks the terminal's expense */
     }
     header h1 { font-size: 15px; font-weight: 600; }
     header h1 span { color: #58a6ff; }
@@ -96,21 +110,17 @@
       0%, 100% { opacity: 0.25; }
       50% { opacity: 1; }
     }
-    /* Terminal area is anchored directly to the layout viewport via
-       position:fixed + explicit insets — exactly the same approach
-       the keybar uses, which has always worked reliably. top tracks
-       the header's measured height; bottom tracks (kb-offset + keybar-h)
-       so the terminal sits flush above the keybar and never overlaps
-       the keyboard. The browser keeps a position:fixed top/bottom
-       element in sync with viewport changes far more reliably than
-       it keeps `dvh`/`100vh` body height in sync, especially on
-       Android Chrome after a soft-keyboard close. */
+    /* Terminal fills whatever space the flex column leaves between the
+       header and keybar. min-height:0 is load-bearing: it lets the box
+       shrink below its content so it never pushes the keybar off-screen,
+       and it guarantees xterm's fit() (which sizes the canvas to fill
+       this box) can't grow the box back — that's what makes the resize
+       loop impossible. position:relative anchors the absolutely-positioned
+       overlay / jump-to-bottom / findbar children. */
     #terminal-wrap {
-      position: fixed;
-      top: var(--header-h, 60px);
-      left: env(safe-area-inset-left, 0px);
-      right: env(safe-area-inset-right, 0px);
-      bottom: calc(var(--kb-offset, 0px) + var(--keybar-h, 0px));
+      flex: 1 1 auto;
+      min-height: 0;
+      position: relative;
       padding: 8px;
       overflow: hidden;
       overscroll-behavior: contain;
@@ -149,11 +159,13 @@
     /* Mobile-only soft-key bar. Phones/tablets have no Esc, Tab, Ctrl,
        arrows on the system keyboard — without these reminal is unusable
        for shell editing on mobile, which is the killer feature vs ssh.
-       On mobile the bar is *fixed* and floats above the soft keyboard:
-       --kb-offset (set from visualViewport) lifts it so it sits flush
-       against the keyboard top instead of being hidden behind it. */
+       The bar is the last child of the body flex column, so it naturally
+       sits at the bottom of the visual viewport — i.e. flush above the
+       soft keyboard — without any fixed positioning or --kb-offset math
+       (JS keeps body height == visualViewport height). */
     #keybar {
       display: none;
+      flex: 0 0 auto;
       flex-wrap: wrap;
       gap: 4px;
       padding: 6px 8px;
@@ -184,10 +196,6 @@
     @media (pointer: coarse), (max-width: 720px) {
       #keybar {
         display: flex;
-        position: fixed;
-        left: 0; right: 0;
-        bottom: var(--kb-offset, 0px);
-        z-index: 60;
         /* Single horizontal row that scrolls instead of wrapping. */
         flex-wrap: nowrap;
         overflow-x: auto;
@@ -2313,18 +2321,14 @@
       keybar.classList.toggle('collapsed', hidden);
       keybarToggle.textContent = hidden ? '⌨' : '≡';
       keybarToggle.title = hidden ? 'Show key bar' : 'Hide key bar';
-      // Route through refitSoon so the inline pin styles get cleared
-      // (otherwise the old keybar height stays baked into
-      // terminal-wrap's bottom inset and the layout is wrong until
-      // the next unrelated resize event). The first call happens
-      // during script bootstrap, before refitSoon's `let` state is
-      // initialized — guard with try/catch so the TDZ error there
-      // can't break initial load.
+      // Collapsing/expanding the bar changes its height, so the terminal
+      // box's height changes too — re-fit. This can fire during bootstrap
+      // before relayout()'s state is initialized; guard so a TDZ error
+      // can't break initial load (the initial relayout() runs regardless).
       try {
-        refitSoon();
+        relayout();
       } catch (_) {
-        try { syncViewport(); fitAddon.fit(); if (agentLive) sendResize(); }
-        catch (__) {}
+        try { fitAddon.fit(); if (agentLive) sendResize(); } catch (__) {}
       }
     }
     keybarToggle.addEventListener('click', () => {
@@ -2401,11 +2405,9 @@
       const clamped = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
       term.options.fontSize = clamped;
       try { localStorage.setItem(FONT_KEY, String(clamped)); } catch (_) {}
-      // Route through refit so any in-flight dim chars get erased
-      // (cell-width changes can reflow them to new positions) and
-      // pinTerminalWrap's inline styles get re-measured against the
-      // new cell metrics.
-      refit();
+      // Font size changes cell metrics but not the box size, so force a
+      // fit (the box-unchanged guard would otherwise skip it).
+      fitTerminal(true);
     }
     document.getElementById('font-up-btn').addEventListener('click', () => {
       setFontSize(term.options.fontSize + 2);
@@ -2722,198 +2724,129 @@
         (imageFiles.length === 1 ? '' : 's') + ' (auto-delete in 1h)\x1b[0m\r\n');
     });
 
-    // syncViewport publishes three CSS variables the layout depends on:
-    //   --kb-offset   how much of the layout viewport the soft keyboard
-    //                 covers (0 on Android Chrome with
-    //                 interactive-widget=resizes-content; positive on
-    //                 iOS, where it lifts the keybar above the keyboard).
-    //   --keybar-h    measured height of the floating mobile key bar.
-    //   --header-h    measured height of the page header.
-    // pinTerminalWrap (below) is the authoritative sizer for the
-    // terminal area; the CSS vars exist for the keybar's own positioning
-    // and as a fallback if pinTerminalWrap somehow can't run.
-    function syncViewport() {
+    // ---- Viewport / layout sizing (single source of truth) ----
+    // Layout itself is 100% CSS: body is a flex column (header / terminal
+    // / keybar) sized to the viewport. JS does exactly two things, and
+    // neither can feed back into the other:
+    //
+    //   1. applyViewportHeight() — pin body's height to the *visual*
+    //      viewport. On iOS the soft keyboard overlays the page without
+    //      resizing the layout, so 100dvh alone would let the keyboard
+    //      cover the keybar/terminal; tracking visualViewport.height
+    //      shrinks the body to exactly the visible area instead. On
+    //      Android (interactive-widget=resizes-content) and desktop,
+    //      visualViewport.height already equals the layout height, so
+    //      this is a harmless no-op there. Setting a height value that
+    //      doesn't depend on the terminal box means it can't loop.
+    //
+    //   2. fitTerminal() — resize xterm's grid to fill #terminal-wrap.
+    //      The box's size is owned entirely by flexbox; fit() only sizes
+    //      the canvas *inside* it (min-height:0 + overflow:hidden mean the
+    //      canvas can't push the box bigger), so a ResizeObserver watching
+    //      the box and calling fit() can NEVER trigger another resize.
+    //
+    // That structural guarantee — no second sizing authority, observer
+    // output can't become observer input — is what kills the old
+    // measure→pin→resize→measure flicker loop for good.
+    // iOS (incl. iPadOS, which reports as "MacIntel" + touch) is the only
+    // platform whose soft keyboard OVERLAYS the page instead of resizing
+    // the layout viewport — there CSS 100dvh stays full-height and the
+    // keyboard hides the terminal, so we must pin <body> to the visual
+    // viewport. EVERYWHERE ELSE (Android Chrome with
+    // interactive-widget=resizes-content, desktop) the layout viewport
+    // resizes natively and 100dvh tracks it reliably — overriding height
+    // there is actively harmful: Android reports a STALE visualViewport
+    // .height for a beat after a keyboard close, so an override pins <body>
+    // back to the old small height and fights the correct 100dvh grow
+    // (the "increase then snap back to a gap" flicker). So: only ever
+    // touch body height on iOS; let CSS own it otherwise.
+    const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    let lastAppliedH = -1, lastAppliedT = '';
+    function applyViewportHeight() {
       const vv = window.visualViewport;
-      const kbOff = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
-      document.documentElement.style.setProperty('--kb-offset', kbOff + 'px');
-      const isMobileKeybar = matchMedia('(pointer: coarse), (max-width: 720px)').matches;
-      const keybarH = isMobileKeybar && keybar.offsetHeight ? keybar.offsetHeight : 0;
-      document.documentElement.style.setProperty('--keybar-h', keybarH + 'px');
-      const headerEl = document.querySelector('header');
-      const headerH = headerEl ? headerEl.offsetHeight : 0;
-      document.documentElement.style.setProperty('--header-h', headerH + 'px');
-      // Lift the jump-to-bottom pill so it never hides behind the bar.
-      document.documentElement.style.setProperty('--jump-bottom-extra', isMobileKeybar ? '8px' : '0px');
-    }
-    // Directly measure the rendered position of the header and keybar
-    // and pin terminal-wrap between them via inline styles. Bypasses
-    // the CSS-var/calc indirection entirely so it can't go stale.
-    // The keybar's `bottom: var(--kb-offset)` has always worked
-    // reliably; reading keybar.getBoundingClientRect().top inherits
-    // that reliability for the terminal area too.
-    function pinTerminalWrap() {
-      const tw = document.getElementById('terminal-wrap');
-      const hdr = document.querySelector('header');
-      if (!tw || !hdr) return;
-      const headerBottom = hdr.getBoundingClientRect().bottom;
-      let bottomInset = 0;
-      const isMobileKeybar = matchMedia('(pointer: coarse), (max-width: 720px)').matches;
-      if (isMobileKeybar && keybar) {
-        const kbRect = keybar.getBoundingClientRect();
-        // keybar.top is its top edge in viewport coords; the inset
-        // from window.innerHeight gives us how far up from the
-        // bottom we need to stop.
-        bottomInset = Math.max(0, window.innerHeight - kbRect.top);
+      if (!IS_IOS || !vv) {
+        // Android / desktop: CSS 100dvh drives layout. Make sure no stale
+        // inline override is left clamping it.
+        if (lastAppliedH !== 0) { document.body.style.height = ''; lastAppliedH = 0; }
+        if (lastAppliedT !== '') { document.body.style.transform = ''; lastAppliedT = ''; }
+        return;
       }
-      tw.style.top = headerBottom + 'px';
-      tw.style.bottom = bottomInset + 'px';
+      const h = Math.round(vv.height);
+      // iOS can scroll the visual viewport down under the keyboard; shift
+      // the body to follow it so the top of the terminal stays visible.
+      const t = vv.offsetTop ? 'translateY(' + Math.round(vv.offsetTop) + 'px)' : '';
+      if (h !== lastAppliedH) { document.body.style.height = h + 'px'; lastAppliedH = h; }
+      if (t !== lastAppliedT) { document.body.style.transform = t; lastAppliedT = t; }
     }
-    // Strip the inline overrides set by pinTerminalWrap. We do this
-    // the instant a viewport event fires so the CSS-var path (which
-    // re-resolves automatically) takes over while pinTerminalWrap is
-    // waiting out its trailing-edge debounce. Without this, a stale
-    // bottom-inset measurement from a previous keyboard state can
-    // stick around for hundreds of ms after the keyboard closes,
-    // leaving the empty keyboard region uncovered by the terminal.
-    function unpinTerminalWrap() {
-      const tw = document.getElementById('terminal-wrap');
-      if (!tw) return;
-      tw.style.top = '';
-      tw.style.bottom = '';
-    }
-    const refit = () => {
-      syncViewport();
-      pinTerminalWrap();
-      // Erase visible dim chars BEFORE fit() reflows the buffer:
-      // cursor is at end-of-run now; after fit() the buffer reflows
-      // and the same column may not exist. The "spaces" we write
-      // become legitimately-empty cells that reflow alongside
-      // everything else, leaving no orphans behind.
+    let lastFitW = 0, lastFitH = 0, fitFrame = 0;
+    function fitTerminal(force) {
+      const wrap = document.getElementById('terminal-wrap');
+      if (!wrap) return;
+      const w = wrap.clientWidth, h = wrap.clientHeight;
+      if (!force && w === lastFitW && h === lastFitH) return; // box unchanged → nothing to do
+      lastFitW = w; lastFitH = h;
+      // Erase any in-flight dim predictions before fit() reflows the
+      // buffer (cell columns may move). No-op while predictions are off.
       if (term && predictions.length > 0) resetPredictionsSoft();
       try { fitAddon.fit(); } catch (_) {}
       if (agentLive) sendResize();
-    };
-    // refitSoon trailing-edge-debounces a burst of resize signals.
-    // Android Chrome and iOS Safari fire visualViewport.resize and
-    // ResizeObserver many times during the soft-keyboard animation
-    // (200–300ms total), each at an intermediate size. A bare rAF
-    // only coalesces within ONE frame — bursts spanning multiple
-    // frames each ran their own fitAddon, locking in a stale
-    // mid-animation measurement that the eye saw as a flicker before
-    // the final refit settled things. setTimeout with a delay
-    // longer than the keyboard animation means we ONLY fit after the
-    // final event lands. We also keep a 0ms rAF for the
-    // common "single event, layout already settled" case so a window
-    // resize on desktop still feels instant.
-    let refitFrame = 0;
-    let refitTimer = 0;
-    let refitTimer2 = 0;
-    const REFIT_SETTLE_MS = 140;
-    // Some Android Chrome / Samsung Internet builds animate the
-    // soft-keyboard close for ~400ms but stop firing visualViewport
-    // resize events early. The 140ms trailing-edge timer fires
-    // mid-animation, the 400ms poll misses the final settle (it
-    // happens to sample matching mid-values), and pinTerminalWrap
-    // gets stuck on the keyboard-open inset. The follow-up refit at
-    // ~700ms re-measures once the animation has definitely settled,
-    // catching this case without affecting fast desktops.
-    const REFIT_FOLLOWUP_MS = 700;
-    function refitSoon() {
-      // The instant a viewport signal arrives, drop the stale inline
-      // pin so the CSS-var path drives layout while we wait for the
-      // resize burst to settle. Updating CSS vars *now* (via
-      // syncViewport) keeps the keybar's `bottom:var(--kb-offset)`
-      // and terminal-wrap's CSS fallback `bottom:calc(--kb-offset +
-      // --keybar-h)` in sync with the current viewport, so the
-      // visual layout is correct immediately even if pinTerminalWrap
-      // measures something stale on the trailing-edge fit.
-      unpinTerminalWrap();
-      syncViewport();
-      // Cancel any pending fast path; the trailing-edge timer wins.
-      if (refitFrame) { cancelAnimationFrame(refitFrame); refitFrame = 0; }
-      if (refitTimer) clearTimeout(refitTimer);
-      if (refitTimer2) { clearTimeout(refitTimer2); refitTimer2 = 0; }
-      refitTimer = setTimeout(() => {
-        refitTimer = 0;
-        refitFrame = requestAnimationFrame(() => {
-          refitFrame = 0;
-          refit();
-        });
-      }, REFIT_SETTLE_MS);
-      refitTimer2 = setTimeout(() => {
-        refitTimer2 = 0;
-        refit();
-      }, REFIT_FOLLOWUP_MS);
     }
-    window.addEventListener('resize', refitSoon);
-    // orientationchange is fired by older Android Chrome when window.resize
-    // sometimes isn't (the resize firing on rotation has been flaky for
-    // years). Cheap to hook even on devices that fire both.
-    window.addEventListener('orientationchange', refitSoon);
+    function scheduleFit() {
+      if (fitFrame) return;            // coalesce a burst into one fit per frame
+      fitFrame = requestAnimationFrame(() => { fitFrame = 0; fitTerminal(); });
+    }
+    // Public entry point used by the rest of the app (keybar toggle, font
+    // size, connect). Re-pins height, then fits on the next frame.
+    function relayout() { applyViewportHeight(); scheduleFit(); }
+
+    // Viewport changes (keyboard open/close, rotation, desktop resize)
+    // update body height and re-fit. visualViewport is the accurate
+    // signal on mobile; window.resize covers browsers without it.
     if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', refitSoon);
-      window.visualViewport.addEventListener('scroll', syncViewport);
+      window.visualViewport.addEventListener('resize', relayout);
+      window.visualViewport.addEventListener('scroll', applyViewportHeight);
     }
-    // ResizeObserver on the terminal-wrap is the SOURCE OF TRUTH for
-    // "the box xterm renders into changed size". The various viewport
-    // events (window.resize, visualViewport.resize) fire heuristically
-    // and sometimes get the keyboard-close animation wrong — leaving
-    // a stale small measurement burned into fitAddon and the bottom
-    // half of the page empty. The observer fires whenever the actual
-    // CSS box settles to a new size, regardless of why, so we always
-    // catch the final state.
+    window.addEventListener('resize', relayout);
+    window.addEventListener('orientationchange', relayout);
+    // The box changing size (header wrapping, keybar collapse, height
+    // re-pin) is the authoritative "re-fit now" signal. Safe to observe
+    // the very element we fit, because fit() can't change its size.
     if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(refitSoon);
-      ro.observe(document.getElementById('terminal-wrap'));
-      // Header can grow/shrink as buttons wrap on narrow screens or
-      // change labels (Connect → Disconnect). Observing it keeps
-      // --header-h fresh so the terminal's `top:` inset stays correct.
-      const hdr = document.querySelector('header');
-      if (hdr) ro.observe(hdr);
+      new ResizeObserver(scheduleFit).observe(document.getElementById('terminal-wrap'));
     }
-    // Defensive poll for the (still real) case where neither
-    // visualViewport.resize nor ResizeObserver fires after a soft-
-    // keyboard close on some Android Chrome / Samsung Internet
-    // builds. Compares vv.height + innerHeight + the keybar's
-    // viewport-top position against last seen and triggers a refit
-    // on any drift. Pauses when the tab is hidden so it doesn't
-    // burn battery in the background.
-    let lastVVH = window.visualViewport ? window.visualViewport.height : 0;
-    let lastIH = window.innerHeight;
-    let lastIW = window.innerWidth;
-    let lastKBTop = keybar ? keybar.getBoundingClientRect().top : 0;
-    let lastTWW = 0;
+    // Safety net for missed viewport events. Android Chrome / Samsung
+    // Internet routinely DROP visualViewport.resize after a keyboard
+    // CLOSE — the box grows back but xterm's grid stays stuck at the
+    // keyboard-open row count, leaving an empty band below the content.
+    // The keybar is the reliable tell here: it's the last flex child, so
+    // its top edge moves the instant the layout reflows around the
+    // keyboard — far more dependable than the viewport resize events. So
+    // every tick we re-pin height and refit whenever EITHER the keybar's
+    // measured top moved OR the box drifted from xterm's grid. Guarded so
+    // it's a no-op when nothing changed (can't churn or loop); it just
+    // guarantees the grid matches the visible box within ~0.3s no matter
+    // which events fired. Paused while the tab is hidden.
+    let lastKbTop = -1;
     setInterval(() => {
       if (document.hidden) return;
-      const vvh = window.visualViewport ? window.visualViewport.height : 0;
-      const ih = window.innerHeight;
-      const iw = window.innerWidth;
-      const kbTop = keybar ? keybar.getBoundingClientRect().top : 0;
-      const tw = document.getElementById('terminal-wrap');
-      const tww = tw ? tw.offsetWidth : 0;
-      // Trigger on ANY dimension drift — width changes (rotation,
-      // sidebar collapse) historically went undetected because both
-      // visualViewport.resize and ResizeObserver could miss them on
-      // some Android Chrome builds, leaving xterm pinned to the
-      // first-load cols even after the container grew.
-      if (vvh !== lastVVH || ih !== lastIH || iw !== lastIW || kbTop !== lastKBTop || tww !== lastTWW) {
-        lastVVH = vvh; lastIH = ih; lastIW = iw; lastKBTop = kbTop; lastTWW = tww;
-        refitSoon();
+      applyViewportHeight();
+      const kbTop = keybar ? Math.round(keybar.getBoundingClientRect().top) : 0;
+      const wrap = document.getElementById('terminal-wrap');
+      const boxDrift = wrap && (wrap.clientWidth !== lastFitW || wrap.clientHeight !== lastFitH);
+      if (kbTop !== lastKbTop || boxDrift) {
+        lastKbTop = kbTop;
+        fitTerminal(true); // keybar moved or box drifted → force the grid to match
       }
-    }, 400);
-    // Focus / blur fallback: when xterm's hidden textarea loses focus
-    // the soft keyboard collapses, but Safari sometimes doesn't fire
-    // visualViewport.resize. Schedule a refit a bit later — the
-    // ResizeObserver normally catches it first, but the focus signal
-    // is a cheap belt-and-suspenders.
-    document.addEventListener('focusout', () => setTimeout(refitSoon, 100), true);
-    document.addEventListener('focusin', () => setTimeout(refitSoon, 100), true);
-    // Initial layout — run the full pipeline (syncViewport +
-    // pinTerminalWrap + fitAddon.fit) so xterm renders into the
-    // correctly-sized container from the first frame, not the
-    // CSS-var-defaults that line 671's fitAddon.fit() picked up
-    // before pinTerminalWrap ran.
-    refit();
+    }, 300);
+    // Keyboard open/close toggles focus on xterm's hidden textarea,
+    // usually before (or instead of) firing visualViewport.resize on
+    // mobile — refit on focus change for a faster response than the poll.
+    document.addEventListener('focusout', () => setTimeout(relayout, 100), true);
+    document.addEventListener('focusin', () => setTimeout(relayout, 100), true);
+    // Initial layout.
+    applyViewportHeight();
+    requestAnimationFrame(() => fitTerminal(true));
 
     // Tap-to-focus: on mobile, tapping an empty area of the terminal
     // wrapper should always open the soft keyboard, even if xterm.js
