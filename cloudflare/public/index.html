@@ -1465,6 +1465,12 @@
       ws.onopen = () => {
         // Stash for the one-time "Connected · handshake Xms" line below.
         lastDialMs = Date.now() - dialStart;
+        // Seed the predictive-echo round-trip estimate so the very first
+        // burst of typing on a slow link uses an RTT-scaled stale window
+        // instead of the 700ms floor (which would wipe in-flight dim chars
+        // before their echo lands). Refined by real echo timings as soon
+        // as the user starts typing.
+        if (lastDialMs > 0 && observedRTT <= 0) observedRTT = lastDialMs;
         ws.send(JSON.stringify({ type: 'auth', pin: pinValue }));
         // Heartbeat. Cloudflare Workers keeps the WS alive on its end,
         // but mobile carriers / NAT timeouts / VPN tunnels can silently
@@ -1844,9 +1850,30 @@
     const predictions = [];                  // [{ c: charCode, ch: str, t: ms }]
     let predictBlockedUntil = 0;             // cool-down deadline; predict skipped while < this
     const PREDICT_BLOCK_MS = 1500;           // cool-down after a stale/mismatch
-    const PREDICT_STALE_MS = 700;            // drop a prediction we never got echo for
+    const PREDICT_STALE_MS = 700;            // floor: drop a prediction we never got echo for
+    const PREDICT_STALE_CAP_MS = 2500;       // ceiling: bound how long an un-echoed char can linger
     const PREDICT_MAX_QUEUE = 24;            // safety cap
     let predictStaleTimer = 0;
+    // Round-trip estimate (keystroke → echo back), EWMA over confirmed
+    // echoes. The whole point of predictive echo is high-RTT links, but a
+    // FIXED 700ms stale timeout fights exactly those: on a 900ms-RTT link
+    // the stale timer wipes the dim run ~150ms BEFORE the echo that would
+    // confirm it arrives, yanking the cursor back to the prompt start —
+    // the "cursor jumps to the beginning of the dim part" bug. So we scale
+    // the stale window to the measured RTT (kept alive ~2.5×) and only fall
+    // back to the 700ms floor when we have no measurement yet (a fresh
+    // burst / genuine no-echo password prompt, where prompt erasure is the
+    // privacy-correct behaviour anyway). Seeded from the WS handshake time
+    // so even the first burst on a slow link doesn't flicker.
+    let observedRTT = 0;
+    function noteRTT(sampleMs) {
+      if (sampleMs <= 0 || sampleMs > 10000) return; // ignore clock jumps / outliers
+      observedRTT = observedRTT > 0 ? Math.round(observedRTT * 0.7 + sampleMs * 0.3) : sampleMs;
+    }
+    function effectiveStaleMs() {
+      if (observedRTT <= 0) return PREDICT_STALE_MS;
+      return Math.min(PREDICT_STALE_CAP_MS, Math.max(PREDICT_STALE_MS, Math.round(observedRTT * 2.5)));
+    }
     // The cursor-back+rewrite+cursor-forward sequences we emit only
     // work on the line we're typing on. If predictions would overflow
     // to a wrapped second line, promote/erase math breaks because CUB
@@ -1924,7 +1951,7 @@
     function dropStalePredictions() {
       const now = performance.now();
       if (predictions.length === 0) return false;
-      if (now - predictions[0].t <= PREDICT_STALE_MS) return false;
+      if (now - predictions[0].t <= effectiveStaleMs()) return false;
       erasePendingDimChars();
       predictBlockedUntil = now + PREDICT_BLOCK_MS;
       return true;
@@ -1936,7 +1963,7 @@
         if (dropStalePredictions() === false && predictions.length > 0) {
           armStaleTimer();
         }
-      }, PREDICT_STALE_MS + 50);
+      }, effectiveStaleMs() + 50);
     }
     // Called on every incoming agent data chunk before xterm renders
     // it. Consumes any prefix that matches our predictions queue, so
@@ -1948,6 +1975,10 @@
       let idx = 0;
       let confirmedChars = '';
       while (predictions.length > 0 && idx < bytes.length && bytes[idx] === predictions[0].c) {
+        // First confirmed char of this echo measures the live round-trip;
+        // feeds the adaptive stale window so the timer never wipes a dim
+        // run that's still in flight on a slow link.
+        if (confirmedChars === '') noteRTT(now - predictions[0].t);
         confirmedChars += predictions[0].ch;
         predictions.shift();
         idx++;
