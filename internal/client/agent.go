@@ -549,14 +549,20 @@ func (a *Agent) resetViewerSize() {
 // applyEffectiveSize resizes the PTY to the right dimensions for the
 // currently attached viewer(s).
 //
-//   - Single viewer (count <= 1): mirror that viewer's size verbatim,
-//     even if the local host terminal is smaller. The host's terminal
-//     emulator can scroll past anything the PTY emits beyond its own
-//     dimensions, which is the standard trade-off. Without this, a
-//     phone connecting to a laptop session with a narrower terminal
-//     window was capped at the laptop's rows — keyboard-collapse left
-//     a big empty area at the bottom of the phone, because the agent
-//     refused to grow the PTY past the host's row count.
+//   - Single viewer (count <= 1): the viewer drives ROWS — even past the
+//     host's row count — so a phone with more vertical space than the
+//     laptop window isn't capped to the host's rows (keyboard-collapse
+//     used to leave a big empty area at the bottom of the phone). The
+//     host's terminal just scrolls past extra rows, which is fine.
+//
+//     COLUMNS, though, are capped to the host width. A viewer wider than
+//     the host terminal would make the shell pad its output past the
+//     host's right edge; that output is mirrored to BOTH screens, so the
+//     narrower one (the host) wraps it — most visibly stranding zsh's
+//     PROMPT_EOL_MARK (a ghost "%") on its own line after every command.
+//     Rows are the dimension users actually lose to a host cap; matching
+//     columns to the narrower screen costs a wide viewer some right-edge
+//     width but keeps every screen wrap-clean.
 //   - Multiple viewers: take min(host, viewer-min) so every screen can
 //     render the shell's output correctly. Sacrificing some right-edge
 //     whitespace on the laptop is worth not garbling every phone.
@@ -578,8 +584,13 @@ func (a *Agent) applyEffectiveSize() {
 
 	var cols, rows uint16
 	if soloViewer && vc > 0 && vr > 0 {
-		// Solo viewer drives. Host's terminal scrolls if needed.
+		// Solo viewer drives rows (host scrolls if shorter). Columns are
+		// capped to the host width so the shell never pads output past
+		// the host terminal's right edge and wraps there (the ghost "%").
 		cols, rows = vc, vr
+		if hostCols > 0 && hostCols < cols {
+			cols = hostCols
+		}
 	} else {
 		// Multi-viewer (or no viewer): min(host, viewers).
 		cols, rows = hostCols, hostRows
