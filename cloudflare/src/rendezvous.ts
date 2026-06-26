@@ -9,13 +9,10 @@
 //
 // Security model for a SHORT code:
 //   - The source must be online, so there is no stored ciphertext to attack
-//     offline. Each paste is one LIVE, rate-bounded guess.
-//   - At most MAX_PASTE_ATTEMPTS paste pairings are allowed per code; the
-//     cap (plus the source going away) burns the offer. A few attempts
-//     tolerate a typo without making a short code brute-forceable online.
-//   - The offer is also burned the moment the SOURCE socket closes — a
-//     successful stream ends with the source closing, and a give-up does
-//     too, so a code is never reusable after its source is gone.
+//     offline. A paste is one LIVE guess.
+//   - The offer is burned on the FIRST paste pairing (consumed = true) and
+//     also when the source socket closes. So a code is good for exactly one
+//     attempt; a mistype is spent and the user re-runs `reminal copy`.
 //   - A burned/expired/never-existed code all yield the SAME merged
 //     "code is either too old or invalid" message, so the relay never
 //     confirms whether a given code was real.
@@ -25,7 +22,6 @@
 // store-and-forward drop.
 
 const RV_TTL_MS = 60 * 60 * 1000; // hard server cap; the source may close earlier
-const MAX_PASTE_ATTEMPTS = 5; // online guesses before the code is burned
 
 type RvRole = "source" | "paste";
 interface RvAttachment {
@@ -77,19 +73,13 @@ export class RendezvousRoom {
     if (consumed || !source || source.readyState !== WebSocket.OPEN) {
       return this.reject(client, server, "paste", 4404, "code is either too old or invalid");
     }
-    const attempts = (await this.state.storage.get<number>("attempts")) ?? 0;
-    if (attempts >= MAX_PASTE_ATTEMPTS) {
-      // Out of guesses — burn the offer and drop the source too.
-      await this.state.storage.put("consumed", true);
-      try { source.close(4404, "too many attempts"); } catch { /* best-effort */ }
-      return this.reject(client, server, "paste", 4404, "code is either too old or invalid");
-    }
     if (this.getSocket("paste")) {
       return this.reject(client, server, "paste", 4409, "a paste is already in progress");
     }
-    // Count this guess BEFORE accepting so a racing second paste can't slip
-    // past the cap.
-    await this.state.storage.put("attempts", attempts + 1);
+    // Burn-on-pairing: one live guess per code. Set BEFORE accepting so a
+    // racing second paste can't also pair, and a mistyped code is spent
+    // (re-run `reminal copy` for a fresh one).
+    await this.state.storage.put("consumed", true);
     server.serializeAttachment({ role: "paste" } satisfies RvAttachment);
     this.state.acceptWebSocket(server);
     return new Response(null, { status: 101, webSocket: client });
@@ -135,18 +125,27 @@ export class RendezvousRoom {
     if (!att || att.rejected) return;
 
     if (att.role === "source") {
-      // Source gone → offer is dead for good. A close after streaming =
-      // success; a mid-transfer drop = failure the user recovers from by
-      // re-running `reminal copy`. Either way: burned. Tell any paired
-      // paste to stop waiting.
+      // Source gone → offer is dead. By protocol the source only closes
+      // AFTER it has received the paste's TypeCopyAck, which the paste sends
+      // only after writing the whole file — so by the time we get here the
+      // paste already has everything and there's nothing in flight to
+      // truncate. Closing the paste now is what unblocks it (it's parked on
+      // a read waiting for exactly this).
       const paste = this.getSocket("paste");
       if (paste && paste.readyState === WebSocket.OPEN) {
-        try { paste.close(1000, "source closed"); } catch { /* best-effort */ }
+        try { paste.close(1000, "transfer complete"); } catch { /* best-effort */ }
       }
       await this.state.storage.put("consumed", true);
+    } else if (att.role === "paste") {
+      // Paste gone (e.g. a wrong-code attempt that failed the handshake):
+      // nudge a source still waiting on key-confirmation so it doesn't hang
+      // until TTL. This is a message, not a close, and the source isn't
+      // receiving a stream at this point — so there's no truncation race.
+      const source = this.getSocket("source");
+      if (source && source.readyState === WebSocket.OPEN) {
+        try { source.send(JSON.stringify({ type: "error", error: "paste closed" })); } catch { /* best-effort */ }
+      }
     }
-    // A paste leaving (e.g. a wrong-code attempt) does NOT close the source:
-    // it stays available for the next attempt until the cap or TTL.
   }
 
   async webSocketError(ws: WebSocket) {

@@ -389,7 +389,7 @@ Usage:
   reminal stop [id-or-port] [-y]           Stop the reminal layer (kicks viewers / disables URL — your shell/server keeps running)
   reminal kill [id] [-y]                   Fully terminate a shell session (irreversible — kills shell + disconnects viewers)
   reminal send <file>                      Push a file to every connected viewer (web client auto-downloads)
-  reminal copy [--ttl <dur>] <file>        Offer a file for pickup; prints a one-time code (source must stay online)
+  reminal copy [--ttl <dur>] [-f] <file>   Offer a file for pickup; prints a one-time code (detached by default; -f to stay in foreground)
   reminal paste <code> [destination]       Fetch a file offered by 'reminal copy' on another terminal (default: .)
   reminal notify <message>                 Push a notification to viewers (browser notification on web)
   reminal connections                      List currently attached viewers with connect time
@@ -540,12 +540,16 @@ func sendControl(pid int, cmd string) (string, error) {
 	}
 }
 
-// runCopyCmd implements `reminal copy [--ttl <dur>] <file>`. For now it
-// always uses the standalone source path; the in-session handoff to a
-// running agent (when REMINAL_SESSION is set) is wired in a follow-up.
+// runCopyCmd implements `reminal copy [--ttl <dur>] [--foreground] <file>`.
+// By default it forks a detached holder so the shell isn't blocked;
+// --foreground (-f) keeps the offer in this terminal. --__hold/--handshake-fd
+// are internal flags the detached holder is re-invoked with.
 func runCopyCmd(args []string) error {
 	ttl := client.DefaultCopyTTL
 	var path string
+	foreground := false
+	hold := false
+	handshakeFD := 0
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -562,18 +566,32 @@ func runCopyCmd(args []string) error {
 				return fmt.Errorf("bad --ttl: %w", err)
 			}
 			ttl = d
+		case a == "--foreground" || a == "-f":
+			foreground = true
+		case a == "--__hold":
+			hold = true
+		case a == "--handshake-fd" && i+1 < len(args):
+			handshakeFD = client.ParseHandshakeFD(args[i : i+2])
+			i++
 		case !strings.HasPrefix(a, "-") && path == "":
 			path = a
 		}
 	}
 	if path == "" {
-		return errors.New("usage: reminal copy [--ttl <dur>] <file>")
+		return errors.New("usage: reminal copy [--ttl <dur>] [--foreground] <file>")
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return err
 	}
-	return client.RunCopy(abs, ttl)
+	switch {
+	case hold:
+		return client.RunCopyHold(abs, ttl, handshakeFD)
+	case foreground:
+		return client.RunCopy(abs, ttl)
+	default:
+		return client.RunCopyBackground(abs, ttl)
+	}
 }
 
 // runPasteCmd implements `reminal paste <code> [destination]`.

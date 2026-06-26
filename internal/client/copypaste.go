@@ -11,8 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -104,14 +107,13 @@ func (w *wsFrameConn) recv() (protocol.Message, error) {
 	}
 }
 
-// RunCopy is the standalone (no-session) source path: it dials the relay,
-// prints the code, and blocks streaming the file to the first paste that
-// proves the code — or exits when ttl elapses. Used when REMINAL_SESSION is
-// absent; the in-session path hands off to the agent instead.
-func RunCopy(path string, ttl time.Duration) error {
-	if ttl <= 0 {
-		ttl = DefaultCopyTTL
-	}
+func (w *wsFrameConn) setReadDeadline(t time.Time) error {
+	return w.conn.SetReadDeadline(t)
+}
+
+// validateCopyFile rejects directories and oversize files up front, in the
+// foreground, before we detach a holder the user can't see fail.
+func validateCopyFile(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -123,7 +125,20 @@ func RunCopy(path string, ttl time.Duration) error {
 		return fmt.Errorf("file too large (%s; max %s) — tar+split it first",
 			humanByteSize(int(info.Size())), humanByteSize(downloadMaxBytes))
 	}
+	return nil
+}
 
+// RunCopy is the foreground (`--foreground`) source path: it dials the relay,
+// prints the code, and blocks streaming the file to the first paste that
+// proves the code — or exits when ttl elapses. By default `reminal copy`
+// uses RunCopyBackground instead so it doesn't tie up the shell.
+func RunCopy(path string, ttl time.Duration) error {
+	if ttl <= 0 {
+		ttl = DefaultCopyTTL
+	}
+	if err := validateCopyFile(path); err != nil {
+		return err
+	}
 	code, err := generateCode()
 	if err != nil {
 		return err
@@ -153,6 +168,133 @@ func RunCopy(path string, ttl time.Duration) error {
 	case <-time.After(ttl):
 		conn.Close() // unblocks the goroutine's pending read
 		return fmt.Errorf("code expired after %s — no paste arrived", ttl)
+	}
+}
+
+// copyHandshake is the JSON a detached holder writes back to its parent over
+// the inherited fd, once it has registered the offer with the relay.
+type copyHandshake struct {
+	Code  string `json:"code"`
+	PID   int    `json:"pid"`
+	Error string `json:"error,omitempty"`
+}
+
+// RunCopyBackground is the default source path: it forks a detached holder
+// (RunCopyHold) that owns the relay connection, waits for the holder to
+// report the code (so a paste can't beat it to the relay), prints it, and
+// returns the shell. The holder lives on until a paste arrives or ttl
+// elapses — without blocking this terminal.
+func RunCopyBackground(path string, ttl time.Duration) error {
+	if ttl <= 0 {
+		ttl = DefaultCopyTTL
+	}
+	if err := validateCopyFile(path); err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate self: %w", err)
+	}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("create handshake pipe: %w", err)
+	}
+	defer r.Close()
+	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		_ = w.Close()
+		return fmt.Errorf("open /dev/null: %w", err)
+	}
+	defer devnull.Close()
+
+	cmd := exec.Command(exe, "copy", "--__hold", "--handshake-fd", "3", "--ttl", ttl.String(), path)
+	cmd.Stdin = devnull
+	cmd.Stdout = devnull
+	cmd.Stderr = devnull
+	cmd.ExtraFiles = []*os.File{w}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		_ = w.Close()
+		return fmt.Errorf("start background holder: %w", err)
+	}
+	_ = w.Close() // so our read EOFs if the child dies before reporting
+	_ = cmd.Process.Release()
+
+	done := make(chan copyHandshake, 1)
+	errc := make(chan error, 1)
+	go func() {
+		var hs copyHandshake
+		if err := json.NewDecoder(r).Decode(&hs); err != nil {
+			errc <- fmt.Errorf("background holder didn't start: %w", err)
+			return
+		}
+		done <- hs
+	}()
+
+	select {
+	case hs := <-done:
+		if hs.Error != "" {
+			return errors.New(hs.Error)
+		}
+		fmt.Printf("Copy code: %s\n", displayCode(hs.Code))
+		fmt.Printf("On the other machine, run:  reminal paste %s\n", displayCode(hs.Code))
+		fmt.Printf("Holding %s in the background (pid %d, expires in %s).\n", filepath.Base(path), hs.PID, ttl)
+		fmt.Printf("Cancel with:  kill %d\n", hs.PID)
+		return nil
+	case err := <-errc:
+		return err
+	case <-time.After(spawnHandshakeTimeout):
+		return errors.New("background holder didn't report ready in time")
+	}
+}
+
+// RunCopyHold is the detached holder (invoked with --__hold): it dials the
+// relay, reports the code back to its parent over handshakeFD, then blocks
+// serving the first valid paste (or until ttl). Its stdio is /dev/null, so
+// all user-facing output happened in the parent already.
+func RunCopyHold(path string, ttl time.Duration, handshakeFD int) error {
+	if ttl <= 0 {
+		ttl = DefaultCopyTTL
+	}
+	report := func(hs copyHandshake) {
+		if handshakeFD <= 0 {
+			return
+		}
+		hf := os.NewFile(uintptr(handshakeFD), "handshake")
+		if hf == nil {
+			return
+		}
+		_ = json.NewEncoder(hf).Encode(hs)
+		_ = hf.Close()
+	}
+
+	code, err := generateCode()
+	if err != nil {
+		report(copyHandshake{Error: "generate code: " + err.Error()})
+		return err
+	}
+	url := config.RendezvousWS(code, "source")
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		report(copyHandshake{Error: "connect to relay: " + err.Error()})
+		return err
+	}
+	defer conn.Close()
+
+	// Offer is live the moment the source WS is accepted — safe to release
+	// the parent now.
+	report(copyHandshake{Code: code, PID: os.Getpid()})
+
+	fc := &wsFrameConn{conn: conn}
+	done := make(chan error, 1)
+	go func() { done <- runSource(fc, code, path) }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(ttl):
+		conn.Close()
+		return nil
 	}
 }
 

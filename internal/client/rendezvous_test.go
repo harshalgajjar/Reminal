@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/reminal/reminal/internal/protocol"
 )
@@ -30,6 +31,8 @@ func (m *memConn) recv() (protocol.Message, error) {
 	}
 	return msg, nil
 }
+
+func (m *memConn) setReadDeadline(time.Time) error { return nil }
 
 func newMemPair() (*memConn, *memConn) {
 	a := make(chan protocol.Message, 256)
@@ -55,15 +58,29 @@ func TestRendezvousRoundTrip(t *testing.T) {
 
 		srcConn, pasteConn := newMemPair()
 		srcErr := make(chan error, 1)
-		go func() { srcErr <- runSource(srcConn, code, srcFile) }()
-
-		gotPath, err := runPaste(pasteConn, code, dstDir)
-		if err != nil {
-			t.Fatalf("size %d: paste: %v", size, err)
+		type pres struct {
+			path string
+			err  error
 		}
+		pasteCh := make(chan pres, 1)
+		go func() { srcErr <- runSource(srcConn, code, srcFile) }()
+		go func() {
+			p, e := runPaste(pasteConn, code, dstDir)
+			pasteCh <- pres{p, e}
+		}()
+
+		// Source returns once the paste acks delivery.
 		if err := <-srcErr; err != nil {
 			t.Fatalf("size %d: source: %v", size, err)
 		}
+		// Paste blocks until the source closes; the relay does that in
+		// production, so simulate it by closing the source→paste channel.
+		close(srcConn.out)
+		res := <-pasteCh
+		if res.err != nil {
+			t.Fatalf("size %d: paste: %v", size, res.err)
+		}
+		gotPath := res.path
 
 		got, err := os.ReadFile(gotPath)
 		if err != nil {

@@ -41,6 +41,13 @@ const (
 	// agent's blinded ephemeral public key plus the wrapped session key
 	// (AES-256-GCM under HKDF(ECDH-shared, salt=ex_id)).
 	TypeKexResp MessageType = "kex_resp"
+	// TypeCopyAck is sent by the paste side of a rendezvous AFTER it has
+	// received every chunk and written the file, to tell the source the
+	// transfer landed. The source waits for it before closing — otherwise
+	// closing right after the last chunk races (and on the network beats)
+	// delivery of that chunk through the relay, silently truncating the
+	// file. It also makes the source's "Sent." mean "the paste has it."
+	TypeCopyAck MessageType = "copy_ack"
 	// TypeKexConfirm is sent by the paste side of a `reminal copy`/`paste`
 	// rendezvous after it unwraps the transfer key, to prove to the source
 	// that it derived the same key (i.e. used the right code) BEFORE the

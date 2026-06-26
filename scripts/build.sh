@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="${VERSION:-0.9.0}"
+VERSION="${VERSION:-0.9.1}"
 OUTPUT="${OUTPUT:-dist/reminal}"
 
 mkdir -p dist

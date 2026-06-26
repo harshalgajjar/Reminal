@@ -30,6 +30,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/reminal/reminal/internal/crypto"
 	"github.com/reminal/reminal/internal/protocol"
@@ -49,6 +50,12 @@ var errWrongCode = errors.New("wrong or mistyped code")
 // The CLI renders this as the deliberately-merged "too old or invalid".
 var errCodeNotLive = errors.New("code is either too old or invalid")
 
+// copyAckTimeout bounds how long the source waits for the paste's delivery
+// confirmation after streaming. Generous (a slow disk on the paste side
+// writing a large file) but finite, so a vanished paste doesn't wedge the
+// source forever.
+const copyAckTimeout = 30 * time.Second
+
 // frameConn is the minimal transport the handshake needs. The production
 // path wraps a relay WebSocket; tests use an in-memory pipe. Keeping the
 // exchange transport-agnostic lets us unit-test the whole source<->paste
@@ -56,6 +63,9 @@ var errCodeNotLive = errors.New("code is either too old or invalid")
 type frameConn interface {
 	send(protocol.Message) error
 	recv() (protocol.Message, error)
+	// setReadDeadline bounds the next recv(s); zero clears it. Used so the
+	// source's wait for the delivery ack can't hang forever.
+	setReadDeadline(time.Time) error
 }
 
 // rendezvousChunk is the per-chunk payload, encrypted under the transfer
@@ -164,7 +174,27 @@ func runSource(fc frameConn, code, path string) error {
 	}
 
 	// 4. Stream the file in chunks, each encrypted under the transfer key.
-	return streamFile(fc, box, path, int(info.Size()))
+	if err := streamFile(fc, box, path, int(info.Size())); err != nil {
+		return err
+	}
+
+	// 5. Wait for the paste to confirm it has the whole file before we let
+	//    the caller close the connection. Closing immediately after the last
+	//    chunk races its delivery through the relay (the chunk gets dropped
+	//    when the source socket closes), so this ack is what makes the
+	//    transfer reliable — and makes "Sent." honest.
+	if err := fc.setReadDeadline(time.Now().Add(copyAckTimeout)); err != nil {
+		return err
+	}
+	ack, err := fc.recv()
+	if err != nil {
+		return fmt.Errorf("no delivery confirmation from paste: %w", err)
+	}
+	_ = fc.setReadDeadline(time.Time{})
+	if ack.Type != protocol.TypeCopyAck {
+		return fmt.Errorf("rendezvous: expected copy_ack, got %q", ack.Type)
+	}
+	return nil
 }
 
 // streamFile reads path in downloadChunkBytes pieces and sends each as an
@@ -293,7 +323,21 @@ func runPaste(fc frameConn, code, dest string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return writeRendezvousFile(dest, name, raw)
+	written, err := writeRendezvousFile(dest, name, raw)
+	if err != nil {
+		return "", err
+	}
+
+	// Confirm delivery so the source knows it's safe to close (see the ack
+	// rationale in runSource). We send the ack and then block until the
+	// source closes the connection (relayed to us as a read error); this
+	// keeps our socket open long enough for the ack to actually reach the
+	// source instead of being dropped by an eager close on our end.
+	if err := fc.send(protocol.Message{Type: protocol.TypeCopyAck}); err != nil {
+		return "", err
+	}
+	_, _ = fc.recv() // returns when the source closes; the file is already written
+	return written, nil
 }
 
 // receiveStream reads encrypted TypeData chunks until it has Total of them,
