@@ -41,12 +41,26 @@ const (
 	// agent's blinded ephemeral public key plus the wrapped session key
 	// (AES-256-GCM under HKDF(ECDH-shared, salt=ex_id)).
 	TypeKexResp MessageType = "kex_resp"
+	// TypeKexConfirm is sent by the paste side of a `reminal copy`/`paste`
+	// rendezvous after it unwraps the transfer key, to prove to the source
+	// that it derived the same key (i.e. used the right code) BEFORE the
+	// source streams any file bytes. Data is box.Encrypt of a fixed label
+	// under the transfer key; the source decrypts and checks the label. A
+	// wrong code fails the unwrap on the paste side and, even if a peer
+	// forged a KexConfirm, fails this check on the source side — so a
+	// wrong-code paste never receives ciphertext, it just burns an attempt.
+	TypeKexConfirm MessageType = "kex_confirm"
 	// TypeUpload carries an encrypted file from a viewer to the agent.
 	// Payload (after decrypt) is JSON: {"name": "...", "content": "<base64>"}.
 	TypeUpload MessageType = "upload"
 	// TypeDownload carries an encrypted file from the agent to all
-	// viewers (broadcast like TypeData). Payload after decrypt is JSON:
-	// {"name": "...", "content": "<base64>", "size": <int>}.
+	// viewers (broadcast like TypeData), chunked the same way uploads are.
+	// Payload after decrypt is JSON:
+	//   {"download_id":"...", "index":0, "total":N, "name":"...",
+	//    "content":"<base64 of this chunk>", "size":<total file bytes>}
+	// Viewers buffer chunks by download_id and reassemble in index order
+	// once all `total` chunks arrive. A single-chunk file (total<=1, or no
+	// download_id from a legacy agent) is written straight to disk.
 	TypeDownload MessageType = "download"
 	// TypeNotify carries an encrypted user notification from the agent to
 	// every viewer ("build done", "tests passed"). Payload after decrypt

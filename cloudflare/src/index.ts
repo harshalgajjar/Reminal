@@ -1,9 +1,11 @@
 import { SessionRoom } from "./session";
+import { RendezvousRoom } from "./rendezvous";
 
-export { SessionRoom };
+export { SessionRoom, RendezvousRoom };
 
 export interface Env {
   SESSION: DurableObjectNamespace;
+  RENDEZVOUS: DurableObjectNamespace;
   ASSETS: Fetcher;
 }
 
@@ -21,6 +23,19 @@ export default {
       const stub = env.SESSION.get(id);
       const doUrl = new URL(request.url);
       doUrl.pathname = `/ws/${sessionId}/${role}`;
+      return stub.fetch(new Request(doUrl.toString(), request));
+    }
+
+    // Copy/paste rendezvous WS: /rv/<code>/source | paste
+    // Routed to a per-code RendezvousRoom DO that blindly pairs the two.
+    const rvMatch = url.pathname.match(/^\/rv\/([A-Z0-9]+)\/(source|paste)$/i);
+    if (rvMatch) {
+      const code = rvMatch[1].toUpperCase();
+      const role = rvMatch[2].toLowerCase();
+      const id = env.RENDEZVOUS.idFromName(code);
+      const stub = env.RENDEZVOUS.get(id);
+      const doUrl = new URL(request.url);
+      doUrl.pathname = `/rv/${code}/${role}`;
       return stub.fetch(new Request(doUrl.toString(), request));
     }
 

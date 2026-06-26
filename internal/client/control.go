@@ -2,10 +2,13 @@ package client
 
 import (
 	"bufio"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -15,6 +18,17 @@ import (
 
 	"github.com/reminal/reminal/internal/protocol"
 )
+
+// randomID returns a 16-hex-char correlation ID for a chunked transfer
+// (e.g. a `reminal send` download). crypto/rand so it can't collide with a
+// concurrent transfer; uniqueness, not secrecy, is what matters here.
+func randomID() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
 
 // controlSockPath returns the per-agent Unix socket path where the running
 // agent listens for control commands like `reminal send <file>`. PID is
@@ -161,9 +175,26 @@ func (a *Agent) broadcastNotify(message string) error {
 	return nil
 }
 
-// broadcastFile reads the file at path and ships it to every connected viewer
-// as a TypeDownload message. Encryption uses the session's crypto box so the
-// relay never sees plaintext content.
+// downloadChunkBytes is the raw (pre-base64) payload size of each
+// TypeDownload chunk. Cloudflare Durable Objects cap each WS frame at
+// 1 MiB on the wire; 256 KB raw leaves ample room after base64 (≈4/3×),
+// the AES-GCM nonce/tag, and the JSON envelope. Matches the web client's
+// UPLOAD_CHUNK_BYTES so both directions frame identically.
+const downloadChunkBytes = 256 * 1024
+
+// downloadMaxBytes caps a single `reminal send`. The agent streams the
+// file chunk-by-chunk (peak memory ≈ one chunk), but every viewer
+// reassembles the whole file in memory — a browser tab on a phone most
+// of all — so we keep a generous-but-finite ceiling rather than letting
+// a stray `reminal send /dev/sda` OOM a viewer. Adjust if real transfers
+// need more headroom.
+const downloadMaxBytes = 100 * 1024 * 1024
+
+// broadcastFile streams the file at path to every connected viewer as a
+// sequence of TypeDownload chunks sharing one download_id. Each chunk is
+// encrypted with the session crypto box so the relay never sees plaintext.
+// Viewers buffer chunks by download_id and reassemble once all arrive
+// (mirrors the chunked-upload path in handleUpload).
 func (a *Agent) broadcastFile(path string) error {
 	if path == "" {
 		return errors.New("path required")
@@ -175,48 +206,74 @@ func (a *Agent) broadcastFile(path string) error {
 	if info.IsDir() {
 		return errors.New("directories aren't supported (try tar first)")
 	}
-	// Cloudflare Durable Objects cap each WS message at 1 MiB on the
-	// wire. After base64 expansion (≈4/3×), AES-GCM nonce/tag, JSON
-	// envelope, and the encrypted wrap base64, ~500 KB raw is the
-	// safe ceiling. Larger files were being silently dropped by the
-	// relay — agent's writeMsg returned no error but the viewer
-	// never saw the message. Chunked downloads (similar to the
-	// chunked uploads added in v0.5.6) would lift this; for now,
-	// hard-cap and surface a clear error.
-	const maxBytes = 500 * 1024
-	if info.Size() > maxBytes {
-		return fmt.Errorf("file too large for relay (%d bytes; max %d). Chunked downloads not yet implemented — tar+split the file, or upload from viewer side instead",
-			info.Size(), maxBytes)
+	if info.Size() > downloadMaxBytes {
+		return fmt.Errorf("file too large (%s; max %s) — tar+split it, or upload from the viewer side instead",
+			humanByteSize(int(info.Size())), humanByteSize(downloadMaxBytes))
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	payload, err := json.Marshal(struct {
-		Name    string `json:"name"`
-		Content string `json:"content"`
-		Size    int    `json:"size"`
-	}{
-		Name:    filepath.Base(path),
-		Content: base64.StdEncoding.EncodeToString(raw),
-		Size:    len(raw),
-	})
-	if err != nil {
-		return err
-	}
-	enc, err := a.box.Encrypt(payload)
-	if err != nil {
-		return err
-	}
+
 	a.currentConnMu.Lock()
 	conn := a.currentConn
 	a.currentConnMu.Unlock()
 	if conn == nil {
 		return errors.New("not connected to relay (is the agent paused?)")
 	}
-	if err := a.writeMsg(conn, protocol.Message{Type: protocol.TypeDownload, Data: enc}); err != nil {
+
+	f, err := os.Open(path)
+	if err != nil {
 		return err
 	}
-	a.broadcastNotice(fmt.Sprintf("sent %s (%s) to viewers", filepath.Base(path), humanByteSize(len(raw))))
+	defer f.Close()
+
+	name := filepath.Base(path)
+	size := int(info.Size())
+	// At least one chunk even for an empty file, so the viewer always
+	// gets a (name, total=1) frame it can finalize.
+	total := (size + downloadChunkBytes - 1) / downloadChunkBytes
+	if total == 0 {
+		total = 1
+	}
+	downloadID, err := randomID()
+	if err != nil {
+		return err
+	}
+
+	buf := make([]byte, downloadChunkBytes)
+	for index := 0; index < total; index++ {
+		n, rerr := io.ReadFull(f, buf)
+		if rerr == io.ErrUnexpectedEOF || rerr == io.EOF {
+			// Final (short) chunk, or an empty file's single chunk.
+			rerr = nil
+		}
+		if rerr != nil {
+			return rerr
+		}
+		payload, err := json.Marshal(struct {
+			DownloadID string `json:"download_id"`
+			Index      int    `json:"index"`
+			Total      int    `json:"total"`
+			Name       string `json:"name"`
+			Content    string `json:"content"` // base64 of this chunk
+			Size       int    `json:"size"`    // total file size (informational)
+		}{
+			DownloadID: downloadID,
+			Index:      index,
+			Total:      total,
+			Name:       name,
+			Content:    base64.StdEncoding.EncodeToString(buf[:n]),
+			Size:       size,
+		})
+		if err != nil {
+			return err
+		}
+		enc, err := a.box.Encrypt(payload)
+		if err != nil {
+			return err
+		}
+		if err := a.writeMsg(conn, protocol.Message{Type: protocol.TypeDownload, Data: enc}); err != nil {
+			return err
+		}
+	}
+
+	a.broadcastNotice(fmt.Sprintf("sent %s (%s) to viewers", name, humanByteSize(size)))
 	return nil
 }

@@ -988,6 +988,10 @@
     // Upload IDs THIS viewer originated — used to filter the agent's
     // upload_ack broadcast so only the originator auto-pastes the path.
     const pendingUploadIDs = new Set();
+    // In-flight chunked downloads (host `reminal send`) keyed by download_id.
+    // Each entry: { name, total, chunks: [], received, timer }. Reassembled
+    // once received === total, or dropped after a 60s stall.
+    const pendingDownloads = {};
 
     function humanBytes(n) {
       if (n < 1000) return n + ' B';
@@ -1634,7 +1638,7 @@
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));
-            triggerDownload(payload.name, payload.content);
+            handleDownloadPayload(payload);
           } catch (e) {
             term.write('\r\n\x1b[2m[reminal] download failed: ' + e + '\x1b[0m\r\n');
           }
@@ -2285,13 +2289,63 @@
       if (previewObjectURL) { URL.revokeObjectURL(previewObjectURL); previewObjectURL = null; }
     });
 
-    // triggerDownload routes previewable files (images, PDFs) to the modal
-    // (better phone UX — no app switch) and everything else to a standard
-    // Blob + hidden-anchor download.
-    function triggerDownload(name, b64) {
-      const bin = atob(b64);
+    // b64ToBytes decodes a base64 string into a Uint8Array.
+    function b64ToBytes(b64) {
+      const bin = atob(b64 || '');
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+
+    // handleDownloadPayload routes an incoming 'download' frame. Small files
+    // (legacy single-shot, or one-chunk) save immediately; larger ones arrive
+    // as a sequence of chunks sharing a download_id, buffered here and
+    // reassembled once every chunk has landed. Mirrors the agent's chunked
+    // broadcastFile and the upload reassembly on the host.
+    function handleDownloadPayload(p) {
+      const name = p.name || 'file';
+      if (!p.download_id || (p.total || 1) <= 1) {
+        triggerDownloadBytes(name, b64ToBytes(p.content));
+        return;
+      }
+      const id = p.download_id;
+      let dl = pendingDownloads[id];
+      if (!dl) {
+        dl = pendingDownloads[id] = { name, total: p.total, chunks: new Array(p.total), received: 0, timer: null };
+        term.write('\r\n\x1b[2m[reminal] receiving ' + name + ' (' + p.total + ' chunks)…\x1b[0m\r\n');
+      }
+      // Reset the stale timer on every chunk; drop the transfer if it stalls.
+      if (dl.timer) clearTimeout(dl.timer);
+      dl.timer = setTimeout(() => {
+        if (pendingDownloads[id]) {
+          delete pendingDownloads[id];
+          term.write('\r\n\x1b[2m[reminal] download "' + dl.name + '" timed out (' + dl.received + '/' + dl.total + ' chunks)\x1b[0m\r\n');
+        }
+      }, 60000);
+      if (p.index >= 0 && p.index < dl.total && !dl.chunks[p.index]) {
+        dl.chunks[p.index] = b64ToBytes(p.content);
+        dl.received++;
+      }
+      if (dl.received !== dl.total) return;
+      clearTimeout(dl.timer);
+      delete pendingDownloads[id];
+      let totalLen = 0;
+      for (const c of dl.chunks) totalLen += c.length;
+      const all = new Uint8Array(totalLen);
+      let off = 0;
+      for (const c of dl.chunks) { all.set(c, off); off += c.length; }
+      triggerDownloadBytes(dl.name, all);
+    }
+
+    // triggerDownload decodes base64 then hands off to triggerDownloadBytes.
+    function triggerDownload(name, b64) {
+      triggerDownloadBytes(name, b64ToBytes(b64));
+    }
+
+    // triggerDownloadBytes routes previewable files (images, PDFs) to the modal
+    // (better phone UX — no app switch) and everything else to a standard
+    // Blob + hidden-anchor download.
+    function triggerDownloadBytes(name, bytes) {
       const mime = previewMimeFor(name);
       if (mime) {
         showPreview(name, new Blob([bytes], { type: mime }), mime);

@@ -174,6 +174,18 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "copy":
+			if err := runCopyCmd(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "paste":
+			if err := runPasteCmd(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "notify":
 			if len(os.Args) < 3 {
 				fmt.Fprintln(os.Stderr, "usage: reminal notify <message>")
@@ -377,6 +389,8 @@ Usage:
   reminal stop [id-or-port] [-y]           Stop the reminal layer (kicks viewers / disables URL — your shell/server keeps running)
   reminal kill [id] [-y]                   Fully terminate a shell session (irreversible — kills shell + disconnects viewers)
   reminal send <file>                      Push a file to every connected viewer (web client auto-downloads)
+  reminal copy [--ttl <dur>] <file>        Offer a file for pickup; prints a one-time code (source must stay online)
+  reminal paste <code> [destination]       Fetch a file offered by 'reminal copy' on another terminal (default: .)
   reminal notify <message>                 Push a notification to viewers (browser notification on web)
   reminal connections                      List currently attached viewers with connect time
   reminal info [--json]                    Reprint session ID / PIN / URL / QR for the running agent (or JSON)
@@ -524,6 +538,61 @@ func sendControl(pid int, cmd string) (string, error) {
 	default:
 		return "", fmt.Errorf("agent: %s", strings.TrimSpace(strings.TrimPrefix(reply, "error:")))
 	}
+}
+
+// runCopyCmd implements `reminal copy [--ttl <dur>] <file>`. For now it
+// always uses the standalone source path; the in-session handoff to a
+// running agent (when REMINAL_SESSION is set) is wired in a follow-up.
+func runCopyCmd(args []string) error {
+	ttl := client.DefaultCopyTTL
+	var path string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--ttl" && i+1 < len(args):
+			d, err := time.ParseDuration(args[i+1])
+			if err != nil {
+				return fmt.Errorf("bad --ttl %q: %w", args[i+1], err)
+			}
+			ttl = d
+			i++
+		case strings.HasPrefix(a, "--ttl="):
+			d, err := time.ParseDuration(strings.TrimPrefix(a, "--ttl="))
+			if err != nil {
+				return fmt.Errorf("bad --ttl: %w", err)
+			}
+			ttl = d
+		case !strings.HasPrefix(a, "-") && path == "":
+			path = a
+		}
+	}
+	if path == "" {
+		return errors.New("usage: reminal copy [--ttl <dur>] <file>")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	return client.RunCopy(abs, ttl)
+}
+
+// runPasteCmd implements `reminal paste <code> [destination]`.
+func runPasteCmd(args []string) error {
+	var code, dest string
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		if code == "" {
+			code = a
+		} else if dest == "" {
+			dest = a
+		}
+	}
+	if code == "" {
+		return errors.New("usage: reminal paste <code> [destination]")
+	}
+	return client.RunPaste(code, dest)
 }
 
 // runSend connects to the local agent's control socket and asks it to

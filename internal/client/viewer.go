@@ -48,6 +48,12 @@ type Viewer struct {
 	pin       string
 	box       *crypto.Box
 
+	// pendingDownloads buffers in-flight chunked downloads (from a host
+	// `reminal send`) keyed by download_id, until every chunk arrives.
+	// Guarded by downloadsMu. Mirrors the agent's pendingUploads.
+	downloadsMu      sync.Mutex
+	pendingDownloads map[string]*pendingDownload
+
 	writeMu   sync.Mutex
 	helloOnce sync.Once // first-connect "Connected …" line; suppressed on reconnect
 	// connectTime is set inside helloOnce; zero value means we never
@@ -67,7 +73,11 @@ func NewViewer(sessionID, pin string) (*Viewer, error) {
 	}
 	// box is established per WebSocket connection via the EKE
 	// handshake in negotiateSessionKey (see runConnection).
-	return &Viewer{sessionID: sessionID, pin: pin}, nil
+	return &Viewer{
+		sessionID:        sessionID,
+		pin:              pin,
+		pendingDownloads: make(map[string]*pendingDownload),
+	}, nil
 }
 
 func Connect(sessionID, pin string) error {
@@ -646,15 +656,29 @@ func (v *Viewer) notify(text string) {
 	fmt.Fprintf(os.Stderr, "\r\n\x1b[2m[reminal] %s\x1b[0m\r\n", text)
 }
 
+// pendingDownload buffers in-flight chunks for a single chunked download
+// (a host `reminal send`). Reassembled once len(chunks) == total, or
+// dropped if no chunk arrives within uploadStaleTimeout.
+type pendingDownload struct {
+	name       string
+	total      int
+	chunks     map[int][]byte
+	staleTimer *time.Timer
+}
+
 // handleDownload decrypts a TypeDownload payload (already decrypted at the
-// call site), parses it, and writes the file to ~/Downloads/reminal-incoming/.
-// Mirrors the agent-side handleUpload semantics so files move both ways
+// call site), parses it, and either writes a single-shot file straight to
+// disk or routes a chunk into the pendingDownloads buffer. The chunked path
+// mirrors the agent-side handleUpload semantics so files move both ways
 // without surprises.
 func (v *Viewer) handleDownload(plaintext []byte) {
 	var payload struct {
-		Name    string `json:"name"`
-		Content string `json:"content"` // base64
-		Size    int    `json:"size"`
+		DownloadID string `json:"download_id"`
+		Index      int    `json:"index"`
+		Total      int    `json:"total"`
+		Name       string `json:"name"`
+		Content    string `json:"content"` // base64 of this chunk
+		Size       int    `json:"size"`
 	}
 	if err := json.Unmarshal(plaintext, &payload); err != nil {
 		v.notify(fmt.Sprintf("download failed: parse: %v", err))
@@ -665,11 +689,78 @@ func (v *Viewer) handleDownload(plaintext []byte) {
 		return
 	}
 	safe := filepath.Base(payload.Name)
-	raw, err := base64.StdEncoding.DecodeString(payload.Content)
+	chunk, err := base64.StdEncoding.DecodeString(payload.Content)
 	if err != nil {
 		v.notify(fmt.Sprintf("download failed: bad base64: %v", err))
 		return
 	}
+
+	// Single-shot path: legacy agents (no download_id) and small files
+	// that fit in one chunk. Write immediately, bypassing the buffer.
+	if payload.DownloadID == "" || payload.Total <= 1 {
+		v.writeIncoming(safe, chunk)
+		return
+	}
+	if payload.Index < 0 || payload.Index >= payload.Total {
+		v.notify(fmt.Sprintf("download failed: bad chunk index %d/%d", payload.Index, payload.Total))
+		return
+	}
+
+	v.downloadsMu.Lock()
+	dl, ok := v.pendingDownloads[payload.DownloadID]
+	if !ok {
+		dl = &pendingDownload{
+			name:   safe,
+			total:  payload.Total,
+			chunks: make(map[int][]byte, payload.Total),
+		}
+		id := payload.DownloadID
+		dl.staleTimer = time.AfterFunc(uploadStaleTimeout, func() {
+			v.downloadsMu.Lock()
+			stale, still := v.pendingDownloads[id]
+			if still {
+				delete(v.pendingDownloads, id)
+			}
+			v.downloadsMu.Unlock()
+			if still {
+				v.notify(fmt.Sprintf("download %q timed out after %s (%d/%d chunks)",
+					stale.name, uploadStaleTimeout, len(stale.chunks), stale.total))
+			}
+		})
+		v.pendingDownloads[payload.DownloadID] = dl
+		v.notify(fmt.Sprintf("receiving %s (%d chunks)…", safe, payload.Total))
+	}
+	// Late chunks reset the stale timer. Duplicates are ignored.
+	if _, dup := dl.chunks[payload.Index]; !dup {
+		dl.chunks[payload.Index] = chunk
+	}
+	dl.staleTimer.Reset(uploadStaleTimeout)
+	complete := len(dl.chunks) == dl.total
+	if complete {
+		dl.staleTimer.Stop()
+		delete(v.pendingDownloads, payload.DownloadID)
+	}
+	v.downloadsMu.Unlock()
+
+	if !complete {
+		return
+	}
+
+	// Assemble in index order.
+	totalBytes := 0
+	for _, c := range dl.chunks {
+		totalBytes += len(c)
+	}
+	assembled := make([]byte, 0, totalBytes)
+	for i := 0; i < dl.total; i++ {
+		assembled = append(assembled, dl.chunks[i]...)
+	}
+	v.writeIncoming(dl.name, assembled)
+}
+
+// writeIncoming saves a fully-received download to ~/Downloads/reminal-incoming/,
+// deduplicating the filename. Shared by the single-shot and chunked paths.
+func (v *Viewer) writeIncoming(safe string, raw []byte) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		v.notify(fmt.Sprintf("download failed: %v", err))

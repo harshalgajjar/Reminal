@@ -54,6 +54,16 @@ func SessionWS(sessionID, role string) string {
 	return fmt.Sprintf("%s/%s/%s", base, sessionID, role)
 }
 
+// RendezvousWS builds the WebSocket URL for a `reminal copy`/`paste`
+// rendezvous. RelayWS() ends in "/ws" (the shell-session prefix); the
+// rendezvous lives under "/rv" on the same host, so we swap the suffix.
+// role is "source" or "paste"; code is the canonical (uppercase,
+// dash-free) transfer code that keys the relay's RendezvousRoom.
+func RendezvousWS(code, role string) string {
+	base := strings.TrimSuffix(RelayWS(), "/ws")
+	return fmt.Sprintf("%s/rv/%s/%s", base, strings.ToUpper(code), role)
+}
+
 func Shell() string {
 	if v := os.Getenv("SHELL"); v != "" {
 		return v

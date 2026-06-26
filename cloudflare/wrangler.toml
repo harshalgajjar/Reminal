@@ -9,12 +9,17 @@ account_id = "0cd85a1166e44b17571b7457040d18ae"
 
 [durable_objects]
 bindings = [
-  { name = "SESSION", class_name = "SessionRoom" }
+  { name = "SESSION", class_name = "SessionRoom" },
+  { name = "RENDEZVOUS", class_name = "RendezvousRoom" }
 ]
 
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["SessionRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RendezvousRoom"]
 
 [assets]
 directory = "./public"
