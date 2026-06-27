@@ -62,3 +62,18 @@ func clearHostIndicator() {
 	}
 	fmt.Fprint(os.Stdout, "\x1b[23;0t")
 }
+
+// resetLeakedTermModes turns off host-terminal modes that programs run inside
+// the shared PTY may have enabled on the user's real terminal but never
+// disabled. reminal mirrors PTY output verbatim to stdout, so an inner program
+// that subscribes to color-scheme-change notifications (DEC private mode 2031)
+// leaves that subscription active on the host terminal after the program — and
+// the shell it ran in — are gone. The terminal then keeps emitting unsolicited
+// `CSI ? 997 ; Ps n` reports, which surface as stray `997;1n` text at the
+// user's outer shell prompt once reminal restores cooked mode (zsh runs it as a
+// command → "command not found: 997"). Disabling the mode on teardown returns
+// the terminal to a sane baseline — the same cleanup a terminal multiplexer
+// performs on exit.
+func resetLeakedTermModes() {
+	fmt.Fprint(os.Stdout, "\x1b[?2031l")
+}

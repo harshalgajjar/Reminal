@@ -328,6 +328,11 @@ func (a *Agent) Run() error {
 		if terr == nil {
 			a.hostOldState = oldState
 			defer xterm.Restore(int(os.Stdin.Fd()), oldState)
+			// Registered after Restore so it runs before it (LIFO): disable any
+			// terminal modes (e.g. color-scheme notifications) that inner
+			// programs leaked onto the host terminal, so they don't spew stray
+			// reports at the user's shell prompt after reminal exits.
+			defer resetLeakedTermModes()
 			setHostIndicator(a.sessionID)
 			defer clearHostIndicator()
 			a.localActive = true
