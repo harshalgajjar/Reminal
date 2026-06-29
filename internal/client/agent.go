@@ -76,10 +76,6 @@ type Agent struct {
 	// Persisted into the active record; resolveActive also matches on them.
 	name string
 	cwd  string
-	// shellPID is the PID of the shell running inside the PTY, used to read
-	// its live cwd. Set once after the shell starts; 0 on an Attach'd
-	// (hot-restart) session where we inherited the PTY but not the child.
-	shellPID int
 	// metaMu guards title + lastActivity + cwd, which the pumpPTY and
 	// meta-flush goroutines write while activeRecord reads them.
 	metaMu       sync.Mutex
@@ -370,10 +366,9 @@ func (a *Agent) Run() error {
 		// term was set in NewAgentWith from ResumeState.PTY.
 		defer a.term.Close()
 	}
-	// Track the shell PID so we can read its live cwd, seed the record with
-	// the shell's actual starting directory, and persist it now so `reminal
-	// list` is correct immediately instead of after the first flush.
-	a.shellPID = a.term.Pid()
+	// Seed the record with the shell's actual working directory and persist
+	// it now so `reminal list` is correct immediately instead of after the
+	// first flush.
 	a.refreshCwd()
 	if !a.paused.Load() {
 		_ = session.WriteActive(a.activeRecord(int(a.curViewers.Load())))
@@ -775,11 +770,15 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 }
 
 // refreshCwd updates the recorded cwd from the shell's live working directory
-// so `reminal list` follows cd's instead of showing the launch dir. Best-effort
-// — if the lookup fails (or there's no child PID, e.g. after hot-restart) the
-// previous value is kept.
+// so `reminal list` follows cd's instead of showing the launch dir. The PID is
+// read fresh each call (not cached) because after a hot-restart it comes from
+// the terminal's foreground process group, which changes as programs come and
+// go. Best-effort — if the lookup fails the previous value is kept.
 func (a *Agent) refreshCwd() {
-	if c := shellCwd(a.shellPID); c != "" {
+	if a.term == nil {
+		return
+	}
+	if c := shellCwd(a.term.Pid()); c != "" {
 		a.metaMu.Lock()
 		a.cwd = c
 		a.metaMu.Unlock()

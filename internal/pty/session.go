@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 type Session struct {
@@ -67,12 +68,22 @@ func (s *Session) Fd() uintptr {
 	return s.ptmx.Fd()
 }
 
-// Pid returns the shell process's PID, or 0 if unknown (e.g. an Attach'd
-// session from a hot-restart, where we inherited the PTY but not the child).
-// Used to read the shell's live working directory for `reminal list`.
+// Pid returns a PID representing what's running in the session, used to read
+// the live working directory for `reminal list`.
+//
+// When we spawned the shell we have its PID directly. After a hot-restart we
+// inherited the PTY master but not the child, so we fall back to the terminal's
+// foreground process group (TIOCGPGRP on the master) — which also has the nice
+// property of pointing at whatever is running in the foreground (e.g. an editor
+// or `claude`), so the reported cwd tracks that. 0 if neither is available.
 func (s *Session) Pid() int {
 	if s.cmd != nil && s.cmd.Process != nil {
 		return s.cmd.Process.Pid
+	}
+	if s.ptmx != nil {
+		if pgrp, err := unix.IoctlGetInt(int(s.ptmx.Fd()), unix.TIOCGPGRP); err == nil && pgrp > 0 {
+			return pgrp
+		}
 	}
 	return 0
 }
