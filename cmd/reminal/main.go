@@ -1305,17 +1305,16 @@ func runInfo(arg string, jsonOut, all, withQR bool) error {
 			}
 			return json.NewEncoder(os.Stdout).Encode(records)
 		}
-		fmt.Printf("%d session(s):\n\n", len(shells))
+		fmt.Printf("%d session(s):\n", len(shells))
 		for _, a := range shells {
 			if withQR {
-				client.ShowInfoFor(a)
+				client.ShowInfoFor(a) // full details + QR
 			} else {
-				client.ShowInfoCompact(a)
-				fmt.Println()
+				client.ShowInfoDetails(a) // full details, no QR
 			}
 		}
 		if !withQR {
-			fmt.Println("  Tip: `reminal qr <id|name>` for a scannable code, or `reminal info --all --qr` for all.")
+			fmt.Println("  Add --qr to include a scannable code under each, or `reminal qr <id|name>` for one.")
 		}
 		return nil
 	}

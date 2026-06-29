@@ -70,6 +70,19 @@ func ShowActiveInfo() error {
 func printActiveBanner(a *session.Active) {
 	fmt.Println()
 	fmt.Println("  reminal — remote terminal")
+	printActiveDetails(a)
+	fmt.Println("  Scan to join from your phone:")
+	fmt.Println()
+	joinURL := fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN)
+	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
+	fmt.Println()
+}
+
+// printActiveDetails prints every textual field for a session — name, creds,
+// links, where/what's running, age, idle, viewers — but NOT the QR. It's the
+// shared body of the single-session banner and `reminal info --all`, so both
+// surface the same information per session.
+func printActiveDetails(a *session.Active) {
 	fmt.Println()
 	if a.Name != "" {
 		fmt.Printf("  Name:     %s\n", a.Name)
@@ -95,17 +108,15 @@ func printActiveBanner(a *session.Active) {
 	// on a remote (no local active record).
 	if a.PID > 0 && !a.StartedAt.IsZero() {
 		fmt.Printf("  Started:  %s (PID %d)\n", a.StartedAt.Format(time.RFC3339), a.PID)
+		if !a.LastActivity.IsZero() {
+			fmt.Printf("  Idle:     %s\n", time.Since(a.LastActivity).Round(time.Second))
+		}
 		if a.Viewers > 0 {
 			fmt.Printf("  Viewers:  %d currently attached\n", a.Viewers)
 		} else {
 			fmt.Println("  Viewers:  none currently attached")
 		}
 	}
-	fmt.Println()
-	fmt.Println("  Scan to join from your phone:")
-	fmt.Println()
-	joinURL := fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN)
-	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
 	fmt.Println()
 }
 
@@ -146,22 +157,11 @@ func ShowQRFor(a *session.Active) {
 	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
 }
 
-// ShowInfoCompact prints a short, scannable details block for one session — id,
-// name, PIN, connect command, join URL, and the running hint — without a QR, so
-// many sessions fit on screen at once. Used by `reminal info --all`.
-func ShowInfoCompact(a *session.Active) {
-	name := a.Name
-	if name == "" {
-		name = "\x1b[2m—\x1b[0m"
-	}
-	fmt.Printf("  \x1b[1m%s\x1b[0m  %s", a.ID, name)
-	if a.Title != "" {
-		fmt.Printf("   \x1b[2m· %s\x1b[0m", a.Title)
-	}
-	fmt.Println()
-	fmt.Printf("    PIN %s   ·   reminal connect %s %s\n", a.PIN, a.ID, a.PIN)
-	fmt.Printf("    \x1b[2m%s#p=%s\x1b[0m\n", a.OpenURL, a.PIN)
-}
+// ShowInfoDetails prints the full per-session detail block (everything the
+// single-session banner shows except the QR) for an already-resolved session.
+// Used by `reminal info --all` so each session shows the same information as
+// `reminal info <id>` would. Pair with ShowInfoFor when a QR is wanted too.
+func ShowInfoDetails(a *session.Active) { printActiveDetails(a) }
 
 // InfoJSON returns the JSON-serialisable view of a session's connect details.
 // Shared by the single-session and --all JSON paths so the shape stays
