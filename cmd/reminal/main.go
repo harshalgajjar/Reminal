@@ -82,19 +82,21 @@ func main() {
 			}
 			return
 		case "info":
-			jsonOut := false
+			jsonOut, all, withQR := false, false, false
+			arg := ""
 			for _, a := range os.Args[2:] {
-				if a == "--json" || a == "-j" {
+				switch {
+				case a == "--json" || a == "-j":
 					jsonOut = true
+				case a == "--all" || a == "-a":
+					all = true
+				case a == "--qr":
+					withQR = true
+				case !strings.HasPrefix(a, "-") && arg == "":
+					arg = a
 				}
 			}
-			var err error
-			if jsonOut {
-				err = client.ShowActiveInfoJSON()
-			} else {
-				err = client.ShowActiveInfo()
-			}
-			if err != nil {
+			if err := runInfo(arg, jsonOut, all, withQR); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
@@ -105,7 +107,13 @@ func main() {
 			}
 			return
 		case "qr":
-			if err := client.ShowActiveQR(); err != nil {
+			arg := ""
+			for _, a := range os.Args[2:] {
+				if !strings.HasPrefix(a, "-") && arg == "" {
+					arg = a
+				}
+			}
+			if err := runQR(arg); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
@@ -485,8 +493,8 @@ Usage:
   reminal paste <code> [destination]       Fetch a file offered by 'reminal copy' on another terminal (default: .)
   reminal notify <message>                 Push a notification to viewers (browser notification on web)
   reminal connections                      List currently attached viewers with connect time
-  reminal info [--json]                    Reprint session ID / PIN / URL / QR for the running agent (or JSON)
-  reminal qr                               Print just the join QR for the running agent (for a second screen)
+  reminal info [id|name] [--all] [--qr]    Show connect details (ID/PIN/URL/QR). --all = every session at once; --json for scripts
+  reminal qr [id|name]                     Print just the join QR (defaults to the session you're in)
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
   reminal completion <bash|zsh|fish>       Print shell completion script (source it in your shell rc)
   reminal upgrade                          Upgrade to the latest release (download new binary)
@@ -1269,6 +1277,80 @@ func parseDuration(s string) (time.Duration, error) {
 		}
 		return d, nil
 	}
+}
+
+// runInfo handles `reminal info`. With no target it keeps the original
+// env-aware behavior (the session you're in / the lone one). With a target it
+// resolves by id/name/prefix/substring and prints that session's full banner.
+// With --all it prints connect details for every shell session at once — the
+// "iterate all my sessions" path — compact by default, full banner + QR per
+// session under --qr. --json emits machine-readable output for any of these.
+func runInfo(arg string, jsonOut, all, withQR bool) error {
+	if all {
+		allSessions, err := session.ReadAllActive()
+		if err != nil {
+			return err
+		}
+		shells := matchSessions(allSessions, func(a session.Active) bool { return !a.IsPort() })
+		// recent-first, same ordering as `reminal list`
+		sort.Slice(shells, func(i, j int) bool { return shells[i].LastActive().After(shells[j].LastActive()) })
+		if len(shells) == 0 {
+			fmt.Println("No reminal shell sessions running.")
+			return nil
+		}
+		if jsonOut {
+			records := make([]any, len(shells))
+			for i, a := range shells {
+				records[i] = client.InfoJSON(a)
+			}
+			return json.NewEncoder(os.Stdout).Encode(records)
+		}
+		fmt.Printf("%d session(s):\n\n", len(shells))
+		for _, a := range shells {
+			if withQR {
+				client.ShowInfoFor(a)
+			} else {
+				client.ShowInfoCompact(a)
+				fmt.Println()
+			}
+		}
+		if !withQR {
+			fmt.Println("  Tip: `reminal qr <id|name>` for a scannable code, or `reminal info --all --qr` for all.")
+		}
+		return nil
+	}
+
+	// Single session. No arg → original env-aware path (works on the host and
+	// over `reminal connect` from the same machine).
+	if arg == "" {
+		if jsonOut {
+			return client.ShowActiveInfoJSON()
+		}
+		return client.ShowActiveInfo()
+	}
+	a, err := resolveActive(arg)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		return json.NewEncoder(os.Stdout).Encode(client.InfoJSON(a))
+	}
+	client.ShowInfoFor(a)
+	return nil
+}
+
+// runQR prints just the join QR. No target → the current/lone session (original
+// behavior); a target resolves by id/name/prefix/substring.
+func runQR(arg string) error {
+	if arg == "" {
+		return client.ShowActiveQR()
+	}
+	a, err := resolveActive(arg)
+	if err != nil {
+		return err
+	}
+	client.ShowQRFor(a)
+	return nil
 }
 
 // humanShort renders a duration as a compact 1-unit string (45s, 3m, 2h, 5d).

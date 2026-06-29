@@ -71,10 +71,25 @@ func printActiveBanner(a *session.Active) {
 	fmt.Println()
 	fmt.Println("  reminal — remote terminal")
 	fmt.Println()
+	if a.Name != "" {
+		fmt.Printf("  Name:     %s\n", a.Name)
+	}
 	fmt.Printf("  Session:  %s\n", a.ID)
 	fmt.Printf("  PIN:      %s\n", a.PIN)
 	fmt.Printf("  Open:     %s\n", a.OpenURL)
+	// One-tap join link with the PIN in the URL fragment (#p=…). The fragment
+	// never leaves the device (browsers don't send it to the server); the web
+	// client reads it to auto-fill the PIN. Ideal for tapping on a phone.
+	fmt.Printf("  Join:     %s#p=%s\n", a.OpenURL, a.PIN)
 	fmt.Printf("  Connect:  reminal connect %s %s\n", a.ID, a.PIN)
+	// Where it's running / what's running — so iterating many sessions tells
+	// you which is which without attaching to each.
+	if a.Cwd != "" {
+		fmt.Printf("  Dir:      %s\n", a.Cwd)
+	}
+	if a.Title != "" {
+		fmt.Printf("  Running:  %s\n", a.Title)
+	}
 	// PID + StartedAt are only known on the host machine. Skip them
 	// gracefully when we're reconstructing the banner from env vars
 	// on a remote (no local active record).
@@ -103,23 +118,7 @@ func ShowActiveInfoJSON() error {
 	if err != nil {
 		return err
 	}
-	out := struct {
-		ID        string    `json:"id"`
-		PIN       string    `json:"pin"`
-		OpenURL   string    `json:"open_url"`
-		JoinURL   string    `json:"join_url"`
-		PID       int       `json:"pid"`
-		StartedAt time.Time `json:"started_at"`
-	}{
-		ID:        a.ID,
-		PIN:       a.PIN,
-		OpenURL:   a.OpenURL,
-		JoinURL:   fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN),
-		PID:       a.PID,
-		StartedAt: a.StartedAt,
-	}
-	enc := json.NewEncoder(os.Stdout)
-	return enc.Encode(out)
+	return json.NewEncoder(os.Stdout).Encode(InfoJSON(a))
 }
 
 // ShowActiveQR prints just the join-URL QR code for the running agent, no
@@ -133,6 +132,62 @@ func ShowActiveQR() error {
 	joinURL := fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN)
 	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
 	return nil
+}
+
+// ShowInfoFor prints the full join banner (name, session, PIN, URL, QR, plus
+// the working dir and what's running) for an already-resolved session. Used by
+// `reminal info <id|name>` and `reminal info --all --qr`.
+func ShowInfoFor(a *session.Active) { printActiveBanner(a) }
+
+// ShowQRFor prints just the join QR for an already-resolved session. Used by
+// `reminal qr <id|name>`.
+func ShowQRFor(a *session.Active) {
+	joinURL := fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN)
+	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
+}
+
+// ShowInfoCompact prints a short, scannable details block for one session — id,
+// name, PIN, connect command, join URL, and the running hint — without a QR, so
+// many sessions fit on screen at once. Used by `reminal info --all`.
+func ShowInfoCompact(a *session.Active) {
+	name := a.Name
+	if name == "" {
+		name = "\x1b[2m—\x1b[0m"
+	}
+	fmt.Printf("  \x1b[1m%s\x1b[0m  %s", a.ID, name)
+	if a.Title != "" {
+		fmt.Printf("   \x1b[2m· %s\x1b[0m", a.Title)
+	}
+	fmt.Println()
+	fmt.Printf("    PIN %s   ·   reminal connect %s %s\n", a.PIN, a.ID, a.PIN)
+	fmt.Printf("    \x1b[2m%s#p=%s\x1b[0m\n", a.OpenURL, a.PIN)
+}
+
+// InfoJSON returns the JSON-serialisable view of a session's connect details.
+// Shared by the single-session and --all JSON paths so the shape stays
+// identical. Exported so cmd/reminal can marshal one or an array of them.
+func InfoJSON(a *session.Active) any {
+	return struct {
+		ID        string    `json:"id"`
+		Name      string    `json:"name,omitempty"`
+		PIN       string    `json:"pin"`
+		OpenURL   string    `json:"open_url"`
+		JoinURL   string    `json:"join_url"`
+		Cwd       string    `json:"cwd,omitempty"`
+		Title     string    `json:"title,omitempty"`
+		PID       int       `json:"pid"`
+		StartedAt time.Time `json:"started_at"`
+	}{
+		ID:        a.ID,
+		Name:      a.Name,
+		PIN:       a.PIN,
+		OpenURL:   a.OpenURL,
+		JoinURL:   fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN),
+		Cwd:       a.Cwd,
+		Title:     a.Title,
+		PID:       a.PID,
+		StartedAt: a.StartedAt,
+	}
 }
 
 // resolveActiveForInfo finds the session to describe from any of the

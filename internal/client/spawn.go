@@ -147,6 +147,9 @@ func PrintSpawned(sp *SpawnedSession, name, version string) {
 	fmt.Printf("  Session:  %s\n", sp.ID)
 	fmt.Printf("  PIN:      %s\n", sp.PIN)
 	fmt.Printf("  Open:     %s\n", sp.OpenURL)
+	// One-tap join link (PIN in the #p= fragment, auto-filled by the web
+	// client and never sent to the server) — tap it from a phone.
+	fmt.Printf("  Join:     %s#p=%s\n", sp.OpenURL, sp.PIN)
 	fmt.Printf("  Connect:  reminal connect %s %s\n", sp.ID, sp.PIN)
 	fmt.Printf("  PID:      %d  (detached — survives this terminal closing)\n", sp.PID)
 	fmt.Println()

@@ -300,6 +300,9 @@ func (a *Agent) Run() error {
 		fmt.Printf("  Session:  %s\n", a.sessionID)
 		fmt.Printf("  PIN:      %s\n", a.pin)
 		fmt.Printf("  Open:     %s/?s=%s\n", a.webURL, a.sessionID)
+		// One-tap join link with the PIN in the #p= fragment (auto-filled by
+		// the web client, never sent to the server) — tap it from a phone.
+		fmt.Printf("  Join:     %s/?s=%s#p=%s\n", a.webURL, a.sessionID, a.pin)
 		fmt.Printf("  Connect:  reminal connect %s %s\n", a.sessionID, a.pin)
 		fmt.Println()
 		a.printQR()
