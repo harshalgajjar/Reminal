@@ -81,6 +81,32 @@ func TestResolveActiveByPortStillWorks(t *testing.T) {
 	}
 }
 
+func TestParseDuration(t *testing.T) {
+	ok := map[string]time.Duration{
+		"30m":    30 * time.Minute,
+		"12h":    12 * time.Hour,
+		"1d":     24 * time.Hour,
+		"2w":     14 * 24 * time.Hour,
+		"1h30m":  90 * time.Minute,
+		"90s":    90 * time.Second,
+	}
+	for in, want := range ok {
+		got, err := parseDuration(in)
+		if err != nil {
+			t.Errorf("parseDuration(%q) errored: %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("parseDuration(%q) = %v, want %v", in, got, want)
+		}
+	}
+	for _, bad := range []string{"", "abc", "1y", "-3h", "d", "1.5d"} {
+		if _, err := parseDuration(bad); err == nil {
+			t.Errorf("parseDuration(%q) should have errored", bad)
+		}
+	}
+}
+
 func TestHumanShort(t *testing.T) {
 	cases := map[time.Duration]string{
 		30 * time.Second: "30s",

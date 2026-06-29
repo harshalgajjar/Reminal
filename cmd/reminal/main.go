@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -242,6 +243,14 @@ func main() {
 		case "prune":
 			idle := 30 * time.Minute
 			yes := false
+			parseIdle := func(s string) time.Duration {
+				d, derr := parseDuration(s)
+				if derr != nil {
+					fmt.Fprintf(os.Stderr, "reminal prune: %v\n", derr)
+					os.Exit(2)
+				}
+				return d
+			}
 			for i := 2; i < len(os.Args); i++ {
 				a := os.Args[i]
 				switch {
@@ -249,21 +258,14 @@ func main() {
 					yes = true
 				case a == "--idle":
 					if i+1 < len(os.Args) {
-						d, derr := time.ParseDuration(os.Args[i+1])
-						if derr != nil {
-							fmt.Fprintf(os.Stderr, "reminal prune: invalid --idle duration %q\n", os.Args[i+1])
-							os.Exit(2)
-						}
-						idle = d
+						idle = parseIdle(os.Args[i+1])
 						i++
 					}
 				case strings.HasPrefix(a, "--idle="):
-					d, derr := time.ParseDuration(strings.TrimPrefix(a, "--idle="))
-					if derr != nil {
-						fmt.Fprintf(os.Stderr, "reminal prune: invalid --idle duration\n")
-						os.Exit(2)
-					}
-					idle = d
+					idle = parseIdle(strings.TrimPrefix(a, "--idle="))
+				case !strings.HasPrefix(a, "-"):
+					// Positional shorthand: `reminal prune 12h`, `reminal prune 1d`.
+					idle = parseIdle(a)
 				}
 			}
 			if err := runPrune(idle, yes); err != nil {
@@ -272,14 +274,25 @@ func main() {
 			}
 			return
 		case "rename":
-			// reminal rename <id|name> <new-name…>  (remaining args joined,
-			// so multi-word names work without quoting).
+			// One arg renames the CURRENT session (the one whose shell you're
+			// in — no id needed, which is the only sane option on mobile):
+			//   reminal rename <new-name>
+			// Two+ args target another session explicitly, remaining args
+			// joined so multi-word names work without quoting:
+			//   reminal rename <id|name> <new-name…>
 			rest := os.Args[2:]
-			if len(rest) < 2 {
-				fmt.Fprintln(os.Stderr, "usage: reminal rename <id|name> <new-name>")
+			var target, newName string
+			switch {
+			case len(rest) == 0:
+				fmt.Fprintln(os.Stderr, "usage: reminal rename [id|name] <new-name>")
+				fmt.Fprintln(os.Stderr, "  inside a session, just: reminal rename <new-name>")
 				os.Exit(2)
+			case len(rest) == 1:
+				target, newName = "", rest[0] // current session
+			default:
+				target, newName = rest[0], strings.Join(rest[1:], " ")
 			}
-			if err := runRename(rest[0], strings.Join(rest[1:], " ")); err != nil {
+			if err := runRename(target, newName); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
@@ -461,10 +474,10 @@ Usage:
   reminal new [name] [--name <name>]       Spawn a fresh background session (detached — survives this terminal closing)
   reminal expose <port> [--public]         Forward a local HTTP port to a public URL (PIN-protected by default)
   reminal list [filter] [--idle|--viewers|--headless] [-v]   List sessions (recent-first); filter by id/name/cwd/title
-  reminal prune [--idle <dur>] [-y]        Kill idle, unwatched shell sessions in one go (default: idle ≥ 30m)
+  reminal prune [dur] [-y]                 Kill idle, unwatched shell sessions (default idle ≥ 30m; dur e.g. 12h, 1d, 2w)
   reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
   reminal attach [id|name]                 Re-connect to a local agent as a viewer. No arg → interactive picker
-  reminal rename <id|name> <new-name>      Rename a running session (updates what 'reminal list' shows)
+  reminal rename [id|name] <new-name>      Rename a running session. Inside a session, just: reminal rename <new-name>
   reminal stop [id|name|port] [-y]         Stop the reminal layer (kicks viewers / disables URL — your shell/server keeps running)
   reminal kill [id|name] [-y]              Fully terminate a shell session (irreversible — kills shell + disconnects viewers)
   reminal send <file>                      Push a file to every connected viewer (web client auto-downloads)
@@ -508,9 +521,10 @@ Naming & resolution:
 Examples:
   reminal new deploy                                               # named background session
   reminal attach deploy                                            # … attach to it by name
+  reminal rename prod-db                                           # rename the session you're in (no id needed)
   reminal attach                                                   # interactive picker
   reminal list ~/project                                           # filter by working directory
-  reminal prune -y                                                 # clean up abandoned sessions
+  reminal prune 1d -y                                              # clean up sessions idle 1+ day
   reminal
   reminal connect ABC12345 482916
   reminal connect ABC12345                                          # PIN prompted
@@ -985,8 +999,11 @@ func attachTo(a *session.Active) error {
 // runRename changes a running session's display name in place, via the agent's
 // control socket. We can't just edit the active record from here — the agent
 // owns it and rewrites it on viewer/activity changes, which would clobber a
-// direct file edit. The agent persists the new name itself once told. Accepts
-// the same id/name/prefix/substring resolution as every other verb.
+// direct file edit. The agent persists the new name itself once told.
+//
+// idArg "" targets the current session (the one whose shell we're in, or the
+// only one running) — the no-id form used from inside a session, especially on
+// mobile. A non-empty idArg uses the usual id/name/prefix/substring resolution.
 func runRename(idArg, newName string) error {
 	newName = strings.TrimSpace(newName)
 	// The control protocol is newline-delimited; keep the name on one line.
@@ -996,6 +1013,11 @@ func runRename(idArg, newName string) error {
 	}
 	a, err := resolveActive(idArg)
 	if err != nil {
+		if idArg == "" {
+			// No id given and we couldn't infer one (run from outside any
+			// session with several running). Point at the explicit form.
+			return fmt.Errorf("%w — run from inside the session, or name it explicitly: reminal rename <id|name> %q", err, newName)
+		}
 		return err
 	}
 	if a.IsPort() {
@@ -1178,6 +1200,11 @@ func runList(args []string) error {
 				noun = "viewers"
 			}
 			state = fmt.Sprintf("%d %s", a.Viewers, noun)
+		case a.ID == currentID:
+			// The shell we're typing in can't meaningfully be "idle" — its
+			// last PTY output is just whenever we last hit Enter. Show it as
+			// active so the [current] row never looks prunable.
+			state = "active"
 		default:
 			state = "idle " + humanShort(a.IdleFor(now))
 		}
@@ -1213,6 +1240,35 @@ func runList(args []string) error {
 	fmt.Println("  reminal kill   <id|name>       fully terminate a session (destroys the shell)")
 	fmt.Println("  reminal prune                  kill idle, unwatched sessions in one go")
 	return nil
+}
+
+// parseDuration is time.ParseDuration plus day ("d") and week ("w") units,
+// which the stdlib doesn't support. Accepts a whole number with a trailing
+// d/w (e.g. "1d", "2w") or anything time.ParseDuration handles ("12h", "90m",
+// "1h30m"). Used by `reminal prune` so "reminal prune 1d" works.
+func parseDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, errors.New("empty duration")
+	}
+	switch s[len(s)-1] {
+	case 'd', 'w':
+		n, err := strconv.Atoi(s[:len(s)-1])
+		if err != nil || n < 0 {
+			return 0, fmt.Errorf("invalid duration %q (try 30m, 12h, 1d, 2w)", s)
+		}
+		unit := 24 * time.Hour
+		if s[len(s)-1] == 'w' {
+			unit = 7 * 24 * time.Hour
+		}
+		return time.Duration(n) * unit, nil
+	default:
+		d, err := time.ParseDuration(s)
+		if err != nil || d < 0 {
+			return 0, fmt.Errorf("invalid duration %q (try 30m, 12h, 1d, 2w)", s)
+		}
+		return d, nil
+	}
 }
 
 // humanShort renders a duration as a compact 1-unit string (45s, 3m, 2h, 5d).
