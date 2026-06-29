@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -142,6 +143,9 @@ func main() {
 				idArg = os.Args[2]
 			}
 			if err := runAttach(idArg); err != nil {
+				if errors.Is(err, errPickCancelled) {
+					return // user backed out of the picker — not an error
+				}
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
@@ -204,13 +208,78 @@ func main() {
 			}
 			return
 		case "new":
-			if err := runNew(); err != nil {
+			// Name may be given as `reminal new <name>` (positional) or
+			// `reminal new --name <name>` / `--name=<name>`. First non-flag
+			// arg wins for the positional form.
+			name := ""
+			for i := 2; i < len(os.Args); i++ {
+				a := os.Args[i]
+				switch {
+				case a == "--name" || a == "-name":
+					if i+1 < len(os.Args) {
+						name = os.Args[i+1]
+						i++
+					}
+				case strings.HasPrefix(a, "--name="):
+					name = strings.TrimPrefix(a, "--name=")
+				case strings.HasPrefix(a, "-name="):
+					name = strings.TrimPrefix(a, "-name=")
+				case !strings.HasPrefix(a, "-") && name == "":
+					name = a
+				}
+			}
+			if err := runNew(name); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
 			return
 		case "list", "ls":
-			if err := runList(); err != nil {
+			if err := runList(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "prune":
+			idle := 30 * time.Minute
+			yes := false
+			for i := 2; i < len(os.Args); i++ {
+				a := os.Args[i]
+				switch {
+				case a == "-y" || a == "--yes":
+					yes = true
+				case a == "--idle":
+					if i+1 < len(os.Args) {
+						d, derr := time.ParseDuration(os.Args[i+1])
+						if derr != nil {
+							fmt.Fprintf(os.Stderr, "reminal prune: invalid --idle duration %q\n", os.Args[i+1])
+							os.Exit(2)
+						}
+						idle = d
+						i++
+					}
+				case strings.HasPrefix(a, "--idle="):
+					d, derr := time.ParseDuration(strings.TrimPrefix(a, "--idle="))
+					if derr != nil {
+						fmt.Fprintf(os.Stderr, "reminal prune: invalid --idle duration\n")
+						os.Exit(2)
+					}
+					idle = d
+				}
+			}
+			if err := runPrune(idle, yes); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "rename":
+			// reminal rename <id|name> <new-name…>  (remaining args joined,
+			// so multi-word names work without quoting).
+			rest := os.Args[2:]
+			if len(rest) < 2 {
+				fmt.Fprintln(os.Stderr, "usage: reminal rename <id|name> <new-name>")
+				os.Exit(2)
+			}
+			if err := runRename(rest[0], strings.Join(rest[1:], " ")); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
@@ -282,6 +351,7 @@ func main() {
 	pin := flag.String("pin", "", "PIN for the remote session (prompted if omitted)")
 	verbose := flag.Bool("v", false, "verbose mode — append raw error detail to status lines (same as REMINAL_DEBUG=1)")
 	verboseLong := flag.Bool("verbose", false, "alias for -v")
+	name := flag.String("name", "", "human-friendly label for this session, shown in `reminal list` and usable in place of the ID")
 	headless := flag.Bool("headless", false, "run without owning the host terminal — for spawned background sessions; users normally invoke this via `reminal new`")
 	handshakeFD := flag.Int("handshake-fd", 0, "fd inherited from `reminal new` for the credentials handshake (internal)")
 	exposeHeadless := flag.Bool("expose-headless", false, "run as a headless port-forwarder; users normally invoke this via `reminal expose <port>`")
@@ -318,7 +388,14 @@ func main() {
 	// "already-running, attach?" prompt — neither makes sense for a
 	// detached background child. Run the agent directly.
 	if *headless {
-		opts := client.AgentOptions{Headless: true, HandshakeFD: *handshakeFD}
+		// The detached child has no argv we control, so `reminal new` passes
+		// the name via REMINAL_NEW_NAME (see client.Spawn). Fall back to the
+		// --name flag for a directly-invoked `reminal --headless --name`.
+		hlName := *name
+		if hlName == "" {
+			hlName = os.Getenv("REMINAL_NEW_NAME")
+		}
+		opts := client.AgentOptions{Headless: true, HandshakeFD: *handshakeFD, Name: hlName}
 		agent, err := client.NewAgentWith(version, opts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -363,7 +440,7 @@ func main() {
 		}
 	}
 
-	agent, err := client.NewAgent(version)
+	agent, err := client.NewAgentWith(version, client.AgentOptions{Name: *name})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -380,14 +457,16 @@ func printHelp() {
 	fmt.Print(`reminal — remote terminal access from any browser or terminal
 
 Usage:
-  reminal                                  Share this terminal (works out of the box)
-  reminal new                              Spawn a fresh background session (detached — survives this terminal closing)
+  reminal [--name <name>]                  Share this terminal (works out of the box)
+  reminal new [name] [--name <name>]       Spawn a fresh background session (detached — survives this terminal closing)
   reminal expose <port> [--public]         Forward a local HTTP port to a public URL (PIN-protected by default)
-  reminal list                             List every reminal session running on this machine
+  reminal list [filter] [--idle|--viewers|--headless] [-v]   List sessions (recent-first); filter by id/name/cwd/title
+  reminal prune [--idle <dur>] [-y]        Kill idle, unwatched shell sessions in one go (default: idle ≥ 30m)
   reminal connect <session-or-url> [pin]   Connect to a remote session (PIN prompted if omitted)
-  reminal attach [id]                      Re-connect to a local agent as a viewer (no copy-paste). id required if multiple
-  reminal stop [id-or-port] [-y]           Stop the reminal layer (kicks viewers / disables URL — your shell/server keeps running)
-  reminal kill [id] [-y]                   Fully terminate a shell session (irreversible — kills shell + disconnects viewers)
+  reminal attach [id|name]                 Re-connect to a local agent as a viewer. No arg → interactive picker
+  reminal rename <id|name> <new-name>      Rename a running session (updates what 'reminal list' shows)
+  reminal stop [id|name|port] [-y]         Stop the reminal layer (kicks viewers / disables URL — your shell/server keeps running)
+  reminal kill [id|name] [-y]              Fully terminate a shell session (irreversible — kills shell + disconnects viewers)
   reminal send <file>                      Push a file to every connected viewer (web client auto-downloads)
   reminal copy [--ttl <dur>] [-f] <file>   Offer a file for pickup; prints a one-time code (detached by default; -f to stay in foreground)
   reminal paste <code> [destination]       Fetch a file offered by 'reminal copy' on another terminal (default: .)
@@ -421,7 +500,17 @@ Environment:
   REMINAL_DEBUG          Set to 1 to append raw error detail to status lines
   SHELL                  Shell to run (default: $SHELL, falls back to zsh / bash / sh)
 
+Naming & resolution:
+  Name a session (reminal new deploy) and use the name anywhere an ID works:
+  attach / kill / stop accept an exact id, an exact name, a unique id prefix,
+  or a unique substring of the name / cwd / title.
+
 Examples:
+  reminal new deploy                                               # named background session
+  reminal attach deploy                                            # … attach to it by name
+  reminal attach                                                   # interactive picker
+  reminal list ~/project                                           # filter by working directory
+  reminal prune -y                                                 # clean up abandoned sessions
   reminal
   reminal connect ABC12345 482916
   reminal connect ABC12345                                          # PIN prompted
@@ -679,13 +768,42 @@ func resolveActive(arg string) (*session.Active, error) {
 				return nil, fmt.Errorf("no port forward on port %d (running: %s)", port, joinIDs(all))
 			}
 		}
+		// Resolution precedence, most-specific first. Exact ID stays at the
+		// top so every existing `reminal attach/kill/stop <ID>` keeps working
+		// unchanged; name / prefix / substring are pure fallbacks layered
+		// underneath. Each fallback tier must match exactly one session — an
+		// ambiguous match errors with the candidates rather than guessing.
 		upper := strings.ToUpper(arg)
 		for i := range all {
 			if all[i].ID == upper {
-				return &all[i], nil
+				return &all[i], nil // 1. exact ID (case-insensitive)
 			}
 		}
-		return nil, fmt.Errorf("no active session with id %q (running: %s)", arg, joinIDs(all))
+		if m := matchSessions(all, func(a session.Active) bool {
+			return a.Name != "" && strings.EqualFold(a.Name, arg)
+		}); len(m) == 1 {
+			return m[0], nil // 2. exact name
+		} else if len(m) > 1 {
+			return nil, fmt.Errorf("%q matches multiple sessions by name: %s", arg, describeMatches(m))
+		}
+		if m := matchSessions(all, func(a session.Active) bool {
+			return strings.HasPrefix(a.ID, upper)
+		}); len(m) == 1 {
+			return m[0], nil // 3. unique ID prefix
+		} else if len(m) > 1 {
+			return nil, fmt.Errorf("id prefix %q is ambiguous: %s", arg, describeMatches(m))
+		}
+		lower := strings.ToLower(arg)
+		if m := matchSessions(all, func(a session.Active) bool {
+			return strings.Contains(strings.ToLower(a.Name), lower) ||
+				strings.Contains(strings.ToLower(a.Cwd), lower) ||
+				strings.Contains(strings.ToLower(a.Title), lower)
+		}); len(m) == 1 {
+			return m[0], nil // 4. unique substring of name / cwd / title
+		} else if len(m) > 1 {
+			return nil, fmt.Errorf("%q matches multiple sessions: %s", arg, describeMatches(m))
+		}
+		return nil, fmt.Errorf("no active session matching %q (running: %s)", arg, joinIDs(all))
 	}
 	if inside := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION"))); inside != "" {
 		for i := range all {
@@ -698,6 +816,33 @@ func resolveActive(arg string) (*session.Active, error) {
 		return &all[0], nil
 	}
 	return nil, fmt.Errorf("multiple sessions running — pick one (%s)", joinIDs(all))
+}
+
+// matchSessions returns pointers to the elements of all satisfying pred,
+// preserving order. Pointers index into the caller's slice, so the result
+// stays valid as long as all does.
+func matchSessions(all []session.Active, pred func(session.Active) bool) []*session.Active {
+	var out []*session.Active
+	for i := range all {
+		if pred(all[i]) {
+			out = append(out, &all[i])
+		}
+	}
+	return out
+}
+
+// describeMatches formats ambiguous-match candidates as "ID (name)" so the
+// error tells the user exactly what to disambiguate between.
+func describeMatches(m []*session.Active) string {
+	parts := make([]string, len(m))
+	for i, a := range m {
+		if a.Name != "" {
+			parts[i] = fmt.Sprintf("%s (%s)", a.ID, a.Name)
+		} else {
+			parts[i] = a.ID
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 func joinIDs(all []session.Active) string {
@@ -793,14 +938,74 @@ func runStop(idArg string, yes bool) error {
 // a viewer using its recorded session ID and PIN. With multiple sessions
 // running, an explicit id is required.
 func runAttach(idArg string) error {
+	if idArg == "" {
+		// No target: resolve unambiguously if we can (single session, or
+		// we're inside one). Otherwise, with several shell sessions and a
+		// TTY, offer the interactive picker instead of erroring.
+		if a, err := resolveActive(""); err == nil {
+			return attachTo(a)
+		}
+		all, lerr := session.ReadAllActive()
+		if lerr != nil {
+			return lerr
+		}
+		shells := matchSessions(all, func(a session.Active) bool { return !a.IsPort() })
+		if len(shells) > 1 && term.IsTerminal(int(os.Stdin.Fd())) {
+			picked, perr := pickSession(shells)
+			if perr != nil {
+				return perr
+			}
+			return attachTo(picked)
+		}
+		// Fall through to the original (helpful) error from resolveActive.
+		_, err := resolveActive("")
+		return err
+	}
 	a, err := resolveActive(idArg)
 	if err != nil {
 		return err
+	}
+	return attachTo(a)
+}
+
+// attachTo connects to a resolved session as a viewer, after guarding the two
+// cases that can't work: attaching to a port-forward (no shell to drive) and
+// attaching to the session whose shell we're currently sitting in (would loop
+// the viewer's output back through the PTY).
+func attachTo(a *session.Active) error {
+	if a.IsPort() {
+		return fmt.Errorf("session %s is a port forward (port %d), not a shell — nothing to attach to", a.ID, a.Port)
 	}
 	if os.Getenv("REMINAL_SESSION") == a.ID {
 		return fmt.Errorf("already inside session %s — attaching would loop viewer output back through the PTY; open a different terminal first", a.ID)
 	}
 	return client.Connect(a.ID, a.PIN)
+}
+
+// runRename changes a running session's display name in place, via the agent's
+// control socket. We can't just edit the active record from here — the agent
+// owns it and rewrites it on viewer/activity changes, which would clobber a
+// direct file edit. The agent persists the new name itself once told. Accepts
+// the same id/name/prefix/substring resolution as every other verb.
+func runRename(idArg, newName string) error {
+	newName = strings.TrimSpace(newName)
+	// The control protocol is newline-delimited; keep the name on one line.
+	newName = strings.NewReplacer("\n", " ", "\r", " ").Replace(newName)
+	if newName == "" {
+		return errors.New("new name cannot be empty")
+	}
+	a, err := resolveActive(idArg)
+	if err != nil {
+		return err
+	}
+	if a.IsPort() {
+		return fmt.Errorf("session %s is a port forward — rename is for shell sessions only", a.ID)
+	}
+	if _, err := sendControl(a.PID, "rename "+newName); err != nil {
+		return fmt.Errorf("ask agent to rename: %w", err)
+	}
+	fmt.Printf("Renamed %s → %q\n", a.ID, newName)
+	return nil
 }
 
 // runRestart asks the local agent to hot-swap into the binary that's
@@ -844,41 +1049,101 @@ func runExpose(port int, public bool) error {
 // its credentials in the calling terminal. Behaves exactly like opening
 // a new terminal and typing `reminal` — except the shell runs detached,
 // so killing this terminal doesn't kill the session.
-func runNew() error {
+func runNew(name string) error {
 	if os.Getenv("REMINAL_NEW_NESTED") == "1" {
 		return errors.New("refusing to spawn from inside another reminal new — protection against runaway recursion")
 	}
-	sp, err := client.Spawn()
+	sp, err := client.Spawn(name)
 	if err != nil {
 		return err
 	}
-	client.PrintSpawned(sp, version)
+	client.PrintSpawned(sp, name, version)
 	return nil
 }
 
-// runList prints one line per running reminal agent on this host —
-// shell sessions and port-forwards together, with a mode column so
-// the user can tell them apart at a glance.
-func runList() error {
+// runList prints the running reminal agents on this host, recent-first, one
+// line each (name · id · mode · idle · viewers · cwd/title). An optional
+// substring argument filters by id/name/cwd/title; --idle/--viewers/--headless
+// narrow by state; --verbose adds the join URL + PIN under each row.
+func runList(args []string) error {
+	verbose := false
+	onlyIdle, onlyViewers, onlyHeadless := false, false, false
+	filter := ""
+	for _, a := range args {
+		switch {
+		case a == "-v" || a == "--verbose":
+			verbose = true
+		case a == "--idle":
+			onlyIdle = true
+		case a == "--viewers":
+			onlyViewers = true
+		case a == "--headless":
+			onlyHeadless = true
+		case !strings.HasPrefix(a, "-") && filter == "":
+			filter = a
+		}
+	}
+
 	all, err := session.ReadAllActive()
 	if err != nil {
 		return err
 	}
-	if len(all) == 0 {
-		fmt.Println("No reminal sessions running. Start one with:")
-		fmt.Println("  reminal                # share this terminal")
-		fmt.Println("  reminal new            # share a background terminal")
-		fmt.Println("  reminal expose <port>  # share a local HTTP port")
+	now := time.Now()
+	currentID := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
+
+	// Filter, then sort recent-first. We sort a local copy rather than
+	// changing session.ReadAllActive's stable oldest-first order, which other
+	// callers (ReadActive, port lookup) rely on.
+	lower := strings.ToLower(filter)
+	rows := make([]session.Active, 0, len(all))
+	for _, a := range all {
+		if onlyHeadless && !a.Headless {
+			continue
+		}
+		if onlyViewers && a.Viewers == 0 {
+			continue
+		}
+		if onlyIdle && (a.IsPort() || a.Viewers > 0) {
+			continue
+		}
+		if lower != "" && !strings.Contains(strings.ToLower(a.ID), lower) &&
+			!strings.Contains(strings.ToLower(a.Name), lower) &&
+			!strings.Contains(strings.ToLower(a.Cwd), lower) &&
+			!strings.Contains(strings.ToLower(a.Title), lower) {
+			continue
+		}
+		rows = append(rows, a)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].LastActive().After(rows[j].LastActive())
+	})
+
+	if len(rows) == 0 {
+		if len(all) == 0 {
+			fmt.Println("No reminal sessions running. Start one with:")
+			fmt.Println("  reminal                # share this terminal")
+			fmt.Println("  reminal new [name]     # share a background terminal")
+			fmt.Println("  reminal expose <port>  # share a local HTTP port")
+		} else {
+			fmt.Printf("No sessions match (%d running — drop the filter or run `reminal list`).\n", len(all))
+		}
 		return nil
 	}
-	fmt.Printf("%d session(s) running:\n\n", len(all))
-	now := time.Now()
-	// REMINAL_SESSION marks the session whose shell is running this
-	// command — the agent injects it into the spawned shell. Tagging
-	// the matching row "[current]" is the safety net the user asked
-	// for so `reminal kill` against the wrong id is harder to fat-finger.
-	currentID := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
-	for _, a := range all {
+
+	// Pre-compute the name column width so rows line up. Unnamed sessions
+	// show a dim "—" so the column never collapses.
+	nameW := 4
+	for _, a := range rows {
+		if len(a.Name) > nameW {
+			nameW = len(a.Name)
+		}
+	}
+	if nameW > 24 {
+		nameW = 24
+	}
+
+	fmt.Printf("%d session(s):\n\n", len(rows))
+	for _, a := range rows {
 		var mode string
 		switch {
 		case a.IsPort():
@@ -888,32 +1153,96 @@ func runList() error {
 		default:
 			mode = "foreground"
 		}
-		age := now.Sub(a.StartedAt).Round(time.Second)
-		viewers := ""
-		if a.Viewers > 0 && !a.IsPort() {
+
+		name := a.Name
+		if name == "" {
+			name = "\x1b[2m—\x1b[0m"
+			// pad accounting for the invisible escape bytes
+			name += strings.Repeat(" ", max(0, nameW-1))
+		} else {
+			if len(name) > nameW {
+				name = name[:nameW-1] + "…"
+			}
+			name += strings.Repeat(" ", max(0, nameW-len([]rune(a.Name))))
+		}
+
+		// State column: who's watching / how idle. Ports have no viewer or
+		// activity concept, so they just show their mode.
+		var state string
+		switch {
+		case a.IsPort():
+			state = "up " + humanShort(now.Sub(a.StartedAt))
+		case a.Viewers > 0:
 			noun := "viewer"
 			if a.Viewers != 1 {
 				noun = "viewers"
 			}
-			viewers = fmt.Sprintf(", %d %s", a.Viewers, noun)
+			state = fmt.Sprintf("%d %s", a.Viewers, noun)
+		default:
+			state = "idle " + humanShort(a.IdleFor(now))
 		}
-		// "[current]" suffix marks the session whose shell we're in
-		// right now — useful when scanning the list before running
-		// `reminal kill <id>` so you don't accidentally tear down the
-		// terminal you're sitting in.
+
+		// Identity tail: cwd (home-abbreviated) and the live title hint.
+		var tail string
+		if cwd := abbrevHome(a.Cwd); cwd != "" {
+			tail = "  \x1b[2m" + cwd + "\x1b[0m"
+		}
+		if a.Title != "" {
+			t := a.Title
+			if len(t) > 40 {
+				t = t[:39] + "…"
+			}
+			tail += "  \x1b[2m· " + t + "\x1b[0m"
+		}
+
 		currentTag := ""
 		if a.ID == currentID {
-			currentTag = "  \x1b[1;32m[current — this shell]\x1b[0m"
+			currentTag = "  \x1b[1;32m[current]\x1b[0m"
 		}
-		fmt.Printf("  %s  · %-12s · PID %-6d · up %v%s%s\n",
-			a.ID, mode, a.PID, age, viewers, currentTag)
-		fmt.Printf("           %s\n", a.OpenURL)
+
+		fmt.Printf("  %s  \x1b[1m%s\x1b[0m  \x1b[2m%-10s %-12s\x1b[0m%s%s\n",
+			name, a.ID, mode, state, tail, currentTag)
+		if verbose {
+			fmt.Printf("  %s  \x1b[2m%s  ·  PIN %s\x1b[0m\n",
+				strings.Repeat(" ", nameW), a.OpenURL, a.PIN)
+		}
 	}
 	fmt.Println()
-	fmt.Println("  reminal attach <id>            drive a shell session from this terminal")
-	fmt.Println("  reminal stop <id-or-port>      stop the reminal layer (leaves your shell/server alone)")
-	fmt.Println("  reminal kill <id>              fully terminate a shell session (destroys the shell)")
+	fmt.Println("  \x1b[2mAccepts id, name, unique prefix, or substring:\x1b[0m")
+	fmt.Println("  reminal attach [id|name]       drive a session (no arg → interactive picker)")
+	fmt.Println("  reminal kill   <id|name>       fully terminate a session (destroys the shell)")
+	fmt.Println("  reminal prune                  kill idle, unwatched sessions in one go")
 	return nil
+}
+
+// humanShort renders a duration as a compact 1-unit string (45s, 3m, 2h, 5d).
+func humanShort(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
+}
+
+// abbrevHome collapses the user's home directory to ~ for compact display.
+func abbrevHome(p string) string {
+	if p == "" {
+		return ""
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if p == home {
+			return "~"
+		}
+		if strings.HasPrefix(p, home+string(os.PathSeparator)) {
+			return "~" + p[len(home):]
+		}
+	}
+	return p
 }
 
 // runKill terminates the named agent. Destructive — asks for explicit
@@ -950,24 +1279,93 @@ func runKill(idArg string, yes bool) error {
 			return nil
 		}
 	}
-	if err := syscall.Kill(a.PID, syscall.SIGTERM); err != nil {
-		return fmt.Errorf("SIGTERM PID %d: %w", a.PID, err)
+	if err := terminateAgent(a.PID); err != nil {
+		return err
 	}
-	// Give the agent a brief window to run its defers (clear active
-	// record, close WS gracefully, restore host terminal if foreground).
-	// Then escalate to SIGKILL if it's still alive — a hung agent
-	// shouldn't be able to refuse a kill.
+	fmt.Printf("  Killed session %s (PID %d).\n", a.ID, a.PID)
+	return nil
+}
+
+// terminateAgent SIGTERMs the agent, gives it a brief window to run its defers
+// (clear active record, close WS gracefully, restore the host terminal), then
+// escalates to SIGKILL if it's still alive — a hung agent shouldn't be able to
+// refuse a kill. Shared by `reminal kill` and `reminal prune`.
+func terminateAgent(pid int) error {
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+		return fmt.Errorf("SIGTERM PID %d: %w", pid, err)
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if syscall.Kill(a.PID, 0) != nil {
+		if syscall.Kill(pid, 0) != nil {
 			break // process gone
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if syscall.Kill(a.PID, 0) == nil {
-		_ = syscall.Kill(a.PID, syscall.SIGKILL)
+	if syscall.Kill(pid, 0) == nil {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
-	fmt.Printf("  Killed session %s (PID %d).\n", a.ID, a.PID)
+	return nil
+}
+
+// runPrune terminates idle, unwatched shell sessions in one go — the cleanup
+// for a pile of abandoned `reminal new` instances. A session is a prune
+// candidate when it's a shell (not a port forward), has zero attached viewers,
+// isn't the shell we're currently sitting in, and has had no PTY activity for
+// at least idle. Destructive — lists candidates and asks for confirmation
+// unless -y was passed.
+func runPrune(idle time.Duration, yes bool) error {
+	all, err := session.ReadAllActive()
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	currentID := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
+	var victims []session.Active
+	for _, a := range all {
+		if a.IsPort() || a.Viewers > 0 || a.ID == currentID {
+			continue
+		}
+		if a.IdleFor(now) < idle {
+			continue
+		}
+		victims = append(victims, a)
+	}
+	if len(victims) == 0 {
+		fmt.Printf("Nothing to prune — no shell sessions idle ≥ %s with zero viewers.\n", humanShort(idle))
+		return nil
+	}
+	fmt.Printf("\n  Will terminate %d idle session(s) (idle ≥ %s, no viewers):\n\n", len(victims), humanShort(idle))
+	for _, a := range victims {
+		label := a.ID
+		if a.Name != "" {
+			label = fmt.Sprintf("%s (%s)", a.ID, a.Name)
+		}
+		fmt.Printf("    · %-22s idle %-5s %s\n", label, humanShort(a.IdleFor(now)), abbrevHome(a.Cwd))
+	}
+	fmt.Println("\n    The shell inside each is killed — unsaved work is lost. Irreversible.")
+	fmt.Println()
+	if !yes {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return errors.New("refusing to prune without confirmation — re-run with -y to skip the prompt")
+		}
+		fmt.Print("  Proceed? [y/N]: ")
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		resp := strings.ToLower(strings.TrimSpace(line))
+		if resp != "y" && resp != "yes" {
+			fmt.Println("  Aborted.")
+			return nil
+		}
+	}
+	killed := 0
+	for _, a := range victims {
+		if err := terminateAgent(a.PID); err != nil {
+			fmt.Printf("  ! %s: %v\n", a.ID, err)
+			continue
+		}
+		fmt.Printf("  Killed %s (PID %d).\n", a.ID, a.PID)
+		killed++
+	}
+	fmt.Printf("\n  Pruned %d of %d.\n", killed, len(victims))
 	return nil
 }
 

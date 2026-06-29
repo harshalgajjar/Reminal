@@ -105,6 +105,13 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			return
 		}
 		_, _ = fmt.Fprintln(conn, "ok")
+	case strings.HasPrefix(line, "rename "):
+		// Update the live session's display name and re-persist the active
+		// record so `reminal list` reflects it right away. An empty name
+		// clears it back to unnamed.
+		name := strings.TrimSpace(strings.TrimPrefix(line, "rename "))
+		a.setName(name)
+		_, _ = fmt.Fprintln(conn, "ok")
 	case strings.HasPrefix(line, "notify "):
 		msg := strings.TrimSpace(strings.TrimPrefix(line, "notify "))
 		if err := a.broadcastNotify(msg); err != nil {

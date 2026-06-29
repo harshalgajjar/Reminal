@@ -43,6 +43,47 @@ type Active struct {
 	// the agent on every connect/disconnect event from the relay). Read
 	// by `reminal info` and the "attach to existing?" prompt.
 	Viewers int `json:"viewers,omitempty"`
+	// Name is an optional human-friendly label set via `reminal new --name`
+	// (or the positional `reminal new <name>`, and `reminal --name` for a
+	// foreground session). Surfaced by `reminal list` and usable anywhere a
+	// session ID is accepted (attach / kill / stop), so you don't have to
+	// hunt for a random ID. Empty for unnamed sessions.
+	Name string `json:"name,omitempty"`
+	// Cwd is the working directory the session was started in, captured at
+	// spawn. Shown by `reminal list` so a session is recognisable even
+	// without a name ("the one in ~/project-x"). Empty for records written
+	// before this field existed.
+	Cwd string `json:"cwd,omitempty"`
+	// Title is the most recent terminal title the inner shell emitted via an
+	// OSC 0/2 escape — usually the cwd or the running command. Sniffed live
+	// from the PTY by the agent so `reminal list` can show "running: npm run
+	// dev" with zero user effort. Empty if the shell never set a title.
+	Title string `json:"title,omitempty"`
+	// LastActivity is the timestamp of the most recent PTY output, updated
+	// (throttled) by the agent. Drives recent-first ordering in
+	// `reminal list` and idle detection for `reminal prune`. Zero for
+	// records written before this field existed — LastActive() falls back to
+	// StartedAt in that case.
+	LastActivity time.Time `json:"last_activity,omitempty"`
+}
+
+// LastActive returns the best available "last used" timestamp: LastActivity
+// when the agent has recorded PTY output, falling back to StartedAt for
+// freshly-started sessions and legacy records written before LastActivity
+// existed. Used for recent-first ordering and idle detection.
+func (a Active) LastActive() time.Time {
+	if a.LastActivity.IsZero() {
+		return a.StartedAt
+	}
+	return a.LastActivity
+}
+
+// IdleFor returns how long the session has gone without PTY activity as of
+// now. A session with viewers attached is still "idle" by this measure if no
+// bytes have flowed — callers that care about viewers (prune) check Viewers
+// separately.
+func (a Active) IdleFor(now time.Time) time.Duration {
+	return now.Sub(a.LastActive())
 }
 
 // KindShell + KindPort are the canonical values of Active.Kind. New

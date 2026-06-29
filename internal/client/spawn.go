@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,7 +40,7 @@ type SpawnedSession struct {
 // session leader (Setsid) and stdin/stdout/stderr are wired to
 // /dev/null, so the parent can exit immediately after printing the
 // credentials and the agent keeps running in the background.
-func Spawn() (*SpawnedSession, error) {
+func Spawn(name string) (*SpawnedSession, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("locate self: %w", err)
@@ -68,6 +69,13 @@ func Spawn() (*SpawnedSession, error) {
 	// would trip the headless agent's self-attach checks) — but in
 	// practice the child doesn't run any of those checks. Leave env
 	// untouched for now.
+	//
+	// The user-chosen name rides along in REMINAL_NEW_NAME — the detached
+	// child has no argv we control after exec, so env is the clean channel
+	// for it. The headless agent reads it into AgentOptions.Name.
+	if name = strings.TrimSpace(name); name != "" {
+		cmd.Env = append(os.Environ(), "REMINAL_NEW_NAME="+name)
+	}
 	cmd.Stdin = devnull
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull
@@ -129,10 +137,13 @@ func Spawn() (*SpawnedSession, error) {
 // calling terminal — same shape as the foreground banner so the user
 // recognises it instantly, plus a join-QR. The caller is expected to
 // print this and then exit (the spawned agent keeps running detached).
-func PrintSpawned(sp *SpawnedSession, version string) {
+func PrintSpawned(sp *SpawnedSession, name, version string) {
 	fmt.Println()
 	fmt.Printf("  reminal — new background session · v%s · %s\n", version, sp.ID)
 	fmt.Println()
+	if name = strings.TrimSpace(name); name != "" {
+		fmt.Printf("  Name:     %s\n", name)
+	}
 	fmt.Printf("  Session:  %s\n", sp.ID)
 	fmt.Printf("  PIN:      %s\n", sp.PIN)
 	fmt.Printf("  Open:     %s\n", sp.OpenURL)
@@ -151,10 +162,16 @@ func PrintSpawned(sp *SpawnedSession, version string) {
 		QuietZone: 1,
 	})
 	fmt.Println()
+	// Prefer the name in the hints when the user gave one — it's what
+	// they'll remember, and resolveActive accepts it anywhere an ID works.
+	ref := sp.ID
+	if n := strings.TrimSpace(name); n != "" {
+		ref = n
+	}
 	fmt.Println("  This session has no host terminal — to drive it from here, run:")
-	fmt.Printf("    reminal attach %s\n", sp.ID)
-	fmt.Println("  To stop broadcasting:    reminal stop", sp.ID)
-	fmt.Println("  To terminate completely: reminal kill", sp.ID)
+	fmt.Printf("    reminal attach %s\n", ref)
+	fmt.Println("  To stop broadcasting:    reminal stop", ref)
+	fmt.Println("  To terminate completely: reminal kill", ref)
 	fmt.Println()
 }
 

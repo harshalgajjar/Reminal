@@ -68,6 +68,31 @@ type Agent struct {
 	// startedAt is set once in Run() and used to keep session.Active's
 	// started_at stable when we rewrite the file on viewer-count changes.
 	startedAt time.Time
+
+	// name + cwd are session identity captured at startup: name from
+	// `reminal new --name` / `reminal --name` (empty if unnamed), cwd from
+	// os.Getwd() at construction. Persisted into the active record so
+	// `reminal list` can show them and resolveActive can match on them.
+	name string
+	cwd  string
+	// metaMu guards title + lastActivity, which pumpPTY's goroutine writes
+	// while activeRecord and the meta-flush loop read them.
+	metaMu       sync.Mutex
+	title        string
+	lastActivity time.Time
+	// metaDirty is set by pumpPTY when title or lastActivity changed since
+	// the last on-disk flush; the meta-flush loop clears it when it writes.
+	// Keeps idle sessions from churning the active record.
+	metaDirty atomic.Bool
+	// curViewers caches the latest relay-reported viewer count so the
+	// meta-flush loop can rewrite the record without losing it (the
+	// viewer-count path passes the count explicitly; the meta path can't).
+	curViewers atomic.Int32
+	// OSC title-parser state, touched only by pumpPTY's goroutine. oscState
+	// is the small state machine in feedTitle; oscBuf accumulates the body
+	// of an in-progress OSC 0/2 sequence across PTY read boundaries.
+	oscState int
+	oscBuf   []byte
 	// viewersMu guards viewers — the in-memory list of connect timestamps,
 	// one per currently-attached viewer. We can't perfectly identify which
 	// viewer disconnected (relay only sends a count delta), so we use a
@@ -149,6 +174,23 @@ type AgentOptions struct {
 	// verbatim instead of being freshly generated, so viewers
 	// reconnect to the same session URL.
 	Resume *ResumeState
+	// Name is an optional human-friendly label for the session, surfaced by
+	// `reminal list` and usable in place of the ID. Set from
+	// `reminal new --name` / `reminal --name`. Empty leaves the session
+	// unnamed. Ignored on Resume (the name is recovered from the existing
+	// record so it survives `reminal restart`).
+	Name string
+}
+
+// currentCwd returns the process working directory for the active record,
+// or "" if it can't be determined. Best-effort — an empty cwd just means
+// `reminal list` omits the directory column for this session.
+func currentCwd() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
 }
 
 // NewAgent builds a foreground agent (no host-terminal isolation).
@@ -198,6 +240,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			resumed:        true,
 			headless:       opts.Headless,
 			handshakeFD:    opts.HandshakeFD,
+			cwd:            currentCwd(),
 		}, nil
 	}
 	id, err := session.NewID(8)
@@ -235,6 +278,8 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 		pendingUploads: make(map[string]*pendingUpload),
 		headless:       opts.Headless,
 		handshakeFD:    opts.HandshakeFD,
+		name:           strings.TrimSpace(opts.Name),
+		cwd:            currentCwd(),
 	}, nil
 }
 
@@ -269,6 +314,13 @@ func (a *Agent) Run() error {
 	// keep the same value.
 	if !a.resumed {
 		a.startedAt = time.Now()
+	} else if a.name == "" {
+		// Hot-restart preserves the PID, so the prior record is still on
+		// disk. Recover the user-set name (ResumeState doesn't carry it) so
+		// it survives `reminal restart`. cwd already survives via Getwd().
+		if prev, err := session.ReadActiveByID(a.sessionID); err == nil {
+			a.name = prev.Name
+		}
 	}
 	_ = session.WriteActive(a.activeRecord(0))
 	defer func() { _ = session.ClearActive(a.sessionID) }()
@@ -375,6 +427,12 @@ func (a *Agent) Run() error {
 		a.pumpPTY()
 		close(shellExit)
 	}()
+
+	// Persist title / last-activity updates to the active record on a
+	// throttle. Runs for both headless and foreground sessions so
+	// `reminal list` ordering and `reminal prune` idle detection work
+	// regardless of how the session was started. Stops when the shell exits.
+	go a.metaFlushLoop(shellExit)
 
 	// Trap SIGINT/SIGTERM so the process exits via the normal return path
 	// (defers fire: ClearActive, exit summary, keepawake stop). Default Go
@@ -676,24 +734,177 @@ func (a *Agent) writeHandshake() {
 // transition so `reminal info` and the attach-to-existing prompt see a
 // live count.
 func (a *Agent) activeRecord(viewers int) session.Active {
+	a.metaMu.Lock()
+	title := a.title
+	last := a.lastActivity
+	name := a.name
+	a.metaMu.Unlock()
+	if last.IsZero() {
+		last = a.startedAt
+	}
 	return session.Active{
-		ID:        a.sessionID,
-		PIN:       a.pin,
-		OpenURL:   fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID),
-		PID:       os.Getpid(),
-		StartedAt: a.startedAt,
-		Headless:  a.headless,
-		Viewers:   viewers,
+		ID:           a.sessionID,
+		PIN:          a.pin,
+		OpenURL:      fmt.Sprintf("%s/?s=%s", a.webURL, a.sessionID),
+		PID:          os.Getpid(),
+		StartedAt:    a.startedAt,
+		Headless:     a.headless,
+		Viewers:      viewers,
+		Name:         name,
+		Cwd:          a.cwd,
+		Title:        title,
+		LastActivity: last,
+	}
+}
+
+// setName changes the session's display name (from `reminal rename`, via the
+// control socket) and persists the active record immediately so `reminal list`
+// reflects it without waiting for the next throttled flush. Guarded by metaMu
+// since activeRecord reads a.name from other goroutines.
+func (a *Agent) setName(name string) {
+	a.metaMu.Lock()
+	a.name = strings.TrimSpace(name)
+	a.metaMu.Unlock()
+	if !a.paused.Load() {
+		_ = session.WriteActive(a.activeRecord(int(a.curViewers.Load())))
 	}
 }
 
 // updateActiveViewers refreshes the on-disk viewer count. No-op when paused
 // (active.json is intentionally absent during pause).
 func (a *Agent) updateActiveViewers(viewers int) {
+	a.curViewers.Store(int32(viewers))
 	if a.paused.Load() {
 		return
 	}
 	_ = session.WriteActive(a.activeRecord(viewers))
+}
+
+// markActivity stamps the last-PTY-output time and flags the record dirty so
+// the meta-flush loop rewrites it. Called from pumpPTY on every output chunk;
+// the actual disk write is throttled by metaFlushLoop so a busy shell doesn't
+// rewrite active-*.json on every read.
+func (a *Agent) markActivity(now time.Time) {
+	a.metaMu.Lock()
+	a.lastActivity = now
+	a.metaMu.Unlock()
+	a.metaDirty.Store(true)
+}
+
+// feedTitle drives a tiny state machine over PTY output to capture the latest
+// terminal title the shell sets via OSC 0 (icon+title) or OSC 2 (title) —
+// "ESC ] (0|2) ; <text> (BEL | ESC \)". Most shells set this to the cwd or the
+// running command, giving `reminal list` a recognisable "running: …" hint for
+// free. Runs in pumpPTY's goroutine; oscState/oscBuf are owned by it.
+func (a *Agent) feedTitle(p []byte) {
+	const (
+		oscIdle = iota
+		oscEsc      // saw ESC, expecting ']'
+		oscBody     // inside OSC body, collecting until BEL or ST
+		oscBodyEsc  // inside OSC body, saw ESC, expecting '\' (ST)
+	)
+	for _, c := range p {
+		switch a.oscState {
+		case oscIdle:
+			if c == 0x1b {
+				a.oscState = oscEsc
+			}
+		case oscEsc:
+			if c == ']' {
+				a.oscState = oscBody
+				a.oscBuf = a.oscBuf[:0]
+			} else {
+				a.oscState = oscIdle
+			}
+		case oscBody:
+			switch c {
+			case 0x07: // BEL terminator
+				a.commitTitle()
+				a.oscState = oscIdle
+			case 0x1b:
+				a.oscState = oscBodyEsc
+			default:
+				if len(a.oscBuf) < 512 { // cap: titles are short; ignore overruns
+					a.oscBuf = append(a.oscBuf, c)
+				}
+			}
+		case oscBodyEsc:
+			if c == '\\' { // ST terminator (ESC \)
+				a.commitTitle()
+				a.oscState = oscIdle
+			} else if c == 0x1b {
+				a.oscState = oscEsc // a fresh escape; abandon this OSC
+			} else {
+				a.oscState = oscIdle
+			}
+		}
+	}
+}
+
+// commitTitle parses an accumulated OSC body ("Ps;Pt") and, if it's a title
+// set (Ps 0 or 2) that changed, stores the sanitized text and flags the
+// record dirty for the next meta flush.
+func (a *Agent) commitTitle() {
+	s := string(a.oscBuf)
+	i := strings.IndexByte(s, ';')
+	if i < 0 {
+		return
+	}
+	if ps := s[:i]; ps != "0" && ps != "2" {
+		return // not a title-setting OSC (e.g. OSC 1 icon, OSC 12 cursor)
+	}
+	title := sanitizeTitle(s[i+1:])
+	if title == "" {
+		return
+	}
+	a.metaMu.Lock()
+	changed := title != a.title
+	a.title = title
+	a.metaMu.Unlock()
+	if changed {
+		a.metaDirty.Store(true)
+	}
+}
+
+// sanitizeTitle trims whitespace, strips control characters, and caps length
+// so a hostile or noisy title can't break `reminal list`'s layout.
+func sanitizeTitle(s string) string {
+	s = strings.TrimSpace(s)
+	var b strings.Builder
+	for _, r := range s {
+		if r >= 0x20 && r != 0x7f {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	const max = 120
+	if len(out) > max {
+		out = out[:max]
+	}
+	return strings.TrimSpace(out)
+}
+
+// metaFlushLoop periodically persists title/last-activity changes to the
+// active record. Throttled (and dirty-gated) so an actively-used shell rewrites
+// at most once per tick and an idle one not at all. Stops when stop is closed
+// (Run's shellExit). No-op while paused — active-*.json is intentionally
+// absent during `reminal stop`.
+func (a *Agent) metaFlushLoop(stop <-chan struct{}) {
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			if a.paused.Load() {
+				continue
+			}
+			if a.metaDirty.Swap(false) {
+				_ = session.WriteActive(a.activeRecord(int(a.curViewers.Load())))
+			}
+		}
+	}
 }
 
 // syncViewerList reconciles the in-memory viewer connect-timestamp list to
@@ -1178,6 +1389,12 @@ func (a *Agent) pumpPTY() {
 	for {
 		n, err := a.term.Read(buf)
 		if n > 0 {
+			// Record liveness + sniff the shell's window title so
+			// `reminal list` can order recent-first and show a "running: …"
+			// hint. Both are cheap and update in-memory only; the on-disk
+			// rewrite is throttled by metaFlushLoop.
+			a.markActivity(time.Now())
+			a.feedTitle(buf[:n])
 			// Mirror to the host's stdout so the user typing at the agent
 			// terminal sees the shell's output as if they had run it
 			// directly. The same bytes go into scrollback for remote viewers.
