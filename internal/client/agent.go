@@ -69,14 +69,19 @@ type Agent struct {
 	// started_at stable when we rewrite the file on viewer-count changes.
 	startedAt time.Time
 
-	// name + cwd are session identity captured at startup: name from
-	// `reminal new --name` / `reminal --name` (empty if unnamed), cwd from
-	// os.Getwd() at construction. Persisted into the active record so
-	// `reminal list` can show them and resolveActive can match on them.
+	// name + cwd are session identity. name comes from `reminal new --name` /
+	// `reminal --name` (empty if unnamed). cwd starts as os.Getwd() at
+	// construction but is refreshed from the shell's live working directory
+	// (see refreshCwd) so `reminal list` follows the shell as it cd's.
+	// Persisted into the active record; resolveActive also matches on them.
 	name string
 	cwd  string
-	// metaMu guards title + lastActivity, which pumpPTY's goroutine writes
-	// while activeRecord and the meta-flush loop read them.
+	// shellPID is the PID of the shell running inside the PTY, used to read
+	// its live cwd. Set once after the shell starts; 0 on an Attach'd
+	// (hot-restart) session where we inherited the PTY but not the child.
+	shellPID int
+	// metaMu guards title + lastActivity + cwd, which the pumpPTY and
+	// meta-flush goroutines write while activeRecord reads them.
 	metaMu       sync.Mutex
 	title        string
 	lastActivity time.Time
@@ -364,6 +369,14 @@ func (a *Agent) Run() error {
 	} else {
 		// term was set in NewAgentWith from ResumeState.PTY.
 		defer a.term.Close()
+	}
+	// Track the shell PID so we can read its live cwd, seed the record with
+	// the shell's actual starting directory, and persist it now so `reminal
+	// list` is correct immediately instead of after the first flush.
+	a.shellPID = a.term.Pid()
+	a.refreshCwd()
+	if !a.paused.Load() {
+		_ = session.WriteActive(a.activeRecord(int(a.curViewers.Load())))
 	}
 
 	pty.HandleSignals()
@@ -741,6 +754,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	title := a.title
 	last := a.lastActivity
 	name := a.name
+	cwd := a.cwd
 	a.metaMu.Unlock()
 	if last.IsZero() {
 		last = a.startedAt
@@ -754,9 +768,21 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		Headless:     a.headless,
 		Viewers:      viewers,
 		Name:         name,
-		Cwd:          a.cwd,
+		Cwd:          cwd,
 		Title:        title,
 		LastActivity: last,
+	}
+}
+
+// refreshCwd updates the recorded cwd from the shell's live working directory
+// so `reminal list` follows cd's instead of showing the launch dir. Best-effort
+// — if the lookup fails (or there's no child PID, e.g. after hot-restart) the
+// previous value is kept.
+func (a *Agent) refreshCwd() {
+	if c := shellCwd(a.shellPID); c != "" {
+		a.metaMu.Lock()
+		a.cwd = c
+		a.metaMu.Unlock()
 	}
 }
 
@@ -904,6 +930,10 @@ func (a *Agent) metaFlushLoop(stop <-chan struct{}) {
 				continue
 			}
 			if a.metaDirty.Swap(false) {
+				// A cd shows up as PTY output (the new prompt), so a dirty
+				// record is exactly when the cwd may have changed — refresh
+				// it before persisting.
+				a.refreshCwd()
 				_ = session.WriteActive(a.activeRecord(int(a.curViewers.Load())))
 			}
 		}

@@ -67,6 +67,16 @@ func (s *Session) Fd() uintptr {
 	return s.ptmx.Fd()
 }
 
+// Pid returns the shell process's PID, or 0 if unknown (e.g. an Attach'd
+// session from a hot-restart, where we inherited the PTY but not the child).
+// Used to read the shell's live working directory for `reminal list`.
+func (s *Session) Pid() int {
+	if s.cmd != nil && s.cmd.Process != nil {
+		return s.cmd.Process.Pid
+	}
+	return 0
+}
+
 func (s *Session) CopyFrom(r io.Reader, done chan<- struct{}) {
 	defer close(done)
 	_, _ = io.Copy(s.ptmx, r)
