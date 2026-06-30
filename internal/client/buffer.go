@@ -60,6 +60,26 @@ func (s *scrollback) From(fromSeq uint64) []scrollEntry {
 	return out
 }
 
+// OldestSeq returns the seq of the oldest entry still buffered, or 0 if empty.
+// A resume cursor at or below this means the viewer wants history we've partly
+// evicted — the caller sends a snapshot instead of an incomplete raw replay.
+func (s *scrollback) OldestSeq() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.entries) == 0 {
+		return 0
+	}
+	return s.entries[0].Seq
+}
+
+// LatestSeq returns the seq of the newest appended entry (0 if none). Used to
+// tag a snapshot frame so viewers treat it as covering everything through it.
+func (s *scrollback) LatestSeq() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nextSeq
+}
+
 // NextSeq returns the seq the next Append() will assign. Used to detect
 // "viewer is asking us to resume from a seq we've never reached" — i.e.
 // the viewer was talking to a previous agent incarnation and its

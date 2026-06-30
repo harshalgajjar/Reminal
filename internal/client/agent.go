@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/x/vt"
 	"github.com/gorilla/websocket"
 	"github.com/mdp/qrterminal/v3"
 	"github.com/reminal/reminal/internal/config"
@@ -54,6 +55,19 @@ type Agent struct {
 	sessionKey []byte // 32-byte AES key wrapped per-viewer via EKE; see crypto/kex.go
 	buf        *scrollback
 	term       *pty.Session
+
+	// screen is a headless terminal emulator fed the same plaintext output
+	// that goes to viewers. On a fresh attach we serialize its current state
+	// (screen + scrollback) into a single snapshot paint instead of replaying
+	// the whole raw output history — so joining is instant regardless of how
+	// long the session has run, and the viewer can still scroll back. Guarded
+	// by screenMu (composite reads during snapshot must not race Write/Resize).
+	// nil when snapshots are disabled (REMINAL_SNAPSHOT=0) — then we fall back
+	// to raw replay.
+	screen          *vt.Emulator
+	screenMu        sync.Mutex
+	scrollbackLines int // history lines included in a snapshot (0 = screen only)
+	scrollbackBytes int // byte cap on a snapshot's history (0 = no cap)
 
 	writeMu sync.Mutex // serializes WS writes; safe across sender/reader goroutines
 
@@ -433,6 +447,10 @@ func (a *Agent) Run() error {
 		}()
 	}
 
+	// Build the emulator before the pump starts so it sees output from the
+	// very first byte (snapshot-on-attach; REMINAL_SNAPSHOT=0 disables it).
+	a.initScreen()
+
 	shellExit := make(chan struct{})
 	go func() {
 		a.pumpPTY()
@@ -675,6 +693,7 @@ func (a *Agent) applyEffectiveSize() {
 		return
 	}
 	_ = a.term.Resize(cols, rows)
+	a.resizeScreen(cols, rows)
 	// Tell every viewer the new PTY size so their xterm.js matches.
 	// Without this, the agent shrinks the PTY for a small viewer (e.g.,
 	// phone joining a desktop session), the shell formats output for
@@ -1348,9 +1367,7 @@ func (a *Agent) broadcastNotice(text string) {
 	if a.localActive {
 		_, _ = os.Stdout.Write([]byte(line))
 	}
-	if enc, err := a.box.Encrypt([]byte(line)); err == nil {
-		a.buf.Append(enc)
-	}
+	a.record([]byte(line))
 }
 
 // pause is invoked from the SIGUSR1 handler when the user runs
@@ -1415,6 +1432,76 @@ func (a *Agent) printQR() {
 }
 
 // pumpPTY reads the PTY forever, encrypts each chunk and stores it in the
+// initScreen sets up the headless emulator used for snapshot-on-attach, unless
+// REMINAL_SNAPSHOT=0 disables it (falling back to raw replay). Sized to the
+// current PTY size; kept in sync by feedScreen / resizeScreen.
+func (a *Agent) initScreen() {
+	if os.Getenv("REMINAL_SNAPSHOT") == "0" {
+		return
+	}
+	a.scrollbackLines = config.SnapshotScrollbackLines()
+	a.scrollbackBytes = config.SnapshotScrollbackBytes()
+	cols, rows := a.lastAppliedCol, a.lastAppliedRow
+	if cols == 0 || rows == 0 {
+		cols, rows = 80, 24
+	}
+	a.screenMu.Lock()
+	a.screen = vt.NewEmulator(int(cols), int(rows))
+	if a.scrollbackLines > 0 {
+		a.screen.Scrollback().SetMaxLines(a.scrollbackLines)
+	}
+	a.screenMu.Unlock()
+}
+
+// record is the single path that commits a chunk of plaintext output to both
+// the emulator and the scrollback buffer, under screenMu. Doing both under one
+// lock keeps the invariant the snapshot relies on: the emulator's state always
+// corresponds exactly to the buffer through its latest seq, so a snapshot can be
+// tagged with that seq without duplicating or dropping a chunk on the joiner.
+func (a *Agent) record(p []byte) {
+	a.screenMu.Lock()
+	if a.screen != nil {
+		_, _ = a.screen.Write(p)
+	}
+	if enc, err := a.box.Encrypt(p); err == nil {
+		a.buf.Append(enc)
+	}
+	a.screenMu.Unlock()
+}
+
+// resizeScreen keeps the emulator's dimensions in step with the PTY so the
+// snapshot matches the size viewers render at.
+func (a *Agent) resizeScreen(cols, rows uint16) {
+	if a.screen == nil || cols == 0 || rows == 0 {
+		return
+	}
+	a.screenMu.Lock()
+	a.screen.Resize(int(cols), int(rows))
+	a.screenMu.Unlock()
+}
+
+// snapshotFrame returns the encrypted snapshot of the current screen+scrollback
+// and the seq it represents (everything through that seq). Built under screenMu
+// with the latest seq read in the same critical section, so the frame and seq
+// are consistent. Returns ("", 0) if snapshots are disabled or building fails.
+func (a *Agent) snapshotFrame() (string, uint64) {
+	if a.screen == nil {
+		return "", 0
+	}
+	a.screenMu.Lock()
+	snap := buildSnapshot(a.screen, a.scrollbackLines, a.scrollbackBytes)
+	latest := a.buf.LatestSeq()
+	a.screenMu.Unlock()
+	if snap == "" {
+		return "", 0
+	}
+	enc, err := a.box.Encrypt([]byte(snap))
+	if err != nil {
+		return "", 0
+	}
+	return enc, latest
+}
+
 // scrollback. The sender goroutine drains the scrollback over the websocket.
 func (a *Agent) pumpPTY() {
 	buf := make([]byte, 4096)
@@ -1433,10 +1520,7 @@ func (a *Agent) pumpPTY() {
 			if a.localActive {
 				_, _ = os.Stdout.Write(buf[:n])
 			}
-			enc, encErr := a.box.Encrypt(buf[:n])
-			if encErr == nil {
-				a.buf.Append(enc)
-			}
+			a.record(buf[:n])
 		}
 		if err != nil {
 			return
@@ -1760,6 +1844,25 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			case c := <-cursorCh:
 				cursor = c
 				sending = true
+			}
+		}
+
+		// Fresh attach (or a viewer that fell behind past what we still
+		// buffer): instead of replaying the whole raw output history — which
+		// the viewer's terminal re-executes mutation-by-mutation, the
+		// "fast-forward replay" — send one snapshot that paints the current
+		// screen + scrollback directly. Tagged with the latest seq so
+		// up-to-date viewers drop it and only the new joiner applies it.
+		if a.screen != nil && cursor <= a.buf.OldestSeq() {
+			if frame, latest := a.snapshotFrame(); frame != "" {
+				if err := a.writeMsg(conn, protocol.Message{
+					Type: protocol.TypeData,
+					Data: frame,
+					Seq:  latest,
+				}); err != nil {
+					return err
+				}
+				cursor = latest + 1
 			}
 		}
 

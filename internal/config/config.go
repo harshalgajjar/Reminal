@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -77,4 +78,46 @@ func Shell() string {
 		}
 	}
 	return "/bin/sh"
+}
+
+// DefaultSnapshotScrollbackLines is how many lines of scrollback history a
+// fresh-attach snapshot includes by default. Generous enough to scroll back
+// through a long session, bounded so the snapshot (and the agent's emulator
+// memory) stay reasonable. Override with REMINAL_SCROLLBACK_LINES.
+const DefaultSnapshotScrollbackLines = 10000
+
+// SnapshotScrollbackLines returns how many scrollback lines to include in the
+// attach snapshot. REMINAL_SCROLLBACK_LINES overrides the default; 0 means
+// "screen only, no history"; negative or unparseable falls back to the default.
+func SnapshotScrollbackLines() int {
+	v := os.Getenv("REMINAL_SCROLLBACK_LINES")
+	if v == "" {
+		return DefaultSnapshotScrollbackLines
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return DefaultSnapshotScrollbackLines
+	}
+	return n
+}
+
+// DefaultSnapshotScrollbackBytes caps the rendered size of the scrollback
+// portion of an attach snapshot, so a wide/colorful history can't balloon the
+// payload even within the line limit. The visible screen is always included on
+// top of this.
+const DefaultSnapshotScrollbackBytes = 2 << 20 // 2 MiB
+
+// SnapshotScrollbackBytes returns the byte cap for snapshot scrollback.
+// REMINAL_SCROLLBACK_BYTES overrides the default; 0 means "no byte cap" (the
+// line cap still applies); negative or unparseable falls back to the default.
+func SnapshotScrollbackBytes() int {
+	v := os.Getenv("REMINAL_SCROLLBACK_BYTES")
+	if v == "" {
+		return DefaultSnapshotScrollbackBytes
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		return DefaultSnapshotScrollbackBytes
+	}
+	return n
 }
