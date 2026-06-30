@@ -131,6 +131,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "__complete":
+			// Hidden helper the generated shell-completion scripts call to
+			// list session id/name/port candidates for `attach`/`kill`/etc.
+			// Best-effort and silent — completion must never print errors.
+			client.CompleteSessions()
+			return
 		case "connect":
 			if len(os.Args) < 3 {
 				fmt.Fprintln(os.Stderr, "usage: reminal connect <session-id-or-url> [pin]")
