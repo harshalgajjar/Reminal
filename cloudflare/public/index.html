@@ -2505,8 +2505,12 @@
       if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
     }
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && agentLive && !wakeLock) {
-        acquireWakeLock();
+      if (document.visibilityState === 'visible') {
+        // Coming back to the app (e.g. after opening a session link in a
+        // browser window) — re-read localStorage so a connection made in
+        // another tab/window shows up in Recent without a manual restart.
+        renderRecents();
+        if (agentLive && !wakeLock) acquireWakeLock();
       }
     });
 
@@ -2927,6 +2931,14 @@
     // Populate the Recent dropdown on load so the user sees their saved
     // sessions even before clicking it.
     renderRecents();
+
+    // Keep Recent live across tabs/windows: when another same-origin document
+    // (e.g. a session link opened in a browser window) writes the history,
+    // the browser fires a 'storage' event here — re-render immediately instead
+    // of waiting for the user to reopen the PWA. (e.key is null on clear().)
+    window.addEventListener('storage', (e) => {
+      if (e.key === HISTORY_KEY || e.key === null) renderRecents();
+    });
 
     // Close the recents <details> on any outside click. Native <details>
     // doesn't have this behavior — only the summary toggles it — so a
