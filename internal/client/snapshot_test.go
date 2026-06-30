@@ -4,10 +4,46 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/vt"
 	"github.com/reminal/reminal/internal/crypto"
 )
+
+// TestRecordDoesNotBlockOnTerminalQueries guards the v0.11.0 regression where
+// apps like `claude` froze inside a reminal session: the emulator replies to
+// terminal queries (DA / cursor-position / DSR) by writing into an internal
+// pipe, and with nothing draining it the next query made Write — and thus
+// record() and the whole PTY pump — block forever. initScreen must start the
+// drain so feeding queries never blocks.
+func TestRecordDoesNotBlockOnTerminalQueries(t *testing.T) {
+	t.Setenv("REMINAL_SNAPSHOT", "")
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := &Agent{box: box, buf: newScrollback(1 << 20)}
+	a.initScreen()
+	if a.screen == nil {
+		t.Skip("snapshots disabled")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		// Queries that make the emulator generate pipe replies, plus normal
+		// output. Several, to be sure it's not just a one-deep pipe buffer.
+		for i := 0; i < 50; i++ {
+			a.record([]byte("\x1b[c"))  // primary device attributes
+			a.record([]byte("\x1b[6n")) // cursor position report
+			a.record([]byte("\x1b[5n")) // device status report
+			a.record([]byte("line\r\n"))
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("record() blocked on terminal-query replies — emulator pipe not drained")
+	}
+}
 
 // TestAgentSnapshotFramePath exercises the whole agent-side path the way a
 // fresh viewer triggers it: output is committed via record() (which feeds both

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -1450,7 +1451,19 @@ func (a *Agent) initScreen() {
 	if a.scrollbackLines > 0 {
 		a.screen.Scrollback().SetMaxLines(a.scrollbackLines)
 	}
+	scr := a.screen
 	a.screenMu.Unlock()
+
+	// CRITICAL: the emulator answers terminal queries (device attributes,
+	// cursor-position / status reports, etc.) by writing the reply into an
+	// internal pipe. If nothing reads that pipe, the *next* such query makes
+	// Write block forever — which stalls record() and freezes the shell. Apps
+	// like `claude` emit these queries on startup (plain `seq`/`less` don't,
+	// which is why this slipped through). We don't want the emulator's replies
+	// anyway — the real viewer/host terminal answers queries over the normal
+	// stdin→PTY path — so drain and discard them. Runs until the emulator is
+	// closed / the process exits.
+	go func() { _, _ = io.Copy(io.Discard, scr) }()
 }
 
 // record is the single path that commits a chunk of plaintext output to both
