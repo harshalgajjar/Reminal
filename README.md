@@ -10,7 +10,6 @@ Run `reminal`, scan a QR code, you're in.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/harshalgajjar/Reminal?color=success&label=release)](https://github.com/harshalgajjar/Reminal/releases)
-[![Homebrew](https://img.shields.io/badge/homebrew-harshalgajjar%2Freminal-orange)](https://github.com/harshalgajjar/Reminal)
 [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/harshalgajjar/Reminal/releases)
 [![Encryption](https://img.shields.io/badge/encryption-AES--256--GCM-success)](#security)
@@ -64,7 +63,7 @@ Installs to `~/.local/bin/reminal`. No sudo. macOS and Linux, Apple Silicon and 
 
 `reminal` checks for updates on launch and offers to upgrade in place.
 
-<sub>Other options: `reminal upgrade` to force an immediate upgrade · build from source with `./scripts/build.sh` (Go 1.25+) · Homebrew tap still available at `brew tap harshalgajjar/reminal && brew install reminal` but the shell installer is recommended for the seamless upgrade UX.</sub>
+<sub>Other options: `reminal upgrade` to force an immediate upgrade · build from source with `./scripts/build.sh` (Go 1.25+).</sub>
 
 ---
 
@@ -188,7 +187,7 @@ SSH leaves port 22 open, stores long-lived keys on disk, and trusts you to confi
 
 - Share the session ID and PIN over **different channels** (e.g. email the ID, text the PIN).
 - Stop the session with **Ctrl+C** when you're done. Credentials die instantly.
-- Keep your client up to date — `brew upgrade reminal`.
+- Keep your client up to date — `reminal upgrade`.
 
 ---
 
