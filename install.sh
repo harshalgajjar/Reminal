@@ -27,6 +27,55 @@ case "$(uname -m)" in
     *) echo "reminal: unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
+# Install shell tab-completion for the user's shell so `reminal attach/kill/...`
+# completes session ids and names out of the box. Best-effort — never fails the
+# install. Skip with REMINAL_NO_COMPLETION=1. Idempotent (marker-guarded) so it
+# can run again on every upgrade without duplicating. The rc snippets source
+# `reminal completion ...` at shell startup, so they stay fresh across upgrades.
+install_completion() {
+    [ "${REMINAL_NO_COMPLETION:-}" = "1" ] && return 0
+
+    _begin="# >>> reminal completion >>>"
+    _end="# <<< reminal completion <<<"
+
+    _add_to_rc() { # $1=rcfile  $2=body
+        _rc="$1"
+        if [ ! -e "$_rc" ]; then : >"$_rc" 2>/dev/null || return 0; fi
+        if grep -qF "$_begin" "$_rc" 2>/dev/null; then return 0; fi
+        printf '\n%s\n%s\n%s\n' "$_begin" "$2" "$_end" >>"$_rc" 2>/dev/null || return 0
+        echo "  + tab-completion enabled in $_rc (open a new shell, or: source $_rc)"
+    }
+
+    case "$(basename "${SHELL:-sh}")" in
+        zsh)
+            _add_to_rc "${ZDOTDIR:-$HOME}/.zshrc" 'if command -v reminal >/dev/null 2>&1; then
+  (( $+functions[compdef] )) || { autoload -Uz compinit && compinit -u; }
+  source <(reminal completion zsh)
+fi'
+            ;;
+        bash)
+            _rcfile="$HOME/.bashrc"
+            [ "$OS" = "darwin" ] && [ -e "$HOME/.bash_profile" ] && _rcfile="$HOME/.bash_profile"
+            _add_to_rc "$_rcfile" 'command -v reminal >/dev/null 2>&1 && source <(reminal completion bash)'
+            ;;
+        fish)
+            _fdir="${XDG_CONFIG_HOME:-$HOME/.config}/fish/completions"
+            if mkdir -p "$_fdir" 2>/dev/null && printf '%s\n' 'reminal completion fish | source' >"$_fdir/reminal.fish" 2>/dev/null; then
+                echo "  + tab-completion installed: $_fdir/reminal.fish"
+            fi
+            ;;
+        *)
+            echo "  (couldn't detect your shell — set up completion with: reminal completion <bash|zsh|fish>)"
+            ;;
+    esac
+}
+
+# Re-run completion setup only (no download): REMINAL_SETUP_COMPLETION_ONLY=1.
+if [ "${REMINAL_SETUP_COMPLETION_ONLY:-}" = "1" ]; then
+    install_completion || true
+    exit 0
+fi
+
 # curl is required; check upfront for a clearer error.
 if ! command -v curl >/dev/null 2>&1; then
     echo "reminal: curl is required to install. Install curl and try again." >&2
@@ -70,6 +119,9 @@ fi
 
 echo
 echo "Installed reminal v${VERSION} to ${INSTALL_DIR}/reminal"
+
+# Set up tab-completion for the user's shell (best-effort).
+install_completion || true
 
 # Heads-up if a different reminal is going to win on PATH.
 EXISTING="$(command -v reminal 2>/dev/null || true)"
