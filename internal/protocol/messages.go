@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
 package protocol
 
 type Role string
@@ -102,6 +105,35 @@ const (
 	//    "headers":{"Content-Type":"text/html", ...},
 	//    "body":"<base64>"}
 	TypeTunnelResp MessageType = "tunnel_resp"
+
+	// ---- Window mirroring (view + control a host window in the browser) ----
+	// Like uploads/downloads, every payload rides end-to-end encrypted in
+	// Data as JSON; the relay forwards these opaquely (no relay changes).
+
+	// TypeWindowList is bidirectional. Viewer→agent: a request with empty
+	// Data ("what windows are open?"). Agent→viewer: the reply, Data =
+	// encrypted JSON {"windows":[{"id","app","title","x","y","w","h"}, ...]}.
+	TypeWindowList MessageType = "window_list"
+	// TypeWindowCtl is viewer→agent. Data = encrypted JSON
+	// {"action":"start"|"stop","id":"<window id>"}. "start" begins streaming
+	// periodic JPEG frames of that window; "stop" ends the current stream.
+	TypeWindowCtl MessageType = "window_ctl"
+	// TypeWindowFrame is agent→viewer. Data = encrypted JSON
+	// {"id","w","h","img":"<base64 JPEG>"} — one captured frame of the
+	// window the viewer asked to stream.
+	TypeWindowFrame MessageType = "window_frame"
+	// TypeWindowInput is viewer→agent. Data = encrypted JSON describing a
+	// mouse/keyboard event to inject into the streamed window, e.g.
+	// {"kind":"click","x":0.5,"y":0.3} (x/y are 0..1 fractions of the
+	// window) or {"kind":"key","text":"a"} / {"kind":"key","special":"return"}.
+	TypeWindowInput MessageType = "window_input"
+	// TypeWindowAck is viewer→agent. Data = encrypted JSON {"id","seq"}. The
+	// viewer sends one after it has decoded+rendered a frame; the agent won't
+	// send the next frame for that window until the previous one is acked (or a
+	// short timeout elapses). This bounds in-flight frames to ~1 so latency can't
+	// accumulate on a slow link, and paces the frame rate to what the viewer can
+	// actually consume.
+	TypeWindowAck MessageType = "window_ack"
 )
 
 type Message struct {

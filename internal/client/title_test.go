@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
 package client
 
 import "testing"
@@ -31,11 +34,11 @@ func TestFeedTitle(t *testing.T) {
 
 func TestSanitizeTitle(t *testing.T) {
 	cases := map[string]string{
-		"  spaced  ":      "spaced",
-		"tab\there":       "tabhere",
-		"bell\x07inside":  "bellinside",
-		"":                "",
-		"plain":           "plain",
+		"  spaced  ":     "spaced",
+		"tab\there":      "tabhere",
+		"bell\x07inside": "bellinside",
+		"":               "",
+		"plain":          "plain",
 	}
 	for in, want := range cases {
 		if got := sanitizeTitle(in); got != want {

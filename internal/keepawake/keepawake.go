@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
 // Package keepawake prevents the host machine from sleeping while a reminal
 // agent is running — the whole point of leaving reminal up is so you can come
 // back to it from another device, which doesn't work if the laptop sleeps the

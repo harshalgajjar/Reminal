@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
 package client
 
 import (
@@ -46,10 +49,11 @@ func CompleteSessions() {
 // Supported shells: bash, zsh, fish. Returns an error on unknown shells.
 //
 // Users install with one of:
-//   source <(reminal completion bash)                  # bash, current session
-//   reminal completion bash >> ~/.bashrc               # bash, persistent
-//   reminal completion zsh > "${fpath[1]}/_reminal"    # zsh, persistent
-//   reminal completion fish > ~/.config/fish/completions/reminal.fish
+//
+//	source <(reminal completion bash)                  # bash, current session
+//	reminal completion bash >> ~/.bashrc               # bash, persistent
+//	reminal completion zsh > "${fpath[1]}/_reminal"    # zsh, persistent
+//	reminal completion fish > ~/.config/fish/completions/reminal.fish
 func Completion(shell string) error {
 	switch shell {
 	case "bash":

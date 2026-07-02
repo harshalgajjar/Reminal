@@ -64,7 +64,7 @@
     }
     header h1 { font-size: 15px; font-weight: 600; }
     header h1 span { color: #58a6ff; }
-    #session-form { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+    #session-form { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
     input {
       background: #0d1117;
       border: 1px solid #30363d;
@@ -92,18 +92,23 @@
     button:disabled { background: #21262d; color: #484f58; cursor: not-allowed; }
     button.danger { background: #da3633; }
     button.danger:hover { background: #f85149; }
-    #status { font-size: 13px; color: #8b949e; display: flex; align-items: center; gap: 6px; }
-    #status.connected { color: #3fb950; }
-    #status.warn { color: #d29922; }
-    #status.error { color: #f85149; }
+    /* Connection status as a compact pill, tinted by state. */
+    #status {
+      font-size: 12px; color: #8b949e; display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 11px; border-radius: 999px; white-space: nowrap;
+      background: rgba(139, 148, 158, 0.12); border: 1px solid rgba(139, 148, 158, 0.28);
+    }
+    #status.connected { color: #3fb950; background: rgba(63, 185, 80, 0.13); border-color: rgba(63, 185, 80, 0.40); }
+    #status.warn { color: #d29922; background: rgba(210, 153, 34, 0.13); border-color: rgba(210, 153, 34, 0.40); }
+    #status.error { color: #f85149; background: rgba(248, 81, 73, 0.13); border-color: rgba(248, 81, 73, 0.40); }
     #status::before {
       content: '';
       display: inline-block;
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: currentColor;
-      opacity: 0.5;
+      opacity: 0.9;
     }
     #status.connecting::before { animation: pulse 1.2s ease-in-out infinite; }
     @keyframes pulse {
@@ -154,7 +159,36 @@
     body.connected #session-form input { display: none; }
     /* Share button only makes sense after a successful connect. */
     #share-btn { display: none; }
-    body.connected #share-btn { display: inline-block; }
+    body.connected #share-btn { display: inline-flex; }
+
+    /* Compact header: a clean, consistent ghost toolbar — icon over a small
+       label — so it takes little width (important on phones). All four controls
+       share one footprint; colour is used only as an accent (green Connect, red
+       Disconnect). Connect/Disconnect + Share carry their icon via ::before so
+       the button's stateful textContent never wipes it. */
+    #recents > summary, #windows > summary, #connect-btn, #share-btn {
+      display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 3px; min-width: 46px; padding: 4px 7px; line-height: 1; white-space: nowrap;
+      font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em;
+      background: transparent; border: 1px solid transparent; border-radius: 7px; color: #c9d1d9;
+    }
+    #recents > summary:hover, #windows > summary:hover,
+    #recents[open] > summary, #windows[open] > summary,
+    #connect-btn:hover, #share-btn:hover { background: #21262d; }
+    #recents > summary svg, #windows > summary svg { width: 16px; height: 16px; opacity: 0.95; }
+    #recents > summary .caret, #windows > summary .caret { display: none; }
+    #connect-btn::before, #share-btn::before {
+      content: ''; width: 16px; height: 16px; background: center / contain no-repeat;
+    }
+    /* Connect: log-in arrow (green); Disconnect/Cancel (.danger): log-out (red). */
+    #connect-btn { background: transparent; color: #3fb950; }
+    #connect-btn:hover { background: #21262d; }
+    #connect-btn::before { background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20width%3D%2716%27%20height%3D%2716%27%20fill%3D%27none%27%20stroke%3D%27%233fb950%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M15%203h4a2%202%200%200%201%202%202v14a2%202%200%200%201-2%202h-4%27%2F%3E%3Cpath%20d%3D%27M10%2017l5-5-5-5%27%2F%3E%3Cpath%20d%3D%27M15%2012H3%27%2F%3E%3C%2Fsvg%3E"); }
+    #connect-btn.danger { background: transparent; color: #f85149; }
+    #connect-btn.danger:hover { background: #21262d; }
+    #connect-btn.danger::before { background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20width%3D%2716%27%20height%3D%2716%27%20fill%3D%27none%27%20stroke%3D%27%23f85149%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27M9%2021H5a2%202%200%200%201-2-2V5a2%202%200%200%201%202-2h4%27%2F%3E%3Cpath%20d%3D%27M16%2017l5-5-5-5%27%2F%3E%3Cpath%20d%3D%27M21%2012H9%27%2F%3E%3C%2Fsvg%3E"); }
+    #share-btn { background: transparent; color: #c9d1d9; }
+    #share-btn::before { background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20width%3D%2720%27%20height%3D%2720%27%20fill%3D%27none%27%20stroke%3D%27%23c9d1d9%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Ccircle%20cx%3D%2718%27%20cy%3D%275%27%20r%3D%273%27%2F%3E%3Ccircle%20cx%3D%276%27%20cy%3D%2712%27%20r%3D%273%27%2F%3E%3Ccircle%20cx%3D%2718%27%20cy%3D%2719%27%20r%3D%273%27%2F%3E%3Cpath%20d%3D%27M8.6%2010.5l6.8-4M8.6%2013.5l6.8%204%27%2F%3E%3C%2Fsvg%3E"); }
 
     /* Mobile-only soft-key bar. Phones/tablets have no Esc, Tab, Ctrl,
        arrows on the system keyboard — without these reminal is unusable
@@ -325,17 +359,21 @@
     #recents > summary {
       list-style: none;
       cursor: pointer;
-      background: #21262d;
-      border: 1px solid #30363d;
-      border-radius: 6px;
-      color: #e6edf3;
-      font-size: 14px;
-      padding: 6px 12px;
+      display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 3px; min-width: 46px; padding: 4px 7px; line-height: 1; white-space: nowrap;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      color: #c9d1d9;
+      font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em;
       user-select: none;
     }
+    /* Icon over the small label in the header dropdown buttons. */
+    #recents > summary svg, #windows > summary svg { width: 16px; height: 16px; opacity: 0.95; flex: none; }
+    #recents > summary .caret, #windows > summary .caret { display: none; }
     #recents > summary::-webkit-details-marker { display: none; }
-    #recents > summary:hover { background: #30363d; }
-    #recents[open] > summary { background: #30363d; }
+    #recents > summary:hover { background: #21262d; }
+    #recents[open] > summary { background: #21262d; }
     .recents-list {
       position: absolute;
       top: 100%;
@@ -397,6 +435,121 @@
     .recents-row .row-btn:hover { background: #30363d; color: #e6edf3; }
     /* When connected, the inputs collapse but the recents dropdown stays
        useful: rename the current session, hop to another one. */
+
+    /* Windows dropdown reuses the recents panel/row styles; only its summary
+       and visibility differ. Hidden until a session is live (nothing to list
+       without an agent), then shown next to Recent. */
+    #windows { position: relative; display: none; }
+    body.connected #windows { display: inline-block; }
+    #windows > summary {
+      list-style: none;
+      cursor: pointer;
+      display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 3px; min-width: 46px; padding: 4px 7px; line-height: 1; white-space: nowrap;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      color: #c9d1d9;
+      font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em;
+      user-select: none;
+    }
+    #windows > summary::-webkit-details-marker { display: none; }
+    #windows > summary:hover { background: #21262d; }
+    #windows[open] > summary { background: #21262d; }
+
+    /* Header sits above the floating window panes (which live at z 31–49) but
+       below the full-screen modals (#preview/#share at z 100). position:relative
+       just makes the z-index take effect; it doesn't change the flex layout. */
+    header { position: relative; z-index: 50; }
+
+    /* Floating host-window panes — draggable, resizable mini windows. */
+    #wkey { position: fixed; opacity: 0; pointer-events: none; width: 1px; height: 1px; left: -20px; top: -20px; border: 0; padding: 0; }
+    .wpane {
+      position: fixed; z-index: 31;
+      display: flex; flex-direction: column; overflow: hidden;
+      background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
+      box-shadow: 0 10px 34px rgba(0, 0, 0, 0.6);
+      min-width: 160px; max-width: 98vw;
+    }
+    .wpane.focused { border-color: #1f6feb; box-shadow: 0 10px 34px rgba(31, 111, 235, 0.45); }
+    .wpane-bar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 8px; background: #161b22; border-bottom: 1px solid #30363d;
+      cursor: move; touch-action: none; user-select: none;
+    }
+    .wpane-title {
+      font-size: 12px; color: #e6edf3;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60vw;
+    }
+    .wpane-spacer { flex: 1; }
+    .wpane-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      background: #21262d; border: 1px solid #30363d; border-radius: 5px;
+      color: #c9d1d9; padding: 4px 6px; cursor: pointer;
+    }
+    .wpane-btn:hover { background: #30363d; color: #e6edf3; }
+    .wpane-close:hover { background: #da3633; border-color: #da3633; color: #fff; }
+    /* The soft-keyboard button only helps on touch (no physical keyboard); hide
+       it where there's a real pointer with hover (desktop). */
+    .wpane-kbd { display: none; }
+    @media (hover: none) and (pointer: coarse) { .wpane-kbd { display: inline-flex; } }
+    .wpane-body { position: relative; background: #000; line-height: 0; overflow: hidden; }
+    .wpane-img { display: block; width: 100%; height: auto; touch-action: none; -webkit-user-drag: none; user-select: none; transform-origin: center center; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+    .wpane-resize {
+      position: absolute; right: 0; bottom: 0; width: 20px; height: 20px;
+      cursor: nwse-resize; touch-action: none;
+      background: linear-gradient(135deg, transparent 45%, #57606a 45%, #57606a 55%, transparent 55%, transparent 70%, #57606a 70%, #57606a 80%, transparent 80%);
+    }
+    /* Per-pane trackpad cursor (touch only): drag to move, tap to click here. */
+    /* Arrow pointer for the touch cursor. The arrow TIP is the hotspot, so the
+       margin/transform-origin align it to the click point (2,1 in the SVG). */
+    .wpane-cursor {
+      position: absolute; width: 22px; height: 26px; margin: -1px 0 0 -2px;
+      pointer-events: none; display: none; z-index: 3;
+      transform-origin: 2px 1px;
+      transition: transform 0.1s ease, filter 0.1s ease;
+      background: center / contain no-repeat url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2022%2026%27%20width%3D%2722%27%20height%3D%2726%27%3E%3Cpath%20d%3D%27M2%201%20L2%2020%20L7%2015.5%20L10.5%2023%20L13.5%2021.7%20L10%2014.3%20L17%2014.3%20Z%27%20fill%3D%27white%27%20stroke%3D%27black%27%20stroke-width%3D%271.6%27%20stroke-linejoin%3D%27round%27%2F%3E%3C%2Fsvg%3E");
+      filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.45));
+    }
+    .wpane-cursor.tapped { transform: scale(0.8); }
+    /* While dragging (touch), swap the arrow for a closed "grabbing" hand so it
+       reads like you're holding the thing you're moving. The translate re-centres
+       the hand on the drag point (the arrow's hotspot was its top-left tip). */
+    .wpane-cursor.grabbing {
+      background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2024%2024%27%20width%3D%2726%27%20height%3D%2726%27%3E%3Cpath%20d%3D%27M6.2%2011V9.6a1.4%201.4%200%200%201%202.8%200V9a1.4%201.4%200%200%201%202.8%200v.3a1.4%201.4%200%200%201%202.8%200v.5a1.4%201.4%200%200%201%202.8%200V15a5%205%200%200%201-5%205h-1.8a5%205%200%200%201-4.7-3.3l-1.3-3.6a1.35%201.35%200%200%201%202.45-1.1l.6%201.2Z%27%20fill%3D%27white%27%20stroke%3D%27black%27%20stroke-width%3D%271.5%27%20stroke-linejoin%3D%27round%27%20stroke-linecap%3D%27round%27%2F%3E%3C%2Fsvg%3E");
+      transform-origin: center;
+      transform: translate(-9px, -10px) scale(1.08);
+      filter: drop-shadow(0 0 3px rgba(56, 139, 253, 0.95)) drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.5));
+    }
+    /* Shown when a pane stops receiving frames — e.g. the host screen is locked
+       or asleep, which blocks capture. Turns a silent freeze into a clear cue. */
+    .wpane-stall {
+      position: absolute; inset: 0; z-index: 4; display: none;
+      align-items: center; justify-content: center;
+      background: rgba(13, 17, 23, 0.5); backdrop-filter: blur(2px);
+    }
+    .wpane.stalled .wpane-stall { display: flex; }
+    .wpane-stall .pill {
+      display: flex; align-items: center; gap: 9px; max-width: 92%;
+      background: rgba(22, 27, 34, 0.96); border: 1px solid #30363d; color: #e6edf3;
+      font-size: 13px; padding: 8px 14px; border-radius: 999px;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+    }
+    .wpane-stall .dot {
+      width: 9px; height: 9px; border-radius: 50%; background: #d29922; flex: none;
+      animation: stallpulse 1.2s ease-in-out infinite;
+    }
+    .wpane-stall .sub { color: #8b949e; font-size: 11px; }
+    @keyframes stallpulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+    /* Capture error (vs a transient stall): steady red dot, no pulse. */
+    .wpane.stall-error .wpane-stall .dot { background: #f85149; animation: none; }
+    .wpane.stall-error .wpane-stall .pill { border-color: #f85149; }
+    /* Warning banner atop the Windows dropdown (e.g. Screen Recording is off). */
+    .windows-hint {
+      margin: 6px; padding: 8px 10px; border-radius: 6px; font-size: 11.5px; line-height: 1.45;
+      background: rgba(187, 128, 9, 0.15); border: 1px solid rgba(187, 128, 9, 0.5); color: #e3b341;
+    }
+    .windows-note { padding: 12px; color: #8b949e; font-size: 12px; line-height: 1.5; }
   </style>
 </head>
 <body>
@@ -404,8 +557,12 @@
     <h1><span>re</span>minal</h1>
     <div id="session-form">
       <details id="recents">
-        <summary>Recent ▾</summary>
+        <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3.5 2"/><circle cx="12" cy="12" r="9"/></svg>Recent<span class="caret">▾</span></summary>
         <div class="recents-list" id="recents-list"></div>
+      </details>
+      <details id="windows" title="View & control a window on the host">
+        <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Windows<span class="caret">▾</span></summary>
+        <div class="recents-list" id="windows-list"></div>
       </details>
       <input id="session-input" placeholder="Session" maxlength="8" autocomplete="off" spellcheck="false">
       <input id="pin-input" placeholder="PIN" maxlength="8" inputmode="numeric" autocomplete="off" spellcheck="false">
@@ -449,6 +606,10 @@
       <button id="preview-close">Close</button>
     </div>
   </div>
+  <!-- Host windows open as draggable floating panes appended to <body> at
+       runtime (see the pane manager JS). This shared off-screen input captures
+       keystrokes for the focused pane and summons the mobile soft keyboard. -->
+  <input id="wkey" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-hidden="true">
   <!-- Keybar order optimised for mobile shell flow:
        arrows first (used every prompt), then Tab/Esc/Backspace, then
        common Ctrl-* shortcuts in order of frequency, then symbols,
@@ -985,6 +1146,23 @@
     let bytesSent = 0;
     let bytesReceived = 0;
     let lastDialMs = 0; // measured from new WebSocket() to ws.onopen
+    // On-screen debug log, enabled only with ?debug=true in the query. Lets us
+    // watch the handshake on a phone with no Web Inspector — every relay
+    // message, the kex send/recv, ex_id matching, and timeouts scroll into a
+    // panel at the bottom.
+    const DEBUG = new URLSearchParams(location.search).get('debug') === 'true';
+    let dbgEl = null;
+    function dbg(m) {
+      if (!DEBUG) return;
+      try { console.log('[dbg]', m); } catch (_) {}
+      if (!dbgEl) {
+        dbgEl = document.createElement('div');
+        dbgEl.style.cssText = 'position:fixed;left:0;right:0;bottom:0;max-height:45vh;overflow:auto;z-index:99999;background:rgba(0,0,0,0.88);color:#7ee787;font:11px/1.45 ui-monospace,monospace;padding:6px 8px 10px;white-space:pre-wrap;border-top:1px solid #30363d;';
+        (document.body || document.documentElement).appendChild(dbgEl);
+      }
+      dbgEl.textContent += new Date().toISOString().slice(11, 23) + '  ' + m + '\n';
+      dbgEl.scrollTop = dbgEl.scrollHeight;
+    }
     // Upload IDs THIS viewer originated — used to filter the agent's
     // upload_ack broadcast so only the originator auto-pastes the path.
     const pendingUploadIDs = new Set();
@@ -1032,16 +1210,18 @@
     // Per-handshake state. All four are reset by openSocket() on every
     // reconnect; completeKex clears the ephemeral private material as
     // soon as the wrap is decrypted.
-    let kexExID = '';            // hex, matched against the agent's reply
-    let kexExIDBytes = null;     // raw bytes — used as HKDF salt for wrap key
-    let kexEphKeyPair = null;    // X25519 ephemeral keypair
-    let kexMask = null;          // 32-byte PIN-derived XOR mask
-    // Guard against concurrent sendKexInit calls. ws.onmessage events
-    // for 'auth_ok' and 'connected' can interleave at their first await
-    // (both fire before either assigns kexEphKeyPair). Without this
-    // flag they each generate a separate ephemeral keypair, send two
-    // kex_inits, and the agent does twice the work — harmless, but
-    // ugly. Set synchronously at the top of sendKexInit.
+    // All outstanding kex_init attempts, keyed by hex ex_id →
+    // { keyPair, mask, exIDBytes }. More than one can be in flight (an optimistic
+    // kex_init on auth_ok plus one on connected/agent_online); whichever the
+    // agent answers FIRST completes the handshake, so a dropped/coalesced reply
+    // to one attempt no longer strands the connection (the iOS "handshake timed
+    // out" bug, where we kept only the latest ex_id and discarded a valid reply).
+    const kexAttempts = new Map();
+    let kexExID = '';            // most-recent ex_id (diagnostics only)
+    // Guard against a single sendKexInit call re-entering at its first await.
+    // (Distinct auth_ok / connected triggers intentionally each add their own
+    // attempt to kexAttempts — that's the resilience; this flag only stops one
+    // trigger from double-firing.) Set synchronously at the top of sendKexInit.
     let kexInFlight = false;
 
     async function derivePinMask(pin) {
@@ -1099,38 +1279,42 @@
       // is destroyed in completeKex once the wrap is decrypted, which
       // is what gives the handshake forward secrecy against a future
       // compromise of the agent's long-lived state.
-      kexEphKeyPair = await crypto.subtle.generateKey(
+      const keyPair = await crypto.subtle.generateKey(
         { name: 'X25519' }, true, ['deriveBits']
       );
+      dbg('X25519 keypair generated');
       const myPub = new Uint8Array(
-        await crypto.subtle.exportKey('raw', kexEphKeyPair.publicKey)
+        await crypto.subtle.exportKey('raw', keyPair.publicKey)
       );
-      kexMask = await derivePinMask(pinValue);
+      const mask = await derivePinMask(pinValue);
       const blinded = new Uint8Array(32);
-      for (let i = 0; i < 32; i++) blinded[i] = myPub[i] ^ kexMask[i];
+      for (let i = 0; i < 32; i++) blinded[i] = myPub[i] ^ mask[i];
 
-      kexExIDBytes = crypto.getRandomValues(new Uint8Array(16));
-      kexExID = Array.from(kexExIDBytes)
+      const exIDBytes = crypto.getRandomValues(new Uint8Array(16));
+      const exID = Array.from(exIDBytes)
         .map(b => b.toString(16).padStart(2, '0')).join('');
+      // Keep this attempt alongside any earlier one — completeKex accepts a
+      // reply to whichever is answered first.
+      kexAttempts.set(exID, { keyPair, mask, exIDBytes });
+      kexExID = exID;
 
       ws.send(JSON.stringify({
         type: 'kex_init',
-        ex_id: kexExID,
+        ex_id: exID,
         data: u8ToBase64(blinded),
       }));
+      dbg('▶ kex_init sent ex=' + exID.slice(0, 6) + ' agentLive=' + agentLive + ' (outstanding=' + kexAttempts.size + ')');
       // Arm a watchdog: if completeKex doesn't clear it within
-      // KEX_TIMEOUT_MS, the handshake response is presumed lost.
-      // Clear state and retry once on a fresh ws if still connected,
-      // otherwise surface an error so the user isn't stuck staring at
-      // a blank terminal.
+      // KEX_TIMEOUT_MS, all outstanding replies are presumed lost.
+      // Clear state and retry on a fresh ws if still connected, otherwise
+      // surface an error so the user isn't stuck staring at a blank terminal.
       if (kexTimer) clearTimeout(kexTimer);
       kexTimer = setTimeout(() => {
         kexTimer = 0;
         if (cryptoKey) return; // raced with a late response
-        kexEphKeyPair = null;
-        kexMask = null;
-        kexExID = null;
-        kexExIDBytes = null;
+        dbg('✗ KEX TIMEOUT after ' + KEX_TIMEOUT_MS + 'ms (no matching kex_resp)');
+        kexAttempts.clear();
+        kexExID = '';
         if (ws && ws.readyState === WebSocket.OPEN) {
           // One automatic retry. If it fails again the user will see
           // the second timeout fire and the status banner.
@@ -1146,23 +1330,26 @@
     }
 
     async function completeKex(msg) {
-      if (!kexEphKeyPair || msg.ex_id !== kexExID) {
-        // Broadcast for a different viewer (the relay fans agent
-        // replies out to everyone on the session) — ignore.
+      const att = kexAttempts.get(msg.ex_id);
+      if (!att || cryptoKey) {
+        // Not one of our outstanding attempts (the relay fans agent replies out
+        // to every viewer), or we're already done — ignore.
+        dbg('  kex_resp IGNORED (' + (cryptoKey ? 'already complete' : 'ex ' + String(msg.ex_id).slice(0, 6) + ' not outstanding') + ')');
         return;
       }
+      dbg('  kex_resp matched — deriving key…');
       const agentBlinded = base64ToU8(msg.data || '');
       if (agentBlinded.length !== 32) {
         throw new Error('agent key has bad length');
       }
       const agentPubBytes = new Uint8Array(32);
-      for (let i = 0; i < 32; i++) agentPubBytes[i] = agentBlinded[i] ^ kexMask[i];
+      for (let i = 0; i < 32; i++) agentPubBytes[i] = agentBlinded[i] ^ att.mask[i];
       const agentPub = await crypto.subtle.importKey(
         'raw', agentPubBytes, { name: 'X25519' }, false, []
       );
       const shared = await crypto.subtle.deriveBits(
         { name: 'X25519', public: agentPub },
-        kexEphKeyPair.privateKey,
+        att.keyPair.privateKey,
         256,
       );
       const sharedKey = await crypto.subtle.importKey(
@@ -1171,7 +1358,7 @@
       const wrapKeyBits = await crypto.subtle.deriveBits(
         {
           name: 'HKDF', hash: 'SHA-256',
-          salt: kexExIDBytes,
+          salt: att.exIDBytes,
           info: new TextEncoder().encode('reminal-wrap-v2'),
         },
         sharedKey,
@@ -1196,11 +1383,12 @@
       cryptoKey = await crypto.subtle.importKey(
         'raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
       );
-      // Burn the ephemeral material — nothing downstream should need
-      // it, and holding on makes a long-running tab a juicier target.
-      kexEphKeyPair = null;
-      kexMask = null;
-      kexExIDBytes = null;
+      dbg('✓ handshake complete — session key set');
+      // Burn ALL ephemeral material (every outstanding attempt) — nothing
+      // downstream needs it, and holding on makes a long-running tab a juicier
+      // target.
+      kexAttempts.clear();
+      kexExID = '';
       // Handshake done; cancel the watchdog so it doesn't retry.
       if (kexTimer) { clearTimeout(kexTimer); kexTimer = 0; }
     }
@@ -1230,6 +1418,11 @@
       fitAddon.fit();
       sendResize();
       term.focus();
+      // Warm the window list so the Windows dropdown opens instantly (no
+      // "Loading…" flash) the first time it's clicked — and let the reply
+      // restore any panes this session had open (Recent → reopens its windows).
+      pendingRestore = true;
+      if (typeof sendWin === 'function') sendWin('window_list');
     }
 
     async function encrypt(key, data) {
@@ -1456,10 +1649,8 @@
       // restarted, or it's simply a different K). Clear so we never
       // accidentally encrypt/decrypt with stale material.
       cryptoKey = null;
-      kexEphKeyPair = null;
-      kexMask = null;
+      kexAttempts.clear();
       kexExID = '';
-      kexExIDBytes = null;
       kexInFlight = false;
 
       const fresh = lastSeq === 0;
@@ -1477,6 +1668,7 @@
       ws.onopen = () => {
         // Stash for the one-time "Connected · handshake Xms" line below.
         lastDialMs = Date.now() - dialStart;
+        dbg('ws OPEN (' + lastDialMs + 'ms) → sending auth');
         // Seed the predictive-echo round-trip estimate so the very first
         // burst of typing on a slow link uses an RTT-scaled stale window
         // instead of the 700ms floor (which would wipe in-flight dim chars
@@ -1506,7 +1698,8 @@
         await handleMessage(msg);
       };
 
-      ws.onclose = () => {
+      ws.onclose = (e) => {
+        dbg('ws CLOSE' + (e && e.code ? ' code=' + e.code : ''));
         authed = false;
         agentLive = false;
         ws = null;
@@ -1538,11 +1731,13 @@
       };
 
       ws.onerror = () => {
+        dbg('ws ERROR');
         // ws.onclose will run after this; let it drive reconnect logic.
       };
     }
 
     async function handleMessage(msg) {
+      if (DEBUG) dbg('◀ ' + msg.type + (msg.ex_id ? ' ex=' + String(msg.ex_id).slice(0, 6) : ''));
       switch (msg.type) {
         case 'auth_ok':
           authed = true;
@@ -1603,20 +1798,19 @@
             agentLive = true;
             connectedAt = Date.now();
             backoffMs = 1000;
-            setStatus('Connected to ' + sessionId, 'connected');
+            setStatus(sessionId, 'connected'); // green dot already implies "connected"
             hideOverlay();
             setBtnDisconnect();
             renderRecents();
             if (!wasLive) {
-              // Treat any reattach as potentially a new process.
-              // Clear handshake state and re-run the EKE.
+              // Agent (re)attached — it may be a fresh process, so any session
+              // key we hold is stale; drop it and (re)handshake. Do NOT clear
+              // kexAttempts: the optimistic kex_init from auth_ok is likely still
+              // outstanding, and keeping it means EITHER reply can complete the
+              // handshake — the whole point of the multi-attempt fix.
               cryptoKey = null;
-              kexEphKeyPair = null;
-              kexMask = null;
-              kexExID = null;
-              kexExIDBytes = null;
               try { await sendKexInit(); } catch (_) {}
-            } else if (!cryptoKey && !kexEphKeyPair) {
+            } else if (!cryptoKey && kexAttempts.size === 0) {
               // First-ever connect on this WS — initiate the EKE.
               try { await sendKexInit(); } catch (_) {}
             }
@@ -1650,6 +1844,24 @@
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));
             fireNotification(payload.message || '');
+          } catch (_) {}
+          break;
+        }
+        case 'window_list': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            onWindowList(payload);
+          } catch (_) {}
+          break;
+        }
+        case 'window_frame': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            onWindowFrame(payload);
           } catch (_) {}
           break;
         }
@@ -1783,6 +1995,10 @@
       }
       authed = false;
       agentLive = false;
+      // Tear down any window-mirror popup — its stream is bound to the WS
+      // we just closed. Guarded because userDisconnect can run before the
+      // window module has initialised on very early failures.
+      if (typeof closeAllPanes === 'function') { try { closeAllPanes(); } catch (_) {} }
       // Any in-flight predictions are moot once the session ends;
       // there will be no echo to reconcile against. Drop them so
       // they can't dim chars into a stale "Disconnected" footer.
@@ -2948,6 +3164,571 @@
       if (recents && recents.open && !recents.contains(e.target)) {
         recents.open = false;
       }
+      const windows = document.getElementById('windows');
+      if (windows && windows.open && !windows.contains(e.target)) {
+        windows.open = false;
+      }
+    });
+
+    // ---- Window mirroring: list host windows, stream one, control it -------
+    //
+    // The dropdown lists the host's on-screen windows (fetched fresh each time
+    // it's opened). Picking one opens a popup that shows JPEG frames streamed
+    // from the agent and forwards clicks/keystrokes back. All frames ride the
+    // same end-to-end-encrypted channel as the terminal.
+    let winList = [];            // last window list from the agent
+    let winHint = '';            // capability warning (e.g. Screen Recording off)
+    const winDetails = document.getElementById('windows');
+    const winListRoot = document.getElementById('windows-list');
+    const wkey = document.getElementById('wkey');
+    const panes = new Map();     // window id -> { el, img, w, lastUrl }
+    let focusedPaneId = null;
+    let spawnOffset = 0;         // cascade newly-opened panes
+    let pendingRestore = false;  // reopen saved panes on the next window list
+    let suppressPaneSave = false; // don't persist layout during bulk open/close
+    // Inline SVG icons (inherit currentColor) for a cleaner look than emoji glyphs.
+    const ICON_KEYBOARD = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6.5" width="19" height="11" rx="2"/><path d="M6 10h0M9.5 10h0M13 10h0M16.5 10h0M6 13.5h0M17.5 13.5h0M9.5 13.5h5"/></svg>';
+    const ICON_CLOSE = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+
+    // sendWin sends a window_* control frame. If obj is provided it's
+    // JSON-encoded and encrypted into data; otherwise a bare {type} goes out
+    // (used for the window_list request, which carries no payload).
+    async function sendWin(type, obj) {
+      if (!ws || ws.readyState !== WebSocket.OPEN || !cryptoKey) return;
+      const frame = { type };
+      if (obj !== undefined) frame.data = await encrypt(cryptoKey, JSON.stringify(obj));
+      ws.send(JSON.stringify(frame));
+    }
+
+    function requestWindows() {
+      // Show the last known list instantly (no flicker) and refresh in the
+      // background; only flash "Loading…" the first time, when we have nothing.
+      if (winList.length) renderWindows();
+      else winListRoot.innerHTML = '<div class="windows-note">Loading windows…</div>';
+      sendWin('window_list');
+    }
+
+    function onWindowList(payload) {
+      if (payload.unsupported) {
+        winList = [];
+        winListRoot.innerHTML = '<div class="windows-note">' + escapeHtml(payload.unsupported) + '</div>';
+        return;
+      }
+      if (payload.error) {
+        winList = [];
+        winListRoot.innerHTML = '<div class="windows-note">Couldn\'t list windows: ' + escapeHtml(payload.error) + '</div>';
+        return;
+      }
+      winList = payload.windows || [];
+      winHint = payload.hint || ''; // e.g. macOS Screen Recording is off
+      renderWindows();
+      // First list after (re)connecting: reopen the panes this session had up.
+      // Only when nothing is open, so a mid-session refresh never clobbers the
+      // panes you're already using.
+      if (pendingRestore) {
+        pendingRestore = false;
+        if (panes.size === 0) restoreSavedPanes(winList);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    function renderWindows() {
+      winListRoot.innerHTML = '';
+      if (winHint) {
+        const h = document.createElement('div'); h.className = 'windows-hint'; h.textContent = winHint;
+        winListRoot.appendChild(h);
+      }
+      if (winList.length === 0) {
+        const n = document.createElement('div'); n.className = 'windows-note';
+        n.textContent = 'No open windows found.';
+        winListRoot.appendChild(n);
+        return;
+      }
+      for (const w of winList) {
+        const row = document.createElement('div');
+        row.className = 'recents-row';
+        row.title = 'Open and control this window';
+        const label = document.createElement('div');
+        label.className = 'label';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'name';
+        nameEl.textContent = w.app || 'Window';
+        const metaEl = document.createElement('div');
+        metaEl.className = 'meta';
+        metaEl.textContent = (w.title || '(untitled)') + ' · ' + w.w + '×' + w.h;
+        label.appendChild(nameEl);
+        label.appendChild(metaEl);
+        row.appendChild(label);
+        row.addEventListener('click', () => {
+          winDetails.open = false;
+          openWinView(w);
+        });
+        winListRoot.appendChild(row);
+      }
+    }
+
+    // ---- Windowed panes: host windows as draggable floating windows ----------
+    // Each chosen window becomes a resizable, draggable pane; several stream at
+    // once. Tap/click in a pane's image clicks there; the focused pane (blue
+    // border) receives keystrokes from the shared #wkey input.
+    const WIN_SPECIAL_KEYS = {
+      Enter: 'return', Tab: 'tab', Escape: 'escape', Backspace: 'delete',
+      Delete: 'forwarddelete', ArrowUp: 'up', ArrowDown: 'down',
+      ArrowLeft: 'left', ArrowRight: 'right', ' ': 'space',
+      Home: 'home', End: 'end', PageUp: 'pageup', PageDown: 'pagedown',
+    };
+
+    function focusPane(id) {
+      focusedPaneId = id;
+      const p = panes.get(id);
+      // Restack so the focused pane sits above the others (real-window behaviour).
+      // Reassign z-indices compactly from a fixed base every time — the old
+      // monotonic counter saturated at the 49 ceiling, after which every pane
+      // shared the same z-index and clicking stopped bringing panes forward.
+      const others = [...panes.values()].filter((q) => q !== p)
+        .sort((a, b) => (+a.el.style.zIndex || 0) - (+b.el.style.zIndex || 0));
+      let z = 31; // header is z 50; keep panes below it
+      for (const q of others) q.el.style.zIndex = z++;
+      if (p) p.el.style.zIndex = z; // focused pane on top
+      for (const [pid, q] of panes) q.el.classList.toggle('focused', pid === id);
+    }
+
+    // Lowest Y a floating pane may occupy: just under the header. The header is
+    // taller on phones (its controls wrap), and it sits above panes in the
+    // z-order, so a pane pinned to a fixed small top would slide its draggable
+    // title bar under the header — leaving close/drag unreachable. Clamp to the
+    // header's live height instead.
+    function headerBottom() {
+      const h = document.querySelector('header');
+      return (h ? Math.ceil(h.getBoundingClientRect().bottom) : 48) + 6;
+    }
+
+    // Opens (or re-focuses) a floating pane for window w. Named openWinView so
+    // the dropdown row handler stays unchanged.
+    function openWinView(w, geom) {
+      if (panes.has(w.id)) { focusPane(w.id); return; }
+      const el = document.createElement('div');
+      el.className = 'wpane';
+      // geom (from a restored layout) reuses the last position/size; otherwise
+      // cascade a fresh pane so stacked ones don't hide each other.
+      const minTop = headerBottom();
+      if (geom && Number.isFinite(geom.left)) {
+        el.style.width = (geom.width || Math.min(window.innerWidth * 0.72, 480)) + 'px';
+        el.style.left = Math.max(0, Math.min(geom.left, window.innerWidth - 80)) + 'px';
+        el.style.top = Math.max(minTop, geom.top || minTop) + 'px';
+      } else {
+        el.style.width = Math.min(window.innerWidth * 0.72, 480) + 'px';
+        el.style.left = (24 + spawnOffset) + 'px';
+        el.style.top = (minTop + spawnOffset) + 'px';
+        spawnOffset = (spawnOffset + 28) % 140;
+      }
+
+      const bar = document.createElement('div'); bar.className = 'wpane-bar';
+      const title = document.createElement('span'); title.className = 'wpane-title';
+      title.textContent = (w.app || 'Window') + (w.title ? ' — ' + w.title : '');
+      const spacer = document.createElement('span'); spacer.className = 'wpane-spacer';
+      const kbdBtn = document.createElement('button'); kbdBtn.className = 'wpane-btn wpane-kbd'; kbdBtn.innerHTML = ICON_KEYBOARD; kbdBtn.title = 'Keyboard';
+      const closeBtn = document.createElement('button'); closeBtn.className = 'wpane-btn wpane-close'; closeBtn.innerHTML = ICON_CLOSE; closeBtn.title = 'Close';
+      bar.append(title, spacer, kbdBtn, closeBtn);
+
+      const body = document.createElement('div'); body.className = 'wpane-body';
+      const img = document.createElement('img'); img.className = 'wpane-img'; img.draggable = false; img.alt = title.textContent;
+      // Reserve the correct height from the known window size before the first
+      // frame arrives — otherwise the pane opens as a 0-height black bar and
+      // jumps to full size when the first frame loads (the "open flicker").
+      if (w.w && w.h) img.style.aspectRatio = w.w + ' / ' + w.h;
+      const cursorEl = document.createElement('div'); cursorEl.className = 'wpane-cursor';
+      const stallEl = document.createElement('div'); stallEl.className = 'wpane-stall';
+      const stallMsg = document.createElement('div'); stallMsg.className = 'pill';
+      stallEl.append(stallMsg);
+      body.append(img, cursorEl, stallEl);
+      const rz = document.createElement('div'); rz.className = 'wpane-resize';
+      el.append(bar, body, rz);
+      document.body.appendChild(el);
+
+      const pane = { el, img, body, cursorEl, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), stallMsg, gotFrame: false, errorMsg: null };
+      panes.set(w.id, pane);
+      paneDrag(pane, bar);
+      paneResize(pane, rz);
+      paneInput(pane, img);
+      el.addEventListener('pointerdown', () => focusPane(w.id));
+      closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePane(w.id); });
+      kbdBtn.addEventListener('click', (e) => { e.stopPropagation(); focusPane(w.id); wkey.focus(); });
+
+      focusPane(w.id);
+      sendWin('window_ctl', { action: 'start', id: w.id });
+      savePaneLayout();
+    }
+
+    function closePane(id) {
+      const p = panes.get(id);
+      if (!p) return;
+      sendWin('window_ctl', { action: 'stop', id });
+      if (p.lastUrl) URL.revokeObjectURL(p.lastUrl);
+      p.el.remove();
+      panes.delete(id);
+      if (focusedPaneId === id) focusedPaneId = null;
+      savePaneLayout();
+    }
+
+    function closeAllPanes() {
+      // Bulk close (session switch / disconnect) — don't rewrite the saved
+      // layout to empty; we want to reopen these on reconnect.
+      suppressPaneSave = true;
+      for (const id of [...panes.keys()]) closePane(id);
+      suppressPaneSave = false;
+    }
+
+    // ---- Remember open panes per session ------------------------------------
+    // Reconnecting (e.g. via the Recent dropdown) reopens the windows you had
+    // up. Keyed by session id; matched back to live windows by id first, then
+    // app+title if the agent came back with reassigned window ids.
+    const PANES_KEY_PREFIX = 'reminal:panes:';
+    function panesKey() { return sessionId ? PANES_KEY_PREFIX + sessionId.toUpperCase() : ''; }
+    function savePaneLayout() {
+      if (suppressPaneSave) return;
+      const key = panesKey();
+      if (!key) return;
+      const arr = [...panes.values()].map((p) => ({
+        id: p.w.id, app: p.w.app || '', title: p.w.title || '',
+        left: Math.round(p.el.offsetLeft), top: Math.round(p.el.offsetTop),
+        width: Math.round(p.el.offsetWidth),
+      }));
+      try {
+        if (arr.length) localStorage.setItem(key, JSON.stringify(arr));
+        else localStorage.removeItem(key);
+      } catch (_) {}
+    }
+    function restoreSavedPanes(list) {
+      const key = panesKey();
+      if (!key || !Array.isArray(list) || !list.length) return;
+      let saved;
+      try { saved = JSON.parse(localStorage.getItem(key) || '[]'); } catch (_) { saved = []; }
+      if (!Array.isArray(saved) || !saved.length) return;
+      suppressPaneSave = true;
+      const used = new Set();
+      for (const s of saved) {
+        // Exact id match (session still alive) preferred; else same app+title.
+        let w = list.find((x) => x.id === s.id && !used.has(x.id));
+        if (!w) w = list.find((x) => !used.has(x.id) && (x.app || '') === s.app && (x.title || '') === s.title);
+        if (!w) continue;
+        used.add(w.id);
+        openWinView(w, s);
+      }
+      suppressPaneSave = false;
+      savePaneLayout();
+    }
+
+    // Decide what (if anything) a pane's overlay should say: an explicit capture
+    // error from the host, a "no video yet" for a pane that never got a frame, or
+    // a "waiting" for one whose frames stopped (screen locked/asleep). Turns a
+    // silent freeze into a clear, actionable cue.
+    const STALL_MS = 2500;
+    function updatePaneOverlay(p) {
+      let html = null, isErr = false;
+      if (p.errorMsg) {
+        html = '<span class="dot"></span><span>' + escapeHtml(p.errorMsg) + '</span>';
+        isErr = true;
+      } else if (performance.now() - (p.lastFrameAt || 0) > STALL_MS) {
+        const t = p.gotFrame
+          ? 'Waiting for host… <span class="sub">screen may be locked or asleep</span>'
+          : 'No video yet <span class="sub">the window may be minimized, or screen capture is blocked</span>';
+        html = '<span class="dot"></span><span>' + t + '</span>';
+      }
+      if (html) {
+        p.stallMsg.innerHTML = html;
+        p.el.classList.toggle('stall-error', isErr);
+        p.el.classList.add('stalled');
+      } else {
+        p.el.classList.remove('stalled');
+      }
+    }
+    setInterval(() => {
+      if (!panes.size) return;
+      for (const p of panes.values()) updatePaneOverlay(p);
+    }, 1000);
+
+    function onWindowFrame(payload) {
+      const p = panes.get(payload.id);
+      if (!p) return;
+      if (payload.closed) { closePane(payload.id); return; } // window closed on the host
+      if (payload.error) { // host could list but not capture this window
+        p.errorMsg = payload.error;
+        updatePaneOverlay(p);
+        return;
+      }
+      p.errorMsg = null;
+      p.gotFrame = true;
+      p.lastFrameAt = performance.now();
+      updatePaneOverlay(p);
+      const bin = atob(payload.img);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
+      const prev = p.lastUrl;
+      p.lastUrl = url;
+      p.img.src = url;
+      if (prev) URL.revokeObjectURL(prev);
+      if (payload.w && payload.h && (p.w.w !== payload.w || p.w.h !== payload.h)) {
+        p.img.style.aspectRatio = payload.w + ' / ' + payload.h; // track host-side resizes
+      }
+      p.w.w = payload.w; p.w.h = payload.h; // keep size current for click mapping
+      if (p.placeCursor && p.cursor) p.placeCursor(); // keep cursor aligned on aspect change
+      // Ack once the frame is actually decoded. The host holds the next capture
+      // until this arrives (see streamWindow), so frames are paced to what we can
+      // render — the backpressure that stops latency from piling up on a slow
+      // link. decode() may reject if superseded; the host's timeout covers that.
+      if (payload.seq != null) {
+        p.img.decode().then(
+          () => sendWin('window_ack', { id: payload.id, seq: payload.seq }),
+          () => {},
+        );
+      }
+    }
+
+    // Drag a pane by its title bar (pointer events cover mouse + touch).
+    function paneDrag(pane, bar) {
+      let s = null;
+      bar.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('.wpane-btn')) return;
+        e.preventDefault();
+        focusPane(pane.w.id);
+        const r = pane.el.getBoundingClientRect();
+        s = { px: e.clientX, py: e.clientY, left: r.left, top: r.top };
+        try { bar.setPointerCapture(e.pointerId); } catch (_) {}
+      });
+      bar.addEventListener('pointermove', (e) => {
+        if (!s) return;
+        pane.el.style.left = (s.left + e.clientX - s.px) + 'px';
+        pane.el.style.top = Math.max(headerBottom(), s.top + e.clientY - s.py) + 'px';
+      });
+      const end = () => { if (s) { s = null; savePaneLayout(); } };
+      bar.addEventListener('pointerup', end);
+      bar.addEventListener('pointercancel', end);
+    }
+
+    // Resize from the bottom-right handle; width drives height via image aspect.
+    function paneResize(pane, rz) {
+      let s = null;
+      rz.addEventListener('pointerdown', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        focusPane(pane.w.id);
+        s = { px: e.clientX, w: pane.el.getBoundingClientRect().width };
+        try { rz.setPointerCapture(e.pointerId); } catch (_) {}
+      });
+      rz.addEventListener('pointermove', (e) => {
+        if (!s) return;
+        pane.el.style.width = Math.max(160, s.w + e.clientX - s.px) + 'px';
+        if (pane.placeCursor) pane.placeCursor();
+      });
+      const end = () => { if (s) { s = null; savePaneLayout(); } };
+      rz.addEventListener('pointerup', end);
+      rz.addEventListener('pointercancel', end);
+    }
+
+    // Pointer input inside a pane image.
+    //  • Mouse (desktop): native feel — an instant click (the agent counts
+    //    rapid clicks so double/triple-click work), and mouse-down + move + up
+    //    sends a real drag (text selection, sliders, dragging files).
+    //  • Touch (mobile): one finger = a floating trackpad cursor (drag to move,
+    //    tap = click at the cursor); TWO fingers = pinch-zoom + pan of the pane
+    //    (the pane's image is CSS-transformed; clicks still map correctly since
+    //    we read the transformed rect).
+    function paneInput(pane, img) {
+      const GAIN = 1.5, MAX_ZOOM = 6;
+      const ptrs = new Map();   // active pointerId -> {x, y}
+      let pinch = null;         // {d, mx, my, z, px, py} captured at pinch start
+      let downAt = 0, moved = false, sx = 0, sy = 0, lastX = 0, lastY = 0, path = null;
+      let longPress = null, dragMode = false, dragPath = null; // touch drag-and-drop
+      const clamp01 = v => Math.max(0, Math.min(1, v));
+      const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+      function fracAt(cx, cy) {
+        const r = img.getBoundingClientRect();
+        return { fx: clamp01((cx - r.left) / r.width), fy: clamp01((cy - r.top) / r.height) };
+      }
+      function frac(e) { return fracAt(e.clientX, e.clientY); }
+      // Batch rapid wheel / two-finger scroll deltas into one send per frame so
+      // the host isn't flooded (each scroll is an osascript/xdotool call).
+      let scrollAcc = { dx: 0, dy: 0 }, scrollAt = { fx: 0.5, fy: 0.5 }, scrollTimer = null;
+      function flushScroll() {
+        scrollTimer = null;
+        if (!scrollAcc.dx && !scrollAcc.dy) return;
+        sendWin('window_input', { id: pane.w.id, kind: 'scroll', x: scrollAt.fx, y: scrollAt.fy, dx: scrollAcc.dx, dy: scrollAcc.dy });
+        scrollAcc = { dx: 0, dy: 0 };
+      }
+      function queueScroll(fx, fy, dx, dy) {
+        scrollAt = { fx, fy };
+        scrollAcc.dx += dx; scrollAcc.dy += dy;
+        if (!scrollTimer) scrollTimer = setTimeout(flushScroll, 50);
+      }
+      function applyTransform() {
+        img.style.transform = 'translate(' + pane.panX + 'px,' + pane.panY + 'px) scale(' + pane.zoom + ')';
+        place();
+      }
+      function clampPan() {
+        if (pane.zoom <= 1.001) { pane.zoom = 1; pane.panX = 0; pane.panY = 0; return; }
+        const maxX = img.clientWidth * (pane.zoom - 1) / 2, maxY = img.clientHeight * (pane.zoom - 1) / 2;
+        pane.panX = Math.max(-maxX, Math.min(maxX, pane.panX));
+        pane.panY = Math.max(-maxY, Math.min(maxY, pane.panY));
+      }
+      function place() {
+        const c = pane.cursor;
+        if (!c) { pane.cursorEl.style.display = 'none'; return; }
+        const r = img.getBoundingClientRect(), br = pane.body.getBoundingClientRect();
+        pane.cursorEl.style.display = 'block';
+        pane.cursorEl.style.left = (r.left - br.left + c.fx * r.width) + 'px';
+        pane.cursorEl.style.top = (r.top - br.top + c.fy * r.height) + 'px';
+      }
+      pane.placeCursor = place;
+      function flash() { pane.cursorEl.classList.add('tapped'); setTimeout(() => pane.cursorEl.classList.remove('tapped'), 150); }
+      function click(f) { sendWin('window_input', { id: pane.w.id, kind: 'click', x: f.fx, y: f.fy }); }
+      // Ends a touch grab. Returns 'drag' if a real drag was sent, 'tap' if it
+      // was grabbed but never moved (treat as a click), or false if not grabbed.
+      function endDrag(send) {
+        if (longPress) { clearTimeout(longPress); longPress = null; }
+        if (!dragMode) return false;
+        pane.cursorEl.classList.remove('grabbing');
+        dragMode = false;
+        const dp = dragPath; dragPath = null;
+        if (send && dp && dp.length >= 2) { sendWin('window_input', { id: pane.w.id, kind: 'drag', path: dp.map(p => [p.fx, p.fy]) }); return 'drag'; }
+        return 'tap';
+      }
+
+      img.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        focusPane(pane.w.id);
+        ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        try { img.setPointerCapture(e.pointerId); } catch (_) {}
+        if (ptrs.size === 2 && e.pointerType !== 'mouse') {
+          const [a, b] = [...ptrs.values()];
+          const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2, d0 = dist(a, b);
+          // Two-finger gesture: locked to 'zoom' (fingers spread → pinch-zoom the
+          // pane) or 'scroll' (fingers move together → scroll the window) on the
+          // first decisive movement, so the two don't fight each other.
+          pinch = { d: d0 || 1, mx: cx, my: cy, z: pane.zoom, px: pane.panX, py: pane.panY, startD: d0, lastCx: cx, lastCy: cy, mode: null };
+          downAt = 0; path = null; endDrag(false);
+          return;
+        }
+        downAt = Date.now(); moved = false; sx = lastX = e.clientX; sy = lastY = e.clientY;
+        if (e.pointerType === 'mouse') { path = [frac(e)]; return; }
+        if (!pane.cursor) pane.cursor = { fx: 0.5, fy: 0.5 };
+        place();
+        dragMode = false; dragPath = null;
+        // Long-press (finger held still ~450ms) grabs at the cursor; then moving
+        // the finger drags — touch drag-and-drop. A cursor ring turns red to show
+        // the grab, with a haptic tick where supported.
+        longPress = setTimeout(() => {
+          longPress = null; dragMode = true; dragPath = [{ fx: pane.cursor.fx, fy: pane.cursor.fy }];
+          pane.cursorEl.classList.add('grabbing');
+          if (navigator.vibrate) navigator.vibrate(25);
+        }, 450);
+      });
+
+      img.addEventListener('pointermove', (e) => {
+        if (!ptrs.has(e.pointerId)) return;
+        ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (pinch && ptrs.size >= 2) {
+          const [a, b] = [...ptrs.values()];
+          const d = dist(a, b), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+          if (!pinch.mode) {
+            if (Math.abs(d - pinch.startD) > 16) pinch.mode = 'zoom';
+            else if (Math.hypot(cx - pinch.mx, cy - pinch.my) > 16) pinch.mode = 'scroll';
+          }
+          if (pinch.mode === 'zoom') {
+            pane.zoom = Math.max(1, Math.min(MAX_ZOOM, pinch.z * (d / pinch.d)));
+            pane.panX = pinch.px + (cx - pinch.mx);
+            pane.panY = pinch.py + (cy - pinch.my);
+            clampPan(); applyTransform();
+          } else if (pinch.mode === 'scroll') {
+            // Map finger travel to window pixels (the pane is downscaled) so the
+            // content tracks the fingers. Fingers up → scroll down.
+            const rr = img.getBoundingClientRect();
+            const scaleX = (pane.w.w || rr.width) / rr.width, scaleY = (pane.w.h || rr.height) / rr.height;
+            queueScroll(fracAt(cx, cy).fx, fracAt(cx, cy).fy, (pinch.lastCx - cx) * scaleX, (pinch.lastCy - cy) * scaleY);
+          }
+          pinch.lastCx = cx; pinch.lastCy = cy;
+          return;
+        }
+        if (!downAt) return;
+        if (Math.abs(e.clientX - sx) > 6 || Math.abs(e.clientY - sy) > 6) moved = true;
+        if (e.pointerType === 'mouse') {
+          if (path && path.length < 300) path.push(frac(e));
+          return;
+        }
+        if (!pane.cursor) return;
+        if (moved && longPress) { clearTimeout(longPress); longPress = null; } // moved first → cursor move, not a grab
+        const r = img.getBoundingClientRect();
+        pane.cursor.fx = clamp01(pane.cursor.fx + (e.clientX - lastX) * GAIN / r.width);
+        pane.cursor.fy = clamp01(pane.cursor.fy + (e.clientY - lastY) * GAIN / r.height);
+        lastX = e.clientX; lastY = e.clientY;
+        place();
+        if (dragMode && dragPath && dragPath.length < 400) dragPath.push({ fx: pane.cursor.fx, fy: pane.cursor.fy });
+      });
+
+      function endPointer(e) {
+        ptrs.delete(e.pointerId);
+        try { img.releasePointerCapture(e.pointerId); } catch (_) {}
+        if (pinch) {
+          if (ptrs.size < 2) { pinch = null; clampPan(); applyTransform(); }
+          downAt = 0; return;
+        }
+        if (!downAt) return;
+        const dur = Date.now() - downAt; downAt = 0;
+        if (e.pointerType === 'mouse' || document.activeElement === wkey) wkey.focus();
+        if (e.pointerType === 'mouse') {
+          if (moved && path && path.length > 1) sendWin('window_input', { id: pane.w.id, kind: 'drag', path: path.map(p => [p.fx, p.fy]) });
+          else if (dur <= 600) click(frac(e));
+          path = null;
+          return;
+        }
+        const g = endDrag(true);
+        if (g === 'drag') return;               // a real drag-and-drop completed
+        // A quick tap, or a long-press that never dragged, is a click.
+        if (g === 'tap' || (!moved && dur <= 600)) { click(pane.cursor || { fx: 0.5, fy: 0.5 }); flash(); }
+      }
+      img.addEventListener('pointerup', endPointer);
+      img.addEventListener('pointercancel', endPointer);
+      // Desktop: mouse wheel / trackpad scroll over the pane scrolls the window.
+      img.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        focusPane(pane.w.id);
+        const f = frac(e);
+        const m = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? img.getBoundingClientRect().height : 1);
+        queueScroll(f.fx, f.fy, e.deltaX * m, e.deltaY * m);
+      }, { passive: false });
+      // Suppress the browser's long-press image menu ("save/share image") and
+      // any native image drag — we handle long-press ourselves.
+      img.addEventListener('contextmenu', (e) => e.preventDefault());
+      img.addEventListener('dragstart', (e) => e.preventDefault());
+    }
+
+    // Shared keyboard → focused pane. Physical keys via keydown; soft-keyboard
+    // text via input; backspace via either.
+    wkey.addEventListener('keydown', (e) => {
+      if (!focusedPaneId) return;
+      const sp = WIN_SPECIAL_KEYS[e.key];
+      if (sp) { e.preventDefault(); sendWin('window_input', { id: focusedPaneId, kind: 'key', special: sp }); return; }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        sendWin('window_input', { id: focusedPaneId, kind: 'key', text: e.key });
+      }
+    });
+    wkey.addEventListener('input', (e) => {
+      const text = wkey.value; wkey.value = '';
+      if (!focusedPaneId) return;
+      if (e.inputType === 'deleteContentBackward') { sendWin('window_input', { id: focusedPaneId, kind: 'key', special: 'delete' }); return; }
+      for (const ch of text) sendWin('window_input', { id: focusedPaneId, kind: 'key', text: ch });
+    });
+
+    // Fetch a fresh window list each time the dropdown is opened.
+    winDetails.addEventListener('toggle', () => {
+      if (winDetails.open) requestWindows();
     });
 
     // If the QR code provided both session and PIN, just connect.

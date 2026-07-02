@@ -8,7 +8,7 @@
 No open ports. No long-lived keys. No router gymnastics.
 Run `reminal`, scan a QR code, you're in.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/harshalgajjar/Reminal?color=success&label=release)](https://github.com/harshalgajjar/Reminal/releases)
 [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/harshalgajjar/Reminal/releases)
@@ -255,7 +255,10 @@ REMINAL_LOCAL=1 reminal --connect <session_id> --pin <pin>
 
 ### License
 
-[MIT](LICENSE) — do whatever you want, just don't sue me.
+reminal is **dual-licensed**: [AGPL-3.0](LICENSE) for open-source use, or a
+[commercial license](LICENSING.md) for proprietary/closed-source use. See
+[`LICENSING.md`](LICENSING.md) for details, and [`CLA.md`](CLA.md) if you'd
+like to contribute.
 
 <sub>Built by <a href="https://github.com/harshalgajjar">@harshalgajjar</a>. Stars are appreciated. Issues even more so.</sub>
 

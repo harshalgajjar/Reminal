@@ -2,7 +2,7 @@ class Reminal < Formula
   desc "Remote terminal access — secure, zero-config alternative to SSH"
   homepage "https://github.com/harshalgajjar/Reminal"
   version "0.11.2"
-  license "MIT"
+  license "AGPL-3.0-or-later"
 
   head do
     url "https://github.com/harshalgajjar/Reminal.git", branch: "main"

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
 package relay
 
 import (
@@ -159,7 +162,10 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 
 		switch msg.Type {
 		case protocol.TypeData, protocol.TypeResize, protocol.TypeResume,
-			protocol.TypeKexInit, protocol.TypeKexResp:
+			protocol.TypeKexInit, protocol.TypeKexResp,
+			protocol.TypeWindowList, protocol.TypeWindowCtl,
+			protocol.TypeWindowFrame, protocol.TypeWindowInput,
+			protocol.TypeWindowAck:
 			s.forward(sessionID, role, msg)
 		case protocol.TypePing:
 			s.writeTo(p, protocol.Message{Type: protocol.TypePong})

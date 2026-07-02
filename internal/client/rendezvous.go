@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
 package client
 
 // Rendezvous is the end-to-end transfer used by `reminal copy` / `reminal

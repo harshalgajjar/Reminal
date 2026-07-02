@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
 package client
 
 import "testing"
@@ -7,13 +10,13 @@ func TestStripControlChars(t *testing.T) {
 		in, want string
 	}{
 		{"normal.txt", "normal.txt"},
-		{"with space.png", "with space.png"},          // 0x20 is preserved
-		{"emoji-🎉.txt", "emoji-🎉.txt"},                  // UTF-8 high bytes preserved
+		{"with space.png", "with space.png"},             // 0x20 is preserved
+		{"emoji-🎉.txt", "emoji-🎉.txt"},                   // UTF-8 high bytes preserved
 		{"\x1b[2Jboom", "[2Jboom"},                       // ESC stripped
-		{"a\x00b", "ab"},                                  // NUL stripped
+		{"a\x00b", "ab"},                                 // NUL stripped
 		{"\x07bell.txt", "bell.txt"},                     // BEL stripped
-		{"x\x7fy", "xy"},                                  // DEL stripped
-		{"line\nfeed", "linefeed"},                        // LF stripped
+		{"x\x7fy", "xy"},                                 // DEL stripped
+		{"line\nfeed", "linefeed"},                       // LF stripped
 		{"\x1b]0;title\x07evil.txt", "]0;titleevil.txt"}, // OSC stripped (ESC + BEL gone)
 		{"", ""},
 		{"\x00\x01\x02", ""},

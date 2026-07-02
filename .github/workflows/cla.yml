@@ -1,0 +1,37 @@
+name: CLA Assistant
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+# Required so the action can comment on PRs and store signatures.
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA Assistant
+        # Runs on PR open/sync and when a contributor comments the sign phrase.
+        if: (github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A Personal Access Token (repo scope) is required to write signatures
+          # to the signatures repo/branch below. Create it and add it as the
+          # PERSONAL_ACCESS_TOKEN repository secret.
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        with:
+          path-to-signatures: 'signatures/version1/cla.json'
+          path-to-document: 'https://github.com/harshalgajjar/Reminal/blob/main/CLA.md'
+          branch: 'cla-signatures'
+          allowlist: 'dependabot[bot],bot*'
+          custom-notsigned-prcomment: 'Thanks for your pull request! Before we can merge it, we need you to sign our [Contributor License Agreement](https://github.com/harshalgajjar/Reminal/blob/main/CLA.md). Please read it, then post the comment below in this PR to sign.'
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+          custom-allsigned-prcomment: 'All contributors have signed the CLA. ✅'

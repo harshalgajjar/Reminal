@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
 package client
 
 import (
@@ -170,6 +173,37 @@ type Agent struct {
 	// same control socket (PID is preserved across Exec, so the path
 	// is the same).
 	stopControlFn func()
+
+	// Window mirroring: winBackend is the OS-specific window enumerate/
+	// capture/input driver (built once via winOnce). winStreams, guarded by
+	// winMu, maps a streaming window's id to its stop channel — several
+	// windows can stream at once (the browser shows them as draggable panes),
+	// so this is a set, not a single slot. winOps is a serialized work queue:
+	// window enumeration and input injection shell out to osascript /
+	// screencapture, which can take seconds, so they must NOT run on the
+	// relay reader goroutine (that would freeze terminal I/O). A single
+	// worker drains winOps in FIFO order, keeping keystrokes ordered while
+	// never blocking the reader. See windows.go.
+	winOnce    sync.Once
+	winBackend windowBackend
+	winMu      sync.Mutex
+	winStreams map[string]chan struct{}
+	// winAck maps a streaming window's id to a channel the viewer's frame acks
+	// are delivered on, so streamWindow can pace to the viewer (see streamWindow).
+	// Guarded by winMu.
+	winAck map[string]chan uint64
+	winOps chan func()
+	// Click-counting state for native double/triple-click detection. Touched
+	// only by the single winOps worker goroutine, so it needs no lock.
+	winClickN      int
+	winLastClickX  int
+	winLastClickY  int
+	winLastClickAt time.Time
+	// Scroll-gesture tracking (winOps worker only): we raise the target window
+	// once at the start of a gesture so scroll lands on it, then skip re-raising
+	// during the gesture to keep it smooth.
+	winScrollID string
+	winScrollAt time.Time
 }
 
 // AgentOptions configures startup behaviour. Zero-value runs the
@@ -846,10 +880,10 @@ func (a *Agent) markActivity(now time.Time) {
 // free. Runs in pumpPTY's goroutine; oscState/oscBuf are owned by it.
 func (a *Agent) feedTitle(p []byte) {
 	const (
-		oscIdle = iota
-		oscEsc      // saw ESC, expecting ']'
-		oscBody     // inside OSC body, collecting until BEL or ST
-		oscBodyEsc  // inside OSC body, saw ESC, expecting '\' (ST)
+		oscIdle    = iota
+		oscEsc     // saw ESC, expecting ']'
+		oscBody    // inside OSC body, collecting until BEL or ST
+		oscBodyEsc // inside OSC body, saw ESC, expecting '\' (ST)
 	)
 	for _, c := range p {
 		switch a.oscState {
@@ -965,6 +999,7 @@ func (a *Agent) metaFlushLoop(stop <-chan struct{}) {
 //   - on a connect event, append now() and truncate from the end if we
 //     somehow over-counted
 //   - on a disconnect event, drop newest entries until len matches count
+//
 // The oldest connect timestamps stay accurate; the newest may be a bit off
 // but `reminal connections` is "good enough for the host to see who's
 // watching", not a precise audit log.
@@ -1003,8 +1038,8 @@ func (a *Agent) snapshotViewers() []time.Time {
 type pendingUpload struct {
 	name       string
 	ttlSeconds int
-	total      int               // total chunks expected
-	chunks     map[int][]byte    // index -> decoded bytes
+	total      int            // total chunks expected
+	chunks     map[int][]byte // index -> decoded bytes
 	startedAt  time.Time
 	staleTimer *time.Timer
 	// progress notice is sent at the start; final notice on completion
@@ -1759,6 +1794,19 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.handleKexInit(conn, msg.ExID, msg.Data)
 		case protocol.TypeUpload:
 			a.handleUpload(msg.Data)
+		case protocol.TypeWindowList:
+			a.enqueueWinOp(func() { a.handleWindowList(conn) })
+		case protocol.TypeWindowCtl:
+			d := msg.Data
+			a.enqueueWinOp(func() { a.handleWindowCtl(d) })
+		case protocol.TypeWindowInput:
+			d := msg.Data
+			a.enqueueWinOp(func() { a.handleWindowInput(d) })
+		case protocol.TypeWindowAck:
+			// Acks pace the frame streams (see streamWindow). Handle them
+			// directly rather than via the serialized winOps queue so a pending
+			// capture/input op can't delay the ack that unblocks the next frame.
+			a.handleWindowAck(msg.Data)
 		case protocol.TypeConnected:
 			if msg.Count > 0 {
 				agentNotify("  [%s] Viewer connected (%d active)\n",
@@ -1807,6 +1855,12 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				// once asked for.
 				a.resetViewerSize()
 				a.applyEffectiveSize()
+				// No one left to receive frames — stop all window streams so
+				// we're not capturing the screen into the void, and release any
+				// held mouse button / modifier so leaving the page can never
+				// strand the host's desktop in a grab.
+				a.stopWindowStream("")
+				a.enqueueWinOp(func() { _ = a.windows().releaseInput() })
 			}
 			a.viewerSizeMu.Lock()
 			a.viewerCount = msg.Count
