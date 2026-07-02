@@ -156,7 +156,16 @@ func (darwinWindows) focus(w winInfo) error {
 	// full title-bar text ("Saba… - The Knot - Part of group X - Google Chrome").
 	// Exact equality would never match, so two same-size Chrome windows couldn't
 	// be told apart and clicks landed on the wrong one.
-	script := fmt.Sprintf(`tell application "System Events" to tell process %s
+	//
+	// Target the process by its unix id (PID), NOT by name. Several distinct
+	// processes can share a name — e.g. Chrome profiles and installed PWAs all
+	// run as "Google Chrome" under different PIDs — and `tell process "Google
+	// Chrome"` binds to just one of them (whichever System Events finds first).
+	// Windows owned by the other same-named processes would then be invisible to
+	// this AX query, so focus() could never raise them and their clicks silently
+	// landed on whatever sat at those screen coords. w.PID comes from the same
+	// CGWindowList enumeration as the geometry, so it always matches this window.
+	script := fmt.Sprintf(`tell application "System Events" to tell (first process whose unix id is %d)
 	set frontmost to true
 	try
 		set bestWin to missing value
@@ -179,7 +188,7 @@ func (darwinWindows) focus(w winInfo) error {
 		end repeat
 		if bestWin is not missing value then perform action "AXRaise" of bestWin
 	end try
-end tell`, asStr(w.App), w.X, w.Y, w.W, w.H, asStr(w.Title), asStr(w.Title))
+end tell`, w.PID, w.X, w.Y, w.W, w.H, asStr(w.Title), asStr(w.Title))
 	_, err := run("osascript", "-e", script)
 	return err
 }
