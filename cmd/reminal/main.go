@@ -315,8 +315,29 @@ func main() {
 			}
 			return
 		case "restart":
-			if err := runRestart(); err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			// No arg → the current/active session. An id|name → that session.
+			// --all → every shell session (handy after `reminal upgrade` to
+			// roll the whole machine onto the new binary at once).
+			target := ""
+			all := false
+			for _, a := range os.Args[2:] {
+				switch a {
+				case "-a", "--all":
+					all = true
+				default:
+					if !strings.HasPrefix(a, "-") && target == "" {
+						target = a
+					}
+				}
+			}
+			var rerr error
+			if all {
+				rerr = runRestartAll()
+			} else {
+				rerr = runRestart(target)
+			}
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", rerr)
 				os.Exit(1)
 			}
 			return
@@ -1047,13 +1068,13 @@ func runRename(idArg, newName string) error {
 	return nil
 }
 
-// runRestart asks the local agent to hot-swap into the binary that's
-// currently on disk, preserving its PTY (and thus the shell + running
-// processes) plus session ID/PIN. Used after `reminal upgrade` so the
-// upgrade actually takes effect on the running agent without needing
-// physical access to kill + relaunch it.
-func runRestart() error {
-	a, err := resolveActive("")
+// runRestart asks one agent to hot-swap into the binary that's currently on
+// disk, preserving its PTY (and thus the shell + running processes) plus
+// session ID/PIN. Used after `reminal upgrade` so the upgrade actually takes
+// effect on the running agent without needing physical access to kill +
+// relaunch it. arg selects the session (empty → the current/active one).
+func runRestart(arg string) error {
+	a, err := resolveActive(arg)
 	if err != nil {
 		return err
 	}
@@ -1064,6 +1085,48 @@ func runRestart() error {
 		return fmt.Errorf("ask agent to restart: %w", err)
 	}
 	fmt.Printf("Asked reminal (PID %d, session %s) to hot-restart. Viewers will briefly disconnect.\n", a.PID, a.ID)
+	return nil
+}
+
+// runRestartAll hot-restarts every shell session on the machine, so a single
+// command rolls the whole box onto the freshly-upgraded binary. Port forwards
+// are skipped (they have no PTY to preserve). Best-effort: a failure on one
+// session is reported but doesn't stop the rest.
+func runRestartAll() error {
+	all, err := session.ReadAllActive()
+	if err != nil {
+		return err
+	}
+	if len(all) == 0 {
+		return errors.New("no active reminal sessions on this machine")
+	}
+	var ok, skipped, failed int
+	for i := range all {
+		a := &all[i]
+		if a.IsPort() {
+			skipped++
+			continue
+		}
+		label := a.ID
+		if a.Name != "" {
+			label = fmt.Sprintf("%s (%s)", a.Name, a.ID)
+		}
+		if _, err := sendControl(a.PID, "restart"); err != nil {
+			fmt.Fprintf(os.Stderr, "  %-24s failed: %v\n", label, err)
+			failed++
+			continue
+		}
+		fmt.Printf("  restarted %s\n", label)
+		ok++
+	}
+	msg := fmt.Sprintf("Hot-restarted %d session(s)", ok)
+	if skipped > 0 {
+		msg += fmt.Sprintf(" (skipped %d port forward(s))", skipped)
+	}
+	fmt.Println(msg + ". Viewers briefly disconnect.")
+	if failed > 0 {
+		return fmt.Errorf("%d session(s) could not be restarted", failed)
+	}
 	return nil
 }
 
