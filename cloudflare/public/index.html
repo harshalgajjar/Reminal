@@ -1656,8 +1656,10 @@
       kexExID = '';
       kexInFlight = false;
       // A new socket means a fresh session key; tear down any peer connection so
-      // it renegotiates cleanly (the agent may be a different process now).
+      // it renegotiates cleanly (the agent may be a different process now). Also
+      // re-enable P2P — the network may have changed (e.g. cellular → Wi-Fi).
       teardownWebRTC();
+      webrtcDisabled = false;
 
       const fresh = lastSeq === 0;
       setStatus(fresh ? 'Connecting…' : 'Reconnecting…', 'warn connecting');
@@ -3437,14 +3439,27 @@
     // forms we transparently stay on the WS path — nothing else changes.
     const RTC_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
     let rtcPc = null, rtcDc = null, rtcPeerId = null, rtcPendingIce = [];
+    let rtcFrameSeen = false;   // has a real frame actually arrived over the DataChannel?
+    let webrtcDisabled = false; // give up on P2P this connection (frames won't traverse)
     function rtcActive() { return !!(rtcDc && rtcDc.readyState === 'open'); }
     function teardownWebRTC() {
       try { if (rtcDc) rtcDc.close(); } catch (_) {}
       try { if (rtcPc) rtcPc.close(); } catch (_) {}
-      rtcPc = null; rtcDc = null; rtcPeerId = null; rtcPendingIce = [];
+      rtcPc = null; rtcDc = null; rtcPeerId = null; rtcPendingIce = []; rtcFrameSeen = false;
+    }
+    // The DataChannel can connect yet still fail to carry large frames — a
+    // cellular path whose small MTU / packet loss defeats big SCTP messages lets
+    // tiny acks through but drops ~55KB frames, so the pane connects then stalls.
+    // When we detect that, give up on P2P for this connection and let frames flow
+    // over WS instead. Re-enabled on the next socket (the network may change).
+    function disableWebRTC(reason) {
+      if (webrtcDisabled) return;
+      if (DEBUG) dbg('rtc disabled → WS fallback: ' + reason);
+      webrtcDisabled = true;
+      teardownWebRTC();
     }
     async function ensureWebRTC() {
-      if (!cryptoKey || rtcPeerId || typeof RTCPeerConnection === 'undefined') return;
+      if (!cryptoKey || rtcPeerId || webrtcDisabled || typeof RTCPeerConnection === 'undefined') return;
       rtcPeerId = ((crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2)).slice(0, 12);
       if (DEBUG) dbg('▶ webrtc_hello ' + rtcPeerId);
       try { await sendWin('webrtc_hello', { peer: rtcPeerId }); } catch (_) { rtcPeerId = null; }
@@ -3466,6 +3481,7 @@
         rtcDc = ch;
         ch.binaryType = 'arraybuffer';
         ch.onmessage = (ev) => {
+          rtcFrameSeen = true; // a frame really traversed the channel — P2P is viable
           try { onWindowFrame(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data))); } catch (_) {}
         };
         ch.onopen = () => { if (DEBUG) dbg('rtc frames channel open'); };
@@ -3559,6 +3575,14 @@
     }
     setInterval(() => {
       if (!panes.size) return;
+      // If we're on the DataChannel but a pane has stalled and NO frame has ever
+      // arrived over it, the channel connected but can't carry frames (cellular
+      // MTU/loss) — fall back to WS so the pane un-stalls (see disableWebRTC).
+      if (rtcActive() && !rtcFrameSeen) {
+        for (const p of panes.values()) {
+          if (performance.now() - (p.lastFrameAt || 0) > STALL_MS) { disableWebRTC('frames not arriving over datachannel'); break; }
+        }
+      }
       for (const p of panes.values()) updatePaneOverlay(p);
     }, 1000);
 
