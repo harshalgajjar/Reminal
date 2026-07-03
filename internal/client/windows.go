@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/reminal/reminal/internal/keepawake"
 	"github.com/reminal/reminal/internal/protocol"
 )
 
@@ -362,6 +363,11 @@ func (a *Agent) startWindowStream(id string) {
 	ack := make(chan uint64, 4)
 	a.winStreams[id] = stop
 	a.winAck[id] = ack
+	// First window under mirror → keep the display awake so the host can't
+	// idle-lock and strand remote control (see winAwake).
+	if a.winAwake == nil {
+		a.winAwake = keepawake.StartDisplay()
+	}
 	a.winMu.Unlock()
 
 	go a.streamWindow(w, stop, ack)
@@ -382,7 +388,16 @@ func (a *Agent) stopWindowStream(id string) {
 		delete(a.winStreams, id)
 		delete(a.winAck, id)
 	}
+	// Last window stopped → let the display sleep/lock again. Capture and run the
+	// stop func outside the lock (it kills+waits a child process).
+	var release func()
+	if len(a.winStreams) == 0 && a.winAwake != nil {
+		release, a.winAwake = a.winAwake, nil
+	}
 	a.winMu.Unlock()
+	if release != nil {
+		release()
+	}
 }
 
 // windowFrameInterval is a floor on the frame period — a cheap-to-capture window

@@ -42,6 +42,43 @@ func Start() (stop func()) {
 	}
 }
 
+// StartDisplay additionally prevents the DISPLAY from idle-sleeping, which is
+// what stops the Mac from auto-locking (screensaver / display-off both trigger
+// the lock, and macOS drops synthetic input behind the lock screen — so a
+// locked host looks live but can't be controlled). Heavier than Start (the
+// screen stays lit), so callers hold it only while a window is actively being
+// mirrored/controlled, not for plain terminal sharing. Same best-effort +
+// REMINAL_NO_KEEP_AWAKE opt-out contract as Start.
+func StartDisplay() (stop func()) {
+	noop := func() {}
+	if os.Getenv("REMINAL_NO_KEEP_AWAKE") == "1" {
+		return noop
+	}
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		if _, err := exec.LookPath("caffeinate"); err != nil {
+			return noop
+		}
+		// -d: prevent display idle sleep (also inhibits the screensaver), so the
+		// host can't idle-lock. -w: exit when reminal's pid exits.
+		cmd = exec.Command("caffeinate", "-d", "-w", strconv.Itoa(os.Getpid()))
+	default:
+		// Linux idle-lock behaviour is desktop-environment specific; the base
+		// idle inhibitor from Start already covers the common cases.
+		return noop
+	}
+	if err := cmd.Start(); err != nil {
+		return noop
+	}
+	return func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+	}
+}
+
 func command() *exec.Cmd {
 	switch runtime.GOOS {
 	case "darwin":

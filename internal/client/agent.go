@@ -192,6 +192,11 @@ type Agent struct {
 	// are delivered on, so streamWindow can pace to the viewer (see streamWindow).
 	// Guarded by winMu.
 	winAck map[string]chan uint64
+	// winAwake holds a display-sleep inhibitor (caffeinate -d) while ANY window
+	// is being mirrored, so the host can't idle-lock — a locked Mac drops
+	// synthetic input, making remote window control silently dead. Held from the
+	// first stream, released when the last stops. Guarded by winMu.
+	winAwake func()
 	winOps chan func()
 	// Click-counting state for native double/triple-click detection. Touched
 	// only by the single winOps worker goroutine, so it needs no lock.
