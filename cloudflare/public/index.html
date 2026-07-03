@@ -3757,22 +3757,20 @@
       const prev = p.lastUrl;
       p.lastUrl = url;
       p.img.src = url;
-      if (prev) URL.revokeObjectURL(prev);
       if (payload.w && payload.h && (p.w.w !== payload.w || p.w.h !== payload.h)) {
         p.img.style.aspectRatio = payload.w + ' / ' + payload.h; // track host-side resizes
       }
       p.w.w = payload.w; p.w.h = payload.h; // keep size current for click mapping
       if (p.placeCursor && p.cursor) p.placeCursor(); // keep cursor aligned on aspect change
-      // Ack once the frame is actually decoded. The host holds the next capture
-      // until this arrives (see streamWindow), so frames are paced to what we can
-      // render — the backpressure that stops latency from piling up on a slow
-      // link. decode() may reject if superseded; the host's timeout covers that.
-      if (payload.seq != null) {
-        p.img.decode().then(
-          () => sendWindowAck(payload.id, payload.seq, viaDC),
-          () => {},
-        );
-      }
+      // Revoke the PREVIOUS blob URL only after the new frame has decoded — iOS
+      // Safari flashes the <img> blank if you revoke the URL it's still showing
+      // before the replacement is ready, which is the per-frame flicker at high
+      // fps. Ack in the same step: the host paces the next capture on it, and
+      // decode() may reject if superseded (we still revoke + let the host time out).
+      p.img.decode().then(
+        () => { if (prev) URL.revokeObjectURL(prev); if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC); },
+        () => { if (prev) URL.revokeObjectURL(prev); },
+      );
     }
 
     // Drag a pane by its title bar (pointer events cover mouse + touch).
