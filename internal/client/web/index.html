@@ -3395,11 +3395,14 @@
       bar.append(title, spacer, infoBtn, kbdBtn, closeBtn);
 
       const body = document.createElement('div'); body.className = 'wpane-body';
-      const img = document.createElement('img'); img.className = 'wpane-img'; img.draggable = false; img.alt = title.textContent;
-      // Reserve the correct height from the known window size before the first
-      // frame arrives — otherwise the pane opens as a 0-height black bar and
-      // jumps to full size when the first frame loads (the "open flicker").
-      if (w.w && w.h) img.style.aspectRatio = w.w + ' / ' + w.h;
+      // Frames render onto a <canvas>, not an <img>: drawImage is atomic and
+      // keeps the previous frame until the next draw, so there's no blank flash
+      // between frames (an <img> src-swap flickers on iOS Safari at high fps).
+      const img = document.createElement('canvas'); img.className = 'wpane-img';
+      // Intrinsic size reserves the correct aspect (CSS scales it to the pane
+      // width) so the pane doesn't open as a 0-height bar and jump on first frame.
+      if (w.w && w.h) { img.width = w.w; img.height = w.h; }
+      const ctx = img.getContext('2d', { alpha: false, desynchronized: true });
       const cursorEl = document.createElement('div'); cursorEl.className = 'wpane-cursor';
       const stallEl = document.createElement('div'); stallEl.className = 'wpane-stall';
       const stallMsg = document.createElement('div'); stallMsg.className = 'pill';
@@ -3415,7 +3418,7 @@
       el.append(bar, body, infoEl, rz);
       document.body.appendChild(el);
 
-      const pane = { el, img, body, cursorEl, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false };
+      const pane = { el, img, ctx, body, cursorEl, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false };
       panes.set(w.id, pane);
       paneDrag(pane, bar);
       paneResize(pane, rz);
@@ -3699,24 +3702,29 @@
       const bin = atob(payload.img);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const url = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' }));
-      const prev = p.lastUrl;
-      p.lastUrl = url;
-      p.img.src = url;
-      if (payload.w && payload.h && (p.w.w !== payload.w || p.w.h !== payload.h)) {
-        p.img.style.aspectRatio = payload.w + ' / ' + payload.h; // track host-side resizes
+      const blob = new Blob([bytes], { type: 'image/jpeg' });
+      // Paint onto the canvas: drawImage is atomic and keeps the previous frame
+      // until the new one is drawn, so no per-frame blank flicker. createImage-
+      // Bitmap decodes off the main thread; fall back to <img> decode → canvas
+      // where it's missing (still flicker-free — the canvas is what matters). The
+      // ack fires after the draw, keeping the host's frame-pacing backpressure.
+      const paint = (src, sw, sh) => {
+        const cv = p.img;
+        if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; } // resizes + sets aspect
+        p.ctx.drawImage(src, 0, 0, sw, sh);
+        p.w.w = payload.w; p.w.h = payload.h; // keep size current for click mapping
+        if (p.placeCursor && p.cursor) p.placeCursor();
+        if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC);
+      };
+      if (window.createImageBitmap) {
+        createImageBitmap(blob).then((bmp) => { paint(bmp, bmp.width, bmp.height); bmp.close(); }, () => {});
+      } else {
+        const url = URL.createObjectURL(blob);
+        const im = new Image();
+        im.onload = () => { paint(im, im.naturalWidth, im.naturalHeight); URL.revokeObjectURL(url); };
+        im.onerror = () => URL.revokeObjectURL(url);
+        im.src = url;
       }
-      p.w.w = payload.w; p.w.h = payload.h; // keep size current for click mapping
-      if (p.placeCursor && p.cursor) p.placeCursor(); // keep cursor aligned on aspect change
-      // Revoke the PREVIOUS blob URL only after the new frame has decoded — iOS
-      // Safari flashes the <img> blank if you revoke the URL it's still showing
-      // before the replacement is ready, which is the per-frame flicker at high
-      // fps. Ack in the same step: the host paces the next capture on it, and
-      // decode() may reject if superseded (we still revoke + let the host time out).
-      p.img.decode().then(
-        () => { if (prev) URL.revokeObjectURL(prev); if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC); },
-        () => { if (prev) URL.revokeObjectURL(prev); },
-      );
     }
 
     // Drag a pane by its title bar (pointer events cover mouse + touch).
