@@ -1100,13 +1100,15 @@ func runRestartAll() error {
 	if len(all) == 0 {
 		return errors.New("no active reminal sessions on this machine")
 	}
+	// The session we're being run from must be restarted LAST: hot-restarting it
+	// re-execs the agent our own terminal is attached to, which cuts this command
+	// off mid-loop — so any session after it in the list would silently miss its
+	// restart. Defer it to the end (after the summary prints) so every other
+	// session is done first.
+	current := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
+	var self *session.Active
 	var ok, skipped, failed int
-	for i := range all {
-		a := &all[i]
-		if a.IsPort() {
-			skipped++
-			continue
-		}
+	restart := func(a *session.Active) {
 		label := a.ID
 		if a.Name != "" {
 			label = fmt.Sprintf("%s (%s)", a.Name, a.ID)
@@ -1114,16 +1116,35 @@ func runRestartAll() error {
 		if _, err := sendControl(a.PID, "restart"); err != nil {
 			fmt.Fprintf(os.Stderr, "  %-24s failed: %v\n", label, err)
 			failed++
-			continue
+			return
 		}
 		fmt.Printf("  restarted %s\n", label)
 		ok++
+	}
+	for i := range all {
+		a := &all[i]
+		if a.IsPort() {
+			skipped++
+			continue
+		}
+		if current != "" && a.ID == current {
+			self = a
+			continue
+		}
+		restart(a)
+	}
+	if self != nil {
+		ok++ // count it now; the restart below may cut us off before we can print
+		fmt.Printf("  restarted %s (this session, last)\n", self.ID)
 	}
 	msg := fmt.Sprintf("Hot-restarted %d session(s)", ok)
 	if skipped > 0 {
 		msg += fmt.Sprintf(" (skipped %d port forward(s))", skipped)
 	}
 	fmt.Println(msg + ". Viewers briefly disconnect.")
+	if self != nil {
+		_, _ = sendControl(self.PID, "restart")
+	}
 	if failed > 0 {
 		return fmt.Errorf("%d session(s) could not be restarted", failed)
 	}
