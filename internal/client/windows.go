@@ -400,6 +400,21 @@ func (a *Agent) stopWindowStream(id string) {
 	}
 }
 
+// setStayUnlocked holds or releases a session-wide display-sleep inhibitor so
+// the host can't idle-lock (see keepawake.StartDisplay). Driven by the "always
+// unlocked" setting/env at startup and toggled live by the stayunlock control
+// command. Idempotent.
+func (a *Agent) setStayUnlocked(on bool) {
+	a.stayMu.Lock()
+	defer a.stayMu.Unlock()
+	if on && a.stayAwake == nil {
+		a.stayAwake = keepawake.StartDisplay()
+	} else if !on && a.stayAwake != nil {
+		a.stayAwake()
+		a.stayAwake = nil
+	}
+}
+
 // windowFrameInterval is a floor on the frame period — a cheap-to-capture window
 // with instant acks could otherwise spin a core respawning the capture tool. The
 // real pacing is ack-driven (see streamWindow), so this only caps the ceiling at

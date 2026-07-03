@@ -150,6 +150,14 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			return
 		}
 		_, _ = fmt.Fprintf(conn, "ok %s\n", js)
+	case line == "stayunlock on":
+		// `reminal settings` toggling "always unlocked" applies live: hold the
+		// display-sleep inhibitor now so the host stops idle-locking.
+		a.setStayUnlocked(true)
+		_, _ = fmt.Fprintln(conn, "ok")
+	case line == "stayunlock off":
+		a.setStayUnlocked(false)
+		_, _ = fmt.Fprintln(conn, "ok")
 	default:
 		_, _ = fmt.Fprintln(conn, "error: unknown command")
 	}

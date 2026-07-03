@@ -109,6 +109,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "settings":
+			if err := runSettings(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "qr":
 			arg := ""
 			for _, a := range os.Args[2:] {
@@ -526,6 +532,7 @@ Usage:
   reminal info [id|name] [--all] [--qr]    Show connect details (ID/PIN/URL/QR). --all = every session at once; --json for scripts
   reminal qr [id|name]                     Print just the join QR (defaults to the session you're in)
   reminal doctor                           Self-diagnostic: version, relay reachability, terminal, shell
+  reminal settings                         Open the settings page (e.g. keep this Mac unlocked for remote control)
   reminal completion <bash|zsh|fish>       Print shell completion script (source it in your shell rc)
   reminal upgrade                          Upgrade to the latest release (download new binary)
   reminal restart                          Hot-swap the running agent into the latest binary on disk (shell stays alive)

@@ -197,6 +197,12 @@ type Agent struct {
 	// synthetic input, making remote window control silently dead. Held from the
 	// first stream, released when the last stops. Guarded by winMu.
 	winAwake func()
+	// stayAwake holds a display-sleep inhibitor for the WHOLE session when the
+	// "always unlocked" setting is on, so the host can't idle-lock even before a
+	// viewer connects. Toggled at startup (settings/env) and live via the control
+	// socket. Guarded by stayMu.
+	stayMu    sync.Mutex
+	stayAwake func()
 	winOps chan func()
 	// Click-counting state for native double/triple-click detection. Touched
 	// only by the single winOps worker goroutine, so it needs no lock.
@@ -396,6 +402,13 @@ func (a *Agent) Run() error {
 	stopControl := a.listenControl()
 	a.stopControlFn = stopControl
 	defer stopControl()
+
+	// Apply the persisted "always unlocked" preference (or the env override) so
+	// the host is already prevented from idle-locking before any viewer connects.
+	if config.LoadSettings().StayUnlocked || os.Getenv("REMINAL_STAY_UNLOCKED") == "1" {
+		a.setStayUnlocked(true)
+	}
+	defer a.setStayUnlocked(false)
 
 	// Pass REMINAL_SESSION into the spawned shell so `reminal info` run
 	// from inside this session can show THIS session's details (rather
