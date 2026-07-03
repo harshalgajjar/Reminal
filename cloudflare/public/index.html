@@ -544,6 +544,36 @@
     /* Capture error (vs a transient stall): steady red dot, no pulse. */
     .wpane.stall-error .wpane-stall .dot { background: #f85149; animation: none; }
     .wpane.stall-error .wpane-stall .pill { border-color: #f85149; }
+    /* Loading spinner shown until a pane's first frame arrives, so opening a
+       window reads as "connecting" instead of a blank black box. */
+    .wpane-load {
+      position: absolute; inset: 0; z-index: 4; display: none;
+      flex-direction: column; align-items: center; justify-content: center; gap: 11px;
+      background: rgba(13, 17, 23, 0.6); backdrop-filter: blur(2px);
+    }
+    .wpane.loading .wpane-load { display: flex; }
+    .wpane-spin {
+      width: 26px; height: 26px; border-radius: 50%;
+      border: 3px solid rgba(139, 148, 158, 0.3); border-top-color: #58a6ff;
+      animation: wpspin 0.8s linear infinite;
+    }
+    @keyframes wpspin { to { transform: rotate(360deg); } }
+    .wpane-loadmsg { color: #adbac7; font-size: 12px; text-align: center; max-width: 82%; }
+    .wpane-loadmsg .sub { display: block; color: #8b949e; font-size: 11px; margin-top: 3px; }
+    /* Transport/details popover toggled by the (i) button in a pane's titlebar. */
+    .wpane-info {
+      position: absolute; top: 40px; right: 8px; z-index: 6; display: none;
+      background: rgba(22, 27, 34, 0.98); border: 1px solid #30363d; border-radius: 8px;
+      padding: 9px 11px; font-size: 11.5px; color: #c9d1d9; min-width: 184px;
+      box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5); cursor: default;
+    }
+    .wpane-info.show { display: block; }
+    .wpane-info .row { display: flex; justify-content: space-between; gap: 16px; padding: 2px 0; }
+    .wpane-info .k { color: #8b949e; }
+    .wpane-info .v { color: #e6edf3; font-weight: 500; }
+    .wpane-info .v.p2p { color: #3fb950; }
+    .wpane-info .v.turn { color: #d29922; }
+    .wpane-info .v.ws { color: #f0883e; }
     /* Warning banner atop the Windows dropdown (e.g. Screen Recording is off). */
     .windows-hint {
       margin: 6px; padding: 8px 10px; border-radius: 6px; font-size: 11.5px; line-height: 1.45;
@@ -1656,10 +1686,10 @@
       kexExID = '';
       kexInFlight = false;
       // A new socket means a fresh session key; tear down any peer connection so
-      // it renegotiates cleanly (the agent may be a different process now). Also
-      // re-enable P2P — the network may have changed (e.g. cellular → Wi-Fi).
+      // it renegotiates cleanly (the agent may be a different process now). Clear
+      // the cooldown so P2P is retried immediately — the network may have changed.
       teardownWebRTC();
-      webrtcDisabled = false;
+      rtcRetryAt = 0;
 
       const fresh = lastSeq === 0;
       setStatus(fresh ? 'Connecting…' : 'Reconnecting…', 'warn connecting');
@@ -1817,7 +1847,7 @@
               // outstanding, and keeping it means EITHER reply can complete the
               // handshake — the whole point of the multi-attempt fix.
               cryptoKey = null;
-              teardownWebRTC(); // renegotiate P2P with the (possibly new) agent
+              retryWebRTC('agent reattach', 0); // renegotiate P2P with the (possibly new) agent
               try { await sendKexInit(); } catch (_) {}
             } else if (!cryptoKey && kexAttempts.size === 0) {
               // First-ever connect on this WS — initiate the EKE.
@@ -1870,7 +1900,7 @@
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));
-            onWindowFrame(payload);
+            onWindowFrame(payload, false); // arrived over the WS relay
           } catch (_) {}
           break;
         }
@@ -3214,6 +3244,27 @@
     // Inline SVG icons (inherit currentColor) for a cleaner look than emoji glyphs.
     const ICON_KEYBOARD = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6.5" width="19" height="11" rx="2"/><path d="M6 10h0M9.5 10h0M13 10h0M16.5 10h0M6 13.5h0M17.5 13.5h0M9.5 13.5h5"/></svg>';
     const ICON_CLOSE = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    const ICON_INFO = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 11v5"/><path d="M12 7.6h0"/></svg>';
+    // Which transport delivered the most recent window frame — shown in the pane
+    // (i) popover. Set by onWindowFrame; 'webrtc' means the P2P DataChannel,
+    // 'ws' means the relay. Null until the first frame lands.
+    let lastFrameVia = null;
+    // Describe the current transport for a pane's (i) popover.
+    function paneInfoHtml(p) {
+      const webrtc = lastFrameVia === 'webrtc';
+      let transport, cls;
+      if (webrtc && rtcRelayed) { transport = 'WebRTC · TURN relay'; cls = 'turn'; }
+      else if (webrtc) { transport = 'WebRTC · direct'; cls = 'p2p'; }
+      else if (lastFrameVia === 'ws') { transport = 'Relay · WebSocket'; cls = 'ws'; }
+      else { transport = '—'; cls = ''; }
+      const enc = webrtc ? 'DTLS (end-to-end)' : 'AES-256-GCM (end-to-end)';
+      const res = (p.w.w && p.w.h) ? (p.w.w + '×' + p.w.h) : '—';
+      const fps = p.frameTimes ? p.frameTimes.length : 0;
+      return '<div class="row"><span class="k">Transport</span><span class="v ' + cls + '">' + transport + '</span></div>'
+        + '<div class="row"><span class="k">Encryption</span><span class="v">' + enc + '</span></div>'
+        + '<div class="row"><span class="k">Resolution</span><span class="v">' + res + '</span></div>'
+        + '<div class="row"><span class="k">Frame rate</span><span class="v">' + fps + ' fps</span></div>';
+    }
 
     // sendWin sends a window_* control frame. If obj is provided it's
     // JSON-encoded and encrypted into data; otherwise a bare {type} goes out
@@ -3357,9 +3408,10 @@
       const title = document.createElement('span'); title.className = 'wpane-title';
       title.textContent = (w.app || 'Window') + (w.title ? ' — ' + w.title : '');
       const spacer = document.createElement('span'); spacer.className = 'wpane-spacer';
+      const infoBtn = document.createElement('button'); infoBtn.className = 'wpane-btn wpane-info-btn'; infoBtn.innerHTML = ICON_INFO; infoBtn.title = 'Connection details';
       const kbdBtn = document.createElement('button'); kbdBtn.className = 'wpane-btn wpane-kbd'; kbdBtn.innerHTML = ICON_KEYBOARD; kbdBtn.title = 'Keyboard';
       const closeBtn = document.createElement('button'); closeBtn.className = 'wpane-btn wpane-close'; closeBtn.innerHTML = ICON_CLOSE; closeBtn.title = 'Close';
-      bar.append(title, spacer, kbdBtn, closeBtn);
+      bar.append(title, spacer, infoBtn, kbdBtn, closeBtn);
 
       const body = document.createElement('div'); body.className = 'wpane-body';
       const img = document.createElement('img'); img.className = 'wpane-img'; img.draggable = false; img.alt = title.textContent;
@@ -3371,12 +3423,18 @@
       const stallEl = document.createElement('div'); stallEl.className = 'wpane-stall';
       const stallMsg = document.createElement('div'); stallMsg.className = 'pill';
       stallEl.append(stallMsg);
-      body.append(img, cursorEl, stallEl);
+      // Loading spinner shown until the first frame lands.
+      const loadEl = document.createElement('div'); loadEl.className = 'wpane-load';
+      const loadMsg = document.createElement('div'); loadMsg.className = 'wpane-loadmsg'; loadMsg.textContent = 'Connecting…';
+      loadEl.append(document.createElement('div'), loadMsg); loadEl.firstChild.className = 'wpane-spin';
+      body.append(img, cursorEl, stallEl, loadEl);
       const rz = document.createElement('div'); rz.className = 'wpane-resize';
-      el.append(bar, body, rz);
+      // Transport/details popover (toggled by the (i) button).
+      const infoEl = document.createElement('div'); infoEl.className = 'wpane-info';
+      el.append(bar, body, infoEl, rz);
       document.body.appendChild(el);
 
-      const pane = { el, img, body, cursorEl, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), stallMsg, gotFrame: false, errorMsg: null };
+      const pane = { el, img, body, cursorEl, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false };
       panes.set(w.id, pane);
       paneDrag(pane, bar);
       paneResize(pane, rz);
@@ -3384,6 +3442,13 @@
       el.addEventListener('pointerdown', () => focusPane(w.id));
       closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePane(w.id); });
       kbdBtn.addEventListener('click', (e) => { e.stopPropagation(); focusPane(w.id); wkey.focus(); });
+      infoBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pane.infoShown = !pane.infoShown;
+        if (pane.infoShown) infoEl.innerHTML = paneInfoHtml(pane);
+        infoEl.classList.toggle('show', pane.infoShown);
+      });
+      infoEl.addEventListener('pointerdown', (e) => e.stopPropagation()); // don't drag/focus when interacting
 
       focusPane(w.id);
       sendWin('window_ctl', { action: 'start', id: w.id });
@@ -3439,34 +3504,53 @@
     // forms we transparently stay on the WS path — nothing else changes.
     const RTC_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
     let rtcPc = null, rtcDc = null, rtcPeerId = null, rtcPendingIce = [];
-    let rtcFrameSeen = false;   // has a real frame actually arrived over the DataChannel?
-    let webrtcDisabled = false; // give up on P2P this connection (frames won't traverse)
+    let rtcRetryAt = 0;  // don't (re)attempt P2P before this time (ms epoch)
+    let rtcHelloAt = 0;  // when the current webrtc_hello was sent (to time out silence)
+    let rtcRelayed = false; // is the P2P path going through a TURN relay (vs direct)?
     function rtcActive() { return !!(rtcDc && rtcDc.readyState === 'open'); }
     function teardownWebRTC() {
       try { if (rtcDc) rtcDc.close(); } catch (_) {}
       try { if (rtcPc) rtcPc.close(); } catch (_) {}
-      rtcPc = null; rtcDc = null; rtcPeerId = null; rtcPendingIce = []; rtcFrameSeen = false;
+      rtcPc = null; rtcDc = null; rtcPeerId = null; rtcPendingIce = []; rtcRelayed = false;
     }
-    // The DataChannel can connect yet still fail to carry large frames — a
-    // cellular path whose small MTU / packet loss defeats big SCTP messages lets
-    // tiny acks through but drops ~55KB frames, so the pane connects then stalls.
-    // When we detect that, give up on P2P for this connection and let frames flow
-    // over WS instead. Re-enabled on the next socket (the network may change).
-    function disableWebRTC(reason) {
-      if (webrtcDisabled) return;
-      if (DEBUG) dbg('rtc disabled → WS fallback: ' + reason);
-      webrtcDisabled = true;
+    // Inspect the live ICE candidate pair to tell a direct P2P path from a TURN
+    // relay — a 'relay' candidate on either end means we're going through TURN.
+    async function refreshRtcRoute() {
+      if (!rtcPc) return;
+      try {
+        const stats = await rtcPc.getStats(); const c = {}; let sel = null;
+        stats.forEach((r) => {
+          if (r.type === 'local-candidate' || r.type === 'remote-candidate') c[r.id] = r;
+          if (r.type === 'candidate-pair' && r.state === 'succeeded' && (r.nominated || r.selected)) sel = r;
+        });
+        if (sel) {
+          const l = c[sel.localCandidateId], rm = c[sel.remoteCandidateId];
+          rtcRelayed = (l && l.candidateType === 'relay') || (rm && rm.candidateType === 'relay');
+        }
+      } catch (_) {}
+    }
+    // Tear down and back off before retrying. We ALWAYS prefer P2P and keep
+    // retrying (see the interval below), so this just avoids hammering a network
+    // where it can't connect; on a deliberate re-try (network changed) pass
+    // cooldownMs 0 to reconnect immediately. The agent keeps frames on WS until
+    // a channel proves it can carry them, so a failed attempt never stalls video.
+    function retryWebRTC(reason, cooldownMs) {
+      if (DEBUG) dbg('rtc retry (' + reason + ')');
       teardownWebRTC();
+      rtcRetryAt = Date.now() + (cooldownMs || 0);
     }
     async function ensureWebRTC() {
-      if (!cryptoKey || rtcPeerId || webrtcDisabled || typeof RTCPeerConnection === 'undefined') return;
+      if (!cryptoKey || !agentLive || rtcPeerId || Date.now() < rtcRetryAt || typeof RTCPeerConnection === 'undefined') return;
       rtcPeerId = ((crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2)).slice(0, 12);
+      rtcHelloAt = Date.now();
       if (DEBUG) dbg('▶ webrtc_hello ' + rtcPeerId);
       try { await sendWin('webrtc_hello', { peer: rtcPeerId }); } catch (_) { rtcPeerId = null; }
     }
     async function onWebRTCOffer(payload) {
       if (!payload || payload.peer !== rtcPeerId || rtcPc) return;
-      const pc = new RTCPeerConnection({ iceServers: RTC_ICE });
+      // Use the ICE servers the agent sent (STUN + any TURN it's configured
+      // with) so both peers try the same relays; fall back to STUN-only.
+      const pc = new RTCPeerConnection({ iceServers: (payload.ice && payload.ice.length) ? payload.ice : RTC_ICE });
       rtcPc = pc;
       pc.onicecandidate = (e) => {
         if (!e.candidate) return;
@@ -3474,15 +3558,14 @@
       };
       pc.onconnectionstatechange = () => {
         if (DEBUG) dbg('rtc ' + pc.connectionState);
-        if (rtcPc === pc && (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected')) teardownWebRTC();
+        if (rtcPc === pc && (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected')) retryWebRTC('conn ' + pc.connectionState, 12000);
       };
       pc.ondatachannel = (e) => {
         const ch = e.channel;
         rtcDc = ch;
         ch.binaryType = 'arraybuffer';
         ch.onmessage = (ev) => {
-          rtcFrameSeen = true; // a frame really traversed the channel — P2P is viable
-          try { onWindowFrame(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data))); } catch (_) {}
+          try { onWindowFrame(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data)), true); } catch (_) {}
         };
         ch.onopen = () => { if (DEBUG) dbg('rtc frames channel open'); };
         ch.onclose = () => { if (rtcDc === ch) rtcDc = null; };
@@ -3494,7 +3577,7 @@
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         await sendWin('webrtc_answer', { peer: rtcPeerId, sdp: answer.sdp });
-      } catch (e) { if (DEBUG) dbg('rtc offer err ' + e); teardownWebRTC(); }
+      } catch (e) { if (DEBUG) dbg('rtc offer err ' + e); retryWebRTC('offer error', 12000); }
     }
     async function onWebRTCIce(payload) {
       if (!payload || payload.peer !== rtcPeerId) return;
@@ -3502,10 +3585,12 @@
       if (!rtcPc || !rtcPc.remoteDescription) { rtcPendingIce.push(cand); return; }
       try { await rtcPc.addIceCandidate(cand); } catch (_) {}
     }
-    // Ack over the DataChannel when it's up (keeps acks off the relay too),
-    // else fall back to the WS window_ack.
-    function sendWindowAck(id, seq) {
-      if (rtcActive()) { try { rtcDc.send(JSON.stringify({ id, seq })); return; } catch (_) {} }
+    // Ack over the SAME transport the frame arrived on. A DataChannel frame
+    // acked over the channel is the agent's proof that big frames actually
+    // traverse it (small acks alone can't fake it) — so it only then switches
+    // frames onto P2P. A WS frame is acked over WS.
+    function sendWindowAck(id, seq, viaDC) {
+      if (viaDC && rtcActive()) { try { rtcDc.send(JSON.stringify({ id, seq })); return; } catch (_) {} }
       sendWin('window_ack', { id, seq });
     }
 
@@ -3555,16 +3640,21 @@
     // silent freeze into a clear, actionable cue.
     const STALL_MS = 2500;
     function updatePaneOverlay(p) {
-      let html = null, isErr = false;
+      const stale = performance.now() - (p.lastFrameAt || 0) > STALL_MS;
+      let html = null, isErr = false, loading = false;
       if (p.errorMsg) {
         html = '<span class="dot"></span><span>' + escapeHtml(p.errorMsg) + '</span>';
         isErr = true;
-      } else if (performance.now() - (p.lastFrameAt || 0) > STALL_MS) {
-        const t = p.gotFrame
-          ? 'Waiting for host… <span class="sub">screen may be locked or asleep</span>'
-          : 'No video yet <span class="sub">the window may be minimized, or screen capture is blocked</span>';
-        html = '<span class="dot"></span><span>' + t + '</span>';
+      } else if (!p.gotFrame) {
+        // No frame ever → show the spinner; after a while, hint at why.
+        loading = true;
+        p.loadMsg.innerHTML = stale
+          ? 'No video yet <span class="sub">the window may be minimized, or capture is blocked</span>'
+          : 'Connecting…';
+      } else if (stale) {
+        html = '<span class="dot"></span><span>Waiting for host… <span class="sub">screen may be locked or asleep</span></span>';
       }
+      p.el.classList.toggle('loading', loading);
       if (html) {
         p.stallMsg.innerHTML = html;
         p.el.classList.toggle('stall-error', isErr);
@@ -3572,21 +3662,26 @@
       } else {
         p.el.classList.remove('stalled');
       }
+      if (p.infoShown) p.infoEl.innerHTML = paneInfoHtml(p); // keep the popover live
     }
     setInterval(() => {
+      // Always prefer P2P: whenever we're not connected/negotiating and the
+      // cooldown has passed, (re)attempt WebRTC — so WS upgrades to P2P as soon
+      // as it becomes viable (network improved) with no reconnect needed. If a
+      // hello went unanswered, clear it so the next tick retries.
+      if (rtcPeerId && !rtcPc && Date.now() - rtcHelloAt > 8000) rtcPeerId = null;
+      if (!rtcPc) ensureWebRTC();
+      if (rtcActive()) refreshRtcRoute(); // keep direct-vs-TURN current for the (i)
       if (!panes.size) return;
-      // If we're on the DataChannel but a pane has stalled and NO frame has ever
-      // arrived over it, the channel connected but can't carry frames (cellular
-      // MTU/loss) — fall back to WS so the pane un-stalls (see disableWebRTC).
-      if (rtcActive() && !rtcFrameSeen) {
-        for (const p of panes.values()) {
-          if (performance.now() - (p.lastFrameAt || 0) > STALL_MS) { disableWebRTC('frames not arriving over datachannel'); break; }
-        }
-      }
       for (const p of panes.values()) updatePaneOverlay(p);
     }, 1000);
+    // React immediately to a network change: the old ICE path is dead after a
+    // switch, so drop it and renegotiate on the new network (cooldown 0).
+    function onNetChange() { if (cryptoKey && agentLive) retryWebRTC('network change', 0); }
+    window.addEventListener('online', onNetChange);
+    try { if (navigator.connection && navigator.connection.addEventListener) navigator.connection.addEventListener('change', onNetChange); } catch (_) {}
 
-    function onWindowFrame(payload) {
+    function onWindowFrame(payload, viaDC) {
       const p = panes.get(payload.id);
       if (!p) return;
       if (payload.closed) { closePane(payload.id); return; } // window closed on the host
@@ -3595,9 +3690,20 @@
         updatePaneOverlay(p);
         return;
       }
+      // Dedup: while a DataChannel is being probed the agent sends over WS AND
+      // the channel, so the same seq can arrive twice. Render once — but still
+      // ack a DataChannel copy so the agent learns the channel carries frames.
+      if (p.lastSeq != null && payload.seq != null && payload.seq <= p.lastSeq && (p.lastSeq - payload.seq) < 1000) {
+        if (viaDC) { lastFrameVia = 'webrtc'; sendWindowAck(payload.id, payload.seq, true); }
+        return;
+      }
+      if (payload.seq != null) p.lastSeq = payload.seq;
       p.errorMsg = null;
       p.gotFrame = true;
       p.lastFrameAt = performance.now();
+      lastFrameVia = viaDC ? 'webrtc' : 'ws'; // for the (i) transport popover
+      (p.frameTimes || (p.frameTimes = [])).push(p.lastFrameAt); // rolling 1s window → fps
+      while (p.frameTimes.length && p.lastFrameAt - p.frameTimes[0] > 1000) p.frameTimes.shift();
       updatePaneOverlay(p);
       const bin = atob(payload.img);
       const bytes = new Uint8Array(bin.length);
@@ -3618,7 +3724,7 @@
       // link. decode() may reject if superseded; the host's timeout covers that.
       if (payload.seq != null) {
         p.img.decode().then(
-          () => sendWindowAck(payload.id, payload.seq),
+          () => sendWindowAck(payload.id, payload.seq, viaDC),
           () => {},
         );
       }

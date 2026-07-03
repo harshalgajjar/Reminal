@@ -561,19 +561,32 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 					Seq uint64 `json:"seq"`
 					Img string `json:"img"` // base64 JPEG
 				}{ID: w.ID, W: w.W, H: w.H, Seq: seq, Img: base64.StdEncoding.EncodeToString(img)}
-				// Prefer the peer-to-peer DataChannel(s) when a viewer has one
-				// open — that keeps frames off the (per-message-billed) relay.
-				// The DataChannel is DTLS-encrypted, so the frame rides as plain
-				// JSON; acks come back over the same channel and feed the same
-				// pacing path. With no open channel we fall back to the WS relay.
-				if sinks := a.rtcFrameSinks(); len(sinks) > 0 {
-					if raw, mErr := json.Marshal(frame); mErr == nil {
-						for _, dc := range sinks {
-							_ = dc.Send(raw)
-						}
+				// Transport choice (verify-before-switch): frames go over a
+				// DataChannel ONLY once it's confirmed to actually deliver frames
+				// (the viewer acked one over it). Until then WS carries the frames
+				// and any open channel is probed in parallel — so a channel that
+				// connects but can't carry frames (cellular MTU) never causes a
+				// stall. If a confirmed channel then goes quiet (no acks — the path
+				// broke), demote it so frames revert to WS instead of streaming
+				// into the void.
+				// 6s is safely above winKeepalive (an idle window still acks its
+				// keepalive frame every 3s), so this only fires on a real break.
+				if gotAnyAck && time.Since(lastAck) > streamAckIdleTimeout/2 {
+					a.unconfirmRTC()
+				}
+				confirmed, probing := a.rtcSinks()
+				raw, mErr := json.Marshal(frame)
+				if len(confirmed) > 0 && mErr == nil {
+					for _, dc := range confirmed {
+						_ = dc.Send(raw)
 					}
 				} else {
 					a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
+					if mErr == nil {
+						for _, dc := range probing {
+							_ = dc.Send(raw) // probe: prove it can carry a frame
+						}
+					}
 				}
 				lastSig, haveSig = sig, ok
 				lastSent = time.Now()

@@ -1816,7 +1816,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.handleWindowAck(msg.Data)
 		case protocol.TypeWebRTCHello:
 			// A viewer wants a peer-to-peer frame channel; reply with an offer.
-			a.handleWebRTCHello(conn, msg.Data)
+			// Off the read loop: minting Cloudflare TURN creds is a network call
+			// that must not stall terminal I/O.
+			go a.handleWebRTCHello(conn, msg.Data)
 		case protocol.TypeWebRTCAnswer:
 			a.handleWebRTCAnswer(msg.Data)
 		case protocol.TypeWebRTCICE:
