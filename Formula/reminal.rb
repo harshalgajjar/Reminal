@@ -22,11 +22,11 @@ class Reminal < Formula
   on_linux do
     on_arm do
       url "https://github.com/harshalgajjar/Reminal/releases/download/v1.1.0/reminal_1.1.0_linux_arm64.tar.gz"
-      sha256 "f4123f4c58353865d3e03da5c466cda60f3d9d3fa9ea93b0f8fc2d8dbbf714d9"
+      sha256 "37c2b607cf838baaa558b7a78865442dad4c557916cab9e31297b8854e1f4ad6"
     end
     on_intel do
       url "https://github.com/harshalgajjar/Reminal/releases/download/v1.1.0/reminal_1.1.0_linux_amd64.tar.gz"
-      sha256 "5be5a17c299efcddfc80eab32e2e3165cb3a3ebc0739db4fee6de96492495fd8"
+      sha256 "92f1afb3e71d38b8eea48c87a2f1b7247b4050c36899c81f81ccc00de7bcf62d"
     end
   end
 
