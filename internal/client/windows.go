@@ -409,9 +409,9 @@ const maxFramesInFlight = 2
 // went silent this long. An unclean viewer drop (phone asleep, network lost,
 // laptop closed) sends no WebSocket close, so the relay can be slow to tell the
 // agent count==0 — meanwhile we'd keep capturing and sending frames to a viewer
-// that isn't there, burning relay requests with nobody watching. A live viewer
-// acks at least the keepalive frame every winKeepalive, so this is comfortably
-// above that; a returning viewer re-sends window_ctl start. Only armed once the
+// that isn't there, burning relay requests with nobody watching. Only checked
+// while we're actively sending frames (an idle window sends none and expects no
+// acks); a returning viewer re-sends window_ctl start. Only armed once the
 // viewer has acked at least once, so a hypothetical non-acking client is never
 // cut off.
 const streamAckIdleTimeout = 12 * time.Second
@@ -423,13 +423,18 @@ const streamAckIdleTimeout = 12 * time.Second
 // message and its ack (each is a billed Durable Object request). The threshold
 // is deliberately conservative: a real update (a typed character, a scroll, a
 // cursor move) shifts at least one cell well past it, so we only ever skip
-// visually identical frames and never drop a real change. winKeepalive forces a
-// resend of an otherwise-static window periodically so a viewer that attaches
-// late (or missed a frame) still repaints.
+// visually identical frames and never drop a real change. An unchanged window
+// sends NO frames at all (0 fps); winHeartbeat only governs a tiny liveness
+// ping (see streamWindow) so the viewer knows the host is alive without a frame.
+// winProbeFrame is the one exception: while a DataChannel is open but not yet
+// confirmed to carry frames, we send a real frame this often even if nothing
+// changed — otherwise a static window would never give the channel a frame to
+// prove itself and P2P would never engage. Once confirmed, it's back to 0 fps.
 const (
 	winSigN         = 32
 	winSigThreshold = 12
-	winKeepalive    = 3 * time.Second
+	winHeartbeat    = 3 * time.Second
+	winProbeFrame   = 1 * time.Second
 )
 
 // frameSignature reduces a JPEG frame to a coarse grayscale grid by
@@ -513,7 +518,7 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 	var fails int         // consecutive capture failures while the window exists
 	var lastSig [winSigN * winSigN]byte
 	var haveSig bool
-	var lastSent time.Time // when we last actually sent a frame (for keepalive)
+	var lastSent time.Time // when we last sent a frame OR heartbeat (paces both)
 	var lastAck time.Time  // when the viewer last genuinely acked a frame
 	var gotAnyAck bool     // has this viewer ever acked (arms the idle stop)?
 	for {
@@ -547,12 +552,19 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 		img, err := b.capture(w)
 		if err == nil && len(img) > 0 {
 			fails = 0
-			// Skip frames that are visually identical to the last one we sent
-			// (an idle window), so we don't spend a relay request + ack on a
-			// picture the viewer already has. Always send when we can't compare
-			// (first frame or undecodable) or when the keepalive window lapsed.
+			// An unchanged window sends NO frame at all (0 fps) — only a tiny
+			// heartbeat every winHeartbeat so the viewer knows the host is alive
+			// and doesn't flash "Waiting for host…". A frame goes out only when the
+			// picture actually changes (or the first frame / an undecodable capture
+			// we can't compare against).
 			sig, ok := frameSignature(img)
-			if !ok || !haveSig || sigDiffers(lastSig, sig) || time.Since(lastSent) >= winKeepalive {
+			changed := !ok || !haveSig || sigDiffers(lastSig, sig)
+			confirmed, probing := a.rtcSinks()
+			// Send a real frame when the picture changed, OR periodically while a
+			// channel is open-but-unconfirmed so a static window can still prove
+			// the channel (else P2P would never engage on an idle window).
+			probeFrame := len(confirmed) == 0 && len(probing) > 0 && time.Since(lastSent) >= winProbeFrame
+			if changed || probeFrame {
 				seq++
 				frame := struct {
 					ID  string `json:"id"`
@@ -561,34 +573,51 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 					Seq uint64 `json:"seq"`
 					Img string `json:"img"` // base64 JPEG
 				}{ID: w.ID, W: w.W, H: w.H, Seq: seq, Img: base64.StdEncoding.EncodeToString(img)}
-				// Transport choice (verify-before-switch): frames go over a
-				// DataChannel ONLY once it's confirmed to actually deliver frames
-				// (the viewer acked one over it). Until then WS carries the frames
-				// and any open channel is probed in parallel — so a channel that
-				// connects but can't carry frames (cellular MTU) never causes a
-				// stall. If a confirmed channel then goes quiet (no acks — the path
-				// broke), demote it so frames revert to WS instead of streaming
-				// into the void.
-				// 6s is safely above winKeepalive (an idle window still acks its
-				// keepalive frame every 3s), so this only fires on a real break.
+				// Verify-before-switch: frames go over a DataChannel ONLY once it's
+				// confirmed to deliver them (the viewer acked one over it). Until
+				// then WS carries frames and any open channel is probed in parallel,
+				// so a channel that connects but can't carry frames (cellular MTU)
+				// never causes a stall. The demotion below only runs while we're
+				// actively sending, so an idle window (no acks expected) can't be
+				// mistaken for a broken channel; if acks dry up mid-stream, demote.
 				if gotAnyAck && time.Since(lastAck) > streamAckIdleTimeout/2 {
 					a.unconfirmRTC()
+					confirmed, probing = a.rtcSinks()
 				}
-				confirmed, probing := a.rtcSinks()
-				raw, mErr := json.Marshal(frame)
-				if len(confirmed) > 0 && mErr == nil {
-					for _, dc := range confirmed {
-						_ = dc.Send(raw)
-					}
-				} else {
-					a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
-					if mErr == nil {
+				if raw, mErr := json.Marshal(frame); mErr == nil {
+					if len(confirmed) > 0 {
+						for _, dc := range confirmed {
+							_ = dc.Send(raw)
+						}
+					} else {
+						a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
 						for _, dc := range probing {
 							_ = dc.Send(raw) // probe: prove it can carry a frame
 						}
 					}
 				}
 				lastSig, haveSig = sig, ok
+				lastSent = time.Now()
+			} else if time.Since(lastSent) >= winHeartbeat {
+				// Idle: no frame, just a few-byte liveness ping over the current
+				// transport. Not acked and doesn't confirm a channel (only a real
+				// frame's ack can) — it just keeps the viewer's overlay quiet.
+				hb := struct {
+					ID string `json:"id"`
+					HB bool   `json:"hb"`
+				}{ID: w.ID, HB: true}
+				if raw, mErr := json.Marshal(hb); mErr == nil {
+					if len(confirmed) > 0 {
+						for _, dc := range confirmed {
+							_ = dc.Send(raw)
+						}
+					} else {
+						a.sendWindowMsg(conn, protocol.TypeWindowFrame, hb)
+						for _, dc := range probing {
+							_ = dc.Send(raw)
+						}
+					}
+				}
 				lastSent = time.Now()
 			}
 		} else if !b.exists(w.ID) {

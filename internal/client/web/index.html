@@ -1236,7 +1236,7 @@
     // reconnect; completeKex clears the ephemeral private material as
     // soon as the wrap is decrypted.
     // All outstanding kex_init attempts, keyed by their hex ex_id →
-    // { keyPair, mask, exIDBytes }. We can have more than one in flight: the
+    // { eph, mask, exIDBytes }. We can have more than one in flight: the
     // viewer fires an optimistic kex_init on auth_ok and another on
     // connected/agent_online. Whichever the agent answers FIRST completes the
     // handshake — so a dropped/coalesced reply to one attempt no longer strands
@@ -1295,6 +1295,52 @@
     // and retrying. Without this the viewer would hang forever on a
     // black screen with no error if the response went missing.
     const KEX_TIMEOUT_MS = 10000;
+    // X25519 with a pure-JS fallback. crypto.subtle only gained X25519 on
+    // Safari/iOS 18.4 (June 2025) and other browsers recently; on anything older
+    // it throws NotSupportedError and the handshake can't run. When native X25519
+    // is missing we do the key agreement with tweetnacl (nacl.scalarMult IS
+    // X25519), loaded lazily and integrity-pinned (SRI) so 18.4+ browsers never
+    // fetch it and the fallback can't be tampered with. HKDF + AES-GCM keep using
+    // WebCrypto everywhere (supported far back).
+    const NACL_URL = 'https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js';
+    const NACL_SRI = 'sha384-LMUiUHpaYNGZFzWFRjsADnCSqae1Mk5llcUOHOLDhCxkyF2cdsWAueTZAzV+swW/';
+    let _naclPromise = null;
+    function loadNacl() {
+      if (_naclPromise) return _naclPromise;
+      _naclPromise = new Promise((resolve, reject) => {
+        if (window.nacl) return resolve(window.nacl);
+        const s = document.createElement('script');
+        s.src = NACL_URL; s.integrity = NACL_SRI; s.crossOrigin = 'anonymous';
+        s.onload = () => window.nacl ? resolve(window.nacl) : reject(new Error('nacl load'));
+        s.onerror = () => reject(new Error('failed to load crypto fallback'));
+        document.head.appendChild(s);
+      });
+      return _naclPromise;
+    }
+    let _x25519Native = null;
+    async function x25519NativeOK() {
+      if (_x25519Native === null) {
+        try { await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']); _x25519Native = true; }
+        catch (_) { _x25519Native = false; }
+      }
+      return _x25519Native;
+    }
+    // Ephemeral keypair → { pub: Uint8Array(32), deriveShared(peerPubBytes) -> Uint8Array(32) }.
+    async function newEphemeralX25519() {
+      if (await x25519NativeOK()) {
+        const kp = await crypto.subtle.generateKey({ name: 'X25519' }, true, ['deriveBits']);
+        const pub = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+        return { pub, deriveShared: async (peer) => {
+          const pk = await crypto.subtle.importKey('raw', peer, { name: 'X25519' }, false, []);
+          return new Uint8Array(await crypto.subtle.deriveBits({ name: 'X25519', public: pk }, kp.privateKey, 256));
+        } };
+      }
+      const nacl = await loadNacl();
+      const priv = crypto.getRandomValues(new Uint8Array(32));
+      const pub = nacl.scalarMult.base(priv); // nacl clamps the scalar internally
+      return { pub, deriveShared: async (peer) => nacl.scalarMult(priv, new Uint8Array(peer)) };
+    }
+
     let kexTimer = 0;
     async function sendKexInit() {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -1305,13 +1351,9 @@
       // is destroyed in completeKex once the wrap is decrypted, which
       // is what gives the handshake forward secrecy against a future
       // compromise of the agent's long-lived state.
-      const keyPair = await crypto.subtle.generateKey(
-        { name: 'X25519' }, true, ['deriveBits']
-      );
-      dbg('X25519 keypair generated');
-      const myPub = new Uint8Array(
-        await crypto.subtle.exportKey('raw', keyPair.publicKey)
-      );
+      const eph = await newEphemeralX25519();
+      dbg('X25519 keypair generated' + (_x25519Native ? '' : ' (JS fallback)'));
+      const myPub = eph.pub;
       const mask = await derivePinMask(pinValue);
       const blinded = new Uint8Array(32);
       for (let i = 0; i < 32; i++) blinded[i] = myPub[i] ^ mask[i];
@@ -1321,7 +1363,7 @@
         .map(b => b.toString(16).padStart(2, '0')).join('');
       // Keep this attempt alongside any earlier one — completeKex accepts a
       // reply to whichever is answered first.
-      kexAttempts.set(exID, { keyPair, mask, exIDBytes });
+      kexAttempts.set(exID, { eph, mask, exIDBytes });
       kexExID = exID;
 
       ws.send(JSON.stringify({
@@ -1370,14 +1412,7 @@
       }
       const agentPubBytes = new Uint8Array(32);
       for (let i = 0; i < 32; i++) agentPubBytes[i] = agentBlinded[i] ^ att.mask[i];
-      const agentPub = await crypto.subtle.importKey(
-        'raw', agentPubBytes, { name: 'X25519' }, false, []
-      );
-      const shared = await crypto.subtle.deriveBits(
-        { name: 'X25519', public: agentPub },
-        att.keyPair.privateKey,
-        256,
-      );
+      const shared = await att.eph.deriveShared(agentPubBytes);
       const sharedKey = await crypto.subtle.importKey(
         'raw', shared, 'HKDF', false, ['deriveBits']
       );
@@ -3380,7 +3415,7 @@
       el.append(bar, body, infoEl, rz);
       document.body.appendChild(el);
 
-      const pane = { el, img, body, cursorEl, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false };
+      const pane = { el, img, body, cursorEl, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false };
       panes.set(w.id, pane);
       paneDrag(pane, bar);
       paneResize(pane, rz);
@@ -3583,10 +3618,12 @@
     // Decide what (if anything) a pane's overlay should say: an explicit capture
     // error from the host, a "no video yet" for a pane that never got a frame, or
     // a "waiting" for one whose frames stopped (screen locked/asleep). Turns a
-    // silent freeze into a clear, actionable cue.
-    const STALL_MS = 2500;
+    // silent freeze into a clear, actionable cue. "Alive" counts heartbeats too
+    // (an idle window sends 0 frames but heartbeats every ~3s), so STALL_MS sits
+    // above the heartbeat interval — an idle window never trips the overlay.
+    const STALL_MS = 7000;
     function updatePaneOverlay(p) {
-      const stale = performance.now() - (p.lastFrameAt || 0) > STALL_MS;
+      const stale = performance.now() - (p.lastAliveAt || 0) > STALL_MS;
       let html = null, isErr = false, loading = false;
       if (p.errorMsg) {
         html = '<span class="dot"></span><span>' + escapeHtml(p.errorMsg) + '</span>';
@@ -3636,6 +3673,13 @@
         updatePaneOverlay(p);
         return;
       }
+      if (payload.hb) { // liveness heartbeat — host alive, screen just unchanged (0 fps)
+        p.errorMsg = null;
+        p.lastAliveAt = performance.now();
+        lastFrameVia = viaDC ? 'webrtc' : 'ws';
+        updatePaneOverlay(p);
+        return;
+      }
       // Dedup: while a DataChannel is being probed the agent sends over WS AND
       // the channel, so the same seq can arrive twice. Render once — but still
       // ack a DataChannel copy so the agent learns the channel carries frames.
@@ -3647,6 +3691,7 @@
       p.errorMsg = null;
       p.gotFrame = true;
       p.lastFrameAt = performance.now();
+      p.lastAliveAt = p.lastFrameAt; // frames count as liveness too
       lastFrameVia = viaDC ? 'webrtc' : 'ws'; // for the (i) transport popover
       (p.frameTimes || (p.frameTimes = [])).push(p.lastFrameAt); // rolling 1s window → fps
       while (p.frameTimes.length && p.lastFrameAt - p.frameTimes[0] > 1000) p.frameTimes.shift();
