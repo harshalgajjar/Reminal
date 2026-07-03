@@ -165,7 +165,9 @@ func (s *Server) handleSessionConn(sessionID string, role protocol.Role, conn *w
 			protocol.TypeKexInit, protocol.TypeKexResp,
 			protocol.TypeWindowList, protocol.TypeWindowCtl,
 			protocol.TypeWindowFrame, protocol.TypeWindowInput,
-			protocol.TypeWindowAck:
+			protocol.TypeWindowAck,
+			protocol.TypeWebRTCHello, protocol.TypeWebRTCOffer,
+			protocol.TypeWebRTCAnswer, protocol.TypeWebRTCICE:
 			s.forward(sessionID, role, msg)
 		case protocol.TypePing:
 			s.writeTo(p, protocol.Message{Type: protocol.TypePong})

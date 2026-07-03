@@ -1419,6 +1419,9 @@
       // restore any panes this session had open (Recent → reopens its windows).
       pendingRestore = true;
       if (typeof sendWin === 'function') sendWin('window_list');
+      // Offer the agent a peer-to-peer channel for window frames (no-op if one
+      // is already negotiating/up). Frames fall back to WS until it connects.
+      ensureWebRTC();
     }
 
     async function encrypt(key, data) {
@@ -1648,6 +1651,9 @@
       kexAttempts.clear();
       kexExID = '';
       kexInFlight = false;
+      // A new socket means a fresh session key; tear down any peer connection so
+      // it renegotiates cleanly (the agent may be a different process now).
+      teardownWebRTC();
 
       const fresh = lastSeq === 0;
       setStatus(fresh ? 'Connecting…' : 'Reconnecting…', 'warn connecting');
@@ -1805,6 +1811,7 @@
               // outstanding, and keeping it means EITHER reply can complete the
               // handshake — the whole point of the multi-attempt fix.
               cryptoKey = null;
+              teardownWebRTC(); // renegotiate P2P with the (possibly new) agent
               try { await sendKexInit(); } catch (_) {}
             } else if (!cryptoKey && kexAttempts.size === 0) {
               // First-ever connect on this WS — initiate the EKE.
@@ -1858,6 +1865,22 @@
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));
             onWindowFrame(payload);
+          } catch (_) {}
+          break;
+        }
+        case 'webrtc_offer': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            await onWebRTCOffer(JSON.parse(new TextDecoder().decode(bytes)));
+          } catch (_) {}
+          break;
+        }
+        case 'webrtc_ice': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            await onWebRTCIce(JSON.parse(new TextDecoder().decode(bytes)));
           } catch (_) {}
           break;
         }
@@ -3351,6 +3374,71 @@
       if (document.hidden) pauseWinStreams(); else resumeWinStreams();
     });
 
+    // ---- WebRTC peer-to-peer frame transport --------------------------------
+    // Window frames are the heaviest traffic and the relay bills per forwarded
+    // message, so when a DataChannel to the agent can be opened, frames + acks
+    // go directly peer-to-peer (DTLS-encrypted) instead of through the relay.
+    // Signaling rides the existing encrypted channel (see sendWin); the agent
+    // is the offerer and owns the "frames" channel. If the connection never
+    // forms we transparently stay on the WS path — nothing else changes.
+    const RTC_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+    let rtcPc = null, rtcDc = null, rtcPeerId = null, rtcPendingIce = [];
+    function rtcActive() { return !!(rtcDc && rtcDc.readyState === 'open'); }
+    function teardownWebRTC() {
+      try { if (rtcDc) rtcDc.close(); } catch (_) {}
+      try { if (rtcPc) rtcPc.close(); } catch (_) {}
+      rtcPc = null; rtcDc = null; rtcPeerId = null; rtcPendingIce = [];
+    }
+    async function ensureWebRTC() {
+      if (!cryptoKey || rtcPeerId || typeof RTCPeerConnection === 'undefined') return;
+      rtcPeerId = ((crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2)).slice(0, 12);
+      if (DEBUG) dbg('▶ webrtc_hello ' + rtcPeerId);
+      try { await sendWin('webrtc_hello', { peer: rtcPeerId }); } catch (_) { rtcPeerId = null; }
+    }
+    async function onWebRTCOffer(payload) {
+      if (!payload || payload.peer !== rtcPeerId || rtcPc) return;
+      const pc = new RTCPeerConnection({ iceServers: RTC_ICE });
+      rtcPc = pc;
+      pc.onicecandidate = (e) => {
+        if (!e.candidate) return;
+        sendWin('webrtc_ice', { peer: rtcPeerId, candidate: e.candidate.candidate, mid: e.candidate.sdpMid, line: e.candidate.sdpMLineIndex });
+      };
+      pc.onconnectionstatechange = () => {
+        if (DEBUG) dbg('rtc ' + pc.connectionState);
+        if (rtcPc === pc && (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected')) teardownWebRTC();
+      };
+      pc.ondatachannel = (e) => {
+        const ch = e.channel;
+        rtcDc = ch;
+        ch.binaryType = 'arraybuffer';
+        ch.onmessage = (ev) => {
+          try { onWindowFrame(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data))); } catch (_) {}
+        };
+        ch.onopen = () => { if (DEBUG) dbg('rtc frames channel open'); };
+        ch.onclose = () => { if (rtcDc === ch) rtcDc = null; };
+      };
+      try {
+        await pc.setRemoteDescription({ type: 'offer', sdp: payload.sdp });
+        for (const c of rtcPendingIce) { try { await pc.addIceCandidate(c); } catch (_) {} }
+        rtcPendingIce = [];
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await sendWin('webrtc_answer', { peer: rtcPeerId, sdp: answer.sdp });
+      } catch (e) { if (DEBUG) dbg('rtc offer err ' + e); teardownWebRTC(); }
+    }
+    async function onWebRTCIce(payload) {
+      if (!payload || payload.peer !== rtcPeerId) return;
+      const cand = { candidate: payload.candidate, sdpMid: payload.mid, sdpMLineIndex: payload.line };
+      if (!rtcPc || !rtcPc.remoteDescription) { rtcPendingIce.push(cand); return; }
+      try { await rtcPc.addIceCandidate(cand); } catch (_) {}
+    }
+    // Ack over the DataChannel when it's up (keeps acks off the relay too),
+    // else fall back to the WS window_ack.
+    function sendWindowAck(id, seq) {
+      if (rtcActive()) { try { rtcDc.send(JSON.stringify({ id, seq })); return; } catch (_) {} }
+      sendWin('window_ack', { id, seq });
+    }
+
     // ---- Remember open panes per session ------------------------------------
     // Reconnecting (e.g. via the Recent dropdown) reopens the windows you had
     // up. Keyed by session id; matched back to live windows by id first, then
@@ -3452,7 +3540,7 @@
       // link. decode() may reject if superseded; the host's timeout covers that.
       if (payload.seq != null) {
         p.img.decode().then(
-          () => sendWin('window_ack', { id: payload.id, seq: payload.seq }),
+          () => sendWindowAck(payload.id, payload.seq),
           () => {},
         );
       }

@@ -134,6 +134,31 @@ const (
 	// accumulate on a slow link, and paces the frame rate to what the viewer can
 	// actually consume.
 	TypeWindowAck MessageType = "window_ack"
+
+	// ---- WebRTC signaling (peer-to-peer frame transport) ----
+	// Window frames are high-volume; when a viewer and agent can open a
+	// WebRTC DataChannel, frames (and their acks) flow directly peer-to-peer
+	// instead of through the relay, which bills each forwarded message. These
+	// types carry only the handshake — a few messages per connection — and ride
+	// end-to-end encrypted in Data (JSON) exactly like the window messages.
+	// Because the payload is sealed under the PIN-authenticated session key, a
+	// malicious relay can't tamper with the SDP/ICE (and thus can't MITM the
+	// DTLS connection). Each carries a "peer" id (viewer-chosen, like kex ex_id)
+	// so the agent runs one PeerConnection per viewer and each side ignores
+	// signaling addressed to a different peer.
+
+	// TypeWebRTCHello is viewer→agent: "I can do WebRTC — send me an offer."
+	// Data = encrypted JSON {"peer":"<id>"}.
+	TypeWebRTCHello MessageType = "webrtc_hello"
+	// TypeWebRTCOffer is agent→viewer. Data = encrypted JSON
+	// {"peer":"<id>","sdp":"<offer SDP>"}.
+	TypeWebRTCOffer MessageType = "webrtc_offer"
+	// TypeWebRTCAnswer is viewer→agent. Data = encrypted JSON
+	// {"peer":"<id>","sdp":"<answer SDP>"}.
+	TypeWebRTCAnswer MessageType = "webrtc_answer"
+	// TypeWebRTCICE is bidirectional (trickle ICE). Data = encrypted JSON
+	// {"peer":"<id>","candidate":"<candidate>","mid":"<sdpMid>","line":<idx>}.
+	TypeWebRTCICE MessageType = "webrtc_ice"
 )
 
 type Message struct {

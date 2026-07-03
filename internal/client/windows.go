@@ -269,6 +269,8 @@ func (a *Agent) handleWindowInput(encData string) {
 // handleWindowAck records a viewer's ack of a rendered frame, unblocking the
 // next frame for that window (see streamWindow). Best-effort: an unknown id or a
 // momentarily full channel just drops, since only the newest seq matters.
+// Acks arrive over WS (encrypted) or, when a WebRTC DataChannel is up, over that
+// channel as plaintext JSON — both funnel into deliverWindowAck.
 func (a *Agent) handleWindowAck(encData string) {
 	plaintext, err := a.box.Decrypt(encData)
 	if err != nil {
@@ -281,14 +283,19 @@ func (a *Agent) handleWindowAck(encData string) {
 	if json.Unmarshal(plaintext, &ev) != nil {
 		return
 	}
+	a.deliverWindowAck(ev.ID, ev.Seq)
+}
+
+// deliverWindowAck feeds a decoded (id, seq) ack to the window's pacing channel.
+func (a *Agent) deliverWindowAck(id string, seq uint64) {
 	a.winMu.Lock()
-	ch := a.winAck[ev.ID]
+	ch := a.winAck[id]
 	a.winMu.Unlock()
 	if ch == nil {
 		return
 	}
 	select {
-	case ch <- ev.Seq:
+	case ch <- seq:
 	default:
 		// Full — drop the oldest so the newest seq still gets through.
 		select {
@@ -296,7 +303,7 @@ func (a *Agent) handleWindowAck(encData string) {
 		default:
 		}
 		select {
-		case ch <- ev.Seq:
+		case ch <- seq:
 		default:
 		}
 	}
@@ -554,7 +561,20 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 					Seq uint64 `json:"seq"`
 					Img string `json:"img"` // base64 JPEG
 				}{ID: w.ID, W: w.W, H: w.H, Seq: seq, Img: base64.StdEncoding.EncodeToString(img)}
-				a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
+				// Prefer the peer-to-peer DataChannel(s) when a viewer has one
+				// open — that keeps frames off the (per-message-billed) relay.
+				// The DataChannel is DTLS-encrypted, so the frame rides as plain
+				// JSON; acks come back over the same channel and feed the same
+				// pacing path. With no open channel we fall back to the WS relay.
+				if sinks := a.rtcFrameSinks(); len(sinks) > 0 {
+					if raw, mErr := json.Marshal(frame); mErr == nil {
+						for _, dc := range sinks {
+							_ = dc.Send(raw)
+						}
+					}
+				} else {
+					a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
+				}
 				lastSig, haveSig = sig, ok
 				lastSent = time.Now()
 			}

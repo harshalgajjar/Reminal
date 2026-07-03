@@ -204,6 +204,13 @@ type Agent struct {
 	// during the gesture to keep it smooth.
 	winScrollID string
 	winScrollAt time.Time
+
+	// WebRTC peer-to-peer frame transport. When a viewer can open a
+	// DataChannel, window frames + acks flow directly to it instead of through
+	// the (per-message-billed) relay. rtcPeers maps a viewer-chosen peer id to
+	// its PeerConnection state; guarded by rtcMu. See webrtc.go.
+	rtcMu    sync.Mutex
+	rtcPeers map[string]*rtcPeer
 }
 
 // AgentOptions configures startup behaviour. Zero-value runs the
@@ -1807,6 +1814,13 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// directly rather than via the serialized winOps queue so a pending
 			// capture/input op can't delay the ack that unblocks the next frame.
 			a.handleWindowAck(msg.Data)
+		case protocol.TypeWebRTCHello:
+			// A viewer wants a peer-to-peer frame channel; reply with an offer.
+			a.handleWebRTCHello(conn, msg.Data)
+		case protocol.TypeWebRTCAnswer:
+			a.handleWebRTCAnswer(msg.Data)
+		case protocol.TypeWebRTCICE:
+			a.handleWebRTCICE(msg.Data)
 		case protocol.TypeConnected:
 			if msg.Count > 0 {
 				agentNotify("  [%s] Viewer connected (%d active)\n",
@@ -1860,6 +1874,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				// held mouse button / modifier so leaving the page can never
 				// strand the host's desktop in a grab.
 				a.stopWindowStream("")
+				a.closeAllRTCPeers()
 				a.enqueueWinOp(func() { _ = a.windows().releaseInput() })
 			}
 			a.viewerSizeMu.Lock()
