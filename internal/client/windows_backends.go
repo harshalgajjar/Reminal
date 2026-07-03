@@ -208,23 +208,29 @@ func jxaEvents(body string) error {
 	return err
 }
 
-func (darwinWindows) clickN(w winInfo, fx, fy float64, count int) error {
+func (darwinWindows) clickN(w winInfo, fx, fy float64, count int, right bool) error {
 	if count < 1 {
 		count = 1
 	}
 	x := w.X + int(fx*float64(w.W))
 	y := w.Y + int(fy*float64(w.H))
+	btn, down, up := "kCGMouseButtonLeft", "kCGEventLeftMouseDown", "kCGEventLeftMouseUp"
+	if right {
+		btn, down, up = "kCGMouseButtonRight", "kCGEventRightMouseDown", "kCGEventRightMouseUp"
+	}
 	// Move, then press/release at absolute screen points. The down/up MUST
 	// carry a click-state and be separated by a brief gap — without those,
 	// many apps see the events as mere cursor movement and never register a
-	// click. click-state = count gives native single/double/triple clicks.
+	// click. click-state = count gives native single/double/triple clicks: the
+	// viewer sends count 2 on the second tap so the OS pairs them into a
+	// double-click regardless of network jitter (the field is authoritative).
 	body := fmt.Sprintf(`
 var p=$.CGPointMake(%d,%d);
-function e(t){var ev=$.CGEventCreateMouseEvent(src,t,p,$.kCGMouseButtonLeft);$.CGEventSetIntegerValueField(ev,$.kCGMouseEventClickState,%d);$.CGEventPost($.kCGHIDEventTap,ev);}
+function e(t){var ev=$.CGEventCreateMouseEvent(src,t,p,$.%s);$.CGEventSetIntegerValueField(ev,$.kCGMouseEventClickState,%d);$.CGEventPost($.kCGHIDEventTap,ev);}
 e($.kCGEventMouseMoved);
-e($.kCGEventLeftMouseDown);
+e($.%s);
 $.NSThread.sleepForTimeInterval(0.03);
-e($.kCGEventLeftMouseUp);`, x, y, count)
+e($.%s);`, x, y, btn, count, down, up)
 	return jxaEvents(body)
 }
 
@@ -488,15 +494,20 @@ func (linuxWindows) focus(w winInfo) error {
 	return err
 }
 
-func (linuxWindows) clickN(w winInfo, fx, fy float64, count int) error {
+func (linuxWindows) clickN(w winInfo, fx, fy float64, count int, right bool) error {
 	if !have("xdotool") {
 		return fmt.Errorf("install xdotool for input control")
 	}
 	absX := w.X + int(fx*float64(w.W))
 	absY := w.Y + int(fy*float64(w.H))
-	// X11 coalesces rapid successive clicks into double/triple itself, so each
-	// call is a single click; count is unused here (macOS needs it, X11 doesn't).
-	_, err := run("xdotool", "mousemove", fmt.Sprintf("%d", absX), fmt.Sprintf("%d", absY), "click", "1")
+	btn := "1"
+	if right {
+		btn = "3" // X11 secondary/context button
+	}
+	// X11 has no click-state field, so it coalesces rapid successive clicks into
+	// double/triple by timing itself: each viewer tap is one click here (unlike
+	// macOS, where count is authoritative). Right-click uses button 3.
+	_, err := run("xdotool", "mousemove", fmt.Sprintf("%d", absX), fmt.Sprintf("%d", absY), "click", btn)
 	return err
 }
 

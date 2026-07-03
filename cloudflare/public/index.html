@@ -3835,6 +3835,8 @@
       let pinch = null;         // {d, mx, my, z, px, py} captured at pinch start
       let downAt = 0, moved = false, sx = 0, sy = 0, lastX = 0, lastY = 0, path = null;
       let longPress = null, dragMode = false, dragPath = null; // touch drag-and-drop
+      let mouseBtn = 0;                                        // button on current mouse press (0 left, 2 right)
+      let lastClickAt = 0, lastClickFx = 0, lastClickFy = 0, clickRun = 0; // double-click run tracking
       const clamp01 = v => Math.max(0, Math.min(1, v));
       const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -3877,7 +3879,27 @@
       }
       pane.placeCursor = place;
       function flash() { pane.cursorEl.classList.add('tapped'); setTimeout(() => pane.cursorEl.classList.remove('tapped'), 150); }
-      function click(f) { sendWin('window_input', { id: pane.w.id, kind: 'click', x: f.fx, y: f.fy }); }
+      // Count rapid same-spot left clicks (1→2→3, wrapping) so the host gets
+      // native double/triple-clicks. We time the run HERE at the source, so it's
+      // immune to network jitter — the host trusts the count we send.
+      function nextCount(f) {
+        const now = Date.now();
+        if (now - lastClickAt < 450 && Math.hypot(f.fx - lastClickFx, f.fy - lastClickFy) < 0.04) clickRun = clickRun % 3 + 1;
+        else clickRun = 1;
+        lastClickAt = now; lastClickFx = f.fx; lastClickFy = f.fy;
+        return clickRun;
+      }
+      function click(f, button) {
+        const m = { id: pane.w.id, kind: 'click', x: f.fx, y: f.fy };
+        if (button === 'right') {
+          m.button = 'right';
+          lastClickAt = 0; clickRun = 0;       // a right-click breaks any double-click run
+        } else {
+          const c = nextCount(f);
+          if (c > 1) m.count = c;
+        }
+        sendWin('window_input', m);
+      }
       // Ends a touch grab. Returns 'drag' if a real drag was sent, 'tap' if it
       // was grabbed but never moved (treat as a click), or false if not grabbed.
       function endDrag(send) {
@@ -3901,12 +3923,12 @@
           // Two-finger gesture: locked to 'zoom' (fingers spread → pinch-zoom the
           // pane) or 'scroll' (fingers move together → scroll the window) on the
           // first decisive movement, so the two don't fight each other.
-          pinch = { d: d0 || 1, mx: cx, my: cy, z: pane.zoom, px: pane.panX, py: pane.panY, startD: d0, lastCx: cx, lastCy: cy, mode: null };
+          pinch = { d: d0 || 1, mx: cx, my: cy, z: pane.zoom, px: pane.panX, py: pane.panY, startD: d0, lastCx: cx, lastCy: cy, mode: null, t: Date.now() };
           downAt = 0; path = null; endDrag(false);
           return;
         }
         downAt = Date.now(); moved = false; sx = lastX = e.clientX; sy = lastY = e.clientY;
-        if (e.pointerType === 'mouse') { path = [frac(e)]; return; }
+        if (e.pointerType === 'mouse') { mouseBtn = e.button; path = e.button === 0 ? [frac(e)] : null; return; }
         if (!pane.cursor) pane.cursor = { fx: 0.5, fy: 0.5 };
         place();
         dragMode = false; dragPath = null;
@@ -3965,15 +3987,24 @@
         ptrs.delete(e.pointerId);
         try { img.releasePointerCapture(e.pointerId); } catch (_) {}
         if (pinch) {
-          if (ptrs.size < 2) { pinch = null; clampPan(); applyTransform(); }
+          if (ptrs.size < 2) {
+            // Two fingers down-and-up quickly, with no pinch/scroll movement, is a
+            // two-finger tap → right-click at the cursor (distinct from long-press
+            // drag and two-finger scroll/zoom).
+            if (pinch.mode === null && Date.now() - pinch.t < 400) {
+              click(pane.cursor || fracAt(pinch.mx, pinch.my), 'right'); flash();
+            }
+            pinch = null; clampPan(); applyTransform();
+          }
           downAt = 0; return;
         }
         if (!downAt) return;
         const dur = Date.now() - downAt; downAt = 0;
         if (e.pointerType === 'mouse' || document.activeElement === wkey) wkey.focus();
         if (e.pointerType === 'mouse') {
-          if (moved && path && path.length > 1) sendWin('window_input', { id: pane.w.id, kind: 'drag', path: path.map(p => [p.fx, p.fy]) });
-          else if (dur <= 600) click(frac(e));
+          if (mouseBtn === 2) click(frac(e), 'right');                  // right button → context click
+          else if (mouseBtn === 0 && moved && path && path.length > 1) sendWin('window_input', { id: pane.w.id, kind: 'drag', path: path.map(p => [p.fx, p.fy]) });
+          else if (mouseBtn === 0 && dur <= 600) click(frac(e));
           path = null;
           return;
         }

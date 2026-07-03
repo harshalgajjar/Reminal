@@ -67,11 +67,13 @@ type windowBackend interface {
 	// focus raises the window to the front so captures aren't occluded and
 	// injected input lands on it.
 	focus(w winInfo) error
-	// clickN injects a left click at (fx, fy) — fractions in 0..1 from the
-	// window's top-left — with the given click-state (1=single, 2=double,
-	// 3=triple). The Agent counts rapid clicks and passes the count so apps
-	// see native single/double/triple-clicks.
-	clickN(w winInfo, fx, fy float64, count int) error
+	// clickN injects a click at (fx, fy) — fractions in 0..1 from the window's
+	// top-left — with the given click-state (1=single, 2=double, 3=triple) and
+	// button (right=true for the secondary/context button). The viewer reports
+	// the click count so apps see native single/double/triple-clicks regardless
+	// of network jitter; count falls back to the Agent's own rapid-click timer
+	// for older viewers that don't send it.
+	clickN(w winInfo, fx, fy float64, count int, right bool) error
 	// drag presses at pts[0], drags through the intermediate points, and
 	// releases at the last — a real click-drag (text selection, sliders,
 	// dragging files). Points are (fx, fy) fractions in 0..1.
@@ -222,6 +224,8 @@ func (a *Agent) handleWindowInput(encData string) {
 		Path    [][2]float64 `json:"path"`
 		Text    string       `json:"text"`
 		Special string       `json:"special"`
+		Button  string       `json:"button"` // "right" for the secondary button; else left
+		Count   int          `json:"count"`  // viewer-reported click count (1/2/3); 0 = unset
 	}
 	if json.Unmarshal(plaintext, &ev) != nil {
 		return
@@ -236,11 +240,17 @@ func (a *Agent) handleWindowInput(encData string) {
 	}
 	switch ev.Kind {
 	case "click":
-		// Raise the specific window so the click lands on it, then post a
-		// click whose click-state reflects how many rapid clicks landed here —
-		// giving native single/double/triple-click behaviour.
+		// Raise the specific window so the click lands on it, then post a click
+		// whose click-state gives native single/double/triple-click behaviour.
+		// Prefer the viewer's count (it times taps at the source, immune to
+		// network jitter); fall back to the Agent's own rapid-click timer for
+		// older viewers that don't report it. button:"right" → context click.
+		count := ev.Count
+		if count < 1 {
+			count = a.clickCount(w, ev.X, ev.Y)
+		}
 		_ = b.focus(w)
-		_ = b.clickN(w, ev.X, ev.Y, a.clickCount(w, ev.X, ev.Y))
+		_ = b.clickN(w, ev.X, ev.Y, count, ev.Button == "right")
 	case "drag":
 		_ = b.focus(w)
 		_ = b.drag(w, ev.Path)
@@ -754,7 +764,7 @@ func (stubWindows) permissionHint() string                                   { r
 func (s stubWindows) list() ([]winInfo, error)                               { return nil, nil }
 func (s stubWindows) capture(winInfo) ([]byte, error)                        { return nil, nil }
 func (s stubWindows) focus(winInfo) error                                    { return nil }
-func (s stubWindows) clickN(winInfo, float64, float64, int) error            { return nil }
+func (s stubWindows) clickN(winInfo, float64, float64, int, bool) error      { return nil }
 func (s stubWindows) drag(winInfo, [][2]float64) error                       { return nil }
 func (stubWindows) scroll(winInfo, float64, float64, float64, float64) error { return nil }
 func (s stubWindows) exists(string) bool                                     { return true }
