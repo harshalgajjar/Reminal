@@ -26,19 +26,34 @@ func Start() (stop func()) {
 	if os.Getenv("REMINAL_NO_KEEP_AWAKE") == "1" {
 		return noop
 	}
-	cmd := command()
-	if cmd == nil {
-		return noop
+	var stops []func()
+	if cmd := command(); cmd != nil {
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "  reminal: keep-awake disabled (%v)\n", err)
+		} else {
+			stops = append(stops, func() {
+				if cmd.Process != nil {
+					_ = cmd.Process.Kill()
+				}
+				_ = cmd.Wait()
+			})
+		}
 	}
-	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "  reminal: keep-awake disabled (%v)\n", err)
+	// Opt-in (REMINAL_STAY_UNLOCKED=1): keep the DISPLAY awake for the WHOLE
+	// session, not just while a window is actively mirrored — so the host can't
+	// idle-lock BEFORE you connect. A locked Mac drops synthetic input, so
+	// otherwise you leave reminal up, walk away, and find remote window control
+	// dead. Costs a lit screen; can't beat a closed lid (clamshell sleep).
+	if os.Getenv("REMINAL_STAY_UNLOCKED") == "1" {
+		stops = append(stops, StartDisplay())
+	}
+	if len(stops) == 0 {
 		return noop
 	}
 	return func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+		for _, s := range stops {
+			s()
 		}
-		_ = cmd.Wait()
 	}
 }
 
