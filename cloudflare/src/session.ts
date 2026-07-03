@@ -29,6 +29,20 @@ export class SessionRoom {
 
   constructor(state: DurableObjectState) {
     this.state = state;
+    // Answer app-level keepalive pings in the runtime itself. Without this,
+    // every `{"type":"ping"}` wakes the hibernated DO and counts as a billable
+    // request; auto-response replies with the canned pong without ever invoking
+    // webSocketMessage, so pings cost nothing and the DO stays asleep. The
+    // request string must byte-match what clients send: the browser sends
+    // JSON.stringify({type:'ping'}) and the Go client marshals
+    // protocol.Message{Type:"ping"} (all other fields omitempty) — both are
+    // exactly {"type":"ping"}.
+    this.state.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair(
+        JSON.stringify({ type: "ping" }),
+        JSON.stringify({ type: "pong" }),
+      ),
+    );
   }
 
   async fetch(request: Request): Promise<Response> {

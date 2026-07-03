@@ -3330,6 +3330,27 @@
       suppressPaneSave = false;
     }
 
+    // Pause window streaming while this tab is backgrounded. A hidden tab can't
+    // show frames, so continuing to stream them only burns relay requests (every
+    // frame and its ack is a billed Durable Object request). Ask the agent to
+    // stop each open pane's stream when we're hidden and restart when we return;
+    // the last frame stays painted, so panes look frozen — not blank — meanwhile.
+    // Panes aren't closed, so the layout and inputs are untouched.
+    let winStreamsPaused = false;
+    function pauseWinStreams() {
+      if (winStreamsPaused || !panes.size) return;
+      winStreamsPaused = true;
+      for (const id of panes.keys()) sendWin('window_ctl', { action: 'stop', id });
+    }
+    function resumeWinStreams() {
+      if (!winStreamsPaused) return;
+      winStreamsPaused = false;
+      for (const id of panes.keys()) sendWin('window_ctl', { action: 'start', id });
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) pauseWinStreams(); else resumeWinStreams();
+    });
+
     // ---- Remember open panes per session ------------------------------------
     // Reconnecting (e.g. via the Recent dropdown) reopens the windows you had
     // up. Keyed by session id; matched back to live windows by id first, then

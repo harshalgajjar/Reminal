@@ -34,6 +34,14 @@ export class RendezvousRoom {
 
   constructor(state: DurableObjectState) {
     this.state = state;
+    // Auto-answer keepalive pings in the runtime so they don't wake the
+    // hibernated DO or count as billable requests (see SessionRoom).
+    this.state.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair(
+        JSON.stringify({ type: "ping" }),
+        JSON.stringify({ type: "pong" }),
+      ),
+    );
   }
 
   async fetch(request: Request): Promise<Response> {

@@ -4,9 +4,12 @@
 package client
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"os"
 	"os/exec"
 	"runtime"
@@ -395,6 +398,92 @@ const ackWaitTimeout = 800 * time.Millisecond
 // still bounded — it can't accumulate past this many frames on a slow link.
 const maxFramesInFlight = 2
 
+// streamAckIdleTimeout stops a stream whose viewer was acking frames but then
+// went silent this long. An unclean viewer drop (phone asleep, network lost,
+// laptop closed) sends no WebSocket close, so the relay can be slow to tell the
+// agent count==0 — meanwhile we'd keep capturing and sending frames to a viewer
+// that isn't there, burning relay requests with nobody watching. A live viewer
+// acks at least the keepalive frame every winKeepalive, so this is comfortably
+// above that; a returning viewer re-sends window_ctl start. Only armed once the
+// viewer has acked at least once, so a hypothetical non-acking client is never
+// cut off.
+const streamAckIdleTimeout = 12 * time.Second
+
+// Change-detection knobs. A captured frame is reduced to a winSigN×winSigN
+// grayscale grid (box-averaged, so localized noise averages out); if no cell
+// moved by winSigThreshold or more since the last SENT frame, the window is
+// treated as unchanged and the frame is skipped — sparing the relay a frame
+// message and its ack (each is a billed Durable Object request). The threshold
+// is deliberately conservative: a real update (a typed character, a scroll, a
+// cursor move) shifts at least one cell well past it, so we only ever skip
+// visually identical frames and never drop a real change. winKeepalive forces a
+// resend of an otherwise-static window periodically so a viewer that attaches
+// late (or missed a frame) still repaints.
+const (
+	winSigN         = 32
+	winSigThreshold = 12
+	winKeepalive    = 3 * time.Second
+)
+
+// frameSignature reduces a JPEG frame to a coarse grayscale grid by
+// box-averaging. It reads the luma (Y) plane directly for JPEG's native YCbCr,
+// avoiding a per-pixel RGBA conversion. ok is false when the frame can't be
+// decoded, in which case the caller treats the frame as changed (always sends).
+func frameSignature(jpegBytes []byte) (sig [winSigN * winSigN]byte, ok bool) {
+	img, err := jpeg.Decode(bytes.NewReader(jpegBytes))
+	if err != nil {
+		return sig, false
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w == 0 || h == 0 {
+		return sig, false
+	}
+	var sum [winSigN * winSigN]uint64
+	var cnt [winSigN * winSigN]uint32
+	if yc, isYCbCr := img.(*image.YCbCr); isYCbCr {
+		for y := 0; y < h; y++ {
+			cy := y * winSigN / h
+			for x := 0; x < w; x++ {
+				idx := cy*winSigN + x*winSigN/w
+				sum[idx] += uint64(yc.Y[yc.YOffset(b.Min.X+x, b.Min.Y+y)])
+				cnt[idx]++
+			}
+		}
+	} else {
+		for y := 0; y < h; y++ {
+			cy := y * winSigN / h
+			for x := 0; x < w; x++ {
+				r, g, bl, _ := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
+				gray := (r*299 + g*587 + bl*114) / 1000 >> 8
+				idx := cy*winSigN + x*winSigN/w
+				sum[idx] += uint64(gray)
+				cnt[idx]++
+			}
+		}
+	}
+	for i := range sig {
+		if cnt[i] > 0 {
+			sig[i] = byte(sum[i] / uint64(cnt[i]))
+		}
+	}
+	return sig, true
+}
+
+// sigDiffers reports whether any grid cell changed by at least winSigThreshold.
+func sigDiffers(a, b [winSigN * winSigN]byte) bool {
+	for i := range a {
+		d := int(a[i]) - int(b[i])
+		if d < 0 {
+			d = -d
+		}
+		if d >= winSigThreshold {
+			return true
+		}
+	}
+	return false
+}
+
 // streamWindow captures w and broadcasts each JPEG frame to viewers until stop
 // is closed or the connection goes away. It is ack-paced: after sending a frame
 // it waits for the viewer to acknowledge rendering it before capturing the next,
@@ -415,6 +504,11 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 	}()
 	var seq, acked uint64 // last frame sent, and highest the viewer confirmed
 	var fails int         // consecutive capture failures while the window exists
+	var lastSig [winSigN * winSigN]byte
+	var haveSig bool
+	var lastSent time.Time // when we last actually sent a frame (for keepalive)
+	var lastAck time.Time  // when the viewer last genuinely acked a frame
+	var gotAnyAck bool     // has this viewer ever acked (arms the idle stop)?
 	for {
 		conn := a.liveConn()
 		if conn == nil {
@@ -429,7 +523,14 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 				if s > acked {
 					acked = s
 				}
+				lastAck, gotAnyAck = time.Now(), true
 			case <-time.After(ackWaitTimeout):
+				// A viewer that was acking has gone silent — it vanished without
+				// a clean close and the relay hasn't reported count==0 yet. Stop
+				// rather than stream to nobody (see streamAckIdleTimeout).
+				if gotAnyAck && time.Since(lastAck) > streamAckIdleTimeout {
+					return
+				}
 				acked = seq // assume delivered; keep the stream moving
 			case <-stop:
 				return
@@ -439,15 +540,24 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 		img, err := b.capture(w)
 		if err == nil && len(img) > 0 {
 			fails = 0
-			seq++
-			frame := struct {
-				ID  string `json:"id"`
-				W   int    `json:"w"`
-				H   int    `json:"h"`
-				Seq uint64 `json:"seq"`
-				Img string `json:"img"` // base64 JPEG
-			}{ID: w.ID, W: w.W, H: w.H, Seq: seq, Img: base64.StdEncoding.EncodeToString(img)}
-			a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
+			// Skip frames that are visually identical to the last one we sent
+			// (an idle window), so we don't spend a relay request + ack on a
+			// picture the viewer already has. Always send when we can't compare
+			// (first frame or undecodable) or when the keepalive window lapsed.
+			sig, ok := frameSignature(img)
+			if !ok || !haveSig || sigDiffers(lastSig, sig) || time.Since(lastSent) >= winKeepalive {
+				seq++
+				frame := struct {
+					ID  string `json:"id"`
+					W   int    `json:"w"`
+					H   int    `json:"h"`
+					Seq uint64 `json:"seq"`
+					Img string `json:"img"` // base64 JPEG
+				}{ID: w.ID, W: w.W, H: w.H, Seq: seq, Img: base64.StdEncoding.EncodeToString(img)}
+				a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
+				lastSig, haveSig = sig, ok
+				lastSent = time.Now()
+			}
 		} else if !b.exists(w.ID) {
 			// Capture failed and the window is gone from the full list — it was
 			// closed on the host. Tell the viewer to drop its pane, then stop.
