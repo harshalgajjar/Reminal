@@ -104,14 +104,29 @@ func (darwinWindows) list() ([]winInfo, error) {
 const winMaxWidth = 1100
 
 func (darwinWindows) capture(w winInfo) ([]byte, error) {
+	// -l<id>: capture exactly this window (even if occluded), -o: no drop shadow.
+	return screencaptureJPEG("-o", "-l"+w.ID)
+}
+
+func (darwinWindows) captureRegion(x, y, w, h int) ([]byte, error) {
+	// -R<x,y,w,h>: capture this screen rectangle, so a context menu drawn over
+	// the window (its own OS window) lands in the same frame. No -o: that's a
+	// window-shadow flag and doesn't apply to a rect.
+	return screencaptureJPEG(fmt.Sprintf("-R%d,%d,%d,%d", x, y, w, h))
+}
+
+// screencaptureJPEG runs `screencapture -x -t jpg <target...> raw`, then
+// downscales + recompresses it under the relay's frame cap. target is the
+// window/region selector (-l<id> or -R<rect>) plus any extra flags.
+func screencaptureJPEG(target ...string) ([]byte, error) {
 	raw, err := tmpImage("jpg")
 	if err != nil {
 		return nil, err
 	}
 	defer os.Remove(raw)
-	// -l<id>: capture exactly this window (even if occluded), -o: no drop
-	// shadow, -x: silent.
-	if _, err := run("screencapture", "-x", "-o", "-t", "jpg", "-l"+w.ID, raw); err != nil {
+	args := append([]string{"-x", "-t", "jpg"}, target...)
+	args = append(args, raw)
+	if _, err := run("screencapture", args...); err != nil {
 		return nil, err
 	}
 	small, err := tmpImage("jpg")
@@ -487,6 +502,19 @@ func (linuxWindows) capture(w winInfo) ([]byte, error) {
 	box := strconv.Itoa(winMaxWidth) + "x" + strconv.Itoa(winMaxWidth) + ">"
 	args = append(args, "-resize", box, "-quality", "55", "jpg:-")
 	return runRaw("import", args...)
+}
+
+func (linuxWindows) captureRegion(x, y, w, h int) ([]byte, error) {
+	if !have("import") {
+		return nil, fmt.Errorf("install imagemagick (provides `import`) to capture windows")
+	}
+	// Grab a rectangle of the root window, so an override-redirect menu popup
+	// drawn over the target is composited into the same frame. Downscale to match
+	// capture()'s framing.
+	box := strconv.Itoa(winMaxWidth) + "x" + strconv.Itoa(winMaxWidth) + ">"
+	return runRaw("import", "-window", "root",
+		"-crop", fmt.Sprintf("%dx%d+%d+%d", w, h, x, y), "+repage",
+		"-resize", box, "-quality", "55", "jpg:-")
 }
 
 func (linuxWindows) focus(w winInfo) error {

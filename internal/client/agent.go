@@ -192,6 +192,13 @@ type Agent struct {
 	// are delivered on, so streamWindow can pace to the viewer (see streamWindow).
 	// Guarded by winMu.
 	winAck map[string]chan uint64
+	// winMenu marks a window whose right-click just opened a context menu. macOS
+	// draws menus as SEPARATE windows, so a capture-by-window-id misses them; for
+	// a short interval after a right-click we instead capture that window's screen
+	// REGION (bounds snapshotted at the click), which composites the overlaid menu
+	// into the frame. Cleared on the next click (menu dismissed / item chosen) or
+	// on timeout. Guarded by winMu. See streamWindow / handleWindowInput.
+	winMenu map[string]winMenuState
 	// winAwake holds a display-sleep inhibitor (caffeinate -d) while ANY window
 	// is being mirrored, so the host can't idle-lock — a locked Mac drops
 	// synthetic input, making remote window control silently dead. Held from the

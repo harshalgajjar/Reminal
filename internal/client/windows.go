@@ -55,6 +55,13 @@ type winInfo struct {
 	CropT int `json:"-"`
 }
 
+// winMenuState snapshots a window's screen bounds at the moment a right-click
+// opened a context menu, plus when to stop region-capturing. See Agent.winMenu.
+type winMenuState struct {
+	x, y, w, h int
+	until      time.Time
+}
+
 // windowBackend abstracts the OS-specific bits of window mirroring. macOS is
 // implemented today (osascript + screencapture); Linux/X11 has a best-effort
 // implementation via wmctrl + xdotool + ImageMagick. Wayland and Windows can
@@ -64,6 +71,11 @@ type windowBackend interface {
 	list() ([]winInfo, error)
 	// capture returns a JPEG of the given window's current pixels.
 	capture(w winInfo) ([]byte, error)
+	// captureRegion returns a JPEG of a raw screen rectangle (top-left origin,
+	// screen points). Unlike capture (one window by id), it grabs whatever is
+	// on screen there — used briefly after a right-click so the context menu,
+	// which the OS draws as a separate window overlapping this one, is included.
+	captureRegion(x, y, w, h int) ([]byte, error)
 	// focus raises the window to the front so captures aren't occluded and
 	// injected input lands on it.
 	focus(w winInfo) error
@@ -249,8 +261,23 @@ func (a *Agent) handleWindowInput(encData string) {
 		if count < 1 {
 			count = a.clickCount(w, ev.X, ev.Y)
 		}
+		right := ev.Button == "right"
 		_ = b.focus(w)
-		_ = b.clickN(w, ev.X, ev.Y, count, ev.Button == "right")
+		_ = b.clickN(w, ev.X, ev.Y, count, right)
+		// A right-click opens a context menu, which macOS draws as its own window
+		// (missed by capture-by-id). Snapshot this window's bounds and region-
+		// capture it briefly so the menu shows; a left click dismisses the menu, so
+		// clear the flag then and revert to the sharper per-window capture.
+		a.winMu.Lock()
+		if a.winMenu == nil {
+			a.winMenu = map[string]winMenuState{}
+		}
+		if right {
+			a.winMenu[w.ID] = winMenuState{x: w.X, y: w.Y, w: w.W, h: w.H, until: time.Now().Add(winMenuHold)}
+		} else {
+			delete(a.winMenu, w.ID)
+		}
+		a.winMu.Unlock()
 	case "drag":
 		_ = b.focus(w)
 		_ = b.drag(w, ev.Path)
@@ -475,6 +502,10 @@ const (
 	winSigThreshold = 12
 	winHeartbeat    = 3 * time.Second
 	winProbeFrame   = 1 * time.Second
+	// winMenuHold is how long after a right-click we region-capture a window so
+	// its context menu shows. Long enough to read/aim at a menu; a left click
+	// (dismiss or item-select) ends it sooner. See Agent.winMenu.
+	winMenuHold = 8 * time.Second
 )
 
 // frameSignature reduces a JPEG frame to a coarse grayscale grid by
@@ -589,7 +620,24 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 			}
 		}
 		start := time.Now()
-		img, err := b.capture(w)
+		// While a right-click's context menu is up, capture the window's screen
+		// region so the menu (a separate OS window overlapping this one) is in the
+		// frame. The region matches the window's bounds, so frame size and click
+		// mapping are unchanged; an expired entry falls back to per-window capture.
+		a.winMu.Lock()
+		menu, menuActive := a.winMenu[w.ID]
+		if menuActive && time.Now().After(menu.until) {
+			delete(a.winMenu, w.ID)
+			menuActive = false
+		}
+		a.winMu.Unlock()
+		var img []byte
+		var err error
+		if menuActive {
+			img, err = b.captureRegion(menu.x, menu.y, menu.w, menu.h)
+		} else {
+			img, err = b.capture(w)
+		}
 		if err == nil && len(img) > 0 {
 			fails = 0
 			// An unchanged window sends NO frame at all (0 fps) — only a tiny
@@ -763,6 +811,7 @@ func (s stubWindows) unsupported() string {
 func (stubWindows) permissionHint() string                                   { return "" }
 func (s stubWindows) list() ([]winInfo, error)                               { return nil, nil }
 func (s stubWindows) capture(winInfo) ([]byte, error)                        { return nil, nil }
+func (s stubWindows) captureRegion(int, int, int, int) ([]byte, error)       { return nil, nil }
 func (s stubWindows) focus(winInfo) error                                    { return nil }
 func (s stubWindows) clickN(winInfo, float64, float64, int, bool) error      { return nil }
 func (s stubWindows) drag(winInfo, [][2]float64) error                       { return nil }
