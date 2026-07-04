@@ -156,7 +156,7 @@
     /* Once connected, the session/PIN inputs are dead weight — collapse
        them to reclaim screen real estate (a big deal on phones). The
        Connect button stays visible (it doubles as Disconnect when live). */
-    body.connected #session-form input { display: none; }
+    body.connected #session-form input:not(.apps-search) { display: none; }
     /* Share button only makes sense after a successful connect. */
     #share-btn { display: none; }
     body.connected #share-btn { display: inline-flex; }
@@ -175,8 +175,8 @@
     #recents > summary:hover, #windows > summary:hover,
     #recents[open] > summary, #windows[open] > summary,
     #connect-btn:hover, #share-btn:hover { background: #21262d; }
-    #recents > summary svg, #windows > summary svg { width: 16px; height: 16px; opacity: 0.95; }
-    #recents > summary .caret, #windows > summary .caret { display: none; }
+    #recents > summary svg, #windows > summary svg, #apps > summary svg { width: 16px; height: 16px; opacity: 0.95; }
+    #recents > summary .caret, #windows > summary .caret, #apps > summary .caret { display: none; }
     #connect-btn::before, #share-btn::before {
       content: ''; width: 16px; height: 16px; background: center / contain no-repeat;
     }
@@ -369,8 +369,8 @@
       user-select: none;
     }
     /* Icon over the small label in the header dropdown buttons. */
-    #recents > summary svg, #windows > summary svg { width: 16px; height: 16px; opacity: 0.95; flex: none; }
-    #recents > summary .caret, #windows > summary .caret { display: none; }
+    #recents > summary svg, #windows > summary svg, #apps > summary svg { width: 16px; height: 16px; opacity: 0.95; flex: none; }
+    #recents > summary .caret, #windows > summary .caret, #apps > summary .caret { display: none; }
     #recents > summary::-webkit-details-marker { display: none; }
     #recents > summary:hover { background: #21262d; }
     #recents[open] > summary { background: #21262d; }
@@ -439,9 +439,9 @@
     /* Windows dropdown reuses the recents panel/row styles; only its summary
        and visibility differ. Hidden until a session is live (nothing to list
        without an agent), then shown next to Recent. */
-    #windows { position: relative; display: none; }
-    body.connected #windows { display: inline-block; }
-    #windows > summary {
+    #windows, #apps { position: relative; display: none; }
+    body.connected #windows, body.connected #apps { display: inline-block; }
+    #windows > summary, #apps > summary {
       list-style: none;
       cursor: pointer;
       display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
@@ -453,9 +453,9 @@
       font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em;
       user-select: none;
     }
-    #windows > summary::-webkit-details-marker { display: none; }
-    #windows > summary:hover { background: #21262d; }
-    #windows[open] > summary { background: #21262d; }
+    #windows > summary::-webkit-details-marker, #apps > summary::-webkit-details-marker { display: none; }
+    #windows > summary:hover, #apps > summary:hover { background: #21262d; }
+    #windows[open] > summary, #apps[open] > summary { background: #21262d; }
 
     /* Header sits above the floating window panes (which live at z 31–49) but
        below the full-screen modals (#preview/#share at z 100). position:relative
@@ -580,6 +580,14 @@
       background: rgba(187, 128, 9, 0.15); border: 1px solid rgba(187, 128, 9, 0.5); color: #e3b341;
     }
     .windows-note { padding: 12px; color: #8b949e; font-size: 12px; line-height: 1.5; }
+    /* Search box atop the Apps launcher (the app list can be long). */
+    .apps-search {
+      width: calc(100% - 12px); margin: 6px; padding: 7px 9px; box-sizing: border-box;
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      color: #e6edf3; font-size: 12.5px; outline: none;
+    }
+    .apps-search:focus { border-color: #388bfd; }
+    .apps-rows { max-height: 46vh; overflow-y: auto; }
   </style>
 </head>
 <body>
@@ -593,6 +601,10 @@
       <details id="windows" title="View & control a window on the host">
         <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>Windows<span class="caret">▾</span></summary>
         <div class="recents-list" id="windows-list"></div>
+      </details>
+      <details id="apps" title="Launch an app on the host">
+        <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>Apps<span class="caret">▾</span></summary>
+        <div class="recents-list" id="apps-list"></div>
       </details>
       <input id="session-input" placeholder="Session" maxlength="8" autocomplete="off" spellcheck="false">
       <input id="pin-input" placeholder="PIN" maxlength="8" inputmode="numeric" autocomplete="off" spellcheck="false">
@@ -1926,6 +1938,15 @@
           } catch (_) {}
           break;
         }
+        case 'app_list': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            onAppList(payload);
+          } catch (_) {}
+          break;
+        }
         case 'window_frame': {
           if (!cryptoKey) break;
           try {
@@ -3216,6 +3237,11 @@
     let winHint = '';            // capability warning (e.g. Screen Recording off)
     const winDetails = document.getElementById('windows');
     const winListRoot = document.getElementById('windows-list');
+    const appsDetails = document.getElementById('apps');
+    const appsListRoot = document.getElementById('apps-list');
+    let appList = [];            // installed apps, from app_list
+    let pendingLaunch = null;    // { before:Set<id>, appName, until } — auto-open the window a launch creates
+    let winListWaiters = [];     // resolvers awaiting the next window_list reply (for a fresh baseline)
     const wkey = document.getElementById('wkey');
     const panes = new Map();     // window id -> { el, img, w, lastUrl }
     let focusedPaneId = null;
@@ -3286,6 +3312,13 @@
         pendingRestore = false;
         if (panes.size === 0) restoreSavedPanes(winList);
       }
+      // Resolve anyone awaiting a fresh window list (app-launch baseline), then
+      // see if a just-launched app's window has appeared.
+      if (winListWaiters.length) {
+        const waiters = winListWaiters; winListWaiters = [];
+        waiters.forEach(fn => fn(winList));
+      }
+      checkLaunch();
     }
 
     function escapeHtml(s) {
@@ -3327,6 +3360,115 @@
         });
         winListRoot.appendChild(row);
       }
+    }
+
+    // ---- Apps launcher: list installed apps, launch one on the host ----------
+    function requestApps() {
+      if (appList.length) renderApps();
+      else appsListRoot.innerHTML = '<div class="windows-note">Loading apps…</div>';
+      sendWin('app_list');
+    }
+
+    function onAppList(payload) {
+      if (payload.unsupported) {
+        appList = [];
+        appsListRoot.innerHTML = '<div class="windows-note">' + escapeHtml(payload.unsupported) + '</div>';
+        return;
+      }
+      if (payload.error) {
+        appList = [];
+        appsListRoot.innerHTML = '<div class="windows-note">Couldn\'t list apps: ' + escapeHtml(payload.error) + '</div>';
+        return;
+      }
+      appList = payload.apps || [];
+      renderApps();
+    }
+
+    function renderApps() {
+      appsListRoot.innerHTML = '';
+      if (appList.length === 0) {
+        const n = document.createElement('div'); n.className = 'windows-note';
+        n.textContent = 'No apps found.';
+        appsListRoot.appendChild(n);
+        return;
+      }
+      // The app list can be long, so filter it with a search box.
+      const search = document.createElement('input');
+      search.className = 'apps-search';
+      search.placeholder = 'Search apps…';
+      search.autocomplete = 'off'; search.spellcheck = false;
+      const rows = document.createElement('div');
+      rows.className = 'apps-rows';
+      appsListRoot.appendChild(search);
+      appsListRoot.appendChild(rows);
+      const draw = () => {
+        rows.innerHTML = '';
+        const f = search.value.trim().toLowerCase();
+        const items = f ? appList.filter(a => (a.name || '').toLowerCase().includes(f)) : appList;
+        for (const a of items) {
+          const row = document.createElement('div');
+          row.className = 'recents-row';
+          row.title = 'Launch on the host';
+          const label = document.createElement('div'); label.className = 'label';
+          const nameEl = document.createElement('div'); nameEl.className = 'name';
+          nameEl.textContent = a.name || 'App';
+          label.appendChild(nameEl);
+          row.appendChild(label);
+          row.addEventListener('click', () => launchApp(a));
+          rows.appendChild(row);
+        }
+      };
+      search.addEventListener('input', draw);
+      draw();
+      setTimeout(() => search.focus(), 0);
+    }
+
+    // nextWindowList resolves with the window list from the next window_list
+    // reply — used to snapshot a fresh baseline right before launching an app.
+    function nextWindowList() {
+      return new Promise(resolve => { winListWaiters.push(resolve); sendWin('window_list'); });
+    }
+
+    // launchApp opens an app on the host and auto-mirrors the window it creates.
+    // Robustness: we snapshot the set of open window IDs BEFORE launching, then
+    // watch for a window whose ID wasn't there before. We never match on app
+    // name or title — so a second window of a same-named app (the classic
+    // "click went to the wrong Chrome window") can't be mis-picked; only a
+    // genuinely new window ID is ever opened.
+    async function launchApp(a) {
+      appsDetails.open = false;
+      const base = await nextWindowList();               // accurate pre-launch baseline
+      pendingLaunch = {
+        before: new Set(base.map(w => w.id)),
+        appName: (a.name || '').toLowerCase(),
+        until: Date.now() + 9000,                        // give slow/cold apps time to draw a window
+      };
+      sendWin('app_open', { id: a.id });
+      pollLaunch();
+    }
+
+    function pollLaunch() {
+      if (!pendingLaunch) return;
+      if (Date.now() > pendingLaunch.until) { pendingLaunch = null; return; }
+      sendWin('window_list');                            // reply → onWindowList → checkLaunch
+      setTimeout(pollLaunch, 800);
+    }
+
+    // checkLaunch runs on every window list while a launch is pending: if a new
+    // window ID has appeared, open it. The ID diff alone guarantees the window
+    // is genuinely new; app name is only a tiebreaker on the rare occasion that
+    // several windows appear at once, and never picks a pre-existing window.
+    function checkLaunch() {
+      if (!pendingLaunch) return;
+      const fresh = winList.filter(w => !pendingLaunch.before.has(w.id));
+      if (!fresh.length) return;
+      const name = pendingLaunch.appName;
+      const pick = fresh.find(w => {
+        const app = (w.app || '').toLowerCase();
+        return app && name && (app.includes(name) || name.includes(app));
+      }) || fresh[0];
+      pendingLaunch = null;
+      if (!panes.has(pick.id)) openWinView(pick);
     }
 
     // ---- Windowed panes: host windows as draggable floating windows ----------
@@ -3996,6 +4138,10 @@
     // Fetch a fresh window list each time the dropdown is opened.
     winDetails.addEventListener('toggle', () => {
       if (winDetails.open) requestWindows();
+    });
+    // Fetch the installed-app list each time the Apps launcher is opened.
+    appsDetails.addEventListener('toggle', () => {
+      if (appsDetails.open) requestApps();
     });
 
     // If the QR code provided both session and PIN, just connect.

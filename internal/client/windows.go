@@ -116,6 +116,20 @@ type windowBackend interface {
 	// off), or "" when capture should work. Surfaced to the viewer so a blank
 	// pane comes with an explanation and a fix instead of a silent freeze.
 	permissionHint() string
+	// listApps enumerates launchable installed applications, so the viewer can
+	// offer an app launcher (open an app, then mirror its window).
+	listApps() ([]appInfo, error)
+	// openApp launches (or foregrounds) the app with the given id — a .app path
+	// on macOS, a .desktop file path on Linux — bringing up its window.
+	openApp(id string) error
+}
+
+// appInfo describes one launchable installed application. ID is an opaque,
+// backend-defined handle the viewer echoes back in app_open (a bundle path on
+// macOS, a .desktop file path on Linux); Name is the display label.
+type appInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // newWindowBackend picks the backend for the current OS. Unknown platforms get
@@ -195,6 +209,45 @@ func (a *Agent) handleWindowList(conn *websocket.Conn) {
 		payload.Hint = b.permissionHint() // e.g. Screen Recording is off
 	}
 	a.sendWindowMsg(conn, protocol.TypeWindowList, payload)
+}
+
+// handleAppList enumerates launchable installed apps and sends the encrypted
+// list back in reply to an app_list request, so the viewer can offer a launcher.
+func (a *Agent) handleAppList(conn *websocket.Conn) {
+	b := a.windows()
+	var payload struct {
+		Apps        []appInfo `json:"apps"`
+		Unsupported string    `json:"unsupported,omitempty"`
+		Error       string    `json:"error,omitempty"`
+	}
+	if reason := b.unsupported(); reason != "" {
+		payload.Unsupported = reason
+	} else if apps, err := b.listApps(); err != nil {
+		payload.Error = err.Error()
+	} else {
+		payload.Apps = apps
+	}
+	a.sendWindowMsg(conn, protocol.TypeAppList, payload)
+}
+
+// handleAppOpen launches (or foregrounds) the app the viewer picked; its window
+// then shows up on the next window_list. Best-effort — a bad id just no-ops.
+func (a *Agent) handleAppOpen(encData string) {
+	plaintext, err := a.box.Decrypt(encData)
+	if err != nil {
+		return
+	}
+	var ev struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(plaintext, &ev) != nil || ev.ID == "" {
+		return
+	}
+	b := a.windows()
+	if b.unsupported() != "" {
+		return
+	}
+	_ = b.openApp(ev.ID)
 }
 
 // handleWindowCtl starts or stops streaming a window in response to a
@@ -820,6 +873,8 @@ func (s stubWindows) exists(string) bool                                     { r
 func (s stubWindows) releaseInput() error                                    { return nil }
 func (s stubWindows) typeText(winInfo, string) error                         { return nil }
 func (s stubWindows) key(winInfo, string) error                              { return nil }
+func (s stubWindows) listApps() ([]appInfo, error)                           { return nil, nil }
+func (s stubWindows) openApp(string) error                                   { return nil }
 
 // tmpImage writes captured bytes to a temp file path with the given extension
 // so tools that only emit to a file (screencapture) can be read back.

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -141,6 +143,60 @@ func screencaptureJPEG(target ...string) ([]byte, error) {
 		return os.ReadFile(raw)
 	}
 	return os.ReadFile(small)
+}
+
+func (darwinWindows) listApps() ([]appInfo, error) {
+	// Scan the standard app folders, plus one level into subfolders (some apps
+	// live in e.g. /Applications/Adobe.../Foo.app). ID is the bundle path — an
+	// unambiguous handle for `open`; Name is the display label. Dedupe by name.
+	dirs := []string{"/Applications", "/System/Applications", "/System/Applications/Utilities"}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "Applications"))
+	}
+	seen := map[string]bool{}
+	var apps []appInfo
+	add := func(dir, name string) {
+		if !strings.HasSuffix(name, ".app") {
+			return
+		}
+		disp := strings.TrimSuffix(name, ".app")
+		if seen[disp] {
+			return
+		}
+		seen[disp] = true
+		apps = append(apps, appInfo{ID: filepath.Join(dir, name), Name: disp})
+	}
+	for _, d := range dirs {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".app") {
+				add(d, e.Name())
+			} else if e.IsDir() {
+				// One level deep — catches vendor-subfoldered apps without a slow
+				// full-disk walk.
+				sub := filepath.Join(d, e.Name())
+				if subEntries, err := os.ReadDir(sub); err == nil {
+					for _, se := range subEntries {
+						add(sub, se.Name())
+					}
+				}
+			}
+		}
+	}
+	sort.Slice(apps, func(i, j int) bool {
+		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
+	})
+	return apps, nil
+}
+
+func (darwinWindows) openApp(id string) error {
+	// `open <bundle path>` launches the app, or foregrounds it (and opens a
+	// window if it has none) when already running.
+	_, err := run("open", id)
+	return err
 }
 
 func (darwinWindows) focus(w winInfo) error {
@@ -520,6 +576,136 @@ func (linuxWindows) captureRegion(x, y, w, h int) ([]byte, error) {
 func (linuxWindows) focus(w winInfo) error {
 	_, err := run("wmctrl", "-i", "-a", w.ID)
 	return err
+}
+
+func (linuxWindows) listApps() ([]appInfo, error) {
+	// Freedesktop .desktop entries across the standard data dirs (incl. flatpak
+	// and snap). ID is the .desktop path; Name is its display label. Skip
+	// NoDisplay/Hidden and non-Application entries. Dedupe by desktop-file name
+	// so a user override shadows the system copy.
+	dirs := []string{
+		"/usr/share/applications", "/usr/local/share/applications",
+		"/var/lib/flatpak/exports/share/applications",
+		"/var/lib/snapd/desktop/applications",
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs,
+			filepath.Join(home, ".local/share/applications"),
+			filepath.Join(home, ".local/share/flatpak/exports/share/applications"))
+	}
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		dirs = append(dirs, filepath.Join(xdg, "applications"))
+	}
+	seen := map[string]bool{}
+	var apps []appInfo
+	for _, d := range dirs {
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".desktop") || seen[e.Name()] {
+				continue
+			}
+			path := filepath.Join(d, e.Name())
+			de := parseDesktopEntry(path)
+			if t := de["Type"]; t != "" && t != "Application" {
+				continue
+			}
+			if strings.EqualFold(de["NoDisplay"], "true") || strings.EqualFold(de["Hidden"], "true") {
+				continue
+			}
+			name := de["Name"]
+			if name == "" {
+				continue
+			}
+			seen[e.Name()] = true
+			apps = append(apps, appInfo{ID: path, Name: name})
+		}
+	}
+	sort.Slice(apps, func(i, j int) bool {
+		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
+	})
+	return apps, nil
+}
+
+func (linuxWindows) openApp(id string) error {
+	// Prefer gtk-launch (honours the .desktop's StartupNotify, Terminal, etc.);
+	// fall back to running the entry's Exec line detached. Either way we don't
+	// wait on the GUI app, which would block the winOps worker for its lifetime.
+	if have("gtk-launch") {
+		base := strings.TrimSuffix(filepath.Base(id), ".desktop")
+		if err := launchDetached("gtk-launch", base); err == nil {
+			return nil
+		}
+	}
+	args := desktopExecArgs(parseDesktopEntry(id)["Exec"])
+	if len(args) == 0 {
+		return fmt.Errorf("no launchable Exec in %s", id)
+	}
+	return launchDetached(args[0], args[1:]...)
+}
+
+// parseDesktopEntry reads the [Desktop Entry] group of a freedesktop .desktop
+// file into a key→value map (first value wins; localized keys like Name[de] are
+// skipped so the default Name is used).
+func parseDesktopEntry(path string) map[string]string {
+	m := map[string]string{}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return m
+	}
+	inEntry := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") {
+			inEntry = line == "[Desktop Entry]"
+			continue
+		}
+		if !inEntry || line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		if strings.ContainsRune(key, '[') { // localized variant, e.g. Name[de]
+			continue
+		}
+		if _, ok := m[key]; !ok {
+			m[key] = strings.TrimSpace(line[eq+1:])
+		}
+	}
+	return m
+}
+
+// desktopExecArgs turns a .desktop Exec line into argv, dropping the field
+// codes (%f %F %u %U %i %c %k …) since we launch with no document argument.
+func desktopExecArgs(execLine string) []string {
+	if execLine == "" {
+		return nil
+	}
+	var out []string
+	for _, f := range strings.Fields(execLine) {
+		if len(f) == 2 && f[0] == '%' { // %u, %F, etc.
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// launchDetached starts a GUI program without waiting for it (a GUI app runs
+// for as long as the user keeps it open; waiting would pin the winOps worker).
+// A background reap avoids leaving a zombie when it eventually exits.
+func launchDetached(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 func (linuxWindows) clickN(w winInfo, fx, fy float64, count int, right bool) error {

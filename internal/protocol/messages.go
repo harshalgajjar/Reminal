@@ -135,6 +135,14 @@ const (
 	// actually consume.
 	TypeWindowAck MessageType = "window_ack"
 
+	// TypeAppList is bidirectional. Viewer→agent: an empty-Data request ("what
+	// apps can I launch?"). Agent→viewer: the reply, Data = encrypted JSON
+	// {"apps":[{"id","name"}, ...]} of installed apps, or {"unsupported":"..."}.
+	TypeAppList MessageType = "app_list"
+	// TypeAppOpen is viewer→agent. Data = encrypted JSON {"id":"<app id>"} —
+	// launch (or foreground) that app so its window shows up in the window list.
+	TypeAppOpen MessageType = "app_open"
+
 	// ---- WebRTC signaling (peer-to-peer frame transport) ----
 	// Window frames are high-volume; when a viewer and agent can open a
 	// WebRTC DataChannel, frames (and their acks) flow directly peer-to-peer

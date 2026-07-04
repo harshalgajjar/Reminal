@@ -1839,6 +1839,11 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// directly rather than via the serialized winOps queue so a pending
 			// capture/input op can't delay the ack that unblocks the next frame.
 			a.handleWindowAck(msg.Data)
+		case protocol.TypeAppList:
+			a.enqueueWinOp(func() { a.handleAppList(conn) })
+		case protocol.TypeAppOpen:
+			d := msg.Data
+			a.enqueueWinOp(func() { a.handleAppOpen(d) })
 		case protocol.TypeWebRTCHello:
 			// A viewer wants a peer-to-peer frame channel; reply with an offer.
 			// Off the read loop: minting Cloudflare TURN creds is a network call
