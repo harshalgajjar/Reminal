@@ -15,6 +15,10 @@ Run `reminal`, scan a QR code, you're in.
 [![Encryption](https://img.shields.io/badge/encryption-AES--256--GCM-success)](#security)
 [![Relay](https://img.shields.io/badge/relay-Cloudflare%20free%20tier-F38020?logo=cloudflare&logoColor=white)](cloudflare/README.md)
 
+<br>
+
+<img src="docs/demo.gif" alt="reminal demo — run reminal, then a phone (via QR) and another terminal (via reminal connect) join the same live shell; a cd and ls update on every screen at once" width="900">
+
 </div>
 
 ---
