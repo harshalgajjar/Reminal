@@ -49,16 +49,28 @@ const (
 )
 
 type Agent struct {
-	sessionID  string
-	pin        string
-	pinHash    string
-	webURL     string
-	shell      string
-	version    string // running binary's version, shown in banner + exit summary
-	box        *crypto.Box
-	sessionKey []byte // 32-byte AES key wrapped per-viewer via EKE; see crypto/kex.go
-	buf        *scrollback
-	term       *pty.Session
+	sessionID string
+	pin       string
+	// pinHash is the legacy bcrypt(PIN) credential. Still generated (and carried
+	// across hot-restart) so we can prove control of a pre-existing session while
+	// migrating it, but it is only sent to the relay when sendPinHash is set.
+	pinHash string
+	// token is the high-entropy reattach credential (Level B). It replaces
+	// pinHash so the relay never holds any PIN-derived, offline-crackable value.
+	// Always sent on auth for new-format sessions.
+	token string
+	// sendPinHash is true only while migrating a legacy (pin_hash-registered)
+	// session: the agent presents pinHash once alongside its new token to prove
+	// control, then clears this so later reconnects are token-only and the
+	// bcrypt value stops crossing the wire.
+	sendPinHash bool
+	webURL      string
+	shell       string
+	version     string // running binary's version, shown in banner + exit summary
+	box         *crypto.Box
+	sessionKey  []byte // 32-byte AES key wrapped per-viewer via EKE; see crypto/kex.go
+	buf         *scrollback
+	term        *pty.Session
 
 	// screen is a headless terminal emulator fed the same plaintext output
 	// that goes to viewers. On a fresh attach we serialize its current state
@@ -74,6 +86,16 @@ type Agent struct {
 	scrollbackBytes int // byte cap on a snapshot's history (0 = no cap)
 
 	writeMu sync.Mutex // serializes WS writes; safe across sender/reader goroutines
+
+	// kex throttle. Each kex_init we answer is exactly one online PIN guess
+	// (the viewer-side blinding means a forged handshake can test only one
+	// candidate — see crypto/kex.go), so a token bucket here bounds an active
+	// relay's brute-force of the 6-digit PIN. This replaces the relay's old
+	// 5-strike lockout, which we removed because the relay no longer sees the
+	// PIN at all (it can't, without becoming able to MITM the EKE).
+	kexMu     sync.Mutex
+	kexTokens float64
+	kexLast   time.Time
 
 	// localActive gates whether pumpPTY echoes shell output to the host's
 	// stdout. Set when Run() puts the local terminal into raw-attached mode
@@ -210,7 +232,7 @@ type Agent struct {
 	// socket. Guarded by stayMu.
 	stayMu    sync.Mutex
 	stayAwake func()
-	winOps chan func()
+	winOps    chan func()
 	// Click-counting state for native double/triple-click detection. Touched
 	// only by the single winOps worker goroutine, so it needs no lock.
 	winClickN      int
@@ -298,10 +320,26 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Reattach credential. If the previous image carried a token forward,
+		// this session is already on the new (token) scheme — reuse it and never
+		// send pin_hash. If it didn't (we were hot-restarted BY an older binary
+		// that predates tokens), this is a legacy pin_hash session: mint a token
+		// now and flag a one-time pin_hash send so the relay can migrate us.
+		token := r.Token
+		migrate := false
+		if token == "" {
+			token, err = session.NewToken()
+			if err != nil {
+				return nil, err
+			}
+			migrate = true
+		}
 		return &Agent{
 			sessionID:      r.SessionID,
 			pin:            r.PIN,
 			pinHash:        r.PinHash,
+			token:          token,
+			sendPinHash:    migrate,
 			webURL:         config.WebURL(),
 			shell:          config.Shell(),
 			version:        version,
@@ -338,11 +376,19 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Brand-new session: token-native from the first connect, so no PIN-derived
+	// value ever reaches the relay. pinHash is kept in memory only (for a
+	// possible future migration / legacy-relay fallback) and never sent.
+	token, err := session.NewToken()
+	if err != nil {
+		return nil, err
+	}
 
 	return &Agent{
 		sessionID:      id,
 		pin:            pin,
 		pinHash:        pinHash,
+		token:          token,
 		webURL:         config.WebURL(),
 		shell:          config.Shell(),
 		version:        version,
@@ -1723,10 +1769,14 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) error {
 }
 
 func (a *Agent) authenticate(conn *websocket.Conn) error {
-	if err := a.writeMsg(conn, protocol.Message{
-		Type:    protocol.TypeAuth,
-		PinHash: a.pinHash,
-	}); err != nil {
+	// Always prove control with the high-entropy token. Only a legacy session
+	// mid-migration also sends pin_hash (once) so the relay can match its old
+	// credential before switching us to token-only.
+	auth := protocol.Message{Type: protocol.TypeAuth, Token: a.token}
+	if a.sendPinHash {
+		auth.PinHash = a.pinHash
+	}
+	if err := a.writeMsg(conn, auth); err != nil {
 		return err
 	}
 
@@ -1745,6 +1795,9 @@ func (a *Agent) authenticate(conn *websocket.Conn) error {
 	if msg.Type != protocol.TypeAuthOK {
 		return fmt.Errorf("unexpected auth response: %s", msg.Type)
 	}
+	// Migration succeeded — the relay now holds our token. Stop sending pin_hash
+	// so it stops crossing the wire on subsequent reconnects.
+	a.sendPinHash = false
 	return nil
 }
 
@@ -2007,7 +2060,43 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 // bad encoding): a malicious or buggy peer can't probe us for
 // distinguishable error replies, and a legitimate viewer that
 // gets no kex_resp will time out and reconnect via the normal path.
+// kexBurst is how many kex handshakes we answer back-to-back before the
+// throttle bites — comfortably covers several viewers connecting at once plus
+// a legit user fat-fingering the PIN a few times.
+const kexBurst = 8
+
+// kexRefill is how long it takes to earn back one kex token. At steady state
+// an attacker gets ~6 guesses/min, so the 10^6 PIN space takes ~115 days of
+// continuous, conspicuous handshake spam — while a real viewer reconnecting
+// occasionally never notices.
+const kexRefill = 10 * time.Second
+
+// allowKex reports whether we should answer another kex_init right now,
+// draining one token from the bucket if so. A refused attempt is dropped
+// silently (the viewer just sees a handshake timeout and can retry later).
+func (a *Agent) allowKex(now time.Time) bool {
+	a.kexMu.Lock()
+	defer a.kexMu.Unlock()
+	if a.kexLast.IsZero() {
+		a.kexTokens = kexBurst
+	} else {
+		a.kexTokens += now.Sub(a.kexLast).Seconds() / kexRefill.Seconds()
+		if a.kexTokens > kexBurst {
+			a.kexTokens = kexBurst
+		}
+	}
+	a.kexLast = now
+	if a.kexTokens < 1 {
+		return false
+	}
+	a.kexTokens--
+	return true
+}
+
 func (a *Agent) handleKexInit(conn *websocket.Conn, exIDHex, dataB64 string) {
+	if !a.allowKex(time.Now()) {
+		return
+	}
 	exID, err := crypto.ParseExID(exIDHex)
 	if err != nil {
 		return

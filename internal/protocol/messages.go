@@ -176,11 +176,16 @@ type Message struct {
 	Data      string      `json:"data,omitempty"`
 	Pin       string      `json:"pin,omitempty"`
 	PinHash   string      `json:"pin_hash,omitempty"`
-	Cols      uint16      `json:"cols,omitempty"`
-	Rows      uint16      `json:"rows,omitempty"`
-	Error     string      `json:"error,omitempty"`
-	Seq       uint64      `json:"seq,omitempty"`
-	FromSeq   uint64      `json:"from_seq,omitempty"`
+	// Token is the agent's high-entropy reattach credential (Level B). It
+	// replaces pin_hash so the relay never holds any PIN-derived, offline-
+	// crackable value. A new agent sends this on register; on a legacy session
+	// it also sends pin_hash once to prove control while migrating to token.
+	Token   string `json:"token,omitempty"`
+	Cols    uint16 `json:"cols,omitempty"`
+	Rows    uint16 `json:"rows,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Seq     uint64 `json:"seq,omitempty"`
+	FromSeq uint64 `json:"from_seq,omitempty"`
 	// Count carries the live viewer count when the relay sends a presence
 	// event (TypeConnected / TypeClosed) to the agent, so the host can
 	// show "(N active)" without tracking churn itself.

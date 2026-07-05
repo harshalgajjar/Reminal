@@ -470,7 +470,12 @@ func (v *Viewer) negotiateSessionKey(conn *websocket.Conn) error {
 }
 
 func (v *Viewer) authenticate(conn *websocket.Conn) error {
-	if err := v.writeMsg(conn, protocol.Message{Type: protocol.TypeAuth, Pin: v.pin}); err != nil {
+	// The PIN is deliberately NOT sent to the relay — it authenticates
+	// end-to-end via the EKE (negotiateSessionKey), so an untrusted relay never
+	// sees it and can't MITM the handshake. The relay auths a viewer on the
+	// session being live; a wrong PIN fails the EKE unwrap, which
+	// negotiateSessionKey surfaces as a fatal "PIN mismatch".
+	if err := v.writeMsg(conn, protocol.Message{Type: protocol.TypeAuth}); err != nil {
 		return err
 	}
 
