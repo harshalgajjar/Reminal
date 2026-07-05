@@ -1951,6 +1951,7 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 	sending := false
 
 	for {
+		freshAttach := false
 		if !sending {
 			select {
 			case <-stop:
@@ -1958,16 +1959,19 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			case c := <-cursorCh:
 				cursor = c
 				sending = true
+				freshAttach = true // a resume — a viewer just (re)attached
 			}
 		}
 
-		// Fresh attach (or a viewer that fell behind past what we still
-		// buffer): instead of replaying the whole raw output history — which
-		// the viewer's terminal re-executes mutation-by-mutation, the
-		// "fast-forward replay" — send one snapshot that paints the current
-		// screen + scrollback directly. Tagged with the latest seq so
-		// up-to-date viewers drop it and only the new joiner applies it.
-		if a.screen != nil && cursor <= a.buf.OldestSeq() {
+		// On any fresh (re)attach — every resume — paint the current screen with
+		// one snapshot instead of replaying the raw output history mutation-by-
+		// mutation. Crucially this also covers a viewer that is already CAUGHT UP
+		// reconnecting to an IDLE session: its cursor is past everything we still
+		// buffer, so the raw replay below is empty — without an unconditional
+		// snapshot it would sit blank until the next keystroke produced output.
+		// Tagged with the latest seq so an up-to-date viewer drops it via seq
+		// dedup and only a behind/blank joiner repaints.
+		if freshAttach && a.screen != nil {
 			if frame, latest := a.snapshotFrame(); frame != "" {
 				if err := a.writeMsg(conn, protocol.Message{
 					Type: protocol.TypeData,

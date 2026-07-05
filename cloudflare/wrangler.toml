@@ -24,3 +24,10 @@ new_sqlite_classes = ["RendezvousRoom"]
 [assets]
 directory = "./public"
 binding = "ASSETS"
+
+[vars]
+# Version below which reminal clients FORCE an upgrade (served at /version). Set
+# to the fixed version when shipping a security/critical release, then `wrangler
+# deploy` — clients pick it up on their next ≤24h check and upgrade automatically
+# (no `--force`). Leave "" for normal (prompt-only) releases.
+CRITICAL_MIN = ""
