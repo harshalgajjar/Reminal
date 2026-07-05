@@ -62,7 +62,11 @@ const (
 	// re-derived one — bcrypt is non-deterministic (random salt per
 	// call), and the relay compares the agent-reported pin_hash for
 	// strict equality against the value it captured at first connect.
-	envResumePinHash   = "REMINAL_RESUME_PIN_HASH"
+	envResumePinHash = "REMINAL_RESUME_PIN_HASH"
+	// envResumeToken carries the high-entropy reattach token (Level B) across
+	// the exec. Absent when we were restarted by an older binary that predates
+	// tokens — the new image treats that as a legacy session and migrates it.
+	envResumeToken     = "REMINAL_RESUME_TOKEN"
 	envResumeStartedAt = "REMINAL_RESUME_STARTED_AT"
 	// envResumePTYFD holds the fd number of the inherited PTY master.
 	// We pass the actual fd (whatever Go assigned it — e.g. 7) instead
@@ -79,6 +83,7 @@ type ResumeState struct {
 	SessionID string
 	PIN       string
 	PinHash   string
+	Token     string
 	StartedAt time.Time
 	PTY       *pty.Session
 }
@@ -95,6 +100,7 @@ func LoadResumeState() (*ResumeState, error) {
 	id := os.Getenv(envResumeSessionID)
 	pin := os.Getenv(envResumePIN)
 	pinHash := os.Getenv(envResumePinHash)
+	token := os.Getenv(envResumeToken) // may be empty (restarted by a pre-token binary)
 	if id == "" || pin == "" || pinHash == "" {
 		return nil, errors.New("resume requested but session id / pin / pin_hash missing")
 	}
@@ -120,6 +126,7 @@ func LoadResumeState() (*ResumeState, error) {
 	_ = os.Unsetenv(envResumeSessionID)
 	_ = os.Unsetenv(envResumePIN)
 	_ = os.Unsetenv(envResumePinHash)
+	_ = os.Unsetenv(envResumeToken)
 	_ = os.Unsetenv(envResumePTYFD)
 	_ = os.Unsetenv(envResumeStartedAt)
 
@@ -127,6 +134,7 @@ func LoadResumeState() (*ResumeState, error) {
 		SessionID: id,
 		PIN:       pin,
 		PinHash:   pinHash,
+		Token:     token,
 		StartedAt: startedAt,
 		PTY:       pty.Attach(ptyFile),
 	}, nil
@@ -191,6 +199,7 @@ func (a *Agent) executeRestart() error {
 		envResumeSessionID+"="+a.sessionID,
 		envResumePIN+"="+a.pin,
 		envResumePinHash+"="+a.pinHash,
+		envResumeToken+"="+a.token,
 		envResumePTYFD+"="+strconv.Itoa(ptyFD),
 		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
 	)

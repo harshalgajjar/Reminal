@@ -1760,7 +1760,11 @@
         // before their echo lands). Refined by real echo timings as soon
         // as the user starts typing.
         if (lastDialMs > 0 && observedRTT <= 0) observedRTT = lastDialMs;
-        ws.send(JSON.stringify({ type: 'auth', pin: pinValue }));
+        // NB: the PIN is deliberately NOT sent to the relay — it authenticates
+        // end-to-end via the EKE (sendKexInit), so an untrusted relay never sees
+        // it and can't MITM the handshake. The relay auths a viewer on the
+        // session being live; a wrong PIN fails the EKE unwrap ("PIN mismatch").
+        ws.send(JSON.stringify({ type: 'auth' }));
         // Heartbeat. Cloudflare Workers keeps the WS alive on its end,
         // but mobile carriers / NAT timeouts / VPN tunnels can silently
         // drop an idle socket without surfacing close to either side

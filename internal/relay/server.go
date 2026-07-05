@@ -13,7 +13,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
 )
 
 // orphanTTL is how long a room is kept alive after the agent disconnects,
@@ -27,9 +26,9 @@ var upgrader = websocket.Upgrader{
 }
 
 type peer struct {
-	conn   *websocket.Conn
-	role   protocol.Role
-	authed bool
+	conn    *websocket.Conn
+	role    protocol.Role
+	authed  bool
 	writeMu sync.Mutex
 }
 
@@ -206,38 +205,61 @@ func (r *room) peerByConn(role protocol.Role, conn *websocket.Conn) *peer {
 }
 
 func (s *Server) handleAuthLocked(r *room, role protocol.Role, msg protocol.Message) string {
-	if r.auth.isLocked() {
-		return "too many failed attempts — try again in a few minutes"
-	}
-
 	switch role {
 	case protocol.RoleAgent:
-		if msg.PinHash == "" {
-			return "pin_hash required"
+		// The agent proves control of the session with a high-entropy reattach
+		// *token* (preferred) and/or a legacy bcrypt *pin_hash*. The relay never
+		// checks either against the PIN — they're opaque secrets it only matches
+		// against what the session's original agent registered, so a stranger
+		// can't hijack a session whose agent WS briefly dropped. Accept-either
+		// keeps old agents (pin_hash only) working while new agents move to
+		// token-only; a legacy session migrates the first time its upgraded
+		// agent presents pin_hash (to prove control) alongside a fresh token.
+		if msg.Token == "" && msg.PinHash == "" {
+			return "agent credential required"
 		}
-		// If the room was previously authenticated, the reattaching agent
-		// must present the same pin_hash. This keeps a stranger from
-		// hijacking the session even if the original agent's WS drops.
-		if r.auth.pinHash != "" && r.auth.pinHash != msg.PinHash {
-			return "session credentials mismatch"
+		switch {
+		case r.auth.token != "":
+			// Already migrated to a token — nothing else authenticates.
+			if msg.Token != r.auth.token {
+				return "session credentials mismatch"
+			}
+		case r.auth.pinHash != "":
+			// Legacy session: require the same pin_hash. If the agent also
+			// brought a token, migrate to token-only and drop the pin_hash so
+			// the offline-crackable value stops living at the relay.
+			if msg.PinHash != r.auth.pinHash {
+				return "session credentials mismatch"
+			}
+			if msg.Token != "" {
+				r.auth.token = msg.Token
+				r.auth.pinHash = ""
+			}
+		default:
+			// Brand-new session: register whatever proves control, preferring
+			// the token so no PIN-derived value is ever stored.
+			if msg.Token != "" {
+				r.auth.token = msg.Token
+			} else {
+				r.auth.pinHash = msg.PinHash
+			}
 		}
-		r.auth.pinHash = msg.PinHash
 		r.auth.agentAuthed = true
-		r.auth.resetFailures()
 		return ""
 
 	case protocol.RoleViewer:
-		if msg.Pin == "" {
-			return "pin required"
-		}
-		if !r.auth.agentAuthed || r.auth.pinHash == "" {
+		// The relay does NOT authenticate the viewer's PIN. A 6-digit PIN it
+		// could verify would be offline-brute-forceable, and — worse — knowing
+		// the PIN lets a malicious relay unblind both ephemeral keys and MITM the
+		// EKE (learning the shared session key). Viewer PIN auth is done END-TO-END
+		// by the EKE instead: a wrong PIN fails the AES-GCM session-key unwrap,
+		// which both viewers surface as "PIN mismatch". We only gate on the
+		// session being live. A `pin` field from an older viewer is ignored (still
+		// accepted, for backward compatibility). Brute-force is bounded by the
+		// agent-side kex throttle, since each guess needs an online EKE round-trip.
+		if !r.auth.agentAuthed {
 			return "session not ready"
 		}
-		if !session.CheckPIN(r.auth.pinHash, msg.Pin) {
-			r.auth.recordFailure()
-			return "incorrect PIN"
-		}
-		r.auth.resetFailures()
 		return ""
 	}
 

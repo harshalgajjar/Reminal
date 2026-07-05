@@ -229,7 +229,7 @@ export class SessionRoom {
   private async handleAuth(
     ws: WebSocket,
     attachment: Attachment,
-    msg: { type?: string; pin?: string; pin_hash?: string },
+    msg: { type?: string; pin?: string; pin_hash?: string; token?: string },
   ): Promise<string | null> {
     if (msg.type !== "auth") {
       return "authentication required";
@@ -241,14 +241,45 @@ export class SessionRoom {
     }
 
     if (attachment.role === "agent" || attachment.role === "tunnel") {
-      if (!msg.pin_hash) {
-        return "pin_hash required";
+      // Accept-either: the agent proves control with a high-entropy reattach
+      // *token* (preferred) and/or a legacy bcrypt *pin_hash*. The relay never
+      // checks either against the PIN — they're opaque secrets matched only
+      // against what the session's original agent registered. This keeps old
+      // agents (pin_hash only) working while new agents move to token-only; a
+      // legacy session migrates the first time its upgraded agent presents
+      // pin_hash (to prove control) alongside a fresh token.
+      const token = msg.token ?? "";
+      const pinHash = msg.pin_hash ?? "";
+      if (!token && !pinHash) {
+        return "agent credential required";
       }
+      const storedToken = (await this.state.storage.get<string>("token")) ?? "";
       const storedPinHash = (await this.state.storage.get<string>("pinHash")) ?? "";
-      if (storedPinHash && storedPinHash !== msg.pin_hash) {
-        return "session credentials mismatch";
+      if (storedToken) {
+        // Already migrated to a token — nothing else authenticates.
+        if (token !== storedToken) {
+          return "session credentials mismatch";
+        }
+      } else if (storedPinHash) {
+        // Legacy session: require the same pin_hash. If the agent also brought a
+        // token, migrate to token-only and drop the offline-crackable pin_hash.
+        if (pinHash !== storedPinHash) {
+          return "session credentials mismatch";
+        }
+        if (token) {
+          await this.state.storage.put("token", token);
+          await this.state.storage.delete("pinHash");
+        }
+      } else {
+        // Brand-new session: register whatever proves control, preferring the
+        // token so no PIN-derived value is ever stored.
+        if (token) {
+          await this.state.storage.put("token", token);
+        } else {
+          await this.state.storage.put("pinHash", pinHash);
+        }
       }
-      // PIN matches → this is the legitimate agent (or tunnel)
+      // Credential matches → this is the legitimate agent (or tunnel)
       // reclaiming the session. Evict any prior socket of the same
       // role: it's a stale WS that the DO hasn't yet noticed is dead
       // (the close handler races slower than the genuine reconnect
@@ -264,7 +295,6 @@ export class SessionRoom {
           prior.close(4000, "superseded");
         } catch { /* already closing — best-effort */ }
       }
-      await this.state.storage.put("pinHash", msg.pin_hash);
       if (attachment.role === "agent") {
         await this.state.storage.put("agentAuthed", true);
       }
@@ -283,17 +313,15 @@ export class SessionRoom {
       return null;
     }
 
-    // viewer
-    if (!msg.pin) return "pin required";
-    const pinHash = (await this.state.storage.get<string>("pinHash")) ?? "";
-    if (!pinHash) return "session not ready";
-    const { compare } = await import("bcryptjs");
-    if (!(await compare(msg.pin, pinHash))) {
-      await this.recordFailure();
-      return "incorrect PIN";
-    }
+    // viewer — the relay does NOT verify the PIN. A 6-digit PIN it could check
+    // is offline-brute-forceable, and knowing it would let a malicious relay
+    // unblind both ephemeral keys and MITM the EKE. Viewer PIN auth is done
+    // END-TO-END by the EKE (a wrong PIN fails the AES-GCM unwrap, surfaced as
+    // "PIN mismatch"). Gate only on the session being live; a `pin` from an
+    // older viewer is ignored (still accepted, for backward compatibility).
+    const agentAuthed = (await this.state.storage.get<boolean>("agentAuthed")) ?? false;
+    if (!agentAuthed) return "session not ready";
     await this.state.storage.put("viewerAuthed", true);
-    await this.resetFailures();
     ws.serializeAttachment({ role: "viewer", authed: true } satisfies Attachment);
     ws.send(JSON.stringify({ type: "auth_ok" }));
 
