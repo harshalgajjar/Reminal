@@ -559,6 +559,11 @@ const (
 	// its context menu shows. Long enough to read/aim at a menu; a left click
 	// (dismiss or item-select) ends it sooner. See Agent.winMenu.
 	winMenuHold = 8 * time.Second
+	// winLiveCheck is how often, while a mirrored window's picture is static, we
+	// re-verify it's still open (see streamWindow). Bounds how long a closed
+	// window can sit frozen before its pane is dropped, without spending an
+	// existence check on every idle frame.
+	winLiveCheck = 1200 * time.Millisecond
 )
 
 // frameSignature reduces a JPEG frame to a coarse grayscale grid by
@@ -645,6 +650,7 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 	var lastSent time.Time // when we last sent a frame OR heartbeat (paces both)
 	var lastAck time.Time  // when the viewer last genuinely acked a frame
 	var gotAnyAck bool     // has this viewer ever acked (arms the idle stop)?
+	lastLiveCheck := time.Now() // last time we verified a static window still exists
 	for {
 		conn := a.liveConn()
 		if conn == nil {
@@ -700,6 +706,22 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 			// we can't compare against).
 			sig, ok := frameSignature(img)
 			changed := !ok || !haveSig || sigDiffers(lastSig, sig)
+			// A closed window keeps capturing its LAST frame for a while (macOS
+			// retains the backing store) instead of erroring, so a static picture
+			// alone can't tell "idle" from "gone" — the closed-check below only
+			// fires on a capture failure that may never come. While nothing is
+			// changing, periodically confirm the window is still listed (the same
+			// on-screen list the picker uses); if it isn't, it was closed/minimized
+			// — drop the pane instead of freezing on the last frame forever.
+			if changed {
+				lastLiveCheck = time.Now()
+			} else if time.Since(lastLiveCheck) >= winLiveCheck {
+				lastLiveCheck = time.Now()
+				if !b.exists(w.ID) {
+					a.sendWindowClosed(conn, w.ID)
+					return
+				}
+			}
 			confirmed, probing := a.rtcSinks()
 			// Send a real frame when the picture changed, OR periodically while a
 			// channel is open-but-unconfirmed so a static window can still prove
@@ -762,12 +784,9 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 				lastSent = time.Now()
 			}
 		} else if !b.exists(w.ID) {
-			// Capture failed and the window is gone from the full list — it was
-			// closed on the host. Tell the viewer to drop its pane, then stop.
-			a.sendWindowMsg(conn, protocol.TypeWindowFrame, struct {
-				ID     string `json:"id"`
-				Closed bool   `json:"closed"`
-			}{ID: w.ID, Closed: true})
+			// Capture failed and the window is gone from the list — it was closed
+			// on the host. Tell the viewer to drop its pane, then stop.
+			a.sendWindowClosed(conn, w.ID)
 			return
 		} else {
 			// The window's still there but we're getting no pixels. Rather than
@@ -825,6 +844,15 @@ func (a *Agent) sendWindowMsg(conn *websocket.Conn, t protocol.MessageType, payl
 		return
 	}
 	_ = a.writeMsg(conn, protocol.Message{Type: t, Data: enc})
+}
+
+// sendWindowClosed tells the viewer a mirrored window is gone so it drops the
+// pane (handled as a window_frame with closed=true — same channel as frames).
+func (a *Agent) sendWindowClosed(conn *websocket.Conn, id string) {
+	a.sendWindowMsg(conn, protocol.TypeWindowFrame, struct {
+		ID     string `json:"id"`
+		Closed bool   `json:"closed"`
+	}{ID: id, Closed: true})
 }
 
 // ---- helpers shared by backends --------------------------------------------

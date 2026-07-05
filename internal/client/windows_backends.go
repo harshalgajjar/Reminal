@@ -377,11 +377,15 @@ func (darwinWindows) key(w winInfo, name string) error {
 }
 
 func (darwinWindows) exists(id string) bool {
-	// Check the FULL window list (all Spaces, minimized included) so we only
-	// report "gone" when the window is truly closed. id is a CGWindowNumber we
-	// produced, so atoi is safe and keeps it out of the script as a bare int.
+	// Check the SAME on-screen list the picker (list) uses, so a pane's lifetime
+	// tracks the picker exactly: closed and minimized windows leave this list
+	// immediately, whereas kCGWindowListOptionAll retains a closed window's
+	// (still-capturable) backing store for a while — which froze panes open
+	// forever. Occluded/covered windows stay on-screen, so they're unaffected.
+	// id is a CGWindowNumber we produced, so atoi is safe and keeps it out of the
+	// script as a bare int.
 	script := fmt.Sprintf(`ObjC.import("CoreGraphics");ObjC.import("Foundation");
-var a=ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionAll,$.kCGNullWindowID));
+var a=ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly,$.kCGNullWindowID));
 var t=%d,found=false;for(var i=0;i<a.count;i++){if(a.objectAtIndex(i).objectForKey("kCGWindowNumber").intValue===t){found=true;break;}}
 found?"1":"0";`, atoi(id))
 	out, err := run("osascript", "-l", "JavaScript", "-e", script)
