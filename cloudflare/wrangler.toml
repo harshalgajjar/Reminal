@@ -30,4 +30,4 @@ binding = "ASSETS"
 # to the fixed version when shipping a security/critical release, then `wrangler
 # deploy` — clients pick it up on their next ≤24h check and upgrade automatically
 # (no `--force`). Leave "" for normal (prompt-only) releases.
-CRITICAL_MIN = ""
+CRITICAL_MIN = "1.5.0"
