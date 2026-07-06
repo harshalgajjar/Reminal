@@ -1998,32 +1998,6 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 
 // runSender waits for a resume from the viewer, then streams buffered output
 // from that point. It keeps streaming new chunks as they're appended.
-// needSnapshotOnResume decides whether a (re)attaching viewer should be sent a
-// full screen+scrollback snapshot (true) or just the raw delta it missed
-// (false). cursor is the next seq we'd send it (from_seq+1, or 0 when the viewer
-// outran everything we've emitted); oldest is the oldest seq still buffered
-// (0 if the buffer is empty).
-//
-// A snapshot is warranted only when the viewer has no usable local state to
-// append the delta onto:
-//   - cursor <= 1: a fresh page / brand-new join (from_seq 0, nothing rendered
-//     yet), or the viewer outran us (cursor 0 — typically a hot-restart where
-//     our seq counter reset), so its rendered state no longer matches ours.
-//   - cursor < oldest: it fell so far behind that the delta it needs was already
-//     evicted from the buffer, so a raw replay would be incomplete.
-//
-// Otherwise it's an incremental reconnect: the viewer still has its terminal, so
-// we send only buf.From(cursor) — never the 10k-line scrollback snapshot, which
-// is what used to flood a phone that missed a little output while locked. When
-// the delta is empty (a caught-up reconnect) this returns false too, and the raw
-// replay simply sends nothing — correct, since the viewer is already current.
-func needSnapshotOnResume(cursor, oldest uint64) bool {
-	if cursor <= 1 {
-		return true
-	}
-	return oldest > 0 && cursor < oldest
-}
-
 func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-chan struct{}) error {
 	notify := a.buf.Notify()
 	var cursor uint64
@@ -2042,21 +2016,16 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			}
 		}
 
-		// On a fresh (re)attach, decide how to bring the viewer current.
-		//
-		// A viewer that still holds its terminal — any live reconnect, e.g. a
-		// phone re-waking — keeps its screen AND scrollback in the browser, so it
-		// only needs the bytes it MISSED. Those go out as the raw delta below,
-		// proportional to what actually happened while it was away. We must NOT
-		// send a snapshot here: a snapshot bakes in up to 10k lines of scrollback
-		// (see snapshotFrame), which would flood a viewer that merely missed a few
-		// lines and stall its keystrokes while xterm re-rendered the whole history.
-		//
-		// A full snapshot (screen + scrollback) is only for a viewer with no
-		// usable local state to append onto — see needSnapshotOnResume. It's
-		// tagged with the latest seq, so an up-to-date viewer drops it via seq
-		// dedup and only a behind/blank joiner repaints.
-		if freshAttach && a.screen != nil && needSnapshotOnResume(cursor, a.buf.OldestSeq()) {
+		// Fresh attach (or a viewer that fell behind past what we still buffer):
+		// send ONE snapshot that paints the current screen + scrollback directly,
+		// instead of replaying the raw output history mutation-by-mutation. For a
+		// normal reconnect that's still within the buffer (cursor > OldestSeq) we
+		// skip the snapshot and just replay the (usually small) delta it missed
+		// below. Tagged with the latest seq so up-to-date viewers drop it via seq
+		// dedup and only a behind/blank joiner repaints. (This is the pre-v1.4.2
+		// behaviour; the "snapshot on every resume" variant flooded reconnects
+		// with the whole scrollback.)
+		if freshAttach && a.screen != nil && cursor <= a.buf.OldestSeq() {
 			if frame, latest := a.snapshotFrame(); frame != "" {
 				if err := a.writeMsg(conn, protocol.Message{
 					Type: protocol.TypeData,
