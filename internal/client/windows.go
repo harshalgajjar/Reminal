@@ -641,7 +641,21 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 			delete(a.winStreams, w.ID)
 			delete(a.winAck, w.ID)
 		}
+		delete(a.winMenu, w.ID) // don't leak the right-click region-capture entry
+		// A stream that exits on its own — window closed, viewer went silent —
+		// bypasses stopWindowStream, so it must release the keep-awake inhibitor
+		// itself when it's the last one; otherwise a window closing under mirror
+		// pins the host display awake (never idle-locks) forever. Only release if
+		// we actually removed the last stream (a replaced id leaves the map non-
+		// empty, so the check below is false and the new stream keeps the hold).
+		var release func()
+		if len(a.winStreams) == 0 && a.winAwake != nil {
+			release, a.winAwake = a.winAwake, nil
+		}
 		a.winMu.Unlock()
+		if release != nil {
+			release()
+		}
 	}()
 	var seq, acked uint64 // last frame sent, and highest the viewer confirmed
 	var fails int         // consecutive capture failures while the window exists
