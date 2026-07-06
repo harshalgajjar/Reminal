@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/reminal/reminal/internal/config"
 	"golang.org/x/term"
 )
 
@@ -45,6 +46,11 @@ type cacheEntry struct {
 	CheckedAt time.Time `json:"checked_at"`
 	LatestTag string    `json:"latest_tag"`
 	AssetURL  string    `json:"asset_url"`
+	// CriticalMin is the maintainer-set version below which an upgrade is FORCED
+	// (a security/critical fix), fetched online from the relay's /version beacon
+	// so a fix can be pushed out without users doing anything. Empty = nothing
+	// forced. Cached with the rest so criticality is re-checked within cacheTTL.
+	CriticalMin string `json:"critical_min,omitempty"`
 }
 
 // (release / asset structs removed in favour of fetchLatestTag — see
@@ -59,9 +65,25 @@ func CheckAndPromptOnStart(currentVersion string) {
 		return
 	}
 
-	latestTag, assetURL, err := check(currentVersion, httpTimeoutBackground)
+	latestTag, assetURL, critical, err := check(currentVersion, httpTimeoutBackground)
 	if err != nil || latestTag == "" {
 		return
+	}
+
+	// Critical (e.g. security) update: the maintainer flagged it online via the
+	// relay's /version beacon, so we don't wait for a Y/n — install it now, even
+	// non-interactively. Users never have to run `--force`. The binary still
+	// comes from the signed GitHub release, so a bad beacon can at worst push
+	// everyone onto the latest real release.
+	if critical {
+		fmt.Fprintf(os.Stderr, "\n\x1b[1;31m⚠ Critical update %s — installing now (current v%s)\x1b[0m\n",
+			latestTag, currentVersion)
+		if err := apply(assetURL); err != nil {
+			fmt.Fprintf(os.Stderr, "Critical upgrade failed: %v — run `reminal upgrade` manually.\n", err)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "Upgraded to %s. Restart reminal to use it.\n", latestTag)
+		os.Exit(0)
 	}
 
 	if !isInteractive() {
@@ -90,7 +112,7 @@ func CheckAndPromptOnStart(currentVersion string) {
 func Upgrade(currentVersion string) error {
 	// Bypass the cache so explicit `reminal upgrade` always hits the network.
 	clearCache()
-	latestTag, assetURL, err := check(currentVersion, httpTimeoutInteractive)
+	latestTag, assetURL, _, err := check(currentVersion, httpTimeoutInteractive)
 	if err != nil {
 		return fmt.Errorf("check for updates: %w", err)
 	}
@@ -129,28 +151,67 @@ func shouldCheck(currentVersion string) bool {
 // Result is cached at ~/.reminal/version-check.json for cacheTTL. The
 // timeout caps how long the network fetch can take — short for background
 // on-start checks, long for explicit `reminal upgrade`.
-func check(currentVersion string, timeout time.Duration) (latestTag, assetURL string, err error) {
+func check(currentVersion string, timeout time.Duration) (latestTag, assetURL string, critical bool, err error) {
 	if entry, ok := readCache(); ok && time.Since(entry.CheckedAt) < cacheTTL {
-		if newer(currentVersion, entry.LatestTag) {
-			return entry.LatestTag, entry.AssetURL, nil
+		critical = entry.CriticalMin != "" && newer(currentVersion, entry.CriticalMin)
+		if critical || newer(currentVersion, entry.LatestTag) {
+			return entry.LatestTag, entry.AssetURL, critical, nil
 		}
-		return "", "", nil
+		return "", "", false, nil
 	}
 
 	tag, err := fetchLatestTag(timeout)
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	url := assetURLFor(tag, runtime.GOOS, runtime.GOARCH)
+	// Online criticality signal (best-effort — a fetch failure just means no
+	// forced upgrade this round). critical_min <= latest, so being below it
+	// implies a newer release exists to upgrade to.
+	criticalMin := fetchCriticalMin(timeout)
 
-	// Always cache the latest tag so we don't refetch within the TTL, even
-	// if no matching asset exists for this platform.
-	writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: tag, AssetURL: url})
+	// Always cache so we don't refetch within the TTL, even if no matching asset
+	// exists for this platform.
+	writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: tag, AssetURL: url, CriticalMin: criticalMin})
 
-	if url == "" || !newer(currentVersion, tag) {
-		return "", "", nil
+	critical = criticalMin != "" && newer(currentVersion, criticalMin)
+	if url == "" || (!critical && !newer(currentVersion, tag)) {
+		return "", "", false, nil
 	}
-	return tag, url, nil
+	return tag, url, critical, nil
+}
+
+// fetchCriticalMin reads the relay's /version beacon and returns its
+// critical_min ("" on any error or if unset). This is the ONLINE, maintainer-
+// controlled switch that forces an upgrade — set it to the version below which
+// clients must upgrade (e.g. after shipping a security fix). Best-effort: never
+// fails the caller, so a beacon outage can't block or force anything.
+func fetchCriticalMin(timeout time.Duration) string {
+	base := strings.TrimRight(config.WebURL(), "/")
+	if base == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", base+"/version", nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := (&http.Client{Timeout: timeout}).Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var body struct {
+		CriticalMin string `json:"critical_min"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body) != nil {
+		return ""
+	}
+	return strings.TrimSpace(body.CriticalMin)
 }
 
 // fetchLatestTag returns the latest release tag (e.g. "v0.8.3") by
