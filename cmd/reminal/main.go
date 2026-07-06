@@ -458,6 +458,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		keepawake.ReapOrphans() // clean up any inhibitors a previous (hot-restarted) incarnation leaked
 		stopKeepAwake := keepawake.Start()
 		defer stopKeepAwake()
 		if err := agent.Run(); err != nil {
@@ -502,6 +503,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	keepawake.ReapOrphans() // clean up any inhibitors a previous (hot-restarted) incarnation leaked
 	stopKeepAwake := keepawake.Start()
 	defer stopKeepAwake()
 	if err := agent.Run(); err != nil {

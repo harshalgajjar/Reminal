@@ -16,7 +16,49 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 )
+
+// ReapOrphans kills leftover caffeinate inhibitors THIS process previously
+// started — matched by `-w <our-pid>` in their args — that outlived their owner.
+// A hot-restart (`reminal restart`, via syscall.Exec) keeps the same PID but
+// never runs the stop funcs, so the old image's caffeinate children survive
+// (their `-w <pid>` still points at us) and pile up across restarts, silently
+// pinning the display awake. Call this ONCE at startup, BEFORE Start()/
+// StartDisplay() spawn fresh inhibitors — at that point every `-w <our-pid>`
+// caffeinate is a leftover from a previous incarnation, so reaping them both
+// prevents accumulation and cleans up any mess an older (leaky) build left
+// behind on the next restart. Orphans of a genuinely-exited PID already
+// self-terminate via `-w`, so we only ever match our own live PID. macOS only.
+func ReapOrphans() {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	self := strconv.Itoa(os.Getpid())
+	out, err := exec.Command("pgrep", "-x", "caffeinate").Output()
+	if err != nil {
+		return
+	}
+	for _, f := range strings.Fields(string(out)) {
+		cpid, err := strconv.Atoi(f)
+		if err != nil {
+			continue
+		}
+		args, err := exec.Command("ps", "-o", "args=", "-p", f).Output()
+		if err != nil {
+			continue
+		}
+		fields := strings.Fields(string(args))
+		for i := 0; i+1 < len(fields); i++ {
+			if fields[i] == "-w" && fields[i+1] == self {
+				if p, err := os.FindProcess(cpid); err == nil {
+					_ = p.Kill()
+				}
+				break
+			}
+		}
+	}
+}
 
 // Start launches a sleep inhibitor as a child process and returns a stop
 // function. Safe to call unconditionally; stop is always non-nil. Respects
