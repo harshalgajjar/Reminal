@@ -898,6 +898,146 @@
     term.open(document.getElementById('terminal'));
     fitAddon.fit();
 
+    // ---- Touch scrolling with momentum (mobile only) --------------------
+    // xterm.js's built-in mobile scrolling is poor: a touch-drag over text is
+    // grabbed by native text selection (so it only scrolls if you target the
+    // empty area below the last line), and there's no inertia. We take over: a
+    // vertical touch-drag anywhere scrolls, and a flick coasts with momentum.
+    // Once a drag is clearly a scroll we suppress text selection for the rest of
+    // that gesture (user-select:none + clear any nascent range), so dragging
+    // over text scrolls instead of selecting; a stationary long-press never
+    // trips the threshold, so tap-to-focus and long-press-to-select still work.
+    // Gated on a coarse pointer and driven purely by touch events, so desktop
+    // mouse/trackpad keep xterm's native wheel scrolling untouched.
+    //
+    // IMPORTANT: this xterm's .xterm-viewport.scrollTop is inert — scrollHeight
+    // always equals clientHeight, so writing scrollTop does nothing. The buffer
+    // scrolls only by whole lines via term.scrollLines() (tracked by
+    // buffer.viewportY, which is also what the jump-to-bottom button reads). So
+    // we convert finger pixels into lines using the ACTUAL rendered row height.
+    (function installTouchScroll() {
+      if (!window.matchMedia || !matchMedia('(pointer: coarse)').matches) return;
+      const root = term.element;
+      const viewport = root && root.querySelector('.xterm-viewport');
+      if (!viewport) return;
+      const screen = root.querySelector('.xterm-screen');
+
+      // Take full ownership of touch gestures across the whole xterm subtree so
+      // neither the browser's pan/zoom nor its native text selection competes
+      // with our scroller. Copy uses xterm's OWN selection model (not the native
+      // one), so disabling native selection here doesn't affect it.
+      [root, viewport, screen].forEach((el) => {
+        if (!el) return;
+        el.style.touchAction = 'none';
+        el.style.webkitUserSelect = 'none';
+        el.style.userSelect = 'none';
+        el.style.webkitTouchCallout = 'none';
+      });
+      // Force user-select:none on every descendant (text SPANs included) and
+      // cancel selection outright — otherwise iOS still tries to select on text.
+      const selBlock = document.createElement('style');
+      selBlock.textContent = '.xterm, .xterm * { -webkit-user-select: none !important; user-select: none !important; -webkit-touch-callout: none !important; }';
+      document.head.appendChild(selBlock);
+      root.addEventListener('selectstart', (e) => e.preventDefault());
+
+      const COMMIT_PX = 5;    // vertical travel before we treat a drag as scrolling
+      const MIN_FLING = 0.12; // px/ms; momentum stops once velocity drops below this
+      const FRICTION = 0.93;  // fraction of velocity kept per 16ms frame
+
+      let id = null, startX = 0, startY = 0, lastY = 0, lastT = 0, vy = 0;
+      let dragging = false, raf = 0, accPx = 0;
+      const stopMomentum = () => { if (raf) { cancelAnimationFrame(raf); raf = 0; } };
+      const wipeSel = () => {
+        const s = window.getSelection && window.getSelection();
+        if (s && s.removeAllRanges) s.removeAllRanges();
+        if (term.clearSelection) term.clearSelection();
+      };
+
+      // One rendered row's height in CSS px, measured from the DOM (≈16). This
+      // xterm's .xterm-viewport.scrollTop is inert, so we scroll by whole lines
+      // via term.scrollLines(), converting finger pixels with the real height.
+      const cellPx = () => {
+        const r = root.querySelector('.xterm-rows');
+        const fr = r && r.firstElementChild;
+        return (fr && fr.offsetHeight) || (viewport.clientHeight / term.rows) || 16;
+      };
+
+      // Accumulate finger pixels and scroll xterm in whole lines. Finger DOWN
+      // (dPx > 0) reveals older content, i.e. scrolls up. Returns false at edge.
+      function scrollByPx(dPx) {
+        accPx += dPx;
+        const ch = cellPx();
+        const lines = (accPx / ch) | 0;
+        if (!lines) return true;
+        accPx -= lines * ch;
+        const y0 = term.buffer.active.viewportY;
+        term.scrollLines(-lines);
+        return term.buffer.active.viewportY !== y0;
+      }
+
+      root.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) { id = null; dragging = false; return; }
+        stopMomentum();
+        // Cancel iOS's default text-interaction for this touch. Without this, a
+        // drag that starts on text is handed to iOS's selection after the FIRST
+        // touchmove — it then silently stops delivering moves (no touchcancel),
+        // so we can never scroll. Tap-to-focus is restored in touchend.
+        if (e.cancelable) e.preventDefault();
+        const t = e.touches[0];
+        id = t.identifier;
+        startX = t.clientX; startY = lastY = t.clientY; lastT = e.timeStamp;
+        vy = 0; accPx = 0; dragging = false;
+      }, { passive: false });
+
+      root.addEventListener('touchmove', (e) => {
+        if (id === null) return;
+        let t = null;
+        for (const x of e.touches) { if (x.identifier === id) { t = x; break; } }
+        if (!t) return;
+        if (e.cancelable) e.preventDefault();
+        if (!dragging) {
+          const dY = t.clientY - startY, dX = t.clientX - startX;
+          if (Math.abs(dY) < COMMIT_PX || Math.abs(dY) <= Math.abs(dX)) return;
+          dragging = true;
+          // NB: do NOT rebaseline lastY/lastT here — they still hold the
+          // touchstart values, so this committing move scrolls by the FULL
+          // displacement so far (a quick flick is mostly this one move) and
+          // momentum gets a real velocity.
+        }
+        const dy = t.clientY - lastY;
+        scrollByPx(dy);
+        wipeSel(); // belt-and-suspenders against any selection forming mid-drag
+        const dt = e.timeStamp - lastT;
+        if (dt > 0) vy = Math.max(-4, Math.min(4, dy / dt)); // clamp guards a degenerate dt
+        lastY = t.clientY; lastT = e.timeStamp;
+      }, { passive: false });
+
+      const end = () => {
+        if (id === null) return;
+        const flung = dragging;
+        id = null; dragging = false;
+        if (!flung || Math.abs(vy) < MIN_FLING) return;
+        let v = vy, prev = performance.now();
+        const tick = (now) => {
+          const dt = now - prev; prev = now;
+          const moved = scrollByPx(v * dt);
+          v *= Math.pow(FRICTION, dt / 16);
+          raf = (moved && Math.abs(v) > MIN_FLING) ? requestAnimationFrame(tick) : 0;
+        };
+        raf = requestAnimationFrame(tick);
+      };
+      root.addEventListener('touchend', () => {
+        const tap = (id !== null && !dragging);
+        // We suppressed the synthetic click by preventing touchstart's default,
+        // so open the keyboard ourselves on a tap (touchend is a user gesture).
+        if (tap && term.focus) term.focus();
+        end();
+      }, { passive: true });
+      root.addEventListener('touchcancel', () => {
+        id = null; dragging = false; stopMomentum();
+      }, { passive: true });
+    })();
+
     // Defang the hidden helper textarea that xterm.js routes keystrokes
     // through. Without this, Android Chrome's IME (Gboard etc.) treats
     // each shell command as an English word — autocorrect rewrites it
@@ -2731,11 +2871,13 @@
     // at the bottom; tap to jump.
     const jumpBtn = document.getElementById('jump-bottom');
     function updateJumpBtn() {
-      // term.buffer.active.viewportY is the top line of the viewport;
-      // baseY is the top of the last screen. Equal → we're at bottom.
+      // viewportY is the top line currently shown; baseY is the top of the live
+      // screen. Below baseY means we've scrolled up into history. (We can't use
+      // .xterm-viewport.scrollTop here — it's inert in this xterm; see the
+      // touch-scroll block.) term.scrollLines() keeps viewportY authoritative
+      // and fires onScroll, so this stays in sync however the user scrolled.
       const buf = term.buffer.active;
-      if (buf.viewportY < buf.baseY) jumpBtn.classList.add('visible');
-      else jumpBtn.classList.remove('visible');
+      jumpBtn.classList.toggle('visible', buf.viewportY < buf.baseY);
     }
     term.onScroll(updateJumpBtn);
     term.onLineFeed(updateJumpBtn);
