@@ -978,11 +978,9 @@
       root.addEventListener('touchstart', (e) => {
         if (e.touches.length !== 1) { id = null; dragging = false; return; }
         stopMomentum();
-        // Cancel iOS's default text-interaction for this touch. Without this, a
-        // drag that starts on text is handed to iOS's selection after the FIRST
-        // touchmove — it then silently stops delivering moves (no touchcancel),
-        // so we can never scroll. Tap-to-focus is restored in touchend.
-        if (e.cancelable) e.preventDefault();
+        // NB: we do NOT preventDefault here — that would suppress the native
+        // tap->focus that raises the soft keyboard. We only take over the touch
+        // once it becomes a clear scroll drag (see touchmove).
         const t = e.touches[0];
         id = t.identifier;
         startX = t.clientX; startY = lastY = t.clientY; lastT = e.timeStamp;
@@ -994,7 +992,6 @@
         let t = null;
         for (const x of e.touches) { if (x.identifier === id) { t = x; break; } }
         if (!t) return;
-        if (e.cancelable) e.preventDefault();
         if (!dragging) {
           const dY = t.clientY - startY, dX = t.clientX - startX;
           if (Math.abs(dY) < COMMIT_PX || Math.abs(dY) <= Math.abs(dX)) return;
@@ -1004,6 +1001,7 @@
           // displacement so far (a quick flick is mostly this one move) and
           // momentum gets a real velocity.
         }
+        if (e.cancelable) e.preventDefault(); // only now that we're actually scrolling
         const dy = t.clientY - lastY;
         scrollByPx(dy);
         wipeSel(); // belt-and-suspenders against any selection forming mid-drag
@@ -1026,12 +1024,20 @@
         };
         raf = requestAnimationFrame(tick);
       };
-      root.addEventListener('touchend', () => {
-        const tap = (id !== null && !dragging);
-        // We suppressed the synthetic click by preventing touchstart's default,
-        // so open the keyboard ourselves on a tap (touchend is a user gesture).
-        if (tap && term.focus) term.focus();
+      root.addEventListener('touchend', (e) => {
+        // A touch that barely moved is a tap — finger jitter shouldn't turn it
+        // into a drag and swallow the tap. We suppressed the native tap->focus
+        // by preventing touchstart's default, so raise the keyboard ourselves:
+        // focus the helper textarea synchronously in this user-gesture handler.
+        const ct = e.changedTouches && e.changedTouches[0];
+        const moved = (ct && id !== null) ? Math.hypot(ct.clientX - startX, ct.clientY - startY) : 999;
+        const tap = id !== null && moved < 12;
         end();
+        if (tap) {
+          const ta = root.querySelector('.xterm-helper-textarea');
+          if (ta) ta.focus();
+          else if (term.focus) term.focus();
+        }
       }, { passive: true });
       root.addEventListener('touchcancel', () => {
         id = null; dragging = false; stopMomentum();
