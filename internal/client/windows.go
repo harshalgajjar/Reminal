@@ -633,6 +633,17 @@ func sigDiffers(a, b [winSigN * winSigN]byte) bool {
 // and makes the frame rate adapt to whatever the viewer can actually consume,
 // while guaranteeing every frame sent is freshly captured. On exit it clears its
 // own map entry (unless already replaced) so the id can be re-streamed.
+//
+// wsSinkNeeded reports whether a window frame must ALSO be sent over the
+// (per-message-billed) WS relay: true whenever some viewer isn't covered by a
+// confirmed P2P DataChannel — none confirmed yet, an unknown/zero viewer count,
+// or more viewers than confirmed channels (a WS-only viewer). Only an all-P2P
+// viewer set skips WS, so P2P still keeps frames off the relay when everyone can
+// use it, while a mixed set never leaves a WS-only viewer frozen.
+func wsSinkNeeded(viewerCount, confirmed int) bool {
+	return confirmed == 0 || viewerCount <= 0 || viewerCount > confirmed
+}
+
 func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64) {
 	b := a.windows()
 	defer func() {
@@ -661,9 +672,9 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 	var fails int         // consecutive capture failures while the window exists
 	var lastSig [winSigN * winSigN]byte
 	var haveSig bool
-	var lastSent time.Time // when we last sent a frame OR heartbeat (paces both)
-	var lastAck time.Time  // when the viewer last genuinely acked a frame
-	var gotAnyAck bool     // has this viewer ever acked (arms the idle stop)?
+	var lastSent time.Time      // when we last sent a frame OR heartbeat (paces both)
+	var lastAck time.Time       // when the viewer last genuinely acked a frame
+	var gotAnyAck bool          // has this viewer ever acked (arms the idle stop)?
 	lastLiveCheck := time.Now() // last time we verified a static window still exists
 	for {
 		conn := a.liveConn()
@@ -737,6 +748,9 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 				}
 			}
 			confirmed, probing := a.rtcSinks()
+			a.viewerSizeMu.Lock()
+			vc := a.viewerCount
+			a.viewerSizeMu.Unlock()
 			// Send a real frame when the picture changed, OR periodically while a
 			// channel is open-but-unconfirmed so a static window can still prove
 			// the channel (else P2P would never engage on an idle window).
@@ -762,15 +776,19 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 					confirmed, probing = a.rtcSinks()
 				}
 				if raw, mErr := json.Marshal(frame); mErr == nil {
-					if len(confirmed) > 0 {
-						for _, dc := range confirmed {
-							_ = dc.Send(raw)
-						}
-					} else {
+					for _, dc := range confirmed {
+						_ = dc.Send(raw)
+					}
+					// Also carry the frame over WS whenever a viewer isn't on a
+					// confirmed DataChannel (a WS-only viewer, or none confirmed
+					// yet). Sending ONLY to confirmed DCs froze every other viewer.
+					// WS is skipped only when every viewer is confirmed on P2P, so
+					// an all-P2P set still keeps frames off the billed relay.
+					if wsSinkNeeded(vc, len(confirmed)) {
 						a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
-						for _, dc := range probing {
-							_ = dc.Send(raw) // probe: prove it can carry a frame
-						}
+					}
+					for _, dc := range probing {
+						_ = dc.Send(raw) // probe: prove it can carry a frame
 					}
 				}
 				lastSig, haveSig = sig, ok
@@ -784,15 +802,14 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 					HB bool   `json:"hb"`
 				}{ID: w.ID, HB: true}
 				if raw, mErr := json.Marshal(hb); mErr == nil {
-					if len(confirmed) > 0 {
-						for _, dc := range confirmed {
-							_ = dc.Send(raw)
-						}
-					} else {
+					for _, dc := range confirmed {
+						_ = dc.Send(raw)
+					}
+					if wsSinkNeeded(vc, len(confirmed)) {
 						a.sendWindowMsg(conn, protocol.TypeWindowFrame, hb)
-						for _, dc := range probing {
-							_ = dc.Send(raw)
-						}
+					}
+					for _, dc := range probing {
+						_ = dc.Send(raw)
 					}
 				}
 				lastSent = time.Now()
