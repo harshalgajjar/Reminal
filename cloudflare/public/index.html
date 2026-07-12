@@ -3283,6 +3283,10 @@
       if (windows && windows.open && !windows.contains(e.target)) {
         windows.open = false;
       }
+      const apps = document.getElementById('apps');
+      if (apps && apps.open && !apps.contains(e.target)) {
+        apps.open = false;
+      }
     });
 
     // ---- Window mirroring: list host windows, stream one, control it -------
