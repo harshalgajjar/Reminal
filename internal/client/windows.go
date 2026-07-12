@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"os"
 	"os/exec"
@@ -537,13 +538,20 @@ const maxFramesInFlight = 2
 const streamAckIdleTimeout = 12 * time.Second
 
 // Change-detection knobs. A captured frame is reduced to a winSigN×winSigN
-// grayscale grid (box-averaged, so localized noise averages out); if no cell
-// moved by winSigThreshold or more since the last SENT frame, the window is
-// treated as unchanged and the frame is skipped — sparing the relay a frame
-// message and its ack (each is a billed Durable Object request). The threshold
-// is deliberately conservative: a real update (a typed character, a scroll, a
-// cursor move) shifts at least one cell well past it, so we only ever skip
-// visually identical frames and never drop a real change. An unchanged window
+// grid of per-cell averages across THREE channels — luma (Y) and both chroma
+// planes (Cb, Cr) — box-averaged so localized noise averages out; if no cell
+// moved by winSigThreshold or more in ANY channel since the last SENT frame,
+// the window is treated as unchanged and the frame is skipped — sparing the
+// relay a frame message and its ack (each is a billed Durable Object request).
+// Chroma matters: a colour-only change (a status dot green→red, syntax
+// recolouring) can leave luma nearly constant, so a luma-only signature would
+// miss it entirely and freeze the pane until something else forced a frame.
+// The grid is deliberately fine (winSigN cells across ~1100px ≈ 23px/cell) so a
+// small localized edit — a few characters, a caret, a spinner — occupies a big
+// enough fraction of its cell to shift that cell's average past the threshold,
+// instead of being diluted to nothing by averaging over a large block. So we
+// only ever skip visually identical frames and don't drop small/colour changes.
+// An unchanged window
 // sends NO frames at all (0 fps); winHeartbeat only governs a tiny liveness
 // ping (see streamWindow) so the viewer knows the host is alive without a frame.
 // winProbeFrame is the one exception: while a DataChannel is open but not yet
@@ -551,7 +559,7 @@ const streamAckIdleTimeout = 12 * time.Second
 // changed — otherwise a static window would never give the channel a frame to
 // prove itself and P2P would never engage. Once confirmed, it's back to 0 fps.
 const (
-	winSigN         = 32
+	winSigN         = 48
 	winSigThreshold = 12
 	winHeartbeat    = 3 * time.Second
 	winProbeFrame   = 1 * time.Second
@@ -566,11 +574,21 @@ const (
 	winLiveCheck = 1200 * time.Millisecond
 )
 
-// frameSignature reduces a JPEG frame to a coarse grayscale grid by
-// box-averaging. It reads the luma (Y) plane directly for JPEG's native YCbCr,
-// avoiding a per-pixel RGBA conversion. ok is false when the frame can't be
-// decoded, in which case the caller treats the frame as changed (always sends).
-func frameSignature(jpegBytes []byte) (sig [winSigN * winSigN]byte, ok bool) {
+// frameSig is a coarse per-cell average of a frame across the luma (Y) and both
+// chroma (Cb, Cr) planes. Keeping chroma is what lets sigDiffers catch a change
+// that shifts colour but not brightness (green→red status dot, recoloured text)
+// — a luma-only signature is blind to those and would freeze the pane.
+type frameSig struct {
+	y, cb, cr [winSigN * winSigN]byte
+}
+
+// frameSignature reduces a JPEG frame to a coarse frameSig by box-averaging each
+// cell. It reads the Y/Cb/Cr planes directly for JPEG's native YCbCr (chroma is
+// subsampled, so several luma pixels share a chroma sample — fine for a coarse
+// average); a non-YCbCr image falls back to a per-pixel RGB→YCbCr conversion. ok
+// is false when the frame can't be decoded, in which case the caller treats the
+// frame as changed (always sends).
+func frameSignature(jpegBytes []byte) (sig frameSig, ok bool) {
 	img, err := jpeg.Decode(bytes.NewReader(jpegBytes))
 	if err != nil {
 		return sig, false
@@ -580,14 +598,17 @@ func frameSignature(jpegBytes []byte) (sig [winSigN * winSigN]byte, ok bool) {
 	if w == 0 || h == 0 {
 		return sig, false
 	}
-	var sum [winSigN * winSigN]uint64
+	var sumY, sumCb, sumCr [winSigN * winSigN]uint64
 	var cnt [winSigN * winSigN]uint32
 	if yc, isYCbCr := img.(*image.YCbCr); isYCbCr {
 		for y := 0; y < h; y++ {
 			cy := y * winSigN / h
 			for x := 0; x < w; x++ {
 				idx := cy*winSigN + x*winSigN/w
-				sum[idx] += uint64(yc.Y[yc.YOffset(b.Min.X+x, b.Min.Y+y)])
+				sumY[idx] += uint64(yc.Y[yc.YOffset(b.Min.X+x, b.Min.Y+y)])
+				co := yc.COffset(b.Min.X+x, b.Min.Y+y)
+				sumCb[idx] += uint64(yc.Cb[co])
+				sumCr[idx] += uint64(yc.Cr[co])
 				cnt[idx]++
 			}
 		}
@@ -596,33 +617,44 @@ func frameSignature(jpegBytes []byte) (sig [winSigN * winSigN]byte, ok bool) {
 			cy := y * winSigN / h
 			for x := 0; x < w; x++ {
 				r, g, bl, _ := img.At(b.Min.X+x, b.Min.Y+y).RGBA()
-				gray := (r*299 + g*587 + bl*114) / 1000 >> 8
+				yy, cb, cr := color.RGBToYCbCr(uint8(r>>8), uint8(g>>8), uint8(bl>>8))
 				idx := cy*winSigN + x*winSigN/w
-				sum[idx] += uint64(gray)
+				sumY[idx] += uint64(yy)
+				sumCb[idx] += uint64(cb)
+				sumCr[idx] += uint64(cr)
 				cnt[idx]++
 			}
 		}
 	}
-	for i := range sig {
+	for i := range sig.y {
 		if cnt[i] > 0 {
-			sig[i] = byte(sum[i] / uint64(cnt[i]))
+			sig.y[i] = byte(sumY[i] / uint64(cnt[i]))
+			sig.cb[i] = byte(sumCb[i] / uint64(cnt[i]))
+			sig.cr[i] = byte(sumCr[i] / uint64(cnt[i]))
 		}
 	}
 	return sig, true
 }
 
-// sigDiffers reports whether any grid cell changed by at least winSigThreshold.
-func sigDiffers(a, b [winSigN * winSigN]byte) bool {
-	for i := range a {
-		d := int(a[i]) - int(b[i])
-		if d < 0 {
-			d = -d
-		}
-		if d >= winSigThreshold {
+// sigDiffers reports whether any grid cell changed by at least winSigThreshold
+// in ANY of the three channels (luma or either chroma) since the last signature.
+func sigDiffers(a, b frameSig) bool {
+	for i := range a.y {
+		if absDiffByte(a.y[i], b.y[i]) >= winSigThreshold ||
+			absDiffByte(a.cb[i], b.cb[i]) >= winSigThreshold ||
+			absDiffByte(a.cr[i], b.cr[i]) >= winSigThreshold {
 			return true
 		}
 	}
 	return false
+}
+
+func absDiffByte(x, y byte) int {
+	d := int(x) - int(y)
+	if d < 0 {
+		d = -d
+	}
+	return d
 }
 
 // streamWindow captures w and broadcasts each JPEG frame to viewers until stop
@@ -670,7 +702,7 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64)
 	}()
 	var seq, acked uint64 // last frame sent, and highest the viewer confirmed
 	var fails int         // consecutive capture failures while the window exists
-	var lastSig [winSigN * winSigN]byte
+	var lastSig frameSig
 	var haveSig bool
 	var lastSent time.Time      // when we last sent a frame OR heartbeat (paces both)
 	var lastAck time.Time       // when the viewer last genuinely acked a frame
