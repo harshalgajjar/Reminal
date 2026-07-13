@@ -718,9 +718,11 @@
     }
 
     // ---- Recent sessions history (localStorage, cross-tab, cross-session) ----
-    // Each entry: { id, pin, name, lastSeen }. Capped at 10 most-recent so
-    // the dropdown stays manageable. We keep PINs here knowingly — same
-    // model as `sessionStorage` for the current session; user can clear
+    // Each entry: { id, pin, name, lastSeen }. Only UNNAMED (auto-recorded)
+    // sessions count against the cap of 10 most-recent, so the dropdown stays
+    // manageable; a session the user bothered to name is one they want to keep,
+    // so it's never evicted (see trimHistory). We keep PINs here knowingly —
+    // same model as `sessionStorage` for the current session; user can clear
     // via the "Forget" button on any row.
     const HISTORY_KEY = 'reminal:history';
     const HISTORY_MAX = 10;
@@ -735,6 +737,18 @@
     function saveHistory(list) {
       try { localStorage.setItem(HISTORY_KEY, JSON.stringify(list)); } catch (_) {}
     }
+    // Enforce the cap WITHOUT evicting named sessions: named entries are always
+    // kept (the user deliberately labelled them, so they're not throwaway), and
+    // only the most-recent HISTORY_MAX unnamed entries survive. `list` is
+    // newest-first, so counting unnamed entries from the front keeps the freshest.
+    function trimHistory(list) {
+      let unnamed = 0;
+      return list.filter(e => {
+        if (e.name) return true;
+        unnamed++;
+        return unnamed <= HISTORY_MAX;
+      });
+    }
     function rememberSession(id, pin) {
       if (!id || !pin) return;
       const list = loadHistory();
@@ -748,7 +762,7 @@
       };
       if (existingIdx >= 0) list.splice(existingIdx, 1);
       list.unshift(entry);
-      saveHistory(list.slice(0, HISTORY_MAX));
+      saveHistory(trimHistory(list));
       renderRecents();
     }
     function renameSession(id, name) {
