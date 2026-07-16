@@ -937,7 +937,13 @@
       helperTA.setAttribute('autocomplete', 'off');
       helperTA.setAttribute('autocapitalize', 'none');
       helperTA.setAttribute('spellcheck', 'false');
-      helperTA.setAttribute('inputmode', 'url');
+      // inputmode="url" suppresses autocorrect but on several Android/iOS
+      // keyboards it also drops or shrinks the spacebar (URLs don't need
+      // one), making normal shell commands unusable. inputmode="email"
+      // suppresses autocorrect just as reliably (emails aren't real words
+      // either) while every mobile keyboard we've checked keeps a
+      // full-width space key for it.
+      helperTA.setAttribute('inputmode', 'email');
       helperTA.setAttribute('enterkeyhint', 'done');
       // Intercept autocorrect/replacement events at beforeinput so the
       // typed text never gets clobbered. Capture phase + preventDefault
