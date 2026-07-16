@@ -932,12 +932,29 @@
     //      own input handler still receives the genuine keystrokes
     //      that came BEFORE the replacement attempt.
     const helperTA = document.querySelector('.xterm-helper-textarea');
+    // APPLE_MOBILE: iOS reports as iPhone/iPad/iPod, or as "MacIntel" with a
+    // touch screen (iPadOS masquerading as desktop Safari). Top-level (not
+    // inside the helperTA block) because sendInput and the keybar also branch
+    // on it for the iOS field-mirror.
+    const APPLE_MOBILE = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    // imeField: iOS field-mirror — the text we've mirrored to the shell for the
+    // current IME field (see the beforeinput handler). Top-level so sendInput
+    // can invalidate it when out-of-band input (keybar, paste) edits the line.
+    let imeField = '';
     if (helperTA) {
+      const isAppleMobile = APPLE_MOBILE;
       helperTA.setAttribute('autocorrect', 'off');
       helperTA.setAttribute('autocomplete', 'off');
       helperTA.setAttribute('autocapitalize', 'none');
       helperTA.setAttribute('spellcheck', 'false');
-      helperTA.setAttribute('inputmode', 'url');
+      // inputmode="url" is the only reliable way to disable Android Gboard's
+      // autocorrect (it ignores autocorrect="off"). But on iOS the URL keyboard
+      // ALSO removes the dictation MIC button — and iOS Safari *does* honour
+      // autocorrect="off", so it never needed the URL trick. So: a text
+      // inputmode on iOS (mic returns, attributes keep autocorrect off), and
+      // "url" on Android where it's load-bearing.
+      helperTA.setAttribute('inputmode', isAppleMobile ? 'text' : 'url');
       helperTA.setAttribute('enterkeyhint', 'done');
       // Intercept autocorrect/replacement events at beforeinput so the
       // typed text never gets clobbered. Capture phase + preventDefault
@@ -969,10 +986,22 @@
       let lastCommittedAt = -Infinity;
       let inSuspiciousComposition = false;
       let compositionFirstUpdateSeen = false;
+      let compositionStartedCold = false;  // composition began with no recent typing → user speech/paste, not autocorrect
+      let iosComposing = false;            // iOS: a CJK composition is live — the mirror and keydown interference stand down
       const DUP_WINDOW_LETTER_MS = 60;     // letters: tight, so "letter" still types fast
       const DUP_WINDOW_PUNCT_MS = 80;      // punctuation: slightly wider; tighter than this lets Samsung dup-fires through, wider feels sluggish for deliberate ".." typing
       const PUNCT_RX = /^[.,!?;:'"\/\\(){}\[\]<>@#$%^&*\-_+=|`~]$/;
       const NEW_COMPOSITION_AUTOCORRECT_WINDOW_MS = 50;
+      // Voice dictation arrives as a composition whose data is a whole word or
+      // phrase — the same SHAPE as autocorrect, so shape alone can't tell them
+      // apart. Timing can: autocorrect fires WHILE you type (it rewrites the
+      // word you just committed, so it starts within a few hundred ms of the
+      // last commit), whereas dictation starts COLD — a deliberate mic tap with
+      // no keystroke in the last moment. A composition that begins more than
+      // this long after the last committed char is treated as user-initiated (a
+      // new word or dictation) and is never dropped. Tunable per real-device
+      // traces (?debug=1).
+      const AUTOCORRECT_ACTIVE_TYPING_MS = 1500;
 
       const isHelperTarget = (e) => e.target === helperTA;
 
@@ -1004,6 +1033,42 @@
 
       document.addEventListener('keydown', (e) => {
         if (!isHelperTarget(e)) return;
+        if (isAppleMobile) {
+          // While a CJK composition is live, Enter CONFIRMS the composition and
+          // Backspace edits it — neither is ours to touch. Clearing the field
+          // here would destroy the half-composed word; stand down and let the
+          // IME + xterm's CompositionHelper run it.
+          if (iosComposing) return;
+          // Enter submits the line — the mirrored field is gone; xterm's own
+          // keydown handling sends the '\r'.
+          if (e.key === 'Enter') { imeField = ''; helperTA.value = ''; return; }
+          if (e.key === 'Backspace') {
+            // Keep xterm's keydown handler out of it: xterm would cancel the
+            // keydown (so the browser never edits the field and beforeinput
+            // never fires) and emit its own \x7f — invisible to the mirror.
+            e.stopPropagation();
+            if (helperTA.value === '') {
+              // Nothing in the field for the browser to delete, but a real
+              // backspace must still reach the shell (a TUI, a line that
+              // predates this page, a hardware keyboard whose typed chars
+              // never enter the field). Same timing gate as elsewhere, so
+              // iOS's phantom pre-dictation Backspace bursts (sub-20ms runs,
+              // always with an empty field) leak at most one — and that one
+              // lands on an empty readline, where \x7f is a no-op.
+              const bnow = performance.now();
+              if (bnow - lastBackspaceCreditAt >= BS_MIN_INTERVAL_MS) {
+                lastBackspaceCreditAt = bnow;
+                realBackspacesPending++;
+                sendInput('\x7f', { ime: true });
+              }
+              e.preventDefault(); // no edit to perform; also stops a spurious empty delete event
+            }
+            // Field non-empty: let the browser's default edit run — the
+            // beforeinput deleteContentBackward below mirrors it as \x7f.
+            return;
+          }
+          return;
+        }
         if (e.key === 'Backspace') {
           // NB: helperTA is almost always empty (xterm clears it after
           // each committed char), so we can't gate on textarea content
@@ -1021,10 +1086,135 @@
         }
       }, true);
 
+      // Losing focus abandons the current IME field — drop the mirror so a later
+      // dictation can't diff against stale text and backspace into the shell.
+      helperTA.addEventListener('blur', () => { imeField = ''; });
+
+      // iOS CJK: a composition runs through xterm's CompositionHelper (the
+      // mirror stands down — see the beforeinput handler). iosComposing keeps
+      // the keydown handler's Enter/Backspace interference off while it's live;
+      // on commit, re-adopt whatever xterm left in the field as the mirror's
+      // model, a tick later so xterm's synchronous finalize/clear has already
+      // run. Without the resync, the next mirrored edit would diff against ''
+      // and re-send the composed text.
+      if (isAppleMobile) {
+        helperTA.addEventListener('compositionstart', () => { iosComposing = true; });
+        helperTA.addEventListener('compositionend', () => {
+          iosComposing = false;
+          setTimeout(() => { imeField = helperTA.value; }, 0);
+        });
+      }
+
       // Document-level capture so we run BEFORE xterm's helperTA
       // listeners (xterm registered first during term.open()).
       document.addEventListener('beforeinput', (e) => {
         if (!isHelperTarget(e)) return;
+
+        // ── iOS: mirror the hidden field ──────────────────────────────────
+        // On iOS every edit — plain typing, voice dictation, and deletes —
+        // arrives as a beforeinput that rewrites the field. Dictation is why this
+        // exists (captured with ?debug=1&raw=1): it streams its running
+        // transcription, first REPLACING the field with the whole growing phrase
+        // ("Hello" → "Hello, how are?" → "Hello, how are you?"), then re-emitting
+        // it word by word ("hello," → "hello, how" → …). Forwarding each e.data
+        // verbatim makes the shell accumulate every partial. So we don't forward
+        // events at all: compute what the field BECOMES, diff it against what
+        // we've already shown (imeField), and send only backspaces-for-the-
+        // changed-tail plus the new tail — then preventDefault so xterm never
+        // sends, keeping the field as our own model. Android keeps the switch
+        // below (its autocorrect needs different, composition-based handling).
+        if (isAppleMobile) {
+          const t = e.inputType;
+          // A live CJK composition owns the field: its events mutate the
+          // textarea natively and xterm's CompositionHelper both tracks it and
+          // emits the composed text on compositionend (mirroring the commit too
+          // would send it twice). Stand down for the whole composition — the
+          // compositionend listener below resyncs the mirror afterwards. This
+          // MUST precede the invariant check: mid-composition the field
+          // legitimately diverges from the mirror, and "correcting" it would
+          // wipe the user's half-composed word.
+          if (e.isComposing || t === 'insertCompositionText' || t === 'insertFromComposition') {
+            imeField = '';
+            return;
+          }
+          let cur = helperTA.value;
+          let a = helperTA.selectionStart, b = helperTA.selectionEnd;
+          // Invariant check — the self-correcting heart of the mirror. Between
+          // events, the field must contain exactly what we last mirrored
+          // (imeField): every edit path we know about keeps them equal. If they
+          // diverge, something wrote the textarea behind our back — xterm's
+          // right-click handler stuffs the SELECTION into it for native copy,
+          // its Linux middle-click path does the same, and future xterm
+          // versions may add more. Diffing against phantom text would re-send
+          // it into the shell (or backspace real characters), so instead:
+          // forget it all and start this edit from a clean field. The shell
+          // keeps everything already sent; the current keystroke still lands.
+          if (cur !== imeField) {
+            imeField = '';
+            helperTA.value = '';
+            cur = '';
+            a = 0;
+            b = 0;
+          }
+          let next = null;
+          if (t === 'insertText' || t === 'insertReplacementText' ||
+              t === 'insertFromPaste' || t === 'insertFromDictation') {
+            next = cur.slice(0, a) + (e.data || '') + cur.slice(b);
+          } else if (t === 'deleteContentBackward' || t === 'deleteContent') {
+            // A collapsed-caret delete removes one CHARACTER, which in UTF-16
+            // can be a surrogate pair (emoji) — slicing one code unit would
+            // split the pair.
+            next = (a === b) ? Array.from(cur.slice(0, a)).slice(0, -1).join('') + cur.slice(b)
+                             : cur.slice(0, a) + cur.slice(b);
+          } else if (t === 'deleteContentForward') {
+            next = (a === b) ? cur.slice(0, a) + Array.from(cur.slice(b)).slice(1).join('')
+                             : cur.slice(0, a) + cur.slice(b);
+          }
+          if (t === 'insertLineBreak' || t === 'insertParagraph') {
+            // Return delivered as an EDIT (some iOS keyboards/flows emit this
+            // instead of — or in addition to — a keydown Enter). Submit the
+            // line deterministically: never let a literal newline into the
+            // field, send the CR ourselves, and start the next line fresh.
+            e.preventDefault();
+            e.stopPropagation();
+            imeField = '';
+            helperTA.value = '';
+            sendInput('\r', { ime: true });
+            return;
+          }
+          if (next !== null) {
+            e.preventDefault();
+            e.stopPropagation();
+            // Diff in CODEPOINTS, not UTF-16 code units: the shell deletes one
+            // character per \x7f, so counting code units would send TWO
+            // backspaces for one revised emoji and eat an extra real character.
+            const prevCP = Array.from(imeField);
+            const nextCP = Array.from(next);
+            let common = 0;
+            const min = Math.min(prevCP.length, nextCP.length);
+            while (common < min && prevCP[common] === nextCP[common]) common++;
+            const recon = '\x7f'.repeat(prevCP.length - common) + nextCP.slice(common).join('');
+            if (recon) {
+              // A lone \x7f is exactly what sendInput's phantom-backspace gate
+              // drops — this one is a real, mirrored edit, so fund it.
+              if (recon === '\x7f') realBackspacesPending++;
+              sendInput(recon, { ime: true });
+            }
+            imeField = next;
+            helperTA.value = next;
+            try { helperTA.setSelectionRange(next.length, next.length); } catch (_) {}
+            lastCommittedData = e.data;
+            lastCommittedAt = performance.now();
+            return;
+          }
+          // Unhandled edit (composition, word-delete, undo/redo, …): abandon the
+          // mirror so we never diff against a stale model, and let xterm handle
+          // it. Field and mirror re-converge on the next mirrored edit or the
+          // compositionend resync.
+          imeField = '';
+          return;
+        }
+
         switch (e.inputType) {
           case 'insertReplacementText':
           case 'insertFromComposition':
@@ -1083,6 +1273,10 @@
         compositionFirstUpdateSeen = false;
         const dt = performance.now() - lastCommittedAt;
         inSuspiciousComposition = dt < NEW_COMPOSITION_AUTOCORRECT_WINDOW_MS;
+        // No recent commit → not part of an autocorrect cascade. This is the
+        // user starting fresh: a new word, a paste, or a voice dictation. Never
+        // suppress it, whatever shape its data takes.
+        compositionStartedCold = dt >= AUTOCORRECT_ACTIVE_TYPING_MS;
       }, true);
 
       // Pattern that real English almost never has — 3+ consecutive
@@ -1095,6 +1289,10 @@
 
       document.addEventListener('compositionupdate', (e) => {
         if (!isHelperTarget(e)) return;
+        // A cold-started composition is the user speaking or pasting, not the
+        // IME rewriting recent keystrokes — leave it entirely alone so dictated
+        // words reach the shell instead of being dropped on commit.
+        if (compositionStartedCold) return;
         if (!compositionFirstUpdateSeen) {
           compositionFirstUpdateSeen = true;
           // Real typing: first update is 1 char ("d"). Autocorrect:
@@ -2404,8 +2602,20 @@
       return idx === 0 ? bytes : bytes.subarray(idx);
     }
 
-    async function sendInput(data) {
+    async function sendInput(data, opts) {
       const now = performance.now();
+      // iOS field-mirror invalidation: input that didn't come through the
+      // mirror (keybar keys, Paste button, an upload's auto-pasted path)
+      // changes the shell line behind the mirror's back. Drop the model —
+      // and the field text it mirrors — so a later dictation diffs against
+      // reality instead of a stale line and can't emit backspaces for
+      // characters that are no longer there. (opts.ime marks the mirror's
+      // own sends; xterm-originated sends on iOS are line-neutral except
+      // Enter, which the keydown handler already resets on.)
+      if (APPLE_MOBILE && imeField && !(opts && opts.ime)) {
+        imeField = '';
+        if (helperTA) { helperTA.value = ''; }
+      }
       if (data === lastSendInputData && (now - lastSendInputAt) < 5) {
         return;
       }
@@ -2502,7 +2712,19 @@
       if (!btn.dataset.key) return; // skip non-key buttons (Upload, etc.)
       const seq = keyMap[btn.dataset.key];
       if (!seq) return;
-      const fire = () => sendInput(seq);
+      const fire = () => {
+        // The ⌫ button sends a bare \x7f — exactly what sendInput's
+        // phantom-backspace gate exists to drop. A button tap is as real as
+        // input gets, so fund the counter first (with the same decay the
+        // keydown path uses, so an unconsumed credit can't leak to a later
+        // phantom). Without this the button does nothing — every press was
+        // silently eaten by the gate.
+        if (seq === '\x7f') {
+          realBackspacesPending++;
+          setTimeout(() => { if (realBackspacesPending > 0) realBackspacesPending--; }, 100);
+        }
+        sendInput(seq);
+      };
       if (!('repeat' in btn.dataset)) {
         // No-repeat keys: plain click + refocus terminal so the soft
         // keyboard stays open after the press.
