@@ -3549,6 +3549,9 @@
     // Inline SVG icons (inherit currentColor) for a cleaner look than emoji glyphs.
     const ICON_KEYBOARD = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6.5" width="19" height="11" rx="2"/><path d="M6 10h0M9.5 10h0M13 10h0M16.5 10h0M6 13.5h0M17.5 13.5h0M9.5 13.5h5"/></svg>';
     const ICON_CLOSE = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    // ⧉ as an SVG so the button's metrics match its SVG siblings — a raw text
+    // glyph inherits the page font and renders a taller, mismatched button.
+    const ICON_POPOUT = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="8.5" width="12" height="12" rx="1.5"/><path d="M8.5 4.5h10a1 1 0 0 1 1 1v10"/></svg>';
     const ICON_INFO = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 11v5"/><path d="M12 7.6h0"/></svg>';
     // Which transport delivered the most recent window frame — shown in the pane
     // (i) popover. Set by onWindowFrame; 'webrtc' means the P2P DataChannel,
@@ -3783,6 +3786,9 @@
     function focusPane(id) {
       focusedPaneId = id;
       const p = panes.get(id);
+      // A popped-out pane lives in its own OS window — focusing it means
+      // raising that window, not shuffling in-page z-indices.
+      if (p && p.popup && !p.popup.closed) { try { p.popup.focus(); } catch (_) {} return; }
       // Restack so the focused pane sits above the others (real-window behaviour).
       // Reassign z-indices compactly from a fixed base every time — the old
       // monotonic counter saturated at the 49 ceiling, after which every pane
@@ -3829,10 +3835,11 @@
       const title = document.createElement('span'); title.className = 'wpane-title';
       title.textContent = (w.app || 'Window') + (w.title ? ' — ' + w.title : '');
       const spacer = document.createElement('span'); spacer.className = 'wpane-spacer';
+      const popBtn = document.createElement('button'); popBtn.className = 'wpane-btn wpane-pop'; popBtn.innerHTML = ICON_POPOUT; popBtn.title = 'Open in its own browser window';
       const infoBtn = document.createElement('button'); infoBtn.className = 'wpane-btn wpane-info-btn'; infoBtn.innerHTML = ICON_INFO; infoBtn.title = 'Connection details';
       const kbdBtn = document.createElement('button'); kbdBtn.className = 'wpane-btn wpane-kbd'; kbdBtn.innerHTML = ICON_KEYBOARD; kbdBtn.title = 'Keyboard';
       const closeBtn = document.createElement('button'); closeBtn.className = 'wpane-btn wpane-close'; closeBtn.innerHTML = ICON_CLOSE; closeBtn.title = 'Close';
-      bar.append(title, spacer, infoBtn, kbdBtn, closeBtn);
+      bar.append(title, spacer, popBtn, infoBtn, kbdBtn, closeBtn);
 
       const body = document.createElement('div'); body.className = 'wpane-body';
       // Frames render onto a <canvas>, not an <img>: drawImage is atomic and
@@ -3865,6 +3872,7 @@
       paneInput(pane, img);
       el.addEventListener('pointerdown', () => focusPane(w.id));
       closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePane(w.id); });
+      popBtn.addEventListener('click', (e) => { e.stopPropagation(); popOutPane(pane); });
       kbdBtn.addEventListener('click', (e) => { e.stopPropagation(); focusPane(w.id); wkey.focus(); });
       infoBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -3879,6 +3887,169 @@
       savePaneLayout();
     }
 
+    // paneAspect: the mirrored window's TRUE aspect. The canvas bitmap is the
+    // authority — the agent stamps frames with the window's LISTING-time w/h,
+    // which goes stale the moment the window is resized on the host (the bitmap
+    // itself is always current; Retina scaling changes both axes equally, so the
+    // ratio is unaffected). Listing dims are only a fallback before any frame.
+    function paneAspect(pane) {
+      if (pane.img && pane.img.width && pane.img.height) return pane.img.width / pane.img.height;
+      if (pane.w.w && pane.w.h) return pane.w.w / pane.w.h;
+      return 1.5;
+    }
+
+    // frameRect: the sub-rectangle the FRAME actually occupies inside a canvas
+    // element (viewport coords). A popped-out canvas uses object-fit:contain to
+    // scale the frame up/down to fill its window, which letterboxes when the
+    // window aspect differs — so the drawn image is centered within the element
+    // and smaller than it. The in-page canvas has box aspect == frame aspect
+    // (width:100%/height:auto), so this returns the full box unchanged.
+    function frameRect(r, iw, ih) {
+      if (!iw || !ih || !r.width || !r.height) return { left: r.left, top: r.top, width: r.width, height: r.height };
+      const boxA = r.width / r.height, imgA = iw / ih;
+      let dw, dh;
+      if (imgA > boxA) { dw = r.width; dh = r.width / imgA; }
+      else { dh = r.height; dw = r.height * imgA; }
+      return { left: r.left + (r.width - dw) / 2, top: r.top + (r.height - dh) / 2, width: dw, height: dh };
+    }
+
+    // ---- Pop-out: a pane in its own OS browser window -----------------------
+    // The popup gets its OWN canvas + cursor overlay, and the pane's render
+    // refs (img/ctx/body/cursorEl/placeCursor) are swapped to them while
+    // popped. Moving the original canvas would be simpler, but Chrome clears a
+    // canvas's bitmap and wedges its 2D context when the element is adopted
+    // into another document — the first draw throws, the frame is never acked,
+    // and the agent's backpressure stalls the stream. Same connection, same
+    // frame stream; pointer handlers are freshly bound to the popup canvas
+    // (they die with the popup document). The in-page pane hides and comes
+    // back when the popup closes, so ⧉ is freely reversible.
+    function popOutPane(pane) {
+      if (pane.popup && !pane.popup.closed) { try { pane.popup.focus(); } catch (_) {} return; }
+      // Size the popup to the source window's aspect, capped to the screen.
+      const ar = paneAspect(pane);
+      let pw = Math.max(320, Math.min(Math.round(pane.w.w || 900), Math.round((screen.availWidth || 1280) * 0.85)));
+      let ph = Math.round(pw / ar);
+      const maxH = Math.round((screen.availHeight || 800) * 0.85);
+      if (ph > maxH) { ph = maxH; pw = Math.round(ph * ar); }
+      let pop = null;
+      try { pop = window.open('', 'reminal-pane-' + pane.w.id, 'popup=yes,width=' + pw + ',height=' + ph); } catch (_) {}
+      if (!pop) {
+        // Blocked — tell the user how to fix it, in the pane's own popover.
+        pane.infoEl.innerHTML = '<div style="padding:8px 10px">Pop-up blocked — allow pop-ups for this site, then press ⧉ again.</div>';
+        pane.infoEl.classList.add('show');
+        pane.infoShown = true;
+        return;
+      }
+      const pd = pop.document;
+      pd.open();
+      pd.write('<!doctype html><html><head><meta charset="utf-8"><title></title></head><body></body></html>');
+      pd.close();
+      pd.title = (pane.w.app || 'Window') + (pane.w.title ? ' — ' + pane.w.title : '');
+      // Clone the page's styles so the popup's canvas/cursor reuse the same
+      // .wpane-* classes and render exactly like the in-page pane.
+      for (const st of document.querySelectorAll('style')) pd.head.appendChild(st.cloneNode(true));
+      const bs = pd.body.style;
+      bs.margin = '0'; bs.background = '#000'; bs.display = 'flex';
+      bs.alignItems = 'center'; bs.justifyContent = 'center';
+      bs.height = '100vh'; bs.overflow = 'hidden';
+      const host = pd.createElement('div'); host.className = 'wpane-body';
+      // Contain-fit the canvas with PURE CSS, exactly like the in-page pane: the
+      // canvas advertises the frame bitmap's intrinsic size, and max-width /
+      // max-height let the browser scale it down preserving that intrinsic
+      // aspect. No JS sizing — so a new frame at a new aspect (host window
+      // resized) just re-letterboxes automatically and can never be stretched.
+      host.style.cssText = 'width:100%;height:100%;display:flex;align-items:center;justify-content:center';
+      const pimg = pd.createElement('canvas'); pimg.className = 'wpane-img';
+      pimg.width = pane.img.width; pimg.height = pane.img.height;
+      pimg.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block';
+      const pctx = pimg.getContext('2d', { alpha: false, desynchronized: true });
+      // Seed with the last frame so the popup doesn't open black (the live
+      // stream repaints momentarily anyway).
+      try { pctx.drawImage(pane.img, 0, 0); } catch (_) {}
+      const pcursor = pd.createElement('div'); pcursor.className = 'wpane-cursor';
+      host.append(pimg, pcursor);
+      pd.body.appendChild(host);
+
+      // Swap the pane's render refs to the popup-owned elements; keep the
+      // originals for the un-pop. place()/frames read these through `pane`, so
+      // everything — painting, cursor overlay, click mapping — follows.
+      pane.main = { img: pane.img, ctx: pane.ctx, body: pane.body, cursorEl: pane.cursorEl, placeCursor: pane.placeCursor };
+      pane.img = pimg; pane.ctx = pctx; pane.body = host; pane.cursorEl = pcursor;
+      paneInput(pane, pimg); // fresh pointer/wheel bindings on the popup canvas (rebinds pane.placeCursor)
+      pane.el.style.display = 'none';
+      pane.popup = pop;
+
+      // Optional polish: nudge the popup WINDOW itself to the bitmap aspect so
+      // the black letterbox bars are minimal. Purely cosmetic — CSS above keeps
+      // the content correct regardless — and best-effort (many window managers
+      // ignore a script resize). Debounced so a live host-side resize doesn't
+      // make it jitter. Reads the bitmap, so it's never stale.
+      const matchAspect = () => {
+        if (pop.closed) return;
+        const iw = pop.innerWidth, ih = pop.innerHeight;
+        if (!iw || !ih) return;
+        const a = paneAspect(pane);
+        let tw = iw, th = Math.round(iw / a);
+        const maxIH = Math.round(((pop.screen && pop.screen.availHeight) || 800) * 0.92);
+        if (th > maxIH) { th = maxIH; tw = Math.round(th * a); }
+        if (Math.abs(th - ih) <= 2 && Math.abs(tw - iw) <= 2) return; // already matched
+        try { pop.resizeBy(tw - iw, th - ih); } catch (_) {}
+      };
+      pane.popupAspect = matchAspect;
+      pane.popupMatched = false;
+      setTimeout(matchAspect, 60); // fast approximate match; the first real frame nails it (see paint)
+      // Keep the cursor overlay aligned as the canvas resizes.
+      pop.addEventListener('resize', () => { if (pane.placeCursor) { try { pane.placeCursor(); } catch (_) {} } });
+      // Keyboard: forward from the popup document, same mapping as #wkey.
+      pd.addEventListener('keydown', (e) => {
+        const sp = WIN_SPECIAL_KEYS[e.key];
+        if (sp) { e.preventDefault(); sendWin('window_input', { id: pane.w.id, kind: 'key', special: sp }); return; }
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          e.preventDefault();
+          sendWin('window_input', { id: pane.w.id, kind: 'key', text: e.key });
+        }
+      });
+      // Popup closed (by the user or by us) → fold the pane back into the page.
+      pop.addEventListener('pagehide', () => { setTimeout(() => unPopPane(pane), 0); });
+      // Kick the stream so a fresh frame lands on the new canvas immediately.
+      // The agent numbers each stream from seq 0, so forget the old counter or
+      // the dedup guard would silently drop every frame of the fresh stream.
+      sendWin('window_ctl', { action: 'stop', id: pane.w.id });
+      pane.lastSeq = null;
+      sendWin('window_ctl', { action: 'start', id: pane.w.id });
+      focusedPaneId = pane.w.id;
+    }
+
+    function unPopPane(pane) {
+      if (!pane.popup) return;
+      pane.popup = null;
+      pane.popupAspect = null;
+      pane.popupMatched = false;
+      clearTimeout(pane.popupAspectTimer);
+      const m = pane.main;
+      pane.main = null;
+      if (!panes.has(pane.w.id)) return; // pane was closed while popped — nothing to restore
+      if (m) {
+        pane.img = m.img; pane.ctx = m.ctx; pane.body = m.body;
+        pane.cursorEl = m.cursorEl; pane.placeCursor = m.placeCursor;
+      }
+      pane.el.style.display = '';
+      // Kick the stream: repaint the in-page canvas with a fresh frame (new
+      // stream = new seq space, so the dedup counter must forget the old one).
+      sendWin('window_ctl', { action: 'stop', id: pane.w.id });
+      pane.lastSeq = null;
+      sendWin('window_ctl', { action: 'start', id: pane.w.id });
+      focusPane(pane.w.id);
+    }
+
+    // The page going away must take its popups with it — an orphaned popup
+    // would show a frozen frame wired to a dead connection.
+    window.addEventListener('pagehide', () => {
+      for (const p of panes.values()) {
+        if (p.popup && !p.popup.closed) { try { p.popup.close(); } catch (_) {} }
+      }
+    });
+
     function closePane(id) {
       const p = panes.get(id);
       if (!p) return;
@@ -3887,6 +4058,7 @@
       p.el.remove();
       panes.delete(id);
       if (focusedPaneId === id) focusedPaneId = null;
+      if (p.popup && !p.popup.closed) { try { p.popup.close(); } catch (_) {} }
       savePaneLayout();
     }
 
@@ -3908,12 +4080,24 @@
     function pauseWinStreams() {
       if (winStreamsPaused || !panes.size) return;
       winStreamsPaused = true;
-      for (const id of panes.keys()) sendWin('window_ctl', { action: 'stop', id });
+      for (const [id, p] of panes) {
+        // A popped-out pane is visible in its OWN OS window — backgrounding
+        // this tab says nothing about it, so its stream keeps flowing (frames
+        // arrive in message handlers, which background tabs still run).
+        if (p.popup && !p.popup.closed) continue;
+        sendWin('window_ctl', { action: 'stop', id });
+      }
     }
     function resumeWinStreams() {
       if (!winStreamsPaused) return;
       winStreamsPaused = false;
-      for (const id of panes.keys()) sendWin('window_ctl', { action: 'start', id });
+      for (const [id, p] of panes) {
+        if (p.popup && !p.popup.closed) continue; // never stopped
+        // New stream, new seq space: without this, a young pane (< 1000 frames)
+        // has every post-resume frame eaten by the stale-seq dedup guard.
+        p.lastSeq = null;
+        sendWin('window_ctl', { action: 'start', id });
+      }
     }
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) pauseWinStreams(); else resumeWinStreams();
@@ -4150,9 +4334,29 @@
       // ack fires after the draw, keeping the host's frame-pacing backpressure.
       const paint = (src, sw, sh) => {
         const cv = p.img;
-        if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; } // resizes + sets aspect
+        // Keep the logical size current BEFORE the popped-out fit/aspect hooks
+        // below — they derive the aspect from p.w, and running them against the
+        // previous window's shape is exactly how a host-side resize ended up
+        // stretched (new bitmap displayed in CSS sized for the old ratio, with
+        // no follow-up frame to heal it — a static window only heartbeats).
+        p.w.w = payload.w; p.w.h = payload.h; // keeps click mapping current
+        // Setting the canvas's intrinsic size is all the letterbox needs — the
+        // CSS max-width/max-height (popup) or width:100%/height:auto (in-page)
+        // re-fits to the new aspect automatically, never stretched. We do NOT
+        // resize the popup's OS window on a host-side resize: the in-page pane
+        // doesn't reshape either (it just letterboxes), and auto-growing the
+        // window fights the user's own placement. It only matches aspect once,
+        // at open (see popOutPane), then CSS owns it.
+        if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; }
+        if (p.popup && p.popupAspect && !p.popupMatched) {
+          // First real frame after pop-out: the bitmap is now the authority, so
+          // size the popup window to its aspect exactly — eliminating the bars
+          // the open-time guess (from a pre-pop frame) left. Once only; a later
+          // host-side resize just letterboxes (like the in-page pane).
+          p.popupMatched = true;
+          try { p.popupAspect(); } catch (_) {}
+        }
         p.ctx.drawImage(src, 0, 0, sw, sh);
-        p.w.w = payload.w; p.w.h = payload.h; // keep size current for click mapping
         if (p.placeCursor && p.cursor) p.placeCursor();
         if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC);
       };
@@ -4227,8 +4431,8 @@
       const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
       function fracAt(cx, cy) {
-        const r = img.getBoundingClientRect();
-        return { fx: clamp01((cx - r.left) / r.width), fy: clamp01((cy - r.top) / r.height) };
+        const fr = frameRect(img.getBoundingClientRect(), img.width, img.height);
+        return { fx: clamp01((cx - fr.left) / fr.width), fy: clamp01((cy - fr.top) / fr.height) };
       }
       function frac(e) { return fracAt(e.clientX, e.clientY); }
       // Batch rapid wheel / two-finger scroll deltas into one send per frame so
@@ -4258,10 +4462,11 @@
       function place() {
         const c = pane.cursor;
         if (!c) { pane.cursorEl.style.display = 'none'; return; }
-        const r = img.getBoundingClientRect(), br = pane.body.getBoundingClientRect();
+        const fr = frameRect(img.getBoundingClientRect(), img.width, img.height);
+        const br = pane.body.getBoundingClientRect();
         pane.cursorEl.style.display = 'block';
-        pane.cursorEl.style.left = (r.left - br.left + c.fx * r.width) + 'px';
-        pane.cursorEl.style.top = (r.top - br.top + c.fy * r.height) + 'px';
+        pane.cursorEl.style.left = (fr.left - br.left + c.fx * fr.width) + 'px';
+        pane.cursorEl.style.top = (fr.top - br.top + c.fy * fr.height) + 'px';
       }
       pane.placeCursor = place;
       function flash() { pane.cursorEl.classList.add('tapped'); setTimeout(() => pane.cursorEl.classList.remove('tapped'), 150); }
@@ -4386,7 +4591,9 @@
         }
         if (!downAt) return;
         const dur = Date.now() - downAt; downAt = 0;
-        if (e.pointerType === 'mouse' || document.activeElement === wkey) wkey.focus();
+        // Focusing the main page's hidden #wkey from a popped-out pane would
+        // yank keyboard focus back to this window — the popup wires its own keys.
+        if (!pane.popup && (e.pointerType === 'mouse' || document.activeElement === wkey)) wkey.focus();
         if (e.pointerType === 'mouse') {
           if (mouseBtn === 2) click(frac(e), 'right');                  // right button → context click
           else if (mouseBtn === 0 && moved && path && path.length > 1) sendWin('window_input', { id: pane.w.id, kind: 'drag', path: path.map(p => [p.fx, p.fy]) });
