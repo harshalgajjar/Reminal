@@ -1690,12 +1690,14 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 	// emulator those must be translated into the sliding virtual viewport or a
 	// resize repaint homing to "row 1" would overwrite the oldest history
 	// instead of its own previous render (see vviewWriter).
-	w := &vviewWriter{e: e, rows: rows}
+	w := &vviewWriter{e: e, rows: rows, tall: rebuildRows}
 	for _, ent := range entries {
 		if ent.Cols > 0 {
-			// Resize marker: the following bytes were emitted for this geometry.
-			e.Resize(ent.Cols, rebuildRows)
-			w.setRows(ent.Rows)
+			// Resize marker: bytes after it were RECORDED under this geometry,
+			// but the app keeps rendering for the old one until it handles
+			// SIGWINCH — the writer defers the switch to the app's first
+			// repaint (see vviewWriter.setGeometry).
+			w.setGeometry(ent.Cols, ent.Rows)
 			continue
 		}
 		if ent.Bar {

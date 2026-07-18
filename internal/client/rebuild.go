@@ -44,6 +44,20 @@ type vviewWriter struct {
 	// The alt buffer has no scrollback and is genuinely absolutely addressed,
 	// so translation stands down entirely until the app switches back.
 	alt bool
+	// tall is the replay emulator's height, used when applying deferred
+	// width changes.
+	tall int
+	// pendCols/pendRows hold a geometry change recorded in the buffer but not
+	// yet adopted by the app. The marker lands at PTY-resize time; the app's
+	// frames already in flight — and everything until it handles SIGWINCH —
+	// are still built for the OLD geometry. Translating those against the new
+	// size walks the viewport over rows they never paint (scattered,
+	// duplicated history). So a marker only arms the change here; it applies
+	// at the app's first full repaint (home/clear/region signature) or after
+	// pendMaxAge chunks as a fallback for apps that never repaint (plain
+	// shells barely use absolute addressing, so late is harmless there).
+	pendCols, pendRows int
+	pendAge            int
 	// carry holds a CSI split across Write calls (recorded chunks are ~4KB) so
 	// a row-addressed sequence straddling a boundary is still translated.
 	carry []byte
@@ -61,6 +75,35 @@ func (w *vviewWriter) sync() (vtop, cy, cx int) {
 		w.vtop = cy - w.rows + 1
 	}
 	return w.vtop, cy, cx
+}
+
+// pendMaxAge is the fallback: apply a pending geometry change after this many
+// Write chunks even without a repaint signature.
+const pendMaxAge = 4
+
+// setGeometry arms a recorded geometry change; it takes effect at the app's
+// first post-resize repaint (see pendCols).
+func (w *vviewWriter) setGeometry(cols, rows int) {
+	if cols == w.e.Width() && rows == w.rows {
+		w.pendCols, w.pendRows = 0, 0 // resized back before the app noticed
+		return
+	}
+	w.pendCols, w.pendRows, w.pendAge = cols, rows, 0
+}
+
+// applyPending adopts an armed geometry change.
+func (w *vviewWriter) applyPending() {
+	if w.pendCols == 0 && w.pendRows == 0 {
+		return
+	}
+	cols, rows := w.pendCols, w.pendRows
+	w.pendCols, w.pendRows = 0, 0
+	if cols > 0 && cols != w.e.Width() {
+		w.e.Resize(cols, w.tall)
+	}
+	if rows > 0 {
+		w.setRows(rows)
+	}
 }
 
 // setRows applies a viewport height change, keeping the BOTTOM anchored the
@@ -96,6 +139,11 @@ func (w *vviewWriter) Write(p []byte) {
 	if len(w.carry) > 0 {
 		p = append(w.carry, p...)
 		w.carry = nil
+	}
+	if w.pendCols != 0 || w.pendRows != 0 {
+		if w.pendAge++; w.pendAge > pendMaxAge {
+			w.applyPending()
+		}
 	}
 	var out strings.Builder
 	flush := func() {
@@ -170,8 +218,13 @@ func (w *vviewWriter) Write(p []byte) {
 		switch final {
 		case 'H', 'f': // CUP/HVP: viewport row, clamped to it (CUP can't scroll)
 			flush()
-			vtop, _, _ := w.sync()
 			r, c := csiParam(params, 0, 1), csiParam(params, 1, 1)
+			if r == 1 {
+				// Homing starts a full repaint — the first frame built for a
+				// newly-adopted size. Apply any armed geometry change now.
+				w.applyPending()
+			}
+			vtop, _, _ := w.sync()
 			if r > w.rows {
 				r = w.rows
 			}
@@ -186,6 +239,7 @@ func (w *vviewWriter) Write(p []byte) {
 			fmt.Fprintf(&out, "\x1b[%dd", vtop+r)
 		case 'r': // DECSTBM: scroll region rows are viewport-relative too
 			flush()
+			w.applyPending() // region asserts accompany full repaints
 			vtop, _, _ := w.sync()
 			top := csiParam(params, 0, 1)
 			bot := csiParam(params, 1, w.rows)
@@ -227,8 +281,11 @@ func (w *vviewWriter) Write(p []byte) {
 			}
 		case 'J': // ED: constrain to the viewport
 			flush()
-			vtop, cy, cx := w.sync()
 			mode := csiParam(params, 0, 0)
+			if mode >= 2 {
+				w.applyPending() // whole-screen clears accompany full repaints
+			}
+			vtop, cy, cx := w.sync()
 			switch mode {
 			case 0:
 				// Below-cursor: everything under the viewport is blank or
