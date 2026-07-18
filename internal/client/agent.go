@@ -1736,6 +1736,26 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 	if !wasAlt {
 		screen = lines[base:]
 	}
+	// Squeeze longer blank runs down to one line. A resize can race the app's
+	// in-flight frames (the marker is recorded at PTY-resize time; frames
+	// already written for the old height land after it), and each mis-height
+	// frame walks the replay viewport down over rows it never paints —
+	// stranding runs of blank rows a real terminal never showed. Real output
+	// separates content with at most a blank line or two, so collapsing runs
+	// keeps every content row while erasing the artifact.
+	squeezed, blanks := history[:0], 0
+	for _, ln := range history {
+		if strings.TrimSpace(ln) == "" {
+			blanks++
+			if blanks > 1 {
+				continue
+			}
+		} else {
+			blanks = 0
+		}
+		squeezed = append(squeezed, ln)
+	}
+	history = squeezed
 	if a.scrollbackLines > 0 && len(history) > a.scrollbackLines {
 		history = history[len(history)-a.scrollbackLines:]
 	}

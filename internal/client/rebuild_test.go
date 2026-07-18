@@ -165,3 +165,30 @@ func TestVViewED2ClearsViewportOnly(t *testing.T) {
 		}
 	}
 }
+
+// Longer blank runs in rebuilt history are squeezed to one line (resize-race
+// artifacts); single blank separators are preserved.
+func TestRebuildHistorySqueezesBlankRuns(t *testing.T) {
+	in := []string{"a", "", "b", "", "", "", "", "c", "", "d", "", ""}
+	squeezed, blanks := in[:0], 0
+	for _, ln := range in {
+		if strings.TrimSpace(ln) == "" {
+			blanks++
+			if blanks > 1 {
+				continue
+			}
+		} else {
+			blanks = 0
+		}
+		squeezed = append(squeezed, ln)
+	}
+	want := []string{"a", "", "b", "", "c", "", "d", ""}
+	if len(squeezed) != len(want) {
+		t.Fatalf("got %v want %v", squeezed, want)
+	}
+	for i := range want {
+		if squeezed[i] != want[i] {
+			t.Fatalf("got %v want %v", squeezed, want)
+		}
+	}
+}
