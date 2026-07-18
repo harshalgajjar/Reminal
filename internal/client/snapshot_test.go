@@ -121,7 +121,7 @@ func roundTrip(t *testing.T, w, h, sb int, output string) (src, dst *vt.Emulator
 	if _, err := src.Write([]byte(output)); err != nil {
 		t.Fatalf("src write: %v", err)
 	}
-	snap := buildSnapshot(src, sb, 0)
+	snap := buildSnapshot(src, renderScrollback(src, sb), nil, 0, false)
 	dst = vt.NewEmulator(w, h)
 	dst.Scrollback().SetMaxLines(sb)
 	if _, err := dst.Write([]byte(snap)); err != nil {
@@ -184,7 +184,7 @@ func TestSnapshotByteCapTrimsOldest(t *testing.T) {
 		e.Write([]byte(fmt.Sprintf("LINE-%04d\r\n", i)))
 	}
 	// Generous line cap, tiny byte cap → only the newest scrollback survives.
-	snap := buildSnapshot(e, 10000, 200)
+	snap := buildSnapshot(e, renderScrollback(e, 10000), nil, 200, false)
 
 	if !strings.Contains(snap, "LINE-0495") {
 		t.Errorf("expected newest history (LINE-0495) within the byte cap")

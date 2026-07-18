@@ -83,6 +83,10 @@ type Agent struct {
 	screen          *vt.Emulator
 	screenMu        sync.Mutex
 	scrollbackLines int // history lines included in a snapshot (0 = screen only)
+	// rebuildEmu is the persistent tall emulator snapshots replay history
+	// through (see rebuildView). Guarded by rebuildMu; lazily created.
+	rebuildEmu      *vt.Emulator
+	rebuildMu       sync.Mutex
 	scrollbackBytes int // byte cap on a snapshot's history (0 = no cap)
 
 	writeMu sync.Mutex // serializes WS writes; safe across sender/reader goroutines
@@ -1566,6 +1570,11 @@ func (a *Agent) initScreen() {
 	}
 	scr := a.screen
 	a.screenMu.Unlock()
+	if a.buf != nil {
+		// Seed the replay-geometry baseline for the history rebuild (see
+		// scrollback.SetBase / rebuildView).
+		a.buf.SetBase(int(cols), int(rows))
+	}
 
 	// CRITICAL: the emulator answers terminal queries (device attributes,
 	// cursor-position / status reports, etc.) by writing the reply into an
@@ -1603,7 +1612,134 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	}
 	a.screenMu.Lock()
 	a.screen.Resize(int(cols), int(rows))
+	if a.buf != nil {
+		// Marker for the history rebuild: bytes after this point were emitted
+		// for the new geometry. Under screenMu so it orders correctly against
+		// record()'s appends.
+		a.buf.AppendResize(int(cols), int(rows))
+	}
 	a.screenMu.Unlock()
+}
+
+// rebuildView replays the raw (encrypted) output buffer through a tall replay
+// emulator and returns the reconstructed HISTORY plus, when the session is on
+// the main screen, the current SCREEN rows — carved from the same replay, so
+// history and screen can never overlap or misalign (no seam heuristics).
+// screen == nil means "use the live emulator's screen" (alt-screen sessions,
+// where the replay only reconstructs the main-buffer content behind the app).
+// ok=false means the rebuild can't run (no crypto box or buffer — bare test
+// agents) and the caller should fall back to the live emulator's scrollback.
+//
+// The buffer is a bounded ring, so the replay may begin mid-stream — the
+// parser resynchronises at the next escape sequence, and full-screen apps
+// repaint, so at worst the oldest line or two of history render oddly. Output
+// recorded between this snapshot of the buffer and the live-screen read that
+// follows is missing from the replay only for milliseconds' worth of bytes.
+func (a *Agent) rebuildView() (history, screen []string, ok bool) {
+	if a.box == nil || a.buf == nil || a.scrollbackLines == 0 {
+		return nil, nil, false
+	}
+	entries := a.buf.From(0)
+	if len(entries) == 0 {
+		return nil, nil, true // nothing recorded yet — empty history is correct
+	}
+	// Start the replay at the geometry in effect at the oldest retained entry
+	// and follow the recorded resize markers from there — every segment
+	// re-renders at the width it was emitted for, exactly like a live viewer
+	// saw it (replaying 120-col output at 100 cols wraps every line).
+	cols, rows := a.buf.Base()
+	if cols <= 0 || rows <= 0 {
+		a.screenMu.Lock()
+		cols, rows = a.screen.Width(), a.screen.Height()
+		a.screenMu.Unlock()
+	}
+	if cols <= 0 {
+		cols = 80
+	}
+	if rows <= 0 {
+		rows = 24
+	}
+	// Replay on a TALL screen (current width). Inline TUIs repaint their whole
+	// visible transcript with cursor-relative writes; on a screen-height
+	// emulator each repaint lands after content has scrolled and a stale copy
+	// gets pushed into scrollback — one duplicate transcript block per resize
+	// or redraw. On a tall screen the repaints overwrite IN PLACE (the cursor
+	// never leaves the visible area), so each line exists exactly once by
+	// construction. Only genuinely long history scrolls off the tall screen.
+	//
+	// The emulator is PERSISTENT (created once, reset with RIS between
+	// rebuilds) because vt's Close races its own query-drain goroutine, and
+	// not closing would leak that goroutine per snapshot. Serialized by
+	// rebuildMu — concurrent joins take turns.
+	const rebuildRows = 400
+	a.rebuildMu.Lock()
+	defer a.rebuildMu.Unlock()
+	if a.rebuildEmu == nil {
+		a.rebuildEmu = vt.NewEmulator(cols, rebuildRows)
+		re := a.rebuildEmu
+		// Drain terminal-query replies or Write can block forever (see
+		// initScreen). Lives as long as the agent, like the live emulator's.
+		go func() { _, _ = io.Copy(io.Discard, re) }()
+	}
+	e := a.rebuildEmu
+	_, _ = e.Write([]byte("\x1bc")) // RIS: fresh terminal state for this rebuild
+	e.ClearScrollback()
+	e.Resize(cols, rebuildRows)
+	e.Scrollback().SetMaxLines(a.scrollbackLines)
+	// The app addresses rows assuming the terminal is `rows` tall; on the tall
+	// emulator those must be translated into the sliding virtual viewport or a
+	// resize repaint homing to "row 1" would overwrite the oldest history
+	// instead of its own previous render (see vviewWriter).
+	w := &vviewWriter{e: e, rows: rows}
+	for _, ent := range entries {
+		if ent.Cols > 0 {
+			// Resize marker: the following bytes were emitted for this geometry.
+			e.Resize(ent.Cols, rebuildRows)
+			w.setRows(ent.Rows)
+			continue
+		}
+		if ent.Bar {
+			continue // status-bar chrome: geometry-bound, meaningless in a replay
+		}
+		pt, err := a.box.Decrypt(ent.Data)
+		if err != nil {
+			return nil, nil, false
+		}
+		w.Write(pt)
+	}
+	wasAlt := e.IsAltScreen()
+	if wasAlt {
+		// Pop back to the main buffer so Render() shows the content BEHIND the
+		// full-screen app — that content is the history. The live emulator
+		// still owns the actual alt screen the viewer will get.
+		_, _ = e.Write([]byte("\x1b[?1049l"))
+	}
+	// Rendered rows of the tall replay, trailing blanks trimmed.
+	lines := strings.Split(e.Render(), "\n")
+	end := len(lines)
+	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	lines = lines[:end]
+	for i, r := range lines {
+		lines[i] = strings.TrimRight(r, " ")
+	}
+	// The virtual viewport [base, base+rows) is the current screen; everything
+	// above it — plus whatever scrolled off the tall replay — is history. On
+	// the alt screen the whole main buffer is history (the app owns the view).
+	history = renderScrollback(e, a.scrollbackLines)
+	base := w.Base()
+	if wasAlt || base > len(lines) {
+		base = len(lines)
+	}
+	history = append(history, lines[:base]...)
+	if !wasAlt {
+		screen = lines[base:]
+	}
+	if a.scrollbackLines > 0 && len(history) > a.scrollbackLines {
+		history = history[len(history)-a.scrollbackLines:]
+	}
+	return history, screen, true
 }
 
 // snapshotFrame returns the encrypted snapshot of the current screen+scrollback
@@ -1614,8 +1750,13 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 	if a.screen == nil {
 		return "", 0
 	}
+	history, rebuiltScreen, ok := a.rebuildView()
 	a.screenMu.Lock()
-	snap := buildSnapshot(a.screen, a.scrollbackLines, a.scrollbackBytes)
+	if !ok {
+		history = renderScrollback(a.screen, a.scrollbackLines)
+		rebuiltScreen = nil
+	}
+	snap := buildSnapshot(a.screen, history, rebuiltScreen, a.scrollbackBytes, false)
 	latest := a.buf.LatestSeq()
 	a.screenMu.Unlock()
 	if snap == "" {

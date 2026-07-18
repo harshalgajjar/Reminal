@@ -16,11 +16,28 @@ type scrollback struct {
 	bytes    int
 	maxBytes int
 	notify   chan struct{}
+	// baseCols/baseRows is the geometry in effect at the OLDEST retained
+	// entry: seeded with the initial screen size and advanced whenever a
+	// resize marker is evicted, so a history rebuild always knows the width
+	// to start its replay at even after the marker itself is gone.
+	baseCols, baseRows int
 }
 
 type scrollEntry struct {
 	Seq  uint64
 	Data string // base64 ciphertext, ready to send as-is
+	// Bar marks status-bar chrome (row-addressed draws, scroll-region asserts).
+	// Viewers stream these like any output, but the snapshot's history REBUILD
+	// skips them: replayed outside their original geometry they'd stamp bar
+	// text and scroll regions into the middle of reconstructed history.
+	Bar bool
+	// Cols/Rows > 0 marks a RESIZE MARKER (Data is empty): the PTY changed to
+	// this geometry before the next entry's bytes were emitted. The snapshot's
+	// history rebuild resizes its replay emulator in lockstep so each segment
+	// re-renders at the width it was written for — replaying 120-col output at
+	// 100 cols wraps every line into garbage. Never streamed to viewers (they
+	// get real resize messages) and skipped by the catch-up sender.
+	Cols, Rows int
 }
 
 func newScrollback(maxBytes int) *scrollback {
@@ -32,13 +49,22 @@ func newScrollback(maxBytes int) *scrollback {
 
 // Append records a new chunk and returns its assigned sequence number.
 // Older entries are evicted until total bytes fit under maxBytes.
-func (s *scrollback) Append(data string) uint64 {
+func (s *scrollback) Append(data string) uint64 { return s.append(data, false) }
+
+// AppendBar records status-bar chrome: streamed to viewers like any output but
+// skipped by the snapshot history rebuild (see scrollEntry.Bar).
+func (s *scrollback) AppendBar(data string) uint64 { return s.append(data, true) }
+
+func (s *scrollback) append(data string, bar bool) uint64 {
 	s.mu.Lock()
 	s.nextSeq++
 	seq := s.nextSeq
-	s.entries = append(s.entries, scrollEntry{Seq: seq, Data: data})
+	s.entries = append(s.entries, scrollEntry{Seq: seq, Data: data, Bar: bar})
 	s.bytes += len(data)
 	for s.bytes > s.maxBytes && len(s.entries) > 1 {
+		if s.entries[0].Cols > 0 {
+			s.baseCols, s.baseRows = s.entries[0].Cols, s.entries[0].Rows
+		}
 		s.bytes -= len(s.entries[0].Data)
 		s.entries = s.entries[1:]
 	}
@@ -48,6 +74,40 @@ func (s *scrollback) Append(data string) uint64 {
 	default:
 	}
 	return seq
+}
+
+// AppendResize records a PTY geometry change so the snapshot history rebuild
+// can replay each output segment at the width it was emitted for. Consecutive
+// markers coalesce (only the latest geometry before the next output matters),
+// so a burst of resizes with no output in between costs one entry.
+func (s *scrollback) AppendResize(cols, rows int) {
+	if cols <= 0 || rows <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if n := len(s.entries); n > 0 && s.entries[n-1].Cols > 0 {
+		s.entries[n-1].Cols, s.entries[n-1].Rows = cols, rows
+		return
+	}
+	s.nextSeq++
+	s.entries = append(s.entries, scrollEntry{Seq: s.nextSeq, Cols: cols, Rows: rows})
+}
+
+// SetBase seeds the geometry in effect before the first buffered entry (the
+// initial screen size). See baseCols.
+func (s *scrollback) SetBase(cols, rows int) {
+	s.mu.Lock()
+	s.baseCols, s.baseRows = cols, rows
+	s.mu.Unlock()
+}
+
+// Base returns the geometry in effect at the oldest retained entry (0,0 if
+// never seeded).
+func (s *scrollback) Base() (cols, rows int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.baseCols, s.baseRows
 }
 
 // From returns a copy of entries with Seq >= fromSeq.
