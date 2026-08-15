@@ -50,6 +50,21 @@ jobs:
         with:
           go-version: "1.22"
 
+      - name: Stamp Windows resources (icon + version info)
+        if: matrix.goos == 'windows'
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          # Regenerate the committed .syso resources with the real release
+          # version, so reminal.exe's Properties → Details and the Windows
+          # Firewall dialog show this build's number instead of 0.0.0.0.
+          VERSION="${VERSION#v}"
+          NUM="$(echo "$VERSION" | sed 's/-.*//').0"
+          cd cmd/reminal
+          go run github.com/tc-hib/go-winres@v0.3.3 make --in winres/winres.json \
+            --arch "${{ matrix.goarch }}" \
+            --product-version "$NUM" --file-version "$NUM"
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
