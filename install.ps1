@@ -74,10 +74,45 @@ if (($env:Path -split ";") -notcontains $installDir) {
     $env:Path = "$env:Path;$installDir"
 }
 
+# Shell setup — the Windows twin of install.sh's setup_shell(): a single
+# marker-guarded block in the PowerShell profile that (a) guarantees reminal is
+# on PATH for every new shell and (b) loads tab completion. The PATH line looks
+# redundant next to the registry write above, but it isn't: an already-running
+# Windows Terminal hands new tabs its own CACHED environment, so freshly
+# installed registry PATH entries don't reach them — the profile runs in every
+# new shell and repairs that. Idempotent (the block is rewritten, never
+# duplicated); skip with REMINAL_NO_RC=1. Written for both Windows PowerShell
+# and PowerShell 7 profiles so whichever the user opens works.
+if ($env:REMINAL_NO_RC -ne "1") {
+    $begin = "# >>> reminal >>>"
+    $end = "# <<< reminal <<<"
+    $block = @"
+$begin
+if ((`$env:Path -split ';') -notcontains "$installDir") { `$env:Path += ";$installDir" }
+if (Get-Command reminal -ErrorAction SilentlyContinue) {
+    reminal completion powershell | Out-String | Invoke-Expression
+}
+$end
+"@
+    $docs = [Environment]::GetFolderPath("MyDocuments")
+    foreach ($profDir in @("WindowsPowerShell", "PowerShell")) {
+        $prof = Join-Path (Join-Path $docs $profDir) "profile.ps1"
+        try {
+            New-Item -ItemType Directory -Force -Path (Split-Path $prof) | Out-Null
+            $existing = if (Test-Path $prof) { Get-Content $prof -Raw } else { "" }
+            # Strip any previously-managed block so re-running rewrites exactly one.
+            $existing = $existing -replace "(?ms)\r?\n?# >>> reminal >>>.*?# <<< reminal <<<\r?\n?", ""
+            Set-Content -Path $prof -Value ($existing.TrimEnd() + "`r`n`r`n" + $block + "`r`n")
+            Write-Host "  + reminal shell setup written to $prof"
+        } catch {
+            # Best-effort — never fail the install over a profile write.
+        }
+    }
+}
+
 Write-Host ""
 Write-Host "reminal v$version installed to $installDir"
 Write-Host ""
 Write-Host "Start a session:        reminal"
-Write-Host "Tab completion:         reminal completion powershell >> `$PROFILE"
 Write-Host ""
-Write-Host "Open a NEW terminal if 'reminal' isn't found in this one."
+Write-Host "Open a NEW terminal window for PATH + completion to load there."
