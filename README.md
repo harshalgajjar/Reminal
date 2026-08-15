@@ -7,7 +7,7 @@
 **One command. Scan a QR. Your phone is a live terminal on your machine** — then reach in and control any app window, mirror the whole screen, and drive your whole fleet from one browser.
 No open ports, no keys on disk, no client to install.
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/harshalgajjar/Reminal?color=success&label=release)](https://github.com/harshalgajjar/Reminal/releases) [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/) [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/harshalgajjar/Reminal/releases) [![Encryption](https://img.shields.io/badge/encryption-AES--256--GCM-success)](#security) [![Relay](https://img.shields.io/badge/relay-Cloudflare%20free%20tier-F38020?logo=cloudflare&logoColor=white)](cloudflare/README.md)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE) [![Release](https://img.shields.io/github/v/release/harshalgajjar/Reminal?color=success&label=release)](https://github.com/harshalgajjar/Reminal/releases) [![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/) [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](https://github.com/harshalgajjar/Reminal/releases) [![Encryption](https://img.shields.io/badge/encryption-AES--256--GCM-success)](#security) [![Relay](https://img.shields.io/badge/relay-Cloudflare%20free%20tier-F38020?logo=cloudflare&logoColor=white)](cloudflare/README.md)
 
 </div>
 
@@ -115,7 +115,7 @@ That single pane works because you *own* the machines. Enroll a device once — 
 
 ## Move a file between any two machines
 
-`reminal copy report.pdf` on one machine prints a **one-time code**; `reminal paste <code>` on another pulls the file down — Mac to Linux, laptop to server, anywhere to anywhere. End-to-end encrypted, no cloud drive, no account. AirDrop, for every machine you own.
+`reminal copy report.pdf` on one machine prints a **one-time code**; `reminal paste <code>` on another pulls the file down — Mac to Linux, Windows to Mac, laptop to server, anywhere to anywhere. End-to-end encrypted, no cloud drive, no account. AirDrop, for every machine you own.
 
 <div align="center">
 <img src="docs/copypaste.gif" alt="One terminal runs reminal copy report.pdf and gets a one-time code; another machine runs reminal paste with that code and the file transfers, end-to-end encrypted" width="900">
@@ -311,7 +311,16 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | Closed-lid mode (auto virtual display) | ✅ | — | — |
 | Hot restart (`reminal restart`) | ✅ | ✅ | — (no exec() — start a new session after upgrading) |
 
-<sub>Linux capture needs an **X11** session (or Xwayland) — native Wayland blocks synthetic input, so it isn't supported yet. Apple Silicon, x86_64, and Windows ARM64 all supported. Windows sessions default to PowerShell (pwsh → Windows PowerShell → cmd; set `$env:SHELL` to override).</sub>
+<sub>Linux capture needs an **X11** session (or Xwayland) — native Wayland blocks synthetic input, so it isn't supported yet. Apple Silicon, x86_64, and Windows ARM64 all supported.</sub>
+
+#### Windows notes
+
+- **Shell**: sessions open PowerShell 7 (`pwsh`) when installed, else Windows PowerShell, else `cmd` — set `$env:SHELL` to override. Terminals run through **ConPTY**, the same API Windows Terminal uses, so colors, TUIs, and resizing behave like a native console.
+- **No permission prompts**: unlike macOS's Screen Recording grant, window mirroring and input injection need nothing enabled — it works out of the box.
+- **Firewall prompt on first mirror**: when a viewer first attaches to a window/desktop pane, Windows Firewall asks about reminal — that's the direct peer-to-peer (WebRTC) stream binding a UDP port, the same prompt any video-call app gets. **Allow** enables P2P; **Cancel** is also fine — streaming falls back to the encrypted relay path.
+- **Streaming**: Windows uses the JPEG capture path (~5–15 fps). The 60 fps H.264 pipeline is currently macOS-only.
+- **Mirroring needs a logged-in desktop** — a machine sitting at the login screen (or a service session) has no windows to capture; terminal sharing works regardless.
+- **Upgrades**: `reminal upgrade` swaps the exe in place (the running one is renamed aside). Hot restart isn't available — running sessions keep their old version until you start new ones; the background host restarts itself automatically.
 
 ### Commands
 
@@ -356,14 +365,14 @@ Sessions resolve by **exact id, exact name, unique id prefix, or unique substrin
 | `REMINAL_RELAY` | Cloudflare relay URL | Override the relay WebSocket base URL |
 | `REMINAL_WEB` | Cloudflare web URL | Override the web UI URL shown in the banner |
 | `REMINAL_LOCAL` | — | Set to `1` to point everything at `localhost` |
-| `REMINAL_OWNERS_DIR` | `/etc/reminal` | Where the machine's owner list lives (the sudo-gated trust store) — override for tests or unusual layouts |
-| `REMINAL_NO_KEEP_AWAKE` | — | Set to `1` to let the host sleep while reminal runs (defaults to keeping it awake via `caffeinate` / `systemd-inhibit`) |
+| `REMINAL_OWNERS_DIR` | `/etc/reminal` (`%ProgramData%\reminal` on Windows) | Where the machine's owner list lives (the admin-gated trust store) — override for tests or unusual layouts |
+| `REMINAL_NO_KEEP_AWAKE` | — | Set to `1` to let the host sleep while reminal runs (defaults to keeping it awake via `caffeinate` / `systemd-inhibit` / `SetThreadExecutionState`) |
 | `REMINAL_TURN` / `REMINAL_TURN_USER` / `REMINAL_TURN_PASS` | — | Optional TURN server for P2P window mirroring behind hostile NATs (or `REMINAL_TURN_CF_KEY` + `REMINAL_TURN_CF_TOKEN` for Cloudflare TURN). Without one, un-punchable viewers stay on the relay fallback |
 | `REMINAL_NO_CAPTURE_HELPER` | — | Set to `1` to force the screenshot capture path (skip the native ScreenCaptureKit helper) |
 | `REMINAL_DEBUG` | — | Set to `1` to append the raw error string to status lines, for diagnosing connection problems |
-| `SHELL` | `$SHELL`, then probes `/bin/zsh`, `/bin/bash`, `/bin/sh` | Which shell to spawn inside the session |
+| `SHELL` | `$SHELL`, then probes `/bin/zsh`, `/bin/bash`, `/bin/sh` (Windows: `pwsh` → `powershell` → `cmd`) | Which shell to spawn inside the session |
 
-Installs to `~/.local/bin/reminal` — no sudo. macOS and Linux, Apple Silicon and x86_64. Build from source with `./scripts/build.sh` (Go 1.25+, Swift toolchain on macOS for the native capture helper).
+Installs to `~/.local/bin/reminal` (macOS/Linux) or `%LOCALAPPDATA%\Programs\reminal` (Windows) — no sudo/admin needed. Apple Silicon, x86_64, and Windows ARM64. Build from source with `./scripts/build.sh` (Go 1.25+, Swift toolchain on macOS for the native capture helper); on Windows it's a plain `go build ./cmd/reminal`.
 
 ---
 
