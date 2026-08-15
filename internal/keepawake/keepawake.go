@@ -68,6 +68,13 @@ func Start() (stop func()) {
 	if os.Getenv("REMINAL_NO_KEEP_AWAKE") == "1" {
 		return noop
 	}
+	if runtime.GOOS == "windows" {
+		// In-process (SetThreadExecutionState) — no child to spawn.
+		if s, ok := execStateStart(false); ok {
+			return s
+		}
+		return noop
+	}
 	cmd := command()
 	if cmd == nil {
 		return noop
@@ -105,6 +112,13 @@ func StartDisplay() (stop func()) {
 		// -d: prevent display idle sleep (also inhibits the screensaver), so the
 		// host can't idle-lock. -w: exit when reminal's pid exits.
 		cmd = exec.Command("caffeinate", "-d", "-w", strconv.Itoa(os.Getpid()))
+	case "windows":
+		// ES_DISPLAY_REQUIRED keeps the screen lit (and the lock screen away)
+		// while a window is being mirrored — same reason as macOS -d.
+		if s, ok := execStateStart(true); ok {
+			return s
+		}
+		return noop
 	default:
 		// Linux idle-lock behaviour is desktop-environment specific; the base
 		// idle inhibitor from Start already covers the common cases.

@@ -132,7 +132,11 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 	defer conn.Close()
 	// Spawned per connection (go a.handleControlConn); a panic here would crash the
 	// agent and kill the shell session. Contain it — the command just fails.
-	defer func() { if rec := recover(); rec != nil { recoverLog("handleControlConn", rec) } }()
+	defer func() {
+		if rec := recover(); rec != nil {
+			recoverLog("handleControlConn", rec)
+		}
+	}()
 	r := bufio.NewReader(conn)
 	line, err := r.ReadString('\n')
 	if err != nil {
@@ -179,6 +183,12 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			}
 		}()
 		return
+	case line == "pause":
+		// `reminal stop` on Windows: no SIGUSR1 there, so the pause-broadcast
+		// request rides the control socket instead. Same effect as the Unix
+		// signal — stop broadcasting, keep the local shell alive.
+		a.pause()
+		_, _ = fmt.Fprintln(conn, "ok")
 	case line == "connections":
 		// Return the live viewer connect-timestamp list as JSON on a
 		// single line. CLI side prints it as a human-readable table.

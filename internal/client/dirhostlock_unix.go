@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Harshal Gajjar
 
+//go:build !windows
+
 package client
 
 import (
@@ -17,6 +19,7 @@ import (
 // every reclaim, so the machine flaps online/offline and in-flight owner
 // handshakes/spawns get dropped. flock ties the lock to the holder's process:
 // if it crashes, the kernel releases it and another agent takes over.
+// (Windows uses LockFileEx for the same semantics — see dirhostlock_windows.go.)
 
 func dirHostLockPath() (string, error) {
 	dir, err := reminalDir()

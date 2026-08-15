@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -201,73 +200,58 @@ func RunCopyBackground(path string, ttl time.Duration) error {
 		return fmt.Errorf("locate self: %w", err)
 	}
 
-	r, w, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("create handshake pipe: %w", err)
-	}
-	defer r.Close()
 	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
-		_ = w.Close()
-		return fmt.Errorf("open /dev/null: %w", err)
+		return fmt.Errorf("open %s: %w", os.DevNull, err)
 	}
 	defer devnull.Close()
 
-	cmd := exec.Command(exe, "copy", "--__hold", "--handshake-fd", "3", "--ttl", ttl.String(), path)
+	cmd := exec.Command(exe, "copy", "--__hold", "--ttl", ttl.String(), path)
 	cmd.Stdin = devnull
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull
-	cmd.ExtraFiles = []*os.File{w}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	recv, afterStart, err := prepareHandshake(cmd)
+	if err != nil {
+		return err
+	}
 	if err := cmd.Start(); err != nil {
-		_ = w.Close()
+		afterStart()
 		return fmt.Errorf("start background holder: %w", err)
 	}
-	_ = w.Close() // so our read EOFs if the child dies before reporting
+	afterStart()
 	_ = cmd.Process.Release()
 
-	done := make(chan copyHandshake, 1)
-	errc := make(chan error, 1)
-	go func() {
-		var hs copyHandshake
-		if err := json.NewDecoder(r).Decode(&hs); err != nil {
-			errc <- fmt.Errorf("background holder didn't start: %w", err)
-			return
-		}
-		done <- hs
-	}()
-
-	select {
-	case hs := <-done:
-		if hs.Error != "" {
-			return errors.New(hs.Error)
-		}
-		fmt.Printf("Copy code: %s\n", displayCode(hs.Code))
-		fmt.Printf("On the other machine, run:  reminal paste %s\n", displayCode(hs.Code))
-		fmt.Printf("Holding %s in the background (pid %d, expires in %s).\n", filepath.Base(path), hs.PID, ttl)
-		fmt.Printf("Cancel with:  kill %d\n", hs.PID)
-		return nil
-	case err := <-errc:
-		return err
-	case <-time.After(spawnHandshakeTimeout):
-		return errors.New("background holder didn't report ready in time")
+	line, err := recv(spawnHandshakeTimeout)
+	if err != nil {
+		return fmt.Errorf("background holder didn't start: %w", err)
 	}
+	var hs copyHandshake
+	if err := json.Unmarshal([]byte(line), &hs); err != nil {
+		return fmt.Errorf("background holder didn't start: %w", err)
+	}
+	if hs.Error != "" {
+		return errors.New(hs.Error)
+	}
+	fmt.Printf("Copy code: %s\n", displayCode(hs.Code))
+	fmt.Printf("On the other machine, run:  reminal paste %s\n", displayCode(hs.Code))
+	fmt.Printf("Holding %s in the background (pid %d, expires in %s).\n", filepath.Base(path), hs.PID, ttl)
+	// `kill` also works in PowerShell (an alias of Stop-Process), so the hint
+	// holds on every platform.
+	fmt.Printf("Cancel with:  kill %d\n", hs.PID)
+	return nil
 }
 
 // RunCopyHold is the detached holder (invoked with --__hold): it dials the
 // relay, reports the code back to its parent over handshakeFD, then blocks
 // serving the first valid paste (or until ttl). Its stdio is /dev/null, so
 // all user-facing output happened in the parent already.
-func RunCopyHold(path string, ttl time.Duration, handshakeFD int) error {
+func RunCopyHold(path string, ttl time.Duration, handshakeFD int, handshakeAddr string) error {
 	if ttl <= 0 {
 		ttl = DefaultCopyTTL
 	}
 	report := func(hs copyHandshake) {
-		if handshakeFD <= 0 {
-			return
-		}
-		hf := os.NewFile(uintptr(handshakeFD), "handshake")
-		if hf == nil {
+		hf, err := handshakeWriter(handshakeFD, handshakeAddr)
+		if err != nil {
 			return
 		}
 		_ = json.NewEncoder(hf).Encode(hs)

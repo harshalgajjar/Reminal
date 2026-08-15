@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Harshal Gajjar
 
+//go:build !windows
+
 package client
 
 // Hot-restart support: replace the running agent's binary image with a
@@ -75,18 +77,6 @@ const (
 	// crash on its next poll cycle with EBADF.
 	envResumePTYFD = "REMINAL_RESUME_PTY_FD"
 )
-
-// ResumeState is what the new process reconstructs from env vars after
-// an Exec restart. nil from LoadResumeState() means "not resuming —
-// take the normal fresh-startup path."
-type ResumeState struct {
-	SessionID string
-	PIN       string
-	PinHash   string
-	Token     string
-	StartedAt time.Time
-	PTY       *pty.Session
-}
 
 // LoadResumeState reads REMINAL_RESUME=1 + the surrounding env vars
 // from the freshly-Exec'd process and returns a ResumeState if we're

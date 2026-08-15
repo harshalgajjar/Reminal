@@ -17,7 +17,6 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -45,6 +44,9 @@ type TunnelOptions struct {
 	// writes credentials JSON to this fd once it's connected so the
 	// parent `reminal expose` process can print + exit.
 	HandshakeFD int
+	// HandshakeAddr is the Windows handshake channel: the parent's loopback
+	// listener address to dial and report credentials to (see handshakeWriter).
+	HandshakeAddr string
 	// Version stamps the active record + banner.
 	Version string
 }
@@ -62,9 +64,10 @@ type Tunnel struct {
 	version   string
 	startedAt time.Time
 
-	writeMu     sync.Mutex // serialises WS writes across the per-request goroutines
-	httpClient  *http.Client
-	handshakeFD int
+	writeMu       sync.Mutex // serialises WS writes across the per-request goroutines
+	httpClient    *http.Client
+	handshakeFD   int
+	handshakeAddr string
 
 	// connMu guards conn so the signal handler can close the live WS
 	// the moment stop fires, instead of waiting up to 60s for the read
@@ -102,15 +105,16 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 		},
 	}
 	return &Tunnel{
-		sessionID:   id,
-		pin:         pin,
-		pinHash:     pinHash,
-		webURL:      config.WebURL(),
-		port:        opts.Port,
-		public:      opts.Public,
-		version:     opts.Version,
-		httpClient:  hc,
-		handshakeFD: opts.HandshakeFD,
+		sessionID:     id,
+		pin:           pin,
+		pinHash:       pinHash,
+		webURL:        config.WebURL(),
+		port:          opts.Port,
+		public:        opts.Public,
+		version:       opts.Version,
+		httpClient:    hc,
+		handshakeFD:   opts.HandshakeFD,
+		handshakeAddr: opts.HandshakeAddr,
 	}, nil
 }
 
@@ -135,7 +139,7 @@ func (t *Tunnel) Run() error {
 	defer func() { _ = session.ClearActive(t.sessionID) }()
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
+	notifyAgentSignals(sigCh)
 	defer signal.Stop(sigCh)
 	stop := make(chan struct{})
 	go func() {
@@ -311,7 +315,11 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 	// Spawned per relay-forwarded request (go t.handleTunnelReq); a panic here would
 	// crash the port-forward. Contain it so one bad request just fails.
-	defer func() { if r := recover(); r != nil { recoverLog("handleTunnelReq", r) } }()
+	defer func() {
+		if r := recover(); r != nil {
+			recoverLog("handleTunnelReq", r)
+		}
+	}()
 	var req struct {
 		ReqID   string            `json:"req_id"`
 		Method  string            `json:"method"`
@@ -411,7 +419,7 @@ func (t *Tunnel) writeMsg(conn *websocket.Conn, m protocol.Message) error {
 }
 
 func (t *Tunnel) writeHandshake() {
-	if t.handshakeFD == 0 {
+	if t.handshakeFD == 0 && t.handshakeAddr == "" {
 		return
 	}
 	payload := map[string]any{
@@ -425,13 +433,14 @@ func (t *Tunnel) writeHandshake() {
 	if err != nil {
 		return
 	}
-	f := os.NewFile(uintptr(t.handshakeFD), "handshake")
-	if f == nil {
+	w, err := handshakeWriter(t.handshakeFD, t.handshakeAddr)
+	if err != nil {
 		return
 	}
-	_, _ = f.Write(append(data, '\n'))
-	_ = f.Close()
+	_, _ = w.Write(append(data, '\n'))
+	_ = w.Close()
 	t.handshakeFD = 0
+	t.handshakeAddr = ""
 }
 
 // isHopHeader returns true for headers that mustn't be forwarded across
@@ -455,15 +464,8 @@ func SpawnTunnel(port int, public bool) (*SpawnedSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("locate self: %w", err)
 	}
-	r, w, err := os.Pipe()
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-
 	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
-		_ = w.Close()
 		return nil, err
 	}
 	defer devnull.Close()
@@ -471,7 +473,6 @@ func SpawnTunnel(port int, public bool) (*SpawnedSession, error) {
 	args := []string{
 		"--expose-headless",
 		"--expose-port", fmt.Sprintf("%d", port),
-		"--handshake-fd", "3",
 	}
 	if public {
 		args = append(args, "--expose-public")
@@ -480,36 +481,27 @@ func SpawnTunnel(port int, public bool) (*SpawnedSession, error) {
 	cmd.Stdin = devnull
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull
-	cmd.ExtraFiles = []*os.File{w}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	recv, afterStart, err := prepareHandshake(cmd)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := cmd.Start(); err != nil {
-		_ = w.Close()
+		afterStart()
 		return nil, fmt.Errorf("start headless tunnel: %w", err)
 	}
-	_ = w.Close()
+	afterStart()
 	_ = cmd.Process.Release()
 
-	type result struct {
-		s   *SpawnedSession
-		err error
+	line, err := recv(spawnHandshakeTimeout)
+	if err != nil {
+		return nil, err
 	}
-	done := make(chan result, 1)
-	go func() {
-		dec := json.NewDecoder(r)
-		var sp SpawnedSession
-		if err := dec.Decode(&sp); err != nil {
-			done <- result{nil, fmt.Errorf("read handshake: %w", err)}
-			return
-		}
-		done <- result{&sp, nil}
-	}()
-	select {
-	case res := <-done:
-		return res.s, res.err
-	case <-time.After(spawnHandshakeTimeout):
-		return nil, errors.New("headless tunnel didn't report ready within " + spawnHandshakeTimeout.String())
+	var sp SpawnedSession
+	if err := json.Unmarshal([]byte(line), &sp); err != nil {
+		return nil, fmt.Errorf("parse handshake: %w", err)
 	}
+	return &sp, nil
 }
 
 // PrintSpawnedTunnel renders the new port-forward credentials for the

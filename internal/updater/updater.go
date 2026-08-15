@@ -357,7 +357,7 @@ func apply(url string) error {
 			return fmt.Errorf("tar: %w", err)
 		}
 		switch filepath.Base(hdr.Name) {
-		case "reminal":
+		case "reminal", "reminal.exe":
 			if err := installFileAtomic(bin, tr, dir); err != nil {
 				return err
 			}
@@ -627,6 +627,21 @@ func installFileAtomic(dest string, r io.Reader, dir string) error {
 		return err
 	}
 	if err := os.Rename(tmpName, dest); err != nil {
+		// Windows can't replace a RUNNING executable in place — but it can
+		// RENAME one. Shuffle the live file aside and slot the new one in;
+		// the orphaned .old is cleaned up on the next upgrade (below) or by
+		// the installer.
+		if runtime.GOOS == "windows" {
+			old := dest + ".old"
+			_ = os.Remove(old) // a leftover from the previous upgrade, if any
+			if rerr := os.Rename(dest, old); rerr == nil {
+				if err2 := os.Rename(tmpName, dest); err2 == nil {
+					return nil
+				}
+				// Put the original back so the install isn't left headless.
+				_ = os.Rename(old, dest)
+			}
+		}
 		return fmt.Errorf("install (need write access to %s): %w", dir, err)
 	}
 	return nil

@@ -19,7 +19,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/charmbracelet/x/vt"
@@ -222,6 +221,9 @@ type Agent struct {
 	// this fd and closes it once startup is complete, then the parent
 	// process exits and the child detaches.
 	handshakeFD int
+	// handshakeAddr is the Windows counterpart: the parent's loopback listener
+	// to dial and report to (see handshakeWriter).
+	handshakeAddr string
 	// handshakeOnce guards writeHandshake so it fires exactly once — on the
 	// first successful relay registration, not before. Writing it earlier
 	// let `reminal new` / the web "new session" button return credentials
@@ -322,6 +324,9 @@ type AgentOptions struct {
 	// complete, then closes. Used by `reminal new` to learn the
 	// spawned child's credentials before exiting. Zero means none.
 	HandshakeFD int
+	// HandshakeAddr is the Windows handshake channel (`--handshake-addr`):
+	// the spawning parent's loopback listener to report credentials to.
+	HandshakeAddr string
 	// Resume, if non-nil, signals that this Agent is taking over an
 	// already-running PTY from a previous binary image via the
 	// hot-restart path. The session ID, PIN, and PTY are reused
@@ -410,6 +415,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			resumed:        true,
 			headless:       opts.Headless,
 			handshakeFD:    opts.HandshakeFD,
+			handshakeAddr:  opts.HandshakeAddr,
 			cwd:            currentCwd(),
 		}, nil
 	}
@@ -456,6 +462,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 		pendingUploads: make(map[string]*pendingUpload),
 		headless:       opts.Headless,
 		handshakeFD:    opts.HandshakeFD,
+		handshakeAddr:  opts.HandshakeAddr,
 		name:           strings.TrimSpace(opts.Name),
 		cwd:            currentCwd(),
 	}, nil
@@ -594,9 +601,8 @@ func (a *Agent) Run() error {
 			a.localActive = true
 			a.syncSizeToPTY()
 			go a.pumpHostStdin()
-			winCh := make(chan os.Signal, 1)
-			signal.Notify(winCh, syscall.SIGWINCH)
-			defer signal.Stop(winCh)
+			winCh, stopWinCh := watchResize()
+			defer stopWinCh()
 			go func() {
 				for range winCh {
 					a.syncSizeToPTY()
@@ -658,12 +664,12 @@ func (a *Agent) Run() error {
 	// behavior is to die immediately on these signals, skipping defers and
 	// leaving stale ~/.reminal/active.json + orphaned caffeinate.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGUSR1)
+	notifyAgentSignals(sigCh)
 	defer signal.Stop(sigCh)
 	go func() {
 		first := true
 		for sig := range sigCh {
-			if sig == syscall.SIGUSR1 {
+			if isPauseSignal(sig) {
 				// `reminal stop` — stop broadcasting, keep the local
 				// shell running. Doesn't count against the force-exit
 				// budget; SIGINT/SIGTERM still need a double-tap.
@@ -1011,7 +1017,7 @@ func (a *Agent) broadcastSize(cols, rows uint16) {
 // successful connection; the sync.Once makes all but the first a no-op, so
 // reconnects don't re-signal. No-op for non-spawned agents (handshakeFD 0).
 func (a *Agent) signalRegistered() {
-	if a.handshakeFD == 0 {
+	if a.handshakeFD == 0 && a.handshakeAddr == "" {
 		return
 	}
 	a.handshakeOnce.Do(a.writeHandshake)
@@ -1598,6 +1604,10 @@ func copyToClipboard(text string) bool {
 			{"xclip", "-selection", "clipboard"},
 			{"xsel", "--clipboard", "--input"},
 		}
+	case "windows":
+		// Native Win32 clipboard (CF_UNICODETEXT) — clip.exe would mangle
+		// non-ASCII text through the OEM codepage.
+		return writeClipboardNative(text)
 	default:
 		return false
 	}

@@ -17,11 +17,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/reminal/reminal/internal/client"
 	"github.com/reminal/reminal/internal/keepawake"
+	"github.com/reminal/reminal/internal/proc"
 	"github.com/reminal/reminal/internal/session"
 	"github.com/reminal/reminal/internal/updater"
 	"golang.org/x/term"
@@ -41,6 +41,9 @@ var (
 )
 
 func main() {
+	// Make the console render ANSI escapes (no-op outside Windows/conhost).
+	enableVTConsole()
+
 	// Hot-restart resume path. The previous binary image hit
 	// syscall.Exec on us with REMINAL_RESUME=1 + session credentials in
 	// env + the PTY master inherited as fd 3. Take over without
@@ -174,7 +177,7 @@ func main() {
 				shell = os.Args[2]
 			}
 			if shell == "" {
-				fmt.Fprintln(os.Stderr, "usage: reminal completion <bash|zsh|fish>")
+				fmt.Fprintln(os.Stderr, "usage: reminal completion <bash|zsh|fish|powershell>")
 				os.Exit(1)
 			}
 			if err := client.Completion(shell); err != nil {
@@ -503,7 +506,8 @@ func main() {
 	verboseLong := flag.Bool("verbose", false, "alias for -v")
 	name := flag.String("name", "", "human-friendly label for this session, shown in `reminal list` and usable in place of the ID")
 	headless := flag.Bool("headless", false, "run without owning the host terminal — for spawned background sessions; users normally invoke this via `reminal new`")
-	handshakeFD := flag.Int("handshake-fd", 0, "fd inherited from `reminal new` for the credentials handshake (internal)")
+	handshakeFD := flag.Int("handshake-fd", 0, "fd inherited from `reminal new` for the credentials handshake (internal, Unix)")
+	handshakeAddr := flag.String("handshake-addr", "", "loopback address to report the credentials handshake to (internal, Windows)")
 	exposeHeadless := flag.Bool("expose-headless", false, "run as a headless port-forwarder; users normally invoke this via `reminal expose <port>`")
 	exposePort := flag.Int("expose-port", 0, "local TCP port to forward (used with --expose-headless)")
 	exposePublic := flag.Bool("expose-public", false, "skip PIN gate on the port forward (used with --expose-headless)")
@@ -518,10 +522,11 @@ func main() {
 	// users invoke this indirectly via `reminal expose <port>`.
 	if *exposeHeadless {
 		tun, err := client.NewTunnel(client.TunnelOptions{
-			Port:        *exposePort,
-			Public:      *exposePublic,
-			HandshakeFD: *handshakeFD,
-			Version:     version,
+			Port:          *exposePort,
+			Public:        *exposePublic,
+			HandshakeFD:   *handshakeFD,
+			HandshakeAddr: *handshakeAddr,
+			Version:       version,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -545,7 +550,7 @@ func main() {
 		if hlName == "" {
 			hlName = os.Getenv("REMINAL_NEW_NAME")
 		}
-		opts := client.AgentOptions{Headless: true, HandshakeFD: *handshakeFD, Name: hlName}
+		opts := client.AgentOptions{Headless: true, HandshakeFD: *handshakeFD, HandshakeAddr: *handshakeAddr, Name: hlName}
 		agent, err := client.NewAgentWith(version, opts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -649,7 +654,7 @@ func printHelp() {
 		{"reminal qr [id|name]", "Print just the join QR"},
 		{"reminal doctor", "Self-diagnostic: version, relay reachability, terminal, shell"},
 		{"reminal settings", "Open the settings page (e.g. keep this Mac unlocked)"},
-		{"reminal completion <bash|zsh|fish>", "Print a shell completion script"},
+		{"reminal completion <bash|zsh|fish|powershell>", "Print a shell completion script"},
 		{"reminal upgrade", "Upgrade to the latest release"},
 		{"reminal restart [--all]", "Hot-swap the running agent(s) onto the latest binary"},
 		{"reminal version [--verbose]", "Print version (--verbose adds build date / commit)"},
@@ -767,7 +772,7 @@ func selfHealBundle() {
 		return
 	}
 	client.EnsureDaemonInstalled()
-	if err := syscall.Exec(newBin, os.Args, os.Environ()); err != nil {
+	if err := execReplace(newBin); err != nil {
 		fmt.Fprintln(os.Stderr, "reminal: installed the app bundle — please re-run your command.")
 		os.Exit(0)
 	}
@@ -892,6 +897,7 @@ func runCopyCmd(args []string) error {
 	foreground := false
 	hold := false
 	handshakeFD := 0
+	handshakeAddr := ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -915,6 +921,9 @@ func runCopyCmd(args []string) error {
 		case a == "--handshake-fd" && i+1 < len(args):
 			handshakeFD = client.ParseHandshakeFD(args[i : i+2])
 			i++
+		case a == "--handshake-addr" && i+1 < len(args):
+			handshakeAddr = args[i+1]
+			i++
 		case !strings.HasPrefix(a, "-") && path == "":
 			path = a
 		}
@@ -928,7 +937,7 @@ func runCopyCmd(args []string) error {
 	}
 	switch {
 	case hold:
-		return client.RunCopyHold(abs, ttl, handshakeFD)
+		return client.RunCopyHold(abs, ttl, handshakeFD, handshakeAddr)
 	case foreground:
 		return client.RunCopy(abs, ttl)
 	default:
@@ -1154,9 +1163,13 @@ func runStop(idArg string, yes bool) error {
 			fmt.Print("  Press Enter to continue, Ctrl-C to cancel: ")
 			_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 		}
-		if err := syscall.Kill(a.PID, syscall.SIGTERM); err != nil {
+		if err := proc.Terminate(a.PID); err != nil && !errors.Is(err, proc.ErrGone) {
 			return fmt.Errorf("signal PID %d: %w", a.PID, err)
 		}
+		// The tunnel's own SIGTERM handler clears the record on Unix; Windows
+		// termination is abrupt (no handler runs), so clear it here too —
+		// idempotent either way.
+		_ = session.ClearActive(a.ID)
 		fmt.Printf("  Stopped port-forward %s (port %d, PID %d).\n", a.ID, a.Port, a.PID)
 		return nil
 	}
@@ -1180,8 +1193,8 @@ func runStop(idArg string, yes bool) error {
 		fmt.Print("  Press Enter to continue, Ctrl-C to cancel: ")
 		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 	}
-	if err := syscall.Kill(a.PID, syscall.SIGUSR1); err != nil {
-		return fmt.Errorf("signal PID %d: %w", a.PID, err)
+	if err := pauseAgent(a.PID); err != nil {
+		return fmt.Errorf("pause PID %d: %w", a.PID, err)
 	}
 	fmt.Printf("  Stopped session %s (PID %d).\n", a.ID, a.PID)
 	return nil
@@ -1775,21 +1788,21 @@ func terminateAgent(a session.Active) error {
 	defer func() { _ = session.ClearActive(a.ID) }()
 
 	pid := a.PID
-	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
+	if err := proc.Terminate(pid); err != nil {
+		if errors.Is(err, proc.ErrGone) {
 			return nil // process already gone; record cleared by the defer
 		}
-		return fmt.Errorf("SIGTERM PID %d: %w", pid, err)
+		return fmt.Errorf("terminate PID %d: %w", pid, err)
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if syscall.Kill(pid, 0) != nil {
+		if !proc.Alive(pid) {
 			break // process gone
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if syscall.Kill(pid, 0) == nil {
-		_ = syscall.Kill(pid, syscall.SIGKILL)
+	if proc.Alive(pid) {
+		_ = proc.Kill(pid)
 	}
 	return nil
 }

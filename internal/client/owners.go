@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode"
@@ -68,13 +69,20 @@ func deviceKeyPath() (string, error) {
 }
 
 // ownersDir is where the machine's owner list lives. It's a MACHINE-level trust
-// store (who may own this computer), so it belongs in a root-owned system
-// location — that's what makes `add owner` require sudo. Overridable via
-// REMINAL_OWNERS_DIR (used by tests and unusual layouts). The per-device key
-// stays in ~/.reminal; only this list is system-wide.
+// store (who may own this computer), so it belongs in an admin-writable system
+// location — that's what makes `add owner` require sudo (an Administrator
+// terminal on Windows). Overridable via REMINAL_OWNERS_DIR (used by tests and
+// unusual layouts). The per-device key stays in ~/.reminal; only this list is
+// system-wide.
 func ownersDir() string {
 	if d := os.Getenv("REMINAL_OWNERS_DIR"); d != "" {
 		return d
+	}
+	if runtime.GOOS == "windows" {
+		if pd := os.Getenv("ProgramData"); pd != "" {
+			return filepath.Join(pd, "reminal")
+		}
+		return `C:\ProgramData\reminal`
 	}
 	return "/etc/reminal"
 }

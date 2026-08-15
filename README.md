@@ -18,6 +18,13 @@ curl -fsSL https://raw.githubusercontent.com/harshalgajjar/Reminal/main/install.
 reminal
 ```
 
+On Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/harshalgajjar/Reminal/main/install.ps1 | iex
+reminal
+```
+
 `reminal` prints a session ID, a PIN, and a QR code. Scan it, and your phone is a **full terminal on your machine** — real color, touch text-selection, on-screen modifier keys. No port forwarding. No keys to manage. Nothing to install on the phone; the browser is the client.
 
 <div align="center">
@@ -294,16 +301,17 @@ REMINAL_LOCAL=1 reminal --connect <session_id> --pin <pin>
 
 ### Platform support
 
-The mirroring you see above isn't macOS-only — window capture **and** full control (click, type, scroll, drag) work on Linux/X11 as well.
+The mirroring you see above isn't macOS-only — window capture **and** full control (click, type, scroll, drag) work on Linux/X11 and Windows as well.
 
-| Capability | macOS | Linux |
-|---|---|---|
-| Terminal sharing · sessions · files · port forwarding | ✅ | ✅ |
-| Owner connect (PIN-free) · `reminal machines` | ✅ | ✅ |
-| Window & desktop mirroring + control | ✅ ScreenCaptureKit — H.264 up to 60 fps | ✅ X11 — `wmctrl` · `xdotool` · ImageMagick |
-| Closed-lid mode (auto virtual display) | ✅ | — |
+| Capability | macOS | Linux | Windows |
+|---|---|---|---|
+| Terminal sharing · sessions · files · port forwarding | ✅ | ✅ | ✅ ConPTY |
+| Owner connect (PIN-free) · `reminal machines` | ✅ | ✅ | ✅ |
+| Window & desktop mirroring + control | ✅ ScreenCaptureKit — H.264 up to 60 fps | ✅ X11 — `wmctrl` · `xdotool` · ImageMagick | ✅ Win32 — PrintWindow · SendInput |
+| Closed-lid mode (auto virtual display) | ✅ | — | — |
+| Hot restart (`reminal restart`) | ✅ | ✅ | — (no exec() — start a new session after upgrading) |
 
-<sub>Linux capture needs an **X11** session (or Xwayland) — native Wayland blocks synthetic input, so it isn't supported yet. Apple Silicon and x86_64 both supported.</sub>
+<sub>Linux capture needs an **X11** session (or Xwayland) — native Wayland blocks synthetic input, so it isn't supported yet. Apple Silicon, x86_64, and Windows ARM64 all supported. Windows sessions default to PowerShell (pwsh → Windows PowerShell → cmd; set `$env:SHELL` to override).</sub>
 
 ### Commands
 
@@ -326,7 +334,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | `reminal notify <message>` | Push a notification to viewers (browser notification on web) |
 | `reminal connections` | List currently attached viewers with connect time |
 | `reminal own` | Print this device's owner id + the `add owner` line to paste on machines you want to own |
-| `reminal add owner <id> [--label <name>]` | Enroll an owner device on this machine (needs `sudo`) — lets it connect PIN-free |
+| `reminal add owner <id> [--label <name>]` | Enroll an owner device on this machine (needs `sudo` / an Administrator terminal on Windows) — lets it connect PIN-free |
 | `reminal owners [rename\|revoke\|restore <id\|label> …]` | List / relabel / revoke / restore this machine's owner devices |
 | `reminal machines [rename <id\|name> <new-name>]` | List every machine you own and its live sessions (web Machines panel manages them) |
 | `reminal info [id\|name] [--all] [--qr] [--json]` | Show connect details — ID / PIN / URL / QR |
@@ -334,7 +342,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | `reminal settings` | Settings page: keep the Mac unlocked for remote control; **closed-lid mode** (serve with the lid shut and nothing plugged in — disables clamshell sleep, auto-creates a virtual display while headless) |
 | `reminal doctor` | Self-diagnostic: version, relay reachability, terminal, shell |
 | `reminal permissions` | macOS: grant Screen Recording to reminal once, so background (`+`) sessions can mirror windows |
-| `reminal completion <bash\|zsh\|fish>` | Print a shell completion script |
+| `reminal completion <bash\|zsh\|fish\|powershell>` | Print a shell completion script |
 | `reminal upgrade` | Upgrade to the latest release |
 | `reminal relay [port]` | Start a local relay (development only) |
 | `reminal version [--verbose]` | Print version |
@@ -363,6 +371,13 @@ Installs to `~/.local/bin/reminal` — no sudo. macOS and Linux, Apple Silicon a
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/harshalgajjar/Reminal/main/install.sh | sh
+reminal
+```
+
+On Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/harshalgajjar/Reminal/main/install.ps1 | iex
 reminal
 ```
 

@@ -35,6 +35,14 @@ jobs:
           - goos: linux
             goarch: arm64
             os: ubuntu-latest
+          # windows cross-compiles on ubuntu too — pure Go (ConPTY + Win32 via
+          # syscalls), no cgo, no native helper.
+          - goos: windows
+            goarch: amd64
+            os: ubuntu-latest
+          - goos: windows
+            goarch: arm64
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -52,7 +60,9 @@ jobs:
           VERSION="${VERSION#v}"
           BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           SHORT_COMMIT="${COMMIT:0:7}"
-          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.commit=${SHORT_COMMIT} -X github.com/reminal/reminal/internal/config.DefaultCloudRelay=wss://reminal-relay.futuristic.workers.dev/ws -X github.com/reminal/reminal/internal/config.DefaultCloudWeb=https://reminal-relay.futuristic.workers.dev" -o reminal ./cmd/reminal
+          OUT="reminal"
+          [ "$GOOS" = "windows" ] && OUT="reminal.exe"
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.buildDate=${BUILD_DATE} -X main.commit=${SHORT_COMMIT} -X github.com/reminal/reminal/internal/config.DefaultCloudRelay=wss://reminal-relay.futuristic.workers.dev/ws -X github.com/reminal/reminal/internal/config.DefaultCloudWeb=https://reminal-relay.futuristic.workers.dev" -o "$OUT" ./cmd/reminal
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Build capture helper (macOS)
@@ -113,6 +123,11 @@ jobs:
           if [ "$GOOS" = "darwin" ] && [ -d reminal.app ]; then
             # macOS ships the signed bundle; tar preserves the signature + icon.
             tar czf "${ARCHIVE}" reminal.app
+          elif [ "$GOOS" = "windows" ]; then
+            # Windows ships the bare exe; tar.gz keeps the asset naming (and
+            # the in-app updater's extraction path) uniform across platforms —
+            # install.ps1 and Windows 10+'s built-in tar both handle it.
+            tar czf "${ARCHIVE}" reminal.exe
           else
             FILES="reminal"
             [ -f reminal-capture ] && FILES="$FILES reminal-capture"

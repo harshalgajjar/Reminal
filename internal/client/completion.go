@@ -62,12 +62,52 @@ func Completion(shell string) error {
 		fmt.Print(zshCompletion)
 	case "fish":
 		fmt.Print(fishCompletion)
+	case "powershell", "pwsh":
+		fmt.Print(powershellCompletion)
 	default:
-		fmt.Fprintf(os.Stderr, "unsupported shell: %q (try bash, zsh, or fish)\n", shell)
+		fmt.Fprintf(os.Stderr, "unsupported shell: %q (try bash, zsh, fish, or powershell)\n", shell)
 		return fmt.Errorf("unsupported shell: %q", shell)
 	}
 	return nil
 }
+
+const powershellCompletion = `# reminal PowerShell completion
+# Install: reminal completion powershell | Out-String | Invoke-Expression
+# Persist: reminal completion powershell >> $PROFILE
+Register-ArgumentCompleter -Native -CommandName reminal -ScriptBlock {
+    param($wordToComplete, $commandAst, $cursorPosition)
+    $subcommands = @(
+        'connect','new','attach','list','ls','kill','stop','rename','prune','restart',
+        'expose','send','copy','paste','notify','connections','info','qr','own','owners',
+        'machines','doctor','settings','completion','upgrade','relay','version','help'
+    )
+    $words = $commandAst.CommandElements | ForEach-Object { $_.ToString() }
+    $prev = if ($words.Count -ge 2) { $words[$words.Count - 2] } else { '' }
+    # After a session-taking verb, offer live session ids/names/ports from the
+    # hidden __complete helper ("value<TAB>description" lines).
+    if ($prev -in @('attach','kill','stop','rename','info','qr')) {
+        reminal __complete 2>$null | ForEach-Object {
+            $parts = $_ -split "` + "`" + `t", 2
+            if ($parts[0] -like "$wordToComplete*") {
+                $desc = if ($parts.Count -gt 1) { $parts[1] } else { $parts[0] }
+                [System.Management.Automation.CompletionResult]::new($parts[0], $parts[0], 'ParameterValue', $desc)
+            }
+        }
+        return
+    }
+    if ($prev -eq 'completion') {
+        @('bash','zsh','fish','powershell') | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+            [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+        }
+        return
+    }
+    if ($words.Count -le 2) {
+        $subcommands | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+            [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
+        }
+    }
+}
+`
 
 const bashCompletion = `# reminal bash completion
 _reminal_complete() {

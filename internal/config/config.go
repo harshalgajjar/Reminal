@@ -6,6 +6,8 @@ package config
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -69,6 +71,9 @@ func RendezvousWS(code, role string) string {
 }
 
 func Shell() string {
+	if runtime.GOOS == "windows" {
+		return windowsShell()
+	}
 	if v := os.Getenv("SHELL"); v != "" {
 		return v
 	}
@@ -81,6 +86,25 @@ func Shell() string {
 		}
 	}
 	return "/bin/sh"
+}
+
+// windowsShell picks the session shell on Windows. $SHELL is respected when
+// set (users of git-bash / MSYS set it deliberately); otherwise prefer
+// PowerShell 7 (pwsh), then Windows PowerShell, then %COMSPEC%/cmd — the same
+// order Windows Terminal effectively presents.
+func windowsShell() string {
+	if v := os.Getenv("SHELL"); v != "" {
+		return v
+	}
+	for _, candidate := range []string{"pwsh.exe", "powershell.exe"} {
+		if p, err := exec.LookPath(candidate); err == nil {
+			return p
+		}
+	}
+	if v := os.Getenv("COMSPEC"); v != "" {
+		return v
+	}
+	return "cmd.exe"
 }
 
 // DefaultSnapshotScrollbackLines is how many lines of scrollback history a

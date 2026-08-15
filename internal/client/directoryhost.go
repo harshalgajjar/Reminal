@@ -12,13 +12,13 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
 
 	"github.com/reminal/reminal/internal/config"
 	"github.com/reminal/reminal/internal/crypto"
+	"github.com/reminal/reminal/internal/proc"
 	"github.com/reminal/reminal/internal/protocol"
 	"github.com/reminal/reminal/internal/session"
 )
@@ -149,7 +149,11 @@ func serveDirectoryLocked(stop <-chan struct{}, isDaemon bool) {
 // spawned (not synchronous) so serveDirectoryOnce's recover wouldn't catch them.
 func safeGoDir(f func()) {
 	go func() {
-		defer func() { if r := recover(); r != nil { recoverLog("safeGoDir", r) } }()
+		defer func() {
+			if r := recover(); r != nil {
+				recoverLog("safeGoDir", r)
+			}
+		}()
 		f()
 	}()
 }
@@ -622,12 +626,12 @@ func killLocalSession(id string) error {
 			continue
 		}
 		pid := a.PID
-		if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
-			if errors.Is(err, syscall.ESRCH) {
+		if err := proc.Terminate(pid); err != nil {
+			if errors.Is(err, proc.ErrGone) {
 				_ = session.ClearActive(a.ID) // already gone
 				return nil
 			}
-			return fmt.Errorf("SIGTERM %d: %w", pid, err)
+			return fmt.Errorf("terminate %d: %w", pid, err)
 		}
 		// Drop the registry entry immediately so `reminal list` and the Machines
 		// panel stop showing it the moment the kill is acknowledged — not after
@@ -638,13 +642,13 @@ func killLocalSession(id string) error {
 		go func(pid int) {
 			deadline := time.Now().Add(3 * time.Second)
 			for time.Now().Before(deadline) {
-				if syscall.Kill(pid, 0) != nil {
+				if !proc.Alive(pid) {
 					return
 				}
 				time.Sleep(100 * time.Millisecond)
 			}
-			if syscall.Kill(pid, 0) == nil {
-				_ = syscall.Kill(pid, syscall.SIGKILL)
+			if proc.Alive(pid) {
+				_ = proc.Kill(pid)
 			}
 		}(pid)
 		return nil

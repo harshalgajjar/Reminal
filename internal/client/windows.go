@@ -140,6 +140,11 @@ type appInfo struct {
 // newWindowBackend picks the backend for the current OS. Unknown platforms get
 // a stub whose every call reports that window mirroring isn't supported yet.
 func newWindowBackend() windowBackend {
+	// Native (build-tagged) backends first — Windows/Win32 lives behind this
+	// seam so its syscalls never enter non-Windows builds.
+	if b := newNativeWindowBackend(); b != nil {
+		return b
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		return darwinWindows{}

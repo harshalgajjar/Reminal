@@ -185,10 +185,9 @@ func (v *Viewer) Run() error {
 		}
 	}()
 
-	// SIGWINCH → resize notifications.
-	winCh := make(chan os.Signal, 1)
-	signal.Notify(winCh, syscall.SIGWINCH)
-	defer signal.Stop(winCh)
+	// Terminal-resize notifications (SIGWINCH on Unix, a size poller on Windows).
+	winCh, stopWinCh := watchResize()
+	defer stopWinCh()
 
 	// Ctrl+C / SIGTERM → clean exit.
 	intCh := make(chan os.Signal, 1)

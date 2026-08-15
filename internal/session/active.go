@@ -10,8 +10,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/reminal/reminal/internal/proc"
 )
 
 // Active is the on-disk record of a currently running agent. Each agent
@@ -280,18 +281,14 @@ func readActiveFile(path string) (*Active, error) {
 	return &a, nil
 }
 
-// pidAlive returns true if a process with this PID exists and is reachable
-// (signal 0 is "permission and existence check, no signal sent"). On Unix
-// this is the standard way to check liveness without side effects.
+// pidAlive returns true if a process with this PID exists and is reachable.
+// On Unix this is the standard signal-0 probe; on Windows proc.Alive opens the
+// process handle and checks the exit code. No side effects either way.
 func pidAlive(pid int) bool {
 	if pid <= 0 {
 		return false
 	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	if p.Signal(syscall.Signal(0)) != nil {
+	if !proc.Alive(pid) {
 		return false
 	}
 	// Signal 0 succeeds for a zombie too — the PID lingers in the process table

@@ -4,15 +4,12 @@
 package client
 
 import (
-	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mdp/qrterminal/v3"
@@ -49,22 +46,13 @@ func Spawn(name string) (*SpawnedSession, error) {
 		return nil, fmt.Errorf("locate self: %w", err)
 	}
 
-	// Pipe used as fd 3 in the child. The child writes one JSON line
-	// once startup is complete; we read it here and surface to the user.
-	r, w, err := os.Pipe()
-	if err != nil {
-		return nil, fmt.Errorf("create handshake pipe: %w", err)
-	}
-	defer r.Close()
-
 	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
-		_ = w.Close()
-		return nil, fmt.Errorf("open /dev/null: %w", err)
+		return nil, fmt.Errorf("open %s: %w", os.DevNull, err)
 	}
 	defer devnull.Close()
 
-	cmd := exec.Command(exe, "--headless", "--handshake-fd", "3")
+	cmd := exec.Command(exe, "--headless")
 	// Pass through enough env that the child finds the same relay /
 	// shell / debug knobs the user expected. The full environment is
 	// inherited by default in exec.Cmd; we only need to scrub
@@ -82,8 +70,14 @@ func Spawn(name string) (*SpawnedSession, error) {
 	cmd.Stdin = devnull
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull
-	cmd.ExtraFiles = []*os.File{w}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	// The handshake channel (fd-3 pipe on Unix, loopback socket on Windows) +
+	// the platform's detach attributes. The child writes one JSON line once
+	// startup is complete; we read it back here and surface it to the user.
+	recv, afterStart, err := prepareHandshake(cmd)
+	if err != nil {
+		return nil, err
+	}
 
 	// Start the session in the user's home when we have no meaningful working
 	// directory of our own — i.e. when spawned by the background host, which runs
@@ -98,13 +92,10 @@ func Spawn(name string) (*SpawnedSession, error) {
 	}
 
 	if err := cmd.Start(); err != nil {
-		_ = w.Close()
+		afterStart()
 		return nil, fmt.Errorf("start headless reminal: %w", err)
 	}
-	// Close our copy of the write end so the read EOFs once the child
-	// closes its copy (e.g., child crashed before writing). Without this
-	// the parent would block until the child fully exits.
-	_ = w.Close()
+	afterStart()
 
 	// Release the child so we don't keep a zombie around if Spawn's
 	// caller exits before the child does.
@@ -112,40 +103,18 @@ func Spawn(name string) (*SpawnedSession, error) {
 
 	// Read the JSON handshake with a deadline. Reading until newline is
 	// cheap and robust; a malformed payload (child wrote junk) shows up
-	// as a parse error rather than a hang.
-	type result struct {
-		s   *SpawnedSession
-		err error
+	// as a parse error rather than a hang. On failure the child may
+	// already be running fine with a broken handshake channel — don't
+	// pretend we know its state; the user can `reminal list` / `kill`.
+	line, err := recv(spawnHandshakeTimeout)
+	if err != nil {
+		return nil, err
 	}
-	done := make(chan result, 1)
-	go func() {
-		br := bufio.NewReader(r)
-		line, err := br.ReadString('\n')
-		if err != nil {
-			done <- result{nil, fmt.Errorf("read handshake: %w", err)}
-			return
-		}
-		var sp SpawnedSession
-		if err := json.Unmarshal([]byte(line), &sp); err != nil {
-			done <- result{nil, fmt.Errorf("parse handshake: %w", err)}
-			return
-		}
-		done <- result{&sp, nil}
-	}()
-
-	select {
-	case res := <-done:
-		if res.err != nil {
-			// The child may already be running fine but with a broken
-			// handshake pipe. Don't pretend we know its state — just
-			// surface the error so the user can `reminal list` to find
-			// out and `reminal kill` if needed.
-			return nil, res.err
-		}
-		return res.s, nil
-	case <-time.After(spawnHandshakeTimeout):
-		return nil, errors.New("headless reminal didn't report ready within " + spawnHandshakeTimeout.String())
+	var sp SpawnedSession
+	if err := json.Unmarshal([]byte(line), &sp); err != nil {
+		return nil, fmt.Errorf("parse handshake: %w", err)
 	}
+	return &sp, nil
 }
 
 // PrintSpawned formats the spawned session's credentials for the user's
