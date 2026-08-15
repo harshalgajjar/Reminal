@@ -1029,9 +1029,6 @@ func (a *Agent) signalRegistered() {
 // and ready to accept viewers. Best-effort — a closed pipe (parent
 // already exited) is logged but doesn't break the headless agent.
 func (a *Agent) writeHandshake() {
-	if a.handshakeFD == 0 {
-		return
-	}
 	payload := map[string]any{
 		"id":       a.sessionID,
 		"pin":      a.pin,
@@ -1042,8 +1039,8 @@ func (a *Agent) writeHandshake() {
 	if err != nil {
 		return
 	}
-	f := os.NewFile(uintptr(a.handshakeFD), "handshake")
-	if f == nil {
+	f, err := handshakeWriter(a.handshakeFD, a.handshakeAddr)
+	if err != nil {
 		return
 	}
 	_, _ = f.Write(append(data, '\n'))

@@ -99,6 +99,14 @@ func Start(shell string, env ...string) (*Session, error) {
 	siEx := new(windows.StartupInfoEx)
 	siEx.Cb = uint32(unsafe.Sizeof(*siEx))
 	siEx.ProcThreadAttributeList = attrs.List()
+	// STARTF_USESTDHANDLES with all three std handles NULL is load-bearing:
+	// without it, a child spawned from a process that itself has a console
+	// picks up that console's std handles, so the shell's output lands on the
+	// PARENT's console and its input never comes from the ConPTY. With the
+	// flag + null handles, the client's CRT re-opens the console it is
+	// actually attached to — the pseudo console. (Same trick as Windows
+	// Terminal and every working Go ConPTY wrapper.)
+	siEx.Flags |= windows.STARTF_USESTDHANDLES
 
 	var pi windows.ProcessInformation
 	// CurrentDir nil → the shell inherits our working directory.
