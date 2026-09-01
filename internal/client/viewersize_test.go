@@ -4,6 +4,7 @@
 package client
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,5 +166,20 @@ func TestSizeBookForgetWrapsAllowsRegrow(t *testing.T) {
 	got := b.settledSize()
 	if got.rows != 40 {
 		t.Fatalf("remaining viewer settled at %d, want 40", got.rows)
+	}
+}
+
+func TestSizeBookDumpListsEveryViewer(t *testing.T) {
+	var b viewerSizeBook
+	b.seed(map[string]termSize{
+		"laptop": {100, 40},
+		"phone":  {80, 20},
+	}, termSize{80, 20})
+	got := b.dump()
+	if !strings.Contains(got, "laptop=100x40") || !strings.Contains(got, "phone=80x20") {
+		t.Fatalf("dump missing a viewer: %s", got)
+	}
+	if !strings.Contains(got, "settled=80x20") || !strings.Contains(got, "applied=80x20") {
+		t.Fatalf("dump missing min/applied: %s", got)
 	}
 }

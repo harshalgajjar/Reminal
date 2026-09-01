@@ -133,6 +133,54 @@ func TestRecordKeepsScrollbackWhenResizeEmitsED3(t *testing.T) {
 	if n := a.screen.Scrollback().Len(); n == 0 {
 		t.Fatal("ESC[3J during the post-resize window wiped scrollback")
 	}
+	if lastNonBlankRow(screenRows(a)) < 0 {
+		t.Fatal("ESC[2J during the post-resize window wiped the screen")
+	}
+}
+
+func TestStripConhostResizeClear(t *testing.T) {
+	got := stripConhostResizeClear([]byte("before\x1b[H\x1b[2J\x1b[3Jafter"))
+	if string(got) != "beforeafter" {
+		t.Errorf("full shim: got %q, want beforeafter", got)
+	}
+	got = stripConhostResizeClear([]byte("x\x1b[2J\x1b[3Jy"))
+	if string(got) != "xy" {
+		t.Errorf("ED2+ED3: got %q, want xy", got)
+	}
+	got = stripConhostResizeClear([]byte("plain"))
+	if string(got) != "plain" {
+		t.Errorf("untouched: got %q", got)
+	}
+}
+
+// TestGrowThenConhostClearKeepsBottomAnchor is the keyboard-collapse case
+// on Windows: grow pulls history onto the screen, then conhost emits the
+// WriteClearScreen shim. ED2 used to wipe that screen and leave the prompt
+// stuck at the top of a tall grid with a void under it.
+func TestGrowThenConhostClearKeepsBottomAnchor(t *testing.T) {
+	a := clearingAgent(t, 80, 10)
+	feedLines(a, 30)
+	const grown = 20
+	a.resizeScreen(80, grown)
+
+	wantLast := lastNonBlankRow(screenRows(a))
+	if wantLast != grown-2 {
+		t.Fatalf("setup: last content row %d after grow, want %d", wantLast, grown-2)
+	}
+	sb := a.screen.Scrollback().Len()
+	a.ignoreED3Until = time.Now().Add(time.Second)
+	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
+
+	rows := screenRows(a)
+	if got := lastNonBlankRow(rows); got != wantLast {
+		t.Errorf("conhost shim after grow moved last content from %d to %d", wantLast, got)
+	}
+	if rows[wantLast] != "line-0030" {
+		t.Errorf("row %d is %q, want line-0030 — ED2 undid the bottom-anchor", wantLast, rows[wantLast])
+	}
+	if n := a.screen.Scrollback().Len(); n != sb {
+		t.Errorf("conhost shim changed scrollback from %d to %d", sb, n)
+	}
 }
 
 // TestRegionWordsInvertedRange pins the last line of defense: even handed a

@@ -127,9 +127,10 @@ type Agent struct {
 	// spot a shrink (an app's ESC[3J) and retire the now-stale segment indices
 	// above. Guarded by screenMu.
 	sbLen int
-	// ignoreED3Until, when set, strips ESC[3J from record() so a Windows
-	// conhost resize-clear cannot wipe the scrollback we just bottom-anchored.
-	// Guarded by screenMu.
+	// ignoreED3Until, when set, strips conhost's resize-clear shim
+	// (ESC[H ESC[2J ESC[3J) from record() so it cannot undo the screen
+	// resizeAnchoredBottom just laid out or wipe the scrollback those
+	// lines moved into. Guarded by screenMu.
 	ignoreED3Until time.Time
 	// rebuildEmu is the persistent tall emulator snapshots replay history
 	// through (see rebuildView). Guarded by rebuildMu; lazily created.
@@ -872,22 +873,32 @@ func (a *Agent) Run() error {
 // happen to start a session right at the tail of a previous burst.
 const rateLimitMinWait = 10 * time.Minute
 
-// syncSizeToPTY copies the host terminal's current size into the PTY so the
-// shell sees the correct cols/rows. Called on startup and on every SIGWINCH.
-// Falls through applyEffectiveSize so the viewer-min logic still clamps
-// the PTY to the smallest attached viewer.
+// syncSizeToPTY applies host-terminal geometry to the PTY when no viewer
+// is attached. Called on startup and on host SIGWINCH. Once a viewer is
+// connected, that wrap owns the PTY — a host WINCH is the kernel echoing
+// our own Resize, or the user dragging the mirror window, not a wrap.
 func (a *Agent) syncSizeToPTY() {
+	a.viewerSizeMu.Lock()
+	n := a.viewerCount
+	a.viewerSizeMu.Unlock()
+	if n > 0 {
+		sizeLog("host WINCH ignored (%d viewers own geometry)", n)
+		return
+	}
 	a.applyEffectiveSize()
 }
 
 // coalesceViewerResize records one viewer's wrap and resizes the PTY to
 // the min of every wrap once the viewport is quiet. See viewersize.go.
 func (a *Agent) coalesceViewerResize(id string, cols, rows uint16) {
-	if a.sizeBook.report(id, cols, rows) {
-		a.applyEffectiveSize()
+	if cols < minTermCols || rows < minTermRows {
+		sizeLog("drop %s %dx%d (min is %dx%d)", id, cols, rows, minTermCols, minTermRows)
 		return
 	}
-	if cols < minTermCols || rows < minTermRows {
+	first := a.sizeBook.report(id, cols, rows)
+	sizeLog("recv %s %dx%d  %s first=%v", id, cols, rows, a.sizeBook.dump(), first)
+	if first {
+		a.applyEffectiveSize()
 		return
 	}
 	a.sizeBook.schedule(func() { a.applyEffectiveSize() })
@@ -903,25 +914,11 @@ func (a *Agent) resetViewerSize() {
 }
 
 // applyEffectiveSize resizes the PTY to the settled min of every viewer's
-// wrap (sizeBook). Rows are not capped to the host; the host terminal
-// scrolls vertically. Columns are capped to the host width so the host
-// never wraps the shell's output and strands zsh's PROMPT_EOL_MARK.
+// wrap (sizeBook). The host is a mirror: extra rows scroll, extra columns
+// wrap. Live GetSize is not mixed in — a PTY resize changes that metric
+// (scrollbar, SIGWINCH echo) and would SIGWINCH the app again.
 //
-//   - ROWS: the active viewer's rows, NOT capped by the host terminal.
-//     The host just scrolls past any extra rows. This is what lets a tall
-//     phone use its full height even when the host window (or, in a
-//     headless/dev run, the host PTY) is shorter — capping rows to the
-//     host was what left a big empty band at the bottom of the phone,
-//     both on keyboard-collapse and whenever a second viewer joined.
-//
-//   - COLUMNS: the active viewer's cols, additionally capped to the host
-//     width. A viewer wider than the host terminal would make the shell
-//     pad output past the host's right edge; that output is mirrored to
-//     BOTH screens, so the narrower host wraps it — most visibly
-//     stranding zsh's PROMPT_EOL_MARK (a ghost "%") on its own line.
-//     Capping columns to the host keeps every screen wrap-clean.
-//
-// With no viewers attached, the PTY simply matches the host terminal.
+// With no viewers attached, the PTY matches the host terminal.
 //
 // Safe to call from any path that thinks the size might have changed.
 // Dedups against the last applied size so repeated calls are cheap.
@@ -929,38 +926,32 @@ func (a *Agent) applyEffectiveSize() {
 	if a.term == nil {
 		return
 	}
-	var hostCols, hostRows uint16
-	if c, r, err := xterm.GetSize(int(os.Stdout.Fd())); err == nil {
-		hostCols, hostRows = uint16(c), uint16(r)
-	}
-	s := a.sizeBook.settledSize()
-	vc, vr := s.cols, s.rows
-
-	var cols, rows uint16
-	if vc > 0 && vr > 0 {
-		// A viewer is attached — the min of their current wraps drives the
-		// PTY, so every screen can show the whole terminal. ROWS are taken
-		// as-is; the host terminal scrolls vertically, so a tall phone is
-		// never capped to a short host window (or, in a headless/dev run,
-		// to a tiny host PTY). COLS are capped to the host width so the
-		// host terminal never has to wrap the shell's output and strand
-		// zsh's PROMPT_EOL_MARK (the ghost "%").
-		cols, rows = vc, vr
-		if hostCols > 0 && hostCols < cols {
-			cols = hostCols
+	viewer := a.sizeBook.settledSize()
+	var host termSize
+	// Sample stdout only when it would actually own the PTY. Reading it
+	// on the viewer path is how a Resize's echo became the next cap.
+	if viewer.zero() {
+		if c, r, err := xterm.GetSize(int(os.Stdout.Fd())); err == nil {
+			host = termSize{uint16(c), uint16(r)}
 		}
-	} else {
-		// No viewers attached — match the host terminal.
-		cols, rows = hostCols, hostRows
 	}
+	sz := effectivePTYSize(viewer, host)
+	cols, rows := sz.cols, sz.rows
 	if cols == 0 || rows == 0 {
 		return
 	}
+	sizeLog("apply want %dx%d host %dx%d → pty %dx%d  %s",
+		viewer.cols, viewer.rows, host.cols, host.rows, cols, rows, a.sizeBook.dump())
 	if !a.sizeBook.setApplied(cols, rows) {
+		sizeLog("skip pty already %dx%d", cols, rows)
 		return
 	}
-	_ = a.term.Resize(cols, rows)
+	// Bottom-anchor the emulator and arm the conhost-clear guard BEFORE
+	// the PTY hears the new size. ConPTY emits ESC[H ESC[2J ESC[3J from
+	// inside term.Resize; if that lands first, ED2 wipes the screen we
+	// were about to re-anchor and ED3 drops the scrollback it needs.
 	a.resizeScreen(cols, rows)
+	_ = a.term.Resize(cols, rows)
 	// Tell every viewer the new PTY size so their xterm.js matches.
 	// Without this, the agent shrinks the PTY for a small viewer (e.g.,
 	// phone joining a desktop session), the shell formats output for
@@ -1002,6 +993,7 @@ func (a *Agent) broadcastSize(cols, rows uint16) {
 	if conn == nil {
 		return
 	}
+	sizeLog("broadcast %dx%d", cols, rows)
 	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeResize, Data: enc})
 }
 
@@ -1816,6 +1808,16 @@ func agentNotify(format string, args ...interface{}) {
 	fmt.Print("\x1b[2m" + s + "\x1b[0m")
 }
 
+// sizeLog traces wrap → min → PTY. Off unless REMINAL_SIZELOG is set, so
+// a live session can `REMINAL_SIZELOG=1 reminal restart` and watch which
+// hop is wrong without a special build.
+func sizeLog(format string, args ...interface{}) {
+	if os.Getenv("REMINAL_SIZELOG") == "" {
+		return
+	}
+	agentNotify("  [size] "+format+"\n", args...)
+}
+
 // printQR renders a scannable QR for the join URL with the PIN in the URL
 // fragment (#p=...). The fragment never leaves the phone — it's read by the
 // page's JS to autofill the PIN field, giving a one-tap join from mobile.
@@ -1896,10 +1898,11 @@ func (a *Agent) initScreen() {
 func (a *Agent) record(p []byte) {
 	a.screenMu.Lock()
 	if !a.ignoreED3Until.IsZero() && time.Now().Before(a.ignoreED3Until) {
-		// conhost turns a PowerShell buffer-fill on SIGWINCH into ESC[3J.
-		// That is not the user clearing history — it would wipe the lines
-		// resizeAnchoredBottom just moved into scrollback.
-		p = bytes.ReplaceAll(p, []byte("\x1b[3J"), nil)
+		// conhost turns a PowerShell buffer-fill on SIGWINCH into
+		// ESC[H ESC[2J ESC[3J. That is not the user clearing history —
+		// ED2 would wipe the screen resizeAnchoredBottom just laid out
+		// and ED3 would drop the lines it moved into scrollback.
+		p = stripConhostResizeClear(p)
 	}
 	if a.screen != nil {
 		_, _ = a.screen.Write(p)
@@ -1989,6 +1992,9 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 		return
 	}
 	a.screenMu.Lock()
+	// Arm before the emulator changes size so a racing PTY read cannot
+	// apply the shim to the pre-anchor screen.
+	a.armResizeClearGuardLocked()
 	// Fingerprint the frame the app is ABOUT to repaint: capture the pre-resize
 	// screen's words (width-invariant — re-wrapping moves line breaks, not words)
 	// and where in scrollback the repaint's overflow would land. The overflow of a
@@ -2011,9 +2017,6 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	// drop, and recording the position beforehand would put genuine content
 	// inside the drop window.
 	resizeAnchoredBottom(a.screen, int(cols), int(rows))
-	if filterHostMirror {
-		a.ignoreED3Until = time.Now().Add(800 * time.Millisecond)
-	}
 	// A grow pulls lines back out of scrollback, so its length can fall here.
 	// Reconcile before recording a new segment, or the older segments' absolute
 	// positions would be left pointing past the end of the rendered history.
@@ -2032,6 +2035,27 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 		// record()'s appends.
 		a.buf.AppendResize(int(cols), int(rows))
 	}
+	a.screenMu.Unlock()
+}
+
+const resizeClearGuard = 800 * time.Millisecond
+
+// armResizeClearGuardLocked starts the post-resize window during which
+// record() drops conhost's WriteClearScreen shim. Caller holds screenMu.
+func (a *Agent) armResizeClearGuardLocked() {
+	if filterHostMirror {
+		a.ignoreED3Until = time.Now().Add(resizeClearGuard)
+	}
+}
+
+// armResizeClearGuard is the unlocked form for PTY-only resizes that do
+// not go through resizeScreen (the 0→1 viewer bounce).
+func (a *Agent) armResizeClearGuard() {
+	if !filterHostMirror {
+		return
+	}
+	a.screenMu.Lock()
+	a.armResizeClearGuardLocked()
 	a.screenMu.Unlock()
 }
 
@@ -2654,16 +2678,12 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// still grow the PTY back. Reset happens when the last
 			// viewer leaves (TypeClosed below).
 			a.coalesceViewerResize(rs.Viewer, rs.Cols, rs.Rows)
-			// If the PTY size didn't actually change but the sender
-			// asked for something different, still tell them (and
-			// everyone) the authoritative size — otherwise a viewer
-			// that grew its own viewport keeps rendering at the wrong
-			// width while the shell formats for the unchanged PTY.
-			applied := a.sizeBook.lastApplied()
-			pc, pr := applied.cols, applied.rows
-			if pc > 0 && pr > 0 && (pc != rs.Cols || pr != rs.Rows) {
-				a.broadcastSize(pc, pr)
-			}
+			// Do not rebroadcast the PTY just because this wrap differs
+			// from it. Web viewers already paint min(wrap, last PTY);
+			// rebroadcasting on every mismatch re-enters adoptPty and
+			// can ResizeObserver-report the painted grid as a new wrap.
+			// applyEffectiveSize broadcasts when the PTY actually moves;
+			// TypeConnected publishes it to a joining tab.
 		case protocol.TypeResume:
 			// FromSeq is the highest seq the viewer has received. We replay
 			// everything with Seq > FromSeq, so the next seq to send is FromSeq+1.
@@ -2777,6 +2797,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				// repaint, and React/Ink-based UIs re-render the
 				// whole screen on every WINCH.
 				if prevCount == 0 {
+					a.armResizeClearGuard()
 					_ = a.term.Resize(pc, pr+1)
 					_ = a.term.Resize(pc, pr)
 				}
@@ -2818,6 +2839,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			rebroadcast := msg.Count > 0 && msg.Count < prevCount
 			a.viewerSizeMu.Unlock()
 			if rebroadcast {
+				sizeLog("viewer left, forget wraps  %s", a.sizeBook.dump())
 				a.sizeBook.forgetWraps()
 			}
 			a.updateActiveViewers(msg.Count)

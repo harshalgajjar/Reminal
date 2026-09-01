@@ -127,6 +127,31 @@ func maxTrailingPrefix(p []byte) int {
 	return best
 }
 
+// conhostResizeClear is what the Windows pseudo console emits on a resize
+// (microsoft/terminal WriteClearScreen): CUP home, erase display, erase
+// scrollback. Longest first so a ReplaceAll of the full shim is not undone
+// by a shorter match leaving a remnant.
+var conhostResizeClear = [][]byte{
+	[]byte("\x1b[H\x1b[2J\x1b[3J"),
+	[]byte("\x1b[H\x1b[2J"),
+	[]byte("\x1b[2J\x1b[3J"),
+	[]byte("\x1b[3J"),
+	[]byte("\x1b[2J"),
+}
+
+// stripConhostResizeClear removes the resize-clear shim from a PTY chunk so
+// it cannot undo resizeAnchoredBottom or wipe the scrollback we just moved
+// lines into. Genuine app clears after the post-resize window still land.
+func stripConhostResizeClear(p []byte) []byte {
+	for _, seq := range conhostResizeClear {
+		if len(p) == 0 {
+			return p
+		}
+		p = bytes.ReplaceAll(p, seq, nil)
+	}
+	return p
+}
+
 // trailingPrefixLen returns the length of the longest proper prefix of seq that
 // p ends with (0 if none).
 func trailingPrefixLen(p, seq []byte) int {

@@ -58,6 +58,10 @@ func TestPaneGestureContracts(t *testing.T) {
 		"TermSize.adoptPty",
 		"Must live above TermSize: keybar init",
 		"never grow past the PTY",
+		"flex-basis 0, not auto",
+		"never report the canvas as the wrap",
+		"peek wrap; never commit lastW",
+		"Size debug handle is the drag; the body still scrolls",
 		"Match the visible wrap, including keyboard-open",
 		"min of every viewer's wrap, including keyboard-open",
 		"the very lines the grow needs",
@@ -73,6 +77,9 @@ func TestPaneGestureContracts(t *testing.T) {
 	}
 	if strings.Contains(s, "fitAddon.fit()") {
 		t.Fatal("viewer still drives the grid with fit() instead of TermSize")
+	}
+	if strings.Contains(s, "new FitAddon") {
+		t.Fatal("viewer still loads FitAddon; wrap measure must not go through the canvas")
 	}
 	if strings.Contains(s, "mode: pane.zoom > 1.001 ? 'view' : null") {
 		t.Fatal("zoomed panes still force local-only view mode; remote edge scrolling is unreachable")

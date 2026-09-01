@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-store">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>reminal</title>
+  <!-- reminal-web 3.3.2-iso 2026-09-01 -->
   <meta name="theme-color" content="#0d1117">
   <!-- iOS "Add to Home Screen": fullscreen, black status bar, no Safari chrome. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -116,14 +118,15 @@
       50% { opacity: 1; }
     }
     /* Terminal fills whatever space the flex column leaves between the
-       header and keybar. min-height:0 is load-bearing: it lets the box
-       shrink below its content so it never pushes the keybar off-screen,
-       and it guarantees xterm's fit() (which sizes the canvas to fill
-       this box) can't grow the box back — that's what makes the resize
-       loop impossible. position:relative anchors the absolutely-positioned
-       overlay / jump-to-bottom / findbar children. */
+       header and keybar. flex-basis 0, not auto: the wrap is the leftover
+       column, never the canvas. A short PTY grid (height:auto xterm) must
+       not shrink this box, or we would measure the painted grid, report
+       it as the wrap, and lock the PTY there. min-height:0 lets it shrink
+       below content so it never pushes the keybar off-screen.
+       position:relative anchors the absolutely-positioned overlay /
+       jump-to-bottom / findbar children. */
     #terminal-wrap {
-      flex: 1 1 auto;
+      flex: 1 1 0%;
       min-height: 0;
       position: relative;
       padding: 8px;
@@ -139,6 +142,19 @@
        swipe past the top of the scrollback can't escape to the
        page-level URL-bar collapse or pull-to-refresh. */
     .xterm-viewport { overscroll-behavior: contain !important; }
+    /* xterm parks this at the cursor and Chrome Android pans the visual
+       viewport to keep it on screen. The wrap already shrank for the
+       keyboard; that pan clips the 25-row grid to the few rows above
+       the IME. Pin it to the layout origin so a keystroke cannot scroll. */
+    .xterm .xterm-helper-textarea {
+      position: fixed !important;
+      left: 0 !important;
+      top: 0 !important;
+      width: 1px !important;
+      height: 1px !important;
+      opacity: 0 !important;
+      pointer-events: none;
+    }
     /* We own touch selection (long-press + drag grips), so suppress the
        browser's native text selection + iOS long-press callout on the grid —
        otherwise both fire at once and fight. xterm renders its own highlight. */
@@ -146,9 +162,10 @@
       -webkit-user-select: none; user-select: none;
       -webkit-touch-callout: none;
     }
-    /* Fill the wrap. The grid is min(wrap, PTY), so the canvas should
-       occupy the box; leftover sub-row pixels sit above the live rows
-       (flex-end) instead of as a hole under the prompt. */
+    /* Hug the canvas. The grid is min(wrap, PTY); stretching .xterm to
+       100% of a taller wrap leaves a black unscrollable void under a
+       short cell grid (keyboard just collapsed, PTY not grown yet).
+       Leftover sub-row pixels sit above the live rows (flex-end). */
     #terminal {
       height: 100%;
       display: flex;
@@ -156,7 +173,12 @@
       justify-content: flex-end;
       overflow: hidden;
     }
-    .xterm { height: 100%; width: 100%; }
+    .xterm {
+      height: auto !important;
+      width: 100%;
+      flex: 0 0 auto;
+      margin-top: auto;
+    }
     #overlay {
       position: absolute;
       inset: 8px;
@@ -518,6 +540,83 @@
       box-shadow: -8px 0 8px -4px #161b22;
       /* Vertical drag is the snippet-dock gesture — never the bar's scroll. */
       touch-action: none;
+    }
+    #settings-btn.on { color: #7ee787; border-color: #3fb950; }
+    #settdock {
+      display: none;
+      position: fixed;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 200px;
+      max-width: 75vw;
+      padding: 6px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+      z-index: 49;
+    }
+    #settdock.open { display: flex; }
+    #settdock .sett-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      background: none;
+      border: none;
+      color: #e6edf3;
+      font: 14px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: left;
+    }
+    #settdock .sett-row:active { background: #30363d; }
+    #settdock .sett-sw { color: #8b949e; font-variant-numeric: tabular-nums; }
+    #settdock .sett-row.on .sett-sw { color: #3fb950; font-weight: 600; }
+    #sizelog {
+      position: fixed;
+      left: 6px;
+      top: 56px;
+      z-index: 99999;
+      display: flex;
+      flex-direction: column;
+      background: rgba(0,0,0,.9);
+      color: #7ee787;
+      font: 11px/1.35 ui-monospace, Menlo, monospace;
+      max-width: 96vw;
+      max-height: 48vh;
+      border-radius: 6px;
+      border: 1px solid #238636;
+      pointer-events: auto;
+      overflow: hidden;
+    }
+    /* Size debug handle is the drag; the body still scrolls. */
+    #sizelog .sizelog-handle {
+      flex: 0 0 auto;
+      padding: 8px 10px 6px;
+      cursor: grab;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+      color: #3fb950;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      border-bottom: 1px solid #238636;
+    }
+    #sizelog .sizelog-handle:active,
+    #sizelog .sizelog-handle.dragging { cursor: grabbing; }
+    #sizelog .sizelog-body {
+      flex: 1 1 auto;
+      min-height: 0;
+      padding: 6px 10px 8px;
+      overflow-x: hidden;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
+      white-space: pre;
     }
     #keybar-toggle {
       /* Pinned to the right edge of the visible scroll viewport so the
@@ -1189,6 +1288,7 @@
        deleting a line one char at a time. -->
   <div id="sessdock"></div>
   <div id="snipdock"></div>
+  <div id="settdock"></div>
   <div id="keybar">
     <button data-key="up" data-repeat title="Previous in history">↑</button>
     <button data-key="down" data-repeat title="Next in history">↓</button>
@@ -1217,16 +1317,17 @@
     <button id="find-btn" title="Search scrollback">Find</button>
     <button id="upload-btn" title="Upload file to host's ~/Downloads/reminal/">⇪ Upload</button>
     <input type="file" id="upload-input" multiple style="display:none">
+    <button id="settings-btn" title="Settings">⚙</button>
     <button id="snip-btn" title="Snippets — drag up to paste, tap to manage">✂</button>
     <button id="keybar-toggle" title="Hide / show the key bar">≡</button>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
+    window.__REMINAL_WEB = '3.3.2-iso';
     const statusEl = document.getElementById('status');
     const sessionInput = document.getElementById('session-input');
     const pinInput = document.getElementById('pin-input');
@@ -2306,8 +2407,6 @@
         selectionBackground: '#264f78',
       },
     });
-    const fitAddon = new FitAddon.FitAddon();
-    term.loadAddon(fitAddon);
     const searchAddon = new SearchAddon.SearchAddon();
     term.loadAddon(searchAddon);
     // WebLinksAddon: any http(s)://… in terminal output becomes a tap
@@ -2441,6 +2540,13 @@
       // "url" on Android where it's load-bearing.
       helperTA.setAttribute('inputmode', isAppleMobile ? 'text' : 'url');
       helperTA.setAttribute('enterkeyhint', 'done');
+      helperTA.style.setProperty('position', 'fixed', 'important');
+      helperTA.style.setProperty('left', '0', 'important');
+      helperTA.style.setProperty('top', '0', 'important');
+      helperTA.style.setProperty('width', '1px', 'important');
+      helperTA.style.setProperty('height', '1px', 'important');
+      helperTA.addEventListener('focus', applyViewportHeight);
+      helperTA.addEventListener('input', applyViewportHeight, true);
       // Intercept autocorrect/replacement events at beforeinput so the
       // typed text never gets clobbered. Capture phase + preventDefault
       // stops the replacement from reaching xterm's listener.
@@ -4165,6 +4271,14 @@
       // today's behavior.
       const bufA = term.buffer.active;
       const distUp = bufA.baseY - bufA.viewportY;
+      if (hasWipeSignature(merged) && Date.now() < resizeDirtyUntil) {
+        // Windows conhost resize-clear. Keep the local screen and
+        // scrollback; writing ED2 here is what stuck reminal info at
+        // the top of a tall grid with a black void you could not scroll.
+        const kept = stripWipeSignature(merged);
+        if (kept.byteLength > 0) term.write(kept);
+        return;
+      }
       if (hasWipeSignature(merged)) {
         term.write(merged, () => {
           const b2 = term.buffer.active;
@@ -4182,6 +4296,32 @@
             u8[i + 4] === 0x1b && u8[i + 5] === 0x5b && u8[i + 6] === 0x33 && u8[i + 7] === 0x4a) return true;
       }
       return false;
+    }
+    function stripWipeSignature(u8) {
+      const seqs = [
+        [0x1b, 0x5b, 0x48, 0x1b, 0x5b, 0x32, 0x4a, 0x1b, 0x5b, 0x33, 0x4a],
+        [0x1b, 0x5b, 0x32, 0x4a, 0x1b, 0x5b, 0x33, 0x4a],
+        [0x1b, 0x5b, 0x33, 0x4a],
+        [0x1b, 0x5b, 0x32, 0x4a],
+      ];
+      let buf = u8;
+      for (const seq of seqs) buf = stripByteSeq(buf, seq);
+      return buf;
+    }
+    function stripByteSeq(u8, seq) {
+      if (!u8 || !u8.length) return u8;
+      const out = [];
+      for (let i = 0; i < u8.length; ) {
+        let hit = i + seq.length <= u8.length;
+        if (hit) {
+          for (let j = 0; j < seq.length; j++) {
+            if (u8[i + j] !== seq[j]) { hit = false; break; }
+          }
+        }
+        if (hit) i += seq.length;
+        else { out.push(u8[i]); i++; }
+      }
+      return new Uint8Array(out);
     }
     function enqueueData(bytes) {
       // Skip any prefix the user already saw via local echo (mosh-
@@ -4244,11 +4384,18 @@
     let lastAppliedH = -1, lastAppliedT = '';
     function applyViewportHeight() {
       const vv = window.visualViewport;
-      if (!IS_IOS || !vv) {
-        // Android / desktop: CSS 100dvh drives layout. Make sure no stale
-        // inline override is left clamping it.
+      if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+      if (!vv) return;
+      if (!IS_IOS) {
+        // Android / desktop: CSS 100dvh drives layout height. Do not
+        // write an inline height — a stale visualViewport.height after
+        // keyboard-close fights the grow. DO cancel a visualViewport
+        // pan: Chrome scrolls the visual viewport to chase xterm's
+        // hidden textarea, which is what clips a correct 25-row grid
+        // down to the top ~6 rows when typing starts.
         if (lastAppliedH !== 0) { document.body.style.height = ''; lastAppliedH = 0; }
-        if (lastAppliedT !== '') { document.body.style.transform = ''; lastAppliedT = ''; }
+        const t = vv.offsetTop ? 'translateY(' + Math.round(vv.offsetTop) + 'px)' : '';
+        if (t !== lastAppliedT) { document.body.style.transform = t; lastAppliedT = t; }
         return;
       }
       const h = Math.round(vv.height);
@@ -4259,14 +4406,42 @@
       if (t !== lastAppliedT) { document.body.style.transform = t; lastAppliedT = t; }
     }
 
+    // Size-pipeline trace. ?sizelog=1 or Settings → Size debug. Shows wrap
+    // → send → PTY broadcast → paint so a phone can tell whether the hole
+    // is the client's measure, the agent's min, or the local grid.
+    const sizeEvents = [];
+    function sizeTrace(kind, c, r) {
+      const line = kind + ' ' + c + 'x' + r;
+      sizeEvents.push({ t: Date.now(), kind, c, r });
+      if (sizeEvents.length > 24) sizeEvents.shift();
+      SizeLog.trace(line);
+    }
+    window.__size = function () {
+      let snap = {};
+      try { snap = TermSize.snapshot() || {}; } catch (_) {}
+      return {
+        viewer: viewerId,
+        vv: window.visualViewport ? {
+          w: Math.round(visualViewport.width),
+          h: Math.round(visualViewport.height),
+          top: Math.round(visualViewport.offsetTop),
+          left: Math.round(visualViewport.offsetLeft),
+        } : null,
+        inner: { w: window.innerWidth, h: window.innerHeight },
+        grid: { c: term.cols, r: term.rows },
+        snap,
+        events: sizeEvents.slice(),
+      };
+    };
+
     // TermSize — the only size loop on this page.
     //
     // This tab reports the wrap it can show. The agent owns the PTY
     // (min of every viewer's wrap, including keyboard-open) and
-    // broadcasts the applied size. We render min(wrap, PTY): the
-    // visible grid always fills the wrap so a keyboard-open cannot
-    // leave a black hole under the prompt, and we never grow past the PTY,
-    // so a laptop cannot stomp a phone. xterm.js resize is top-anchored,
+    // broadcasts the applied size. We render min(wrap, PTY): we
+    // never grow past the PTY, so a laptop cannot stomp a phone. A short
+    // grid hugs the canvas (flex-end) so a keyboard-open cannot leave
+    // a black hole under the prompt. xterm.js resize is top-anchored,
     // so after every grid change we pin to the live bottom if the user
     // was already there.
     const TermSize = (() => {
@@ -4282,29 +4457,75 @@
         } catch (_) { return true; }
       }
       function pinLive(wasLive) {
-        if (wasLive) {
+        const pin = () => {
           try { term.scrollToBottom(); } catch (_) {}
-        }
-        if (typeof updateJumpBtn === 'function') updateJumpBtn();
+          if (typeof updateJumpBtn === 'function') updateJumpBtn();
+        };
+        if (wasLive) {
+          pin();
+          requestAnimationFrame(pin);
+        } else if (typeof updateJumpBtn === 'function') updateJumpBtn();
       }
-      function measure() {
-        applyViewportHeight();
-        const el = document.getElementById('terminal-wrap');
-        if (el) { lastW = el.clientWidth; lastH = el.clientHeight; }
+      function cellSize() {
         try {
-          const d = fitAddon.proposeDimensions();
-          if (d && d.cols >= MIN_C && d.rows >= MIN_R) return d;
+          const cell = term._core && term._core._renderService &&
+            term._core._renderService.dimensions &&
+            term._core._renderService.dimensions.css &&
+            term._core._renderService.dimensions.css.cell;
+          if (cell && cell.width > 0 && cell.height > 0) return cell;
         } catch (_) {}
         return null;
       }
+      // peek wrap; never commit lastW. Debug HUD and anything else that
+      // only wants to READ geometry must use this. Committing lastW here
+      // would hide a real wrap change from the next boxDrift poll.
+      function peekWrap(wrapEl) {
+        if (!wrapEl) return null;
+        const cell = cellSize();
+        if (!cell) return null;
+        try {
+          const st = getComputedStyle(wrapEl);
+          const padX = (parseFloat(st.paddingLeft) || 0) + (parseFloat(st.paddingRight) || 0);
+          const padY = (parseFloat(st.paddingTop) || 0) + (parseFloat(st.paddingBottom) || 0);
+          const cols = Math.floor((wrapEl.clientWidth - padX) / cell.width);
+          const rows = Math.floor((wrapEl.clientHeight - padY) / cell.height);
+          if (cols >= MIN_C && rows >= MIN_R) return { cols, rows };
+        } catch (_) {}
+        return null;
+      }
+      function measure() {
+        applyViewportHeight();
+        const wrapEl = document.getElementById('terminal-wrap');
+        if (wrapEl) { lastW = wrapEl.clientWidth; lastH = wrapEl.clientHeight; }
+        // Always measure the WRAP, never #terminal / the canvas. A short
+        // PTY grid inside a tall wrap would otherwise report itself and
+        // stay stuck at 8 rows while the keyboard-open box is ~20.
+        // No FitAddon fallback: proposeDimensions measures the canvas,
+        // which is min(wrap, PTY). Reporting that as the wrap feeds the
+        // painted grid back into the min — never report the canvas as the wrap.
+        return peekWrap(wrapEl);
+      }
       function paint(cols, rows) {
         if (cols < MIN_C || rows < MIN_R) return;
-        const wasLive = atLiveBottom();
+        const shrinking = rows < term.rows;
+        // A keyboard-open shrink must show the prompt, even if the user
+        // had scrolled up — they opened the keyboard to type.
+        const wasLive = shrinking || atLiveBottom();
         const changed = term.cols !== cols || term.rows !== rows;
         if (changed && predictions.length > 0) resetPredictionsSoft();
         if (changed) {
+          if (rows !== term.rows) markResizeDirty();
           try { term.resize(cols, rows); } catch (_) {}
         }
+        try {
+          const cell = cellSize();
+          if (term.element && cell) {
+            term.element.style.height = (term.rows * cell.height) + 'px';
+            term.element.style.flexGrow = '0';
+            term.element.style.flexShrink = '0';
+            term.element.style.marginTop = 'auto';
+          }
+        } catch (_) {}
         // xterm.js already bottom-anchors when there is scrollback: shrink
         // pushes the top rows into history, grow pulls them back. Do not
         // follow this with a snapshot — those start with ESC[3J and wipe
@@ -4312,9 +4533,9 @@
         // prompt stays on screen; the top lines come back with the grow.
         pinLive(wasLive);
       }
-      function display() {
+      function display(wrap) {
         if (!ownsTerminal) return;
-        const wrap = measure();
+        if (!wrap) wrap = measure();
         if (!wrap) return;
         let cols = wrap.cols, rows = wrap.rows;
         if (ptyC >= MIN_C && ptyR >= MIN_R) {
@@ -4326,16 +4547,21 @@
         }
         paint(cols, rows);
       }
-      function report() {
+      function report(wrap) {
         if (!ownsTerminal || !agentLive) return;
-        const wrap = measure();
+        if (!wrap) wrap = measure();
         if (!wrap) return;
         if (wrap.cols === lastReportC && wrap.rows === lastReportR) return;
         lastReportC = wrap.cols;
         lastReportR = wrap.rows;
+        sizeTrace('send', wrap.cols, wrap.rows);
         send({ type: 'resize', cols: wrap.cols, rows: wrap.rows });
       }
-      function sync() { display(); report(); }
+      function sync() {
+        const wrap = measure();
+        display(wrap);
+        report(wrap);
+      }
 
       return {
         sync,
@@ -4359,6 +4585,20 @@
         boxDrift(el) {
           return !!(el && (el.clientWidth !== lastW || el.clientHeight !== lastH));
         },
+        snapshot() {
+          const wrapEl = document.getElementById('terminal-wrap');
+          const wrap = peekWrap(wrapEl);
+          return {
+            measC: wrap ? wrap.cols : 0,
+            measR: wrap ? wrap.rows : 0,
+            sentC: lastReportC,
+            sentR: lastReportR,
+            ptyC,
+            ptyR,
+            wrapW: wrapEl ? wrapEl.clientWidth : 0,
+            wrapH: wrapEl ? wrapEl.clientHeight : 0,
+          };
+        },
       };
     })();
     function sendResize() { TermSize.sync(); }
@@ -4367,6 +4607,196 @@
     function fitTerminal() { TermSize.sync(); }
     function scheduleFit() { TermSize.schedule(); }
     function relayout() { TermSize.schedule(); }
+
+    // Size debug HUD. Reads TermSize.snapshot() only — never measure(),
+    // never report(), never lastW. Dragging the handle moves the overlay
+    // and does not schedule a wrap.
+    const SizeLog = (() => {
+      const KEY = 'reminal:sizelog';
+      const POS_KEY = 'reminal:sizelog-pos';
+      const lines = [];
+      let on = false;
+      try { on = params.has('sizelog') || localStorage.getItem(KEY) === '1'; } catch (_) {}
+      let box = null, body = null, timer = 0;
+
+      function paint(line) {
+        if (!body) return;
+        if (line) {
+          lines.push((performance.now() / 1000 % 1000).toFixed(1) + ' ' + line);
+          while (lines.length > 40) lines.shift();
+        }
+        const y = body.scrollTop;
+        let s = window.__size();
+        let cell = '-';
+        try {
+          const c = term._core._renderService.dimensions.css.cell;
+          cell = c.width.toFixed(1) + 'x' + c.height.toFixed(1);
+        } catch (_) {}
+        const meas = s.snap.measC ? s.snap.measC + 'x' + s.snap.measR : '-';
+        const sent = s.snap.sentC ? s.snap.sentC + 'x' + s.snap.sentR : '-';
+        const pty = s.snap.ptyC ? s.snap.ptyC + 'x' + s.snap.ptyR : '-';
+        const paintC = Math.min(s.snap.measC || 0, s.snap.ptyC || s.snap.measC || 0);
+        const paintR = Math.min(s.snap.measR || 0, s.snap.ptyR || s.snap.measR || 0);
+        const grid = (paintC && paintR) ? paintC + 'x' + paintR : '-';
+        let hint = '';
+        if (s.snap.measC && s.snap.ptyC && (s.snap.ptyC < s.snap.measC || s.snap.ptyR < s.snap.measR)) {
+          hint = 'CLAMP: agent min (another viewer wrap) < this wrap';
+        } else if (s.snap.measR && s.snap.wrapH && cell !== '-') {
+          hint = 'client wrap is what we send; pty is what the source applied';
+        }
+        body.textContent = [
+          'SIZE  viewer ' + s.viewer,
+          'vv    ' + (s.vv ? s.vv.w + 'x' + s.vv.h + ' @' + s.vv.top : '-'),
+          'inner ' + s.inner.w + 'x' + s.inner.h,
+          'wrap  ' + (s.snap.wrapW || 0) + 'x' + (s.snap.wrapH || 0) + ' px',
+          'cell  ' + cell,
+          'meas  ' + meas + '   ← send',
+          'sent  ' + sent,
+          'pty   ' + pty + '   ← agent',
+          'paint ' + grid + '   min(meas,pty)',
+          'grid  ' + s.grid.c + 'x' + s.grid.r,
+          hint,
+          '---',
+          lines.join('\n') || '(open/close keyboard)',
+        ].join('\n');
+        body.scrollTop = y;
+      }
+      function clamp(el, x, y) {
+        const w = el.offsetWidth || 160;
+        const maxX = Math.max(0, window.innerWidth - w);
+        const maxY = Math.max(0, window.innerHeight - 36);
+        return {
+          x: Math.min(maxX, Math.max(0, x)),
+          y: Math.min(maxY, Math.max(0, y)),
+        };
+      }
+      function place(el, x, y) {
+        const p = clamp(el, x, y);
+        el.style.left = p.x + 'px';
+        el.style.top = p.y + 'px';
+        el.style.right = 'auto';
+        el.style.bottom = 'auto';
+        return p;
+      }
+      function savePos(p) {
+        try { localStorage.setItem(POS_KEY, JSON.stringify(p)); } catch (_) {}
+      }
+      function loadPos() {
+        try {
+          const v = JSON.parse(localStorage.getItem(POS_KEY) || 'null');
+          if (v && Number.isFinite(v.x) && Number.isFinite(v.y)) return v;
+        } catch (_) {}
+        return null;
+      }
+      function bindDrag(handle, el) {
+        let drag = null;
+        handle.addEventListener('pointerdown', (e) => {
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          handle.setPointerCapture(e.pointerId);
+          const r = el.getBoundingClientRect();
+          drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+          handle.classList.add('dragging');
+        });
+        handle.addEventListener('pointermove', (e) => {
+          if (!drag) return;
+          e.preventDefault();
+          e.stopPropagation();
+          place(el, e.clientX - drag.dx, e.clientY - drag.dy);
+        });
+        const end = (e) => {
+          if (!drag) return;
+          handle.classList.remove('dragging');
+          const r = el.getBoundingClientRect();
+          savePos(place(el, r.left, r.top));
+          drag = null;
+          if (e) e.stopPropagation();
+        };
+        handle.addEventListener('pointerup', end);
+        handle.addEventListener('pointercancel', end);
+      }
+      function mount() {
+        if (box) return;
+        box = document.createElement('div');
+        box.id = 'sizelog';
+        const handle = document.createElement('div');
+        handle.className = 'sizelog-handle';
+        handle.textContent = 'SIZE  ·  drag';
+        body = document.createElement('div');
+        body.className = 'sizelog-body';
+        box.appendChild(handle);
+        box.appendChild(body);
+        box.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+        box.addEventListener('touchmove', (e) => e.stopPropagation(), { passive: true });
+        box.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+        document.body.appendChild(box);
+        bindDrag(handle, box);
+        paint();
+        const saved = loadPos();
+        if (saved) place(box, saved.x, saved.y);
+        timer = setInterval(() => paint(), 400);
+      }
+      function unmount() {
+        if (timer) { clearInterval(timer); timer = 0; }
+        if (box) { box.remove(); box = null; }
+        body = null;
+      }
+      function set(v) {
+        on = !!v;
+        try { localStorage.setItem(KEY, on ? '1' : '0'); } catch (_) {}
+        if (on) mount(); else unmount();
+        const sb = document.getElementById('settings-btn');
+        if (sb) sb.classList.toggle('on', on);
+      }
+      if (on) set(true);
+      return { set, isOn: () => on, trace: paint };
+    })();
+    window.__sizeLogPaint = SizeLog.trace;
+
+    (function initSettings() {
+      const dock = document.getElementById('settdock');
+      const btn = document.getElementById('settings-btn');
+      if (!dock || !btn) return;
+      btn.classList.toggle('on', SizeLog.isOn());
+      function render() {
+        dock.innerHTML = '';
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'sett-row' + (SizeLog.isOn() ? ' on' : '');
+        row.innerHTML = '<span>Size debug</span><span class="sett-sw">' + (SizeLog.isOn() ? 'On' : 'Off') + '</span>';
+        row.addEventListener('click', (e) => {
+          e.stopPropagation();
+          SizeLog.set(!SizeLog.isOn());
+          render();
+        });
+        dock.appendChild(row);
+      }
+      function position() {
+        if (!dock.classList.contains('open')) return;
+        const kb = document.getElementById('keybar');
+        const kbTop = kb ? kb.getBoundingClientRect().top : window.innerHeight;
+        const r = btn.getBoundingClientRect();
+        dock.style.bottom = (window.innerHeight - kbTop + 8) + 'px';
+        dock.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 220)) + 'px';
+        dock.style.right = 'auto';
+        dock.style.top = 'auto';
+      }
+      function close() { dock.classList.remove('open'); }
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (dock.classList.contains('open')) { close(); return; }
+        render();
+        dock.classList.add('open');
+        position();
+      });
+      document.addEventListener('click', (e) => {
+        if (!dock.classList.contains('open')) return;
+        if (dock.contains(e.target) || e.target === btn) return;
+        close();
+      });
+      window.addEventListener('resize', position);
+      if (window.visualViewport) visualViewport.addEventListener('resize', position);
+    })();
 
     function sendResume() {
       // Resume rewinds the agent's output cursor, and the agent holds ONE
@@ -4821,11 +5251,13 @@
             const payload = JSON.parse(new TextDecoder().decode(bytes));
             const c = parseInt(payload.cols, 10) || 0;
             const r = parseInt(payload.rows, 10) || 0;
-            if (c === 0 && r === 0) {
-              TermSize.adoptPty(0, 0);
-            } else if (c > 0 && r > 0) {
-              TermSize.adoptPty(c, r);
-            }
+          if (c === 0 && r === 0) {
+            sizeTrace('pty-ask', 0, 0);
+            TermSize.adoptPty(0, 0);
+          } else if (c > 0 && r > 0) {
+            sizeTrace('pty', c, r);
+            TermSize.adoptPty(c, r);
+          }
           } catch (_) {}
           break;
         }
@@ -6047,6 +6479,7 @@
       window.visualViewport.addEventListener('resize', relayout);
       window.visualViewport.addEventListener('scroll', applyViewportHeight);
     }
+    window.addEventListener('scroll', applyViewportHeight, { passive: true });
     window.addEventListener('resize', relayout);
     window.addEventListener('orientationchange', relayout);
     // The box changing size (header wrapping, keybar collapse, height

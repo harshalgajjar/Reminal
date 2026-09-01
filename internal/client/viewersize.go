@@ -4,6 +4,9 @@
 package client
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,6 +18,11 @@ import (
 // attached screen can display the whole terminal. Viewers then render
 // min(their wrap, the PTY the agent broadcasts). They never decide the
 // PTY themselves.
+//
+// The host terminal is a mirror of that PTY, not a second wrap. Live
+// GetSize of stdout is not mixed into the min: a PTY SIGWINCH can change
+// that metric (scrollbar, echo) and feed back into another SIGWINCH.
+// Extra rows already scroll on the host; extra columns wrap the same way.
 //
 // Garbage measurements (a 5-row wrap mid-keyboard-animation) are ignored.
 // A burst of reports is one resize, applied when the viewport goes quiet.
@@ -66,6 +74,17 @@ func minTermSizes(wraps map[string]termSize) termSize {
 		}
 	}
 	return out
+}
+
+// effectivePTYSize is the size the PTY should be. A settled viewer wrap
+// owns geometry outright — host GetSize is not a cap, because that
+// number moves when the PTY itself resizes. With no viewer wrap, the
+// PTY matches the host terminal.
+func effectivePTYSize(viewer, host termSize) termSize {
+	if !viewer.zero() {
+		return viewer
+	}
+	return host
 }
 
 // report stores one viewer's wrap. Invalid sizes are ignored. Returns
@@ -124,6 +143,29 @@ func (b *viewerSizeBook) lastApplied() termSize {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.applied
+}
+
+// dump is the size-pipeline trace: every viewer's last wrap, the min
+// those wraps imply, and what the PTY actually is.
+func (b *viewerSizeBook) dump() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ids := make([]string, 0, len(b.wraps))
+	for id := range b.wraps {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		s := b.wraps[id]
+		parts = append(parts, fmt.Sprintf("%s=%dx%d", id, s.cols, s.rows))
+	}
+	shown := strings.Join(parts, " ")
+	if shown == "" {
+		shown = "-"
+	}
+	return fmt.Sprintf("n=%d [%s] settled=%dx%d applied=%dx%d",
+		len(b.wraps), shown, b.settled.cols, b.settled.rows, b.applied.cols, b.applied.rows)
 }
 
 // setApplied records the size we just put on the PTY. Returns false if

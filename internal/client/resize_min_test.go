@@ -58,3 +58,38 @@ func TestBroadcastSizeSentinelKeepsZeroFields(t *testing.T) {
 		t.Fatal("broadcastSize lost the omitempty guard; (0,0) would serialize as {} and the remaining viewer would not grow")
 	}
 }
+
+func TestEffectivePTYSizeViewersOwnGeometry(t *testing.T) {
+	phone := termSize{cols: 110, rows: 45}
+	host := termSize{cols: 47, rows: 24}
+	got := effectivePTYSize(phone, host)
+	if got != phone {
+		t.Errorf("viewer wrap %dx%d capped to host %dx%d → %dx%d; host is a mirror, not a cap",
+			phone.cols, phone.rows, host.cols, host.rows, got.cols, got.rows)
+	}
+}
+
+func TestEffectivePTYSizeHostWhenNoViewer(t *testing.T) {
+	host := termSize{cols: 80, rows: 24}
+	got := effectivePTYSize(termSize{}, host)
+	if got != host {
+		t.Errorf("no viewer wrap: got %dx%d, want host %dx%d", got.cols, got.rows, host.cols, host.rows)
+	}
+}
+
+func TestApplyEffectiveSizeDoesNotHostCap(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(src)
+	if strings.Contains(s, "host-cap cols") {
+		t.Fatal("applyEffectiveSize still caps PTY cols to live GetSize; that metric moves when the PTY resizes")
+	}
+	if strings.Contains(s, "pc != rs.Cols || pr != rs.Rows") {
+		t.Fatal("TypeResize still rebroadcasts PTY on wrap mismatch; that re-enters adoptPty")
+	}
+	if !strings.Contains(s, "host WINCH ignored") {
+		t.Fatal("host SIGWINCH must not applyEffectiveSize while viewers own geometry")
+	}
+}
