@@ -28,9 +28,13 @@ var shellCandidates = []string{"/bin/zsh", "/bin/bash", "/bin/sh"}
 // Upstream defaults keep a plain source build compatible with the public
 // service. Forks and release builders can replace either value with -ldflags;
 // runtime REMINAL_RELAY / REMINAL_WEB and REMINAL_LOCAL take precedence.
+//
+// Join links and sockets use live.reminal.app (the viewer + relay).
+// reminal.app is the marketing site. The previous public hostname
+// remains reachable so already-running agents are not cut off.
 var (
-	DefaultCloudRelay = "wss://reminal-relay.futuristic.workers.dev/ws"
-	DefaultCloudWeb   = "https://reminal-relay.futuristic.workers.dev"
+	DefaultCloudRelay = "wss://live.reminal.app/ws"
+	DefaultCloudWeb   = "https://live.reminal.app"
 )
 
 func RelayWS() string {

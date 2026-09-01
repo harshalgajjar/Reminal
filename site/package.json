@@ -1,10 +1,12 @@
 {
   "name": "reminal-site",
   "private": true,
+  "type": "module",
   "scripts": {
     "assets": "./build.sh",
     "dev": "./build.sh && wrangler dev",
-    "deploy": "./build.sh && wrangler deploy"
+    "deploy": "./build.sh && wrangler deploy",
+    "test": "node --test src/index.test.js"
   },
   "devDependencies": {
     "wrangler": "^4.102.0"

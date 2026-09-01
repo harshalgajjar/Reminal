@@ -17,15 +17,32 @@ func withCloudDefaults(t *testing.T, relay, web string) {
 	t.Setenv("REMINAL_LOCAL", "")
 }
 
-func TestUpstreamDefaultsRemainUsable(t *testing.T) {
-	withCloudDefaults(t,
-		"wss://reminal-relay.futuristic.workers.dev/ws",
-		"https://reminal-relay.futuristic.workers.dev")
-	if got := RelayWS(); got != "wss://reminal-relay.futuristic.workers.dev/ws" {
+func TestCompiledDefaultsAreLiveReminalApp(t *testing.T) {
+	if DefaultCloudRelay != "wss://live.reminal.app/ws" {
+		t.Fatalf("DefaultCloudRelay = %q", DefaultCloudRelay)
+	}
+	if DefaultCloudWeb != "https://live.reminal.app" {
+		t.Fatalf("DefaultCloudWeb = %q", DefaultCloudWeb)
+	}
+	t.Setenv("REMINAL_RELAY", "")
+	t.Setenv("REMINAL_WEB", "")
+	t.Setenv("REMINAL_LOCAL", "")
+	if got := RelayWS(); got != "wss://live.reminal.app/ws" {
 		t.Fatalf("RelayWS() = %q", got)
 	}
+	if got := WebURL(); got != "https://live.reminal.app" {
+		t.Fatalf("WebURL() = %q", got)
+	}
+}
+
+func TestWorkersDevAliasStillNormalizes(t *testing.T) {
+	withCloudDefaults(t, "wss://live.reminal.app/ws", "https://live.reminal.app")
+	t.Setenv("REMINAL_WEB", "https://reminal-relay.futuristic.workers.dev")
 	if got := WebURL(); got != "https://reminal-relay.futuristic.workers.dev" {
 		t.Fatalf("WebURL() = %q", got)
+	}
+	if got := RelayWS(); got != "wss://reminal-relay.futuristic.workers.dev/ws" {
+		t.Fatalf("RelayWS() = %q", got)
 	}
 }
 

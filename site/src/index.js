@@ -1,9 +1,10 @@
 // The marketing site for reminal.
 //
 // Deliberately its own Worker, separate from reminal-relay: the relay carries
-// live sessions, and a copy tweak should never be able to take it down.
+// live sessions at live.reminal.app, and a copy tweak here should never be
+// able to take that down.
 //
-// Everything is static except two things this handles by hand:
+// Everything is static except a few things this handles by hand:
 //
 //   * short install URLs — `curl -fsSL https://reminal.app/install.sh | sh` is
 //     what goes on the site, in posts, and in people's shell history, so it
@@ -11,11 +12,14 @@
 //     goes stale;
 //   * one canonical host — reminal.dev and any www. variant fold into
 //     reminal.app so links, OG cards and analytics don't fragment.
+//   * stray `/?s=` on this host — someone typing the marketing domain with a
+//     session id is sent to live.reminal.app, which is the real viewer.
 
 const RAW = "https://raw.githubusercontent.com/harshalgajjar/Reminal/main";
 const REPO = "https://github.com/harshalgajjar/Reminal";
 
 const CANONICAL_HOST = "reminal.app";
+const LIVE_ORIGIN = "https://live.reminal.app";
 
 // Hosts we own and fold into the canonical one. workers.dev and localhost are
 // absent on purpose — that's where the thing gets tested before DNS exists.
@@ -49,6 +53,16 @@ const PAGES = new Set([
   "/guides/macbook-lid-closed",
 ]);
 
+// A join URL typed on the marketing host. Path must stay `/` so /agents/?s=
+// cannot steal a page. The real viewer is live.reminal.app.
+export function isSessionJoin(url) {
+  return url.pathname === "/" && url.searchParams.has("s");
+}
+
+export function liveJoinURL(url) {
+  return LIVE_ORIGIN + "/" + url.search + url.hash;
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -65,6 +79,12 @@ export default {
           "timing-allow-origin": "*",
         },
       });
+    }
+
+    // Session joins leave this host before alias folding, so
+    // www.reminal.app/?s=X goes straight to live.reminal.app/?s=X.
+    if (isSessionJoin(url)) {
+      return Response.redirect(liveJoinURL(url), 302);
     }
 
     if (ALIASES.has(url.hostname)) {

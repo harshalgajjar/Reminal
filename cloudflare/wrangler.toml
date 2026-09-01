@@ -8,6 +8,16 @@ compatibility_flags = ["nodejs_compat"]
 # with their own account ID before deploying.
 account_id = "0cd85a1166e44b17571b7457040d18ae"
 
+# live.reminal.app is the public viewer and relay. The previous public
+# hostname stays bound so already-running agents are not cut off.
+workers_dev = true
+
+# Keep this ABOVE [assets]: TOML binds every key after a table header to
+# that table — put it below and wrangler parses it as assets.routes.
+routes = [
+  { pattern = "live.reminal.app", custom_domain = true },
+]
+
 [durable_objects]
 bindings = [
   { name = "SESSION", class_name = "SessionRoom" },

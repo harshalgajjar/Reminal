@@ -27,11 +27,10 @@ func recoverLog(where string, r any) {
 	}
 }
 
-// rateLimitedError is returned when the relay's edge (Cloudflare on the
-// workers.dev domain) responds 429 to the WS upgrade. The main reconnect
-// loop uses this to switch to a 10-minute back-off instead of its usual
-// 30-second cap — repeatedly retrying inside a throttle window only
-// extends it.
+// rateLimitedError is returned when the relay's edge responds 429 to the
+// WS upgrade. The main reconnect loop uses this to switch to a 10-minute
+// back-off instead of its usual 30-second cap — repeatedly retrying
+// inside a throttle window only extends it.
 type rateLimitedError struct {
 	retryAfter time.Duration // 0 if the server didn't advise one
 }
@@ -86,9 +85,9 @@ func classify(err error) string {
 	var rl *rateLimitedError
 	if errors.As(err, &rl) {
 		if rl.retryAfter > 0 {
-			return "Relay throttled this client (Cloudflare workers.dev rate limit) — backing off " + rl.retryAfter.String() + "."
+			return "Relay throttled this client — backing off " + rl.retryAfter.String() + "."
 		}
-		return "Relay throttled this client (Cloudflare workers.dev rate limit) — backing off. Frequent reconnects extend the block; if this persists, move the relay onto a custom domain."
+		return "Relay throttled this client — backing off. Frequent reconnects extend the block."
 	}
 
 	raw := err.Error()
