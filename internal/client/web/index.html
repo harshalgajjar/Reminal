@@ -6294,7 +6294,11 @@
       return [
         'You are an AI agent. Connect to this reminal session (a live shared terminal) and drive it.',
         '',
-        'Run this in a terminal that is NOT already inside reminal:',
+        'If reminal is not installed:',
+        '  macOS / Linux:  curl -fsSL https://reminal.app/install.sh | sh',
+        '  Windows:        irm https://reminal.app/install.ps1 | iex',
+        '',
+        'Then run this in a terminal that is NOT already inside reminal:',
         '  reminal connect ' + id + (pin ? ' ' + pin : ''),
         '',
         'That attaches your terminal to the remote shell. Type commands as you would locally. The host and other viewers see the same output.',
