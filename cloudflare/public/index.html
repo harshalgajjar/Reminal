@@ -266,6 +266,63 @@
     #share-btn { display: none; }
     body.connected #share-btn { display: inline-flex; }
 
+    #share-modal {
+      position: fixed; inset: 0; z-index: 100;
+      display: none; align-items: center; justify-content: center;
+      background: rgba(0, 0, 0, 0.85); padding: 16px;
+      overflow-y: auto;
+    }
+    .share-card {
+      position: relative;
+      background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+      padding: 18px 16px; width: 340px; max-width: 92vw; max-height: 92vh;
+      overflow-y: auto;
+      display: flex; flex-direction: column; align-items: stretch; gap: 12px;
+    }
+    .share-title { color: #e6edf3; font-size: 15px; font-weight: 600; text-align: center; padding: 0 28px; }
+    #share-close {
+      position: absolute; top: 6px; right: 6px;
+      width: 36px; height: 36px; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent; border: none; border-radius: 8px;
+      color: #8b949e; font-size: 18px; line-height: 1; cursor: pointer;
+    }
+    #share-close:hover { background: #21262d; color: #e6edf3; }
+    #share-qr { align-self: center; background: #fff; padding: 10px; border-radius: 8px; }
+    .share-rows { display: flex; flex-direction: column; gap: 6px; }
+    .share-row {
+      display: grid; grid-template-columns: 64px 1fr auto; align-items: center; gap: 8px;
+      background: #0d1117; border: 1px solid #30363d; border-radius: 7px;
+      padding: 7px 8px 7px 10px; min-height: 38px;
+    }
+    .share-row-label { color: #8b949e; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+    .share-row-value {
+      color: #e6edf3; font-size: 13px; font-variant-numeric: tabular-nums;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      user-select: all;
+    }
+    .share-row-value.share-pin { letter-spacing: 0.16em; font-weight: 600; }
+    .share-row-value.muted { color: #8b949e; letter-spacing: 0; font-weight: 400; font-size: 12px; }
+    .share-copy-one {
+      background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+      color: #e6edf3; padding: 5px 9px; font-size: 12px; cursor: pointer; white-space: nowrap;
+    }
+    .share-copy-one:hover { background: #30363d; }
+    .share-copy-one:disabled { opacity: 0.45; cursor: default; }
+    .share-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    .share-actions.share-msgs { flex-direction: column; }
+    .share-actions.share-msgs button { width: 100%; }
+    .share-actions button {
+      border-radius: 6px; padding: 8px 12px; cursor: pointer; font-size: 13px; border: 1px solid;
+    }
+    #share-copy-human { background: #238636; border-color: #2ea043; color: #fff; }
+    #share-copy-agent { background: #1f6feb; border-color: #388bfd; color: #fff; }
+    #share-native { display: none; background: #21262d; border-color: #30363d; color: #e6edf3; }
+    .share-hint { color: #8b949e; font-size: 12px; text-align: center; line-height: 1.45; }
+    @media (max-height: 720px) {
+      .share-card { gap: 8px; padding: 14px 12px; }
+    }
+
     /* Compact header: a clean, consistent ghost toolbar — icon over a small
        label — so it takes little width (important on phones). All four controls
        share one footprint; colour is used only as an accent (green Connect, red
@@ -1242,22 +1299,36 @@
       <button id="find-close" title="Close (Esc)">✕</button>
     </div>
   </div>
-  <div id="share-modal" style="position:fixed; inset:0; background:rgba(0,0,0,0.85); display:none; align-items:center; justify-content:center; flex-direction:column; gap:12px; padding:16px; z-index:100;">
-    <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px; max-width:90vw; display:flex; flex-direction:column; align-items:center; gap:12px;">
-      <div style="color:#e6edf3; font-size:14px; font-weight:600;">Share this session</div>
-      <div id="share-qr" style="background:#fff; padding:12px; border-radius:6px;"></div>
-      <input id="share-url" readonly style="width:300px; max-width:80vw;">
-      <div id="share-note" style="display:none; color:#d29922; font-size:12px; text-align:center; max-width:300px; line-height:1.45;">
-        You're connected as an owner, so this link carries no PIN. Another owner of this machine joins with it directly; anyone else needs the session PIN — run <code>reminal info</code> on the host to get it.
+  <div id="share-modal">
+    <div class="share-card">
+      <button type="button" id="share-close" title="Close" aria-label="Close">✕</button>
+      <div class="share-title">Share this session</div>
+      <div id="share-qr"></div>
+      <div class="share-rows">
+        <div class="share-row">
+          <div class="share-row-label">Session</div>
+          <div class="share-row-value" id="share-session"></div>
+          <button type="button" class="share-copy-one" data-share="session">Copy</button>
+        </div>
+        <div class="share-row">
+          <div class="share-row-label">PIN</div>
+          <div class="share-row-value share-pin" id="share-pin"></div>
+          <button type="button" class="share-copy-one" data-share="pin">Copy</button>
+        </div>
+        <div class="share-row">
+          <div class="share-row-label">URL</div>
+          <div class="share-row-value" id="share-url-text"></div>
+          <button type="button" class="share-copy-one" data-share="url">Copy</button>
+        </div>
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center;">
-        <button id="share-native" style="display:none; background:#1f6feb; border:1px solid #388bfd; border-radius:6px; color:#fff; padding:8px 14px; cursor:pointer;">Share via…</button>
-        <button id="share-copy" style="background:#238636; border:1px solid #2ea043; border-radius:6px; color:#fff; padding:8px 14px; cursor:pointer;">Copy link</button>
-        <button id="share-close" style="background:#21262d; border:1px solid #30363d; border-radius:6px; color:#e6edf3; padding:8px 14px; cursor:pointer;">Close</button>
+      <div class="share-actions share-msgs">
+        <button type="button" id="share-copy-human">Copy for a person</button>
+        <button type="button" id="share-copy-agent">Copy for an AI agent</button>
       </div>
-      <div style="color:#8b949e; font-size:12px; text-align:center; max-width:300px;">
-        Anyone with this link will join the same shell. Multiple viewers can be connected at once.
+      <div class="share-actions">
+        <button type="button" id="share-native">Share via…</button>
       </div>
+      <div class="share-hint">Anyone with these details joins the same shell. Multiple viewers can be connected at once.</div>
     </div>
   </div>
   <div id="preview">
@@ -1506,6 +1577,16 @@
     function onHostInfo(info) {
       lastHostInfo = info;
       if (info.hostname) rememberHost(sessionId, info.hostname);
+      // Owner (PIN-free) connects never typed the PIN. The agent includes it
+      // on host_info so Share can show it and mint a real Join link.
+      if (info.pin && /^\d{6,8}$/.test(info.pin)) {
+        if (!pinValue) {
+          pinValue = info.pin;
+          rememberSession(sessionId, info.pin);
+        }
+        const modal = document.getElementById('share-modal');
+        if (modal && modal.style.display === 'flex') fillShare();
+      }
       renderHost();
     }
 
@@ -6181,36 +6262,111 @@
       }
     });
 
-    // ---- Share session (QR + link, mintable from the phone itself) ----
-    // Phone-only workflow: a viewer wants to invite a second person and
-    // doesn't want to walk back to the host terminal to type `reminal info`.
-    // Show the active session's full join URL (with PIN fragment) as a
-    // QR + copyable text.
+    // ---- Share session (QR + creds + pasteable messages) ----
+    // Phone-only workflow: a viewer wants to invite a second person (or an
+    // AI agent) without walking back to the host to type `reminal info`.
     const shareModal = document.getElementById('share-modal');
-    const shareUrlInput = document.getElementById('share-url');
     const shareQrEl = document.getElementById('share-qr');
     let shareQrCode = null;
-    function openShare() {
+    function sharePin() {
+      return pinValue || (lastHostInfo && lastHostInfo.pin) || '';
+    }
+    function shareJoinURL() {
+      const id = (sessionId || '').toUpperCase();
+      const base = location.origin + '/?s=' + id;
+      const pin = sharePin();
+      return pin ? base + '#p=' + pin : base;
+    }
+    function shareHumanText() {
+      const id = (sessionId || '').toUpperCase();
+      const pin = sharePin();
+      const url = shareJoinURL();
+      let t = 'Join this reminal terminal:\n\n' + url;
+      if (id && pin) t += '\n\nOr from a terminal:\nreminal connect ' + id + ' ' + pin;
+      t += '\n\nAnyone with these details can type in the same shell.';
+      return t;
+    }
+    function shareAgentText() {
+      const id = (sessionId || '').toUpperCase();
+      const pin = sharePin();
+      const url = shareJoinURL();
+      const pinLine = pin || '(host has not sent it yet — ask the user to run reminal info)';
+      return [
+        'You are an AI agent. Connect to this reminal session (a live shared terminal) and drive it.',
+        '',
+        'Run this in a terminal that is NOT already inside reminal:',
+        '  reminal connect ' + id + (pin ? ' ' + pin : ''),
+        '',
+        'That attaches your terminal to the remote shell. Type commands as you would locally. The host and other viewers see the same output.',
+        '',
+        'To leave without stopping the host, press Ctrl-].',
+        '',
+        'Browser join (same session):',
+        '  ' + url,
+        '',
+        'Session: ' + id,
+        'PIN: ' + pinLine,
+        '',
+        'Do not share these credentials unless the user asked you to.',
+      ].join('\n');
+    }
+    async function copyShare(text, btn) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (_) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (_) {}
+        ta.remove();
+      }
+      if (btn) {
+        const original = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = original; }, 1500);
+      }
+    }
+    function fillShare() {
       if (!sessionId) return;
-      // Owner (PIN-free) connects have no PIN in the browser, so fall back to a
-      // PIN-less link rather than silently doing nothing. The link still joins
-      // other owners directly; a note explains the PIN caveat for everyone else.
-      const base = location.origin + '/?s=' + sessionId.toUpperCase();
-      const joinURL = pinValue ? base + '#p=' + pinValue : base;
-      shareUrlInput.value = joinURL;
+      const id = sessionId.toUpperCase();
+      const pin = sharePin();
+      const url = shareJoinURL();
+      const sessionEl = document.getElementById('share-session');
+      const pinEl = document.getElementById('share-pin');
+      const urlEl = document.getElementById('share-url-text');
+      const pinBtn = document.querySelector('.share-copy-one[data-share="pin"]');
+      sessionEl.textContent = id;
+      urlEl.textContent = url;
+      urlEl.title = url;
+      if (pin) {
+        pinEl.textContent = pin;
+        pinEl.classList.remove('muted');
+        if (pinBtn) pinBtn.disabled = false;
+      } else {
+        pinEl.textContent = 'Asking host…';
+        pinEl.classList.add('muted');
+        if (pinBtn) pinBtn.disabled = true;
+      }
       shareQrEl.innerHTML = '';
+      const qrSize = window.innerHeight < 640 ? 128 : (window.innerHeight < 740 ? 156 : 200);
       try {
         shareQrCode = new QRCode(shareQrEl, {
-          text: joinURL,
-          width: 220, height: 220,
+          text: url,
+          width: qrSize, height: qrSize,
           colorDark: '#000000', colorLight: '#ffffff',
           correctLevel: QRCode.CorrectLevel.L,
         });
       } catch (e) {
         shareQrEl.textContent = 'QR generation failed: ' + e;
       }
-      const note = document.getElementById('share-note');
-      if (note) note.style.display = pinValue ? 'none' : 'block';
+    }
+    function openShare() {
+      if (!sessionId) return;
+      fillShare();
+      if (!sharePin() && typeof sendWin === 'function') sendWin('host_info');
       shareModal.style.display = 'flex';
     }
     function closeShare() {
@@ -6218,6 +6374,21 @@
     }
     document.getElementById('share-btn').addEventListener('click', openShare);
     document.getElementById('share-close').addEventListener('click', closeShare);
+    shareModal.addEventListener('click', (e) => { if (e.target === shareModal) closeShare(); });
+    document.querySelectorAll('.share-copy-one').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const kind = btn.getAttribute('data-share');
+        if (kind === 'session') copyShare((sessionId || '').toUpperCase(), btn);
+        else if (kind === 'pin') { const p = sharePin(); if (p) copyShare(p, btn); }
+        else if (kind === 'url') copyShare(shareJoinURL(), btn);
+      });
+    });
+    document.getElementById('share-copy-human').addEventListener('click', (e) => {
+      copyShare(shareHumanText(), e.currentTarget);
+    });
+    document.getElementById('share-copy-agent').addEventListener('click', (e) => {
+      copyShare(shareAgentText(), e.currentTarget);
+    });
     // navigator.share invokes the native system share sheet on mobile —
     // AirDrop / Messages / Mail / Notes on iOS, the equivalent on
     // Android. Way more natural than "copy link, switch apps, paste."
@@ -6229,25 +6400,12 @@
       shareNativeBtn.addEventListener('click', async () => {
         try {
           await navigator.share({
-            title: 'reminal session ' + (sessionId || ''),
-            text: 'Join my terminal',
-            url: shareUrlInput.value,
+            title: 'reminal session ' + ((sessionId || '').toUpperCase()),
+            text: shareHumanText(),
           });
         } catch (_) { /* user cancelled the sheet — silent */ }
       });
     }
-    document.getElementById('share-copy').addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(shareUrlInput.value);
-        const btn = document.getElementById('share-copy');
-        const original = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = original; }, 1500);
-      } catch (_) {
-        // Fallback: select the input so the user can copy manually.
-        shareUrlInput.select();
-      }
-    });
 
     // ---- Mobile copy / paste ----
     // iOS Safari lets you select text in xterm with long-press but the

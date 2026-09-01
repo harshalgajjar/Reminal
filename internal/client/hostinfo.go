@@ -21,7 +21,14 @@ func (a *Agent) handleHostInfo(conn *websocket.Conn) {
 	if a.box == nil {
 		return
 	}
-	raw, err := json.Marshal(gatherHostInfo())
+	info := gatherHostInfo()
+	// Owners connect PIN-free, so the browser never typed the PIN. The share
+	// menu still needs it to mint a Join link / `reminal connect` line. This
+	// rides the session channel, encrypted — anyone who can read it already
+	// has the session key (PIN join, or owner handshake). The directory
+	// channel still omits PINs (see protocol.DirSession).
+	info.PIN = a.pin
+	raw, err := json.Marshal(info)
 	if err != nil {
 		return
 	}
@@ -102,6 +109,9 @@ type HostInfo struct {
 	// a whole PeerConnection and offer for every one — reaped only after
 	// rtcHandshakeTimeout — so a viewer must not repeat them at it.
 	CapsOnly bool `json:"caps_only,omitempty"`
+	// PIN is this session's join PIN. Sent so an owner-connected viewer can
+	// share the session; omitted from directory listings on purpose.
+	PIN string `json:"pin,omitempty"`
 }
 
 // gatherHostInfo collects the cross-platform basics, then lets the per-OS hook

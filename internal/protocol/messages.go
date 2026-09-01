@@ -200,8 +200,9 @@ const (
 	// TypeHostInfo is bidirectional. Viewer→agent: an empty-Data request ("tell
 	// me about the machine you're on"). Agent→viewer: the reply, Data =
 	// encrypted JSON of internal/client HostInfo (hostname, OS, arch, CPU model
-	// + cores, total/used memory, uptime, load average). Rides E2E-encrypted in
-	// Data like the window messages; the relay forwards it opaquely.
+	// + cores, total/used memory, uptime, load average, and the session PIN so
+	// an owner-connected viewer can share). Rides E2E-encrypted in Data like
+	// the window messages; the relay forwards it opaquely.
 	TypeHostInfo MessageType = "host_info"
 
 	// TypeNewSession is bidirectional. Viewer→agent: a request to spawn a fresh
