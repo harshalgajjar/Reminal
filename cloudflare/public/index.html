@@ -146,8 +146,17 @@
       -webkit-user-select: none; user-select: none;
       -webkit-touch-callout: none;
     }
-    #terminal { height: 100%; }
-    .xterm { height: 100%; }
+    /* Fill the wrap. The grid is min(wrap, PTY), so the canvas should
+       occupy the box; leftover sub-row pixels sit above the live rows
+       (flex-end) instead of as a hole under the prompt. */
+    #terminal {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      overflow: hidden;
+    }
+    .xterm { height: 100%; width: 100%; }
     #overlay {
       position: absolute;
       inset: 8px;
@@ -2306,8 +2315,21 @@
     // where you can't easily copy-paste a URL into the address bar.
     term.loadAddon(new WebLinksAddon.WebLinksAddon());
     term.open(document.getElementById('terminal'));
-    fitAddon.fit();
     window.__term = term; // debug/test handle (harmless; used by automated viewer tests)
+    // Chrome Android pans the layout to keep xterm's hidden textarea in
+    // view. That is the "everything jumps up, hole under the prompt"
+    // keyboard bug: the wrap already shrank, then the browser scrolled
+    // the page anyway. Keep focus; do not pan.
+    (function () {
+      const orig = term.focus.bind(term);
+      term.focus = function () {
+        const ta = term.textarea;
+        if (ta && ta.focus) {
+          try { ta.focus({ preventScroll: true }); return; } catch (_) {}
+        }
+        orig();
+      };
+    })();
     // Per-pane video health, for automated tests and field diagnosis: AUs
     // decoded, sequence gaps seen (each one means the host's stream and this
     // decoder diverged), and decoder errors. Cheap counters, no behaviour.
@@ -4168,9 +4190,6 @@
       // the visible character.
       const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
       lastDataAt = Date.now();
-      // Inside the post-resize dirty window every chunk re-arms the refresh
-      // debounce, so it fires once the repaint stream quiesces (see above).
-      if (resizeDirtyUntil && Date.now() < resizeDirtyUntil) scheduleSoftRefresh();
       const after = reconcilePredictions(u8);
       if (after.byteLength === 0) return;
       pendingChunks.push(after);
@@ -4205,76 +4224,149 @@
       ws.send(JSON.stringify(msg));
     }
 
-    // Remote size mirrors held briefly before applying (see the 'resize' case):
-    // a local measurement is always fresher than an in-flight echo of an older one.
-    let pendingRemoteSize = null, remoteSizeTimer = null;
-    const MIN_TERM_COLS = 20, MIN_TERM_ROWS = 8;
-    let sizeTimer = 0, lastSentC = 0, lastSentR = 0;
-    let lastFitW = 0, lastFitH = 0;
-
-    // xterm.js resize is top-anchored. After a keyboard open the live prompt
-    // is still at the BOTTOM of the buffer, but the viewport is left on the
-    // first rows — a handful of old lines and a screen of empty cells, with
-    // "Jump to bottom" as the only way back. Remember whether we were live
-    // BEFORE the resize; never treat the post-resize top as "user is reading".
-    function atLiveBottom() {
-      try {
-        const buf = term.buffer.active;
-        return !buf || buf.viewportY >= buf.baseY;
-      } catch (_) { return true; }
-    }
-    function pinLive(wasLive) {
-      if (wasLive) {
-        try { term.scrollToBottom(); } catch (_) {}
-      }
-      if (typeof updateJumpBtn === 'function') updateJumpBtn();
-    }
-
-    function publishSize() {
-      // A pane tab must never drive the PTY. Its terminal is display:none, so
-      // fitAddon measures nothing and xterm falls back to its 80x24 default —
-      // and that 80x24 would enter the agent's per-viewer min, shrinking
-      // everyone. Each resize also makes Ink re-emit its whole frame, so
-      // this was corrupting scrollback as well as geometry.
-      if (!ownsTerminal) return;
-      applyViewportHeight();
-      const wrap = document.getElementById('terminal-wrap');
-      if (!wrap || wrap.clientWidth < 80 || wrap.clientHeight < 80) return;
-      const wasLive = atLiveBottom();
-      const prevC = term.cols, prevR = term.rows;
-      if (predictions.length > 0) resetPredictionsSoft();
-      try { fitAddon.fit(); } catch (_) {}
-      lastFitW = wrap.clientWidth;
-      lastFitH = wrap.clientHeight;
-      // Mid-keyboard-animation can measure 5 rows. Do not leave the local
-      // grid there (empty black below a handful of lines) and do not send
-      // it — keep the last honest size until the wrap is real again.
-      if (term.cols < MIN_TERM_COLS || term.rows < MIN_TERM_ROWS) {
-        if (lastSentC >= MIN_TERM_COLS && lastSentR >= MIN_TERM_ROWS) {
-          try { term.resize(lastSentC, lastSentR); } catch (_) {}
-        }
-        pinLive(wasLive);
+    // iOS (incl. iPadOS, which reports as "MacIntel" + touch) is the only
+    // platform whose soft keyboard OVERLAYS the page instead of resizing
+    // the layout viewport — there CSS 100dvh stays full-height and the
+    // keyboard hides the terminal, so we must pin <body> to the visual
+    // viewport. EVERYWHERE ELSE (Android Chrome with
+    // interactive-widget=resizes-content, desktop) the layout viewport
+    // resizes natively and 100dvh tracks it reliably — overriding height
+    // there is actively harmful: Android reports a STALE visualViewport
+    // .height for a beat after a keyboard close, so an override pins <body>
+    // back to the old small height and fights the correct 100dvh grow
+    // (the "increase then snap back to a gap" flicker). So: only ever
+    // touch body height on iOS; let CSS own it otherwise.
+    // Must live above TermSize: keybar init calls TermSize.schedule() during
+    // parse, and a const IS_IOS below that call is a TDZ error that aborts
+    // the rest of the page (Connect never runs).
+    const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    let lastAppliedH = -1, lastAppliedT = '';
+    function applyViewportHeight() {
+      const vv = window.visualViewport;
+      if (!IS_IOS || !vv) {
+        // Android / desktop: CSS 100dvh drives layout. Make sure no stale
+        // inline override is left clamping it.
+        if (lastAppliedH !== 0) { document.body.style.height = ''; lastAppliedH = 0; }
+        if (lastAppliedT !== '') { document.body.style.transform = ''; lastAppliedT = ''; }
         return;
       }
-      pinLive(wasLive);
-      pendingRemoteSize = null;
-      if (remoteSizeTimer) { clearTimeout(remoteSizeTimer); remoteSizeTimer = null; }
-      if (!agentLive) return;
-      if (term.cols === lastSentC && term.rows === lastSentR) return;
-      lastSentC = term.cols;
-      lastSentR = term.rows;
-      send({ type: 'resize', cols: term.cols, rows: term.rows });
-      if (term.cols !== prevC || term.rows !== prevR) {
-        markResizeDirty();
-        scheduleSoftRefresh();
+      const h = Math.round(vv.height);
+      // iOS can scroll the visual viewport down under the keyboard; shift
+      // the body to follow it so the top of the terminal stays visible.
+      const t = vv.offsetTop ? 'translateY(' + Math.round(vv.offsetTop) + 'px)' : '';
+      if (h !== lastAppliedH) { document.body.style.height = h + 'px'; lastAppliedH = h; }
+      if (t !== lastAppliedT) { document.body.style.transform = t; lastAppliedT = t; }
+    }
+
+    // TermSize — the only size loop on this page.
+    //
+    // This tab reports the wrap it can show. The agent owns the PTY
+    // (min of every viewer's wrap, including keyboard-open) and
+    // broadcasts the applied size. We render min(wrap, PTY): the
+    // visible grid always fills the wrap so a keyboard-open cannot
+    // leave a black hole under the prompt, and we never grow past the PTY,
+    // so a laptop cannot stomp a phone. xterm.js resize is top-anchored,
+    // so after every grid change we pin to the live bottom if the user
+    // was already there.
+    const TermSize = (() => {
+      const MIN_C = 20, MIN_R = 8, SETTLE_MS = 200;
+      let timer = 0, lastW = 0, lastH = 0;
+      let lastReportC = 0, lastReportR = 0;
+      let ptyC = 0, ptyR = 0;
+
+      function atLiveBottom() {
+        try {
+          const buf = term.buffer.active;
+          return !buf || buf.viewportY >= buf.baseY;
+        } catch (_) { return true; }
       }
-    }
-    function sendResize() { publishSize(); }
-    function scheduleSize() {
-      applyViewportHeight();
-      if (sizeTimer) clearTimeout(sizeTimer);
-      sizeTimer = setTimeout(() => { sizeTimer = 0; publishSize(); }, 200);
-    }
+      function pinLive(wasLive) {
+        if (wasLive) {
+          try { term.scrollToBottom(); } catch (_) {}
+        }
+        if (typeof updateJumpBtn === 'function') updateJumpBtn();
+      }
+      function measure() {
+        applyViewportHeight();
+        const el = document.getElementById('terminal-wrap');
+        if (el) { lastW = el.clientWidth; lastH = el.clientHeight; }
+        try {
+          const d = fitAddon.proposeDimensions();
+          if (d && d.cols >= MIN_C && d.rows >= MIN_R) return d;
+        } catch (_) {}
+        return null;
+      }
+      function paint(cols, rows) {
+        if (cols < MIN_C || rows < MIN_R) return;
+        const wasLive = atLiveBottom();
+        const changed = term.cols !== cols || term.rows !== rows;
+        if (changed && predictions.length > 0) resetPredictionsSoft();
+        if (changed) {
+          try { term.resize(cols, rows); } catch (_) {}
+        }
+        // xterm.js already bottom-anchors when there is scrollback: shrink
+        // pushes the top rows into history, grow pulls them back. Do not
+        // follow this with a snapshot — those start with ESC[3J and wipe
+        // the very lines the grow needs. Pin to the live bottom so the
+        // prompt stays on screen; the top lines come back with the grow.
+        pinLive(wasLive);
+      }
+      function display() {
+        if (!ownsTerminal) return;
+        const wrap = measure();
+        if (!wrap) return;
+        let cols = wrap.cols, rows = wrap.rows;
+        if (ptyC >= MIN_C && ptyR >= MIN_R) {
+          cols = Math.min(cols, ptyC);
+          // Match the visible wrap, including keyboard-open. A tall PTY
+          // grid CSS-clipped into a short wrap left a black hole under
+          // the prompt and Chrome panned the page to chase the cursor.
+          rows = Math.min(rows, ptyR);
+        }
+        paint(cols, rows);
+      }
+      function report() {
+        if (!ownsTerminal || !agentLive) return;
+        const wrap = measure();
+        if (!wrap) return;
+        if (wrap.cols === lastReportC && wrap.rows === lastReportR) return;
+        lastReportC = wrap.cols;
+        lastReportR = wrap.rows;
+        send({ type: 'resize', cols: wrap.cols, rows: wrap.rows });
+      }
+      function sync() { display(); report(); }
+
+      return {
+        sync,
+        schedule() {
+          applyViewportHeight();
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => { timer = 0; sync(); }, SETTLE_MS);
+        },
+        adoptPty(c, r) {
+          if (c === 0 && r === 0) {
+            lastReportC = lastReportR = 0;
+            ptyC = ptyR = 0;
+            sync();
+            return;
+          }
+          if (c < MIN_C || r < MIN_R) return;
+          ptyC = c;
+          ptyR = r;
+          display();
+        },
+        boxDrift(el) {
+          return !!(el && (el.clientWidth !== lastW || el.clientHeight !== lastH));
+        },
+      };
+    })();
+    function sendResize() { TermSize.sync(); }
+    function publishSize() { TermSize.sync(); }
+    function scheduleSize() { TermSize.schedule(); }
+    function fitTerminal() { TermSize.sync(); }
+    function scheduleFit() { TermSize.schedule(); }
+    function relayout() { TermSize.schedule(); }
 
     function sendResume() {
       // Resume rewinds the agent's output cursor, and the agent holds ONE
@@ -4288,66 +4380,17 @@
       ws.send(JSON.stringify({ type: 'resume', from_seq: lastSeq }));
     }
 
-    // Soft-refresh: once the viewport has finished resizing, re-pull a clean,
-    // de-duplicated snapshot from the agent — no page reload. Resizing makes an
-    // inline TUI (Claude Code, etc.) repaint its frame; when that frame is taller
-    // than the viewport, the overflow stacks duplicate copies into scrollback.
-    // Resuming from_seq:0 tells the agent to resend its snapshot, which is
-    // de-duplicated AND rendered from the app's live frame — so the input line and
-    // anything typed but not yet submitted are preserved (the app, not the viewer,
-    // owns that text). Debounced so a drag fires it once, on settle.
-    let softRefreshTimer = null;
-    // Burst-quiesce refresh: resize is not the only thing that dirties the
-    // live buffer. On a phone, every message typed into an inline TUI opens
-    // and closes the keyboard; with the keyboard up the app's frame overflows
-    // the short screen and every repaint stamps its input-box band into
-    // scrollback. The agent's snapshot dedup collapses those stamps — but the
-    // live tab only pulled a fresh snapshot on resize, so stamps piled up
-    // between resizes and native scrolling exposed them. Now: whenever a
-    // burst of output (>30 lines) has settled for a second and the user is
-    // at the bottom, re-pull the clean snapshot too.
+    // Snapshots (resume from seq 0) wipe the viewer with ESC[3J and then
+    // paint the entire buffer. Cursor CLI / Ink conversations can be tens
+    // of thousands of lines; doing that on a timer after every burst of
+    // output is the "redraw from the top for 20 seconds" stall. Snapshots
+    // are for join/reconnect only — sendResume() on connect. Do not
+    // auto-refresh while live.
     let lastDataAt = 0, cleanBaseY = 0;
-    setInterval(() => {
-      if (!agentLive || !ws || ws.readyState !== WebSocket.OPEN) return;
-      if (!lastDataAt || Date.now() - lastDataAt < 1000) return;
-      const buf = term && term.buffer && term.buffer.active;
-      if (!buf || buf.viewportY < buf.baseY) return;   // never yank a reader
-      if (buf.baseY - cleanBaseY <= 30) return;        // nothing meaningful accrued
-      cleanBaseY = buf.baseY;                          // one refresh per burst
-      scheduleSoftRefresh();
-    }, 2000);
-    // After a resize, the app's SIGWINCH repaint can land well AFTER our settle
-    // debounce — a refresh that fires first pulls a snapshot that predates the
-    // repaint, and the straggler re-stamps duplicates that then linger. So a
-    // resize marks a "dirty window": every data chunk inside it re-arms the
-    // debounce, making the refresh fire only once output quiesces (i.e. after
-    // the repaint). Cleared when the refresh actually fires so the arriving
-    // snapshot doesn't re-trigger it.
     let resizeDirtyUntil = 0;
     function markResizeDirty() { resizeDirtyUntil = Date.now() + 8000; }
     function scheduleSoftRefresh() {
-      if (softRefreshTimer) clearTimeout(softRefreshTimer);
-      softRefreshTimer = setTimeout(() => {
-        softRefreshTimer = null;
-        if (!agentLive || !ws || ws.readyState !== WebSocket.OPEN) return;
-        // Grace period: the fit/size-sync churn right after connect must not
-        // trigger a redundant refresh of the snapshot we just received.
-        if (!connectedAt || (Date.now() - connectedAt) < 1500) return;
-        // Never yank the reader: if they've scrolled up into history, skip — a
-        // snapshot repaint lands them at the bottom, which mid-scroll feels like the
-        // scroll overshooting. Only refresh when the view is already at the bottom
-        // (live). Next time they're at the bottom and resize, it cleans.
-        const buf = term && term.buffer && term.buffer.active;
-        if (buf && buf.viewportY < buf.baseY) return;
-        resizeDirtyUntil = 0;
-        // Reset the seq so the agent resends its snapshot; the snapshot's own
-        // clear (ED3) wipes the duplicated scrollback and repaints in one write,
-        // so the old view stays put until the clean one lands — no blank flash,
-        // and the input line is never momentarily missing.
-        lastSeq = 0;
-        awaitingSnapshotUntil = Date.now() + 15000;
-        sendResume();
-      }, 450);
+      // Kept as a no-op so older call sites cannot resurrect the stall.
     }
 
     function cancelReconnect() {
@@ -4776,29 +4819,12 @@
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             const payload = JSON.parse(new TextDecoder().decode(bytes));
-            const c = parseInt(payload.cols, 10);
-            const r = parseInt(payload.rows, 10);
+            const c = parseInt(payload.cols, 10) || 0;
+            const r = parseInt(payload.rows, 10) || 0;
             if (c === 0 && r === 0) {
-              publishSize();
+              TermSize.adoptPty(0, 0);
             } else if (c > 0 && r > 0) {
-              // Hold the latest mirror briefly. A newer local measurement
-              // cancels it. If the agent truly wants a different size
-              // (another viewer is smaller), that broadcast lands here.
-              pendingRemoteSize = { c, r };
-              if (remoteSizeTimer) clearTimeout(remoteSizeTimer);
-              remoteSizeTimer = setTimeout(() => {
-                remoteSizeTimer = null;
-                const p = pendingRemoteSize;
-                pendingRemoteSize = null;
-                if (!p || (p.c === term.cols && p.r === term.rows)) return;
-                if (p.c < MIN_TERM_COLS || p.r < MIN_TERM_ROWS) return;
-                const wasLive = atLiveBottom();
-                resetPredictionsSoft();
-                term.resize(p.c, p.r);
-                pinLive(wasLive);
-                markResizeDirty();
-                scheduleSoftRefresh();
-              }, 450);
+              TermSize.adoptPty(c, r);
             }
           } catch (_) {}
           break;
@@ -5579,14 +5605,9 @@
       keybarToggle.textContent = hidden ? '⌨' : '≡';
       keybarToggle.title = hidden ? 'Show key bar' : 'Hide key bar';
       // Collapsing/expanding the bar changes its height, so the terminal
-      // box's height changes too — re-fit. This can fire during bootstrap
-      // before relayout()'s state is initialized; guard so a TDZ error
-      // can't break initial load (the initial relayout() runs regardless).
-      try {
-        relayout();
-      } catch (_) {
-        try { fitAddon.fit(); if (agentLive) sendResize(); } catch (__) {}
-      }
+      // box's height changes too — re-fit. Guard so a throw here cannot
+      // abort the rest of the page (Connect, listeners) during bootstrap.
+        try { TermSize.schedule(); } catch (_) {}
     }
     keybarToggle.addEventListener('click', (e) => {
       // A dock drag that just released synthesizes a click on this button
@@ -5667,7 +5688,7 @@
       try { localStorage.setItem(FONT_KEY, String(clamped)); } catch (_) {}
       // Font size changes cell metrics but not the box size, so force a
       // fit (the box-unchanged guard would otherwise skip it).
-      fitTerminal(true);
+      TermSize.sync();
     }
     document.getElementById('font-up-btn').addEventListener('click', () => {
       setFontSize(term.options.fontSize + 2);
@@ -6009,55 +6030,18 @@
     //      this is a harmless no-op there. Setting a height value that
     //      doesn't depend on the terminal box means it can't loop.
     //
-    //   2. fitTerminal() — resize xterm's grid to fill #terminal-wrap.
-    //      The box's size is owned entirely by flexbox; fit() only sizes
-    //      the canvas *inside* it (min-height:0 + overflow:hidden mean the
-    //      canvas can't push the box bigger), so a ResizeObserver watching
-    //      the box and calling fit() can NEVER trigger another resize.
+    //   2. TermSize.sync() — report the wrap to the agent, then paint
+    //      min(wrap, PTY). The box's size is owned entirely by flexbox;
+    //      we only size the canvas inside it.
     //
     // That structural guarantee — no second sizing authority, observer
     // output can't become observer input — is what kills the old
     // measure→pin→resize→measure flicker loop for good.
-    // iOS (incl. iPadOS, which reports as "MacIntel" + touch) is the only
-    // platform whose soft keyboard OVERLAYS the page instead of resizing
-    // the layout viewport — there CSS 100dvh stays full-height and the
-    // keyboard hides the terminal, so we must pin <body> to the visual
-    // viewport. EVERYWHERE ELSE (Android Chrome with
-    // interactive-widget=resizes-content, desktop) the layout viewport
-    // resizes natively and 100dvh tracks it reliably — overriding height
-    // there is actively harmful: Android reports a STALE visualViewport
-    // .height for a beat after a keyboard close, so an override pins <body>
-    // back to the old small height and fights the correct 100dvh grow
-    // (the "increase then snap back to a gap" flicker). So: only ever
-    // touch body height on iOS; let CSS own it otherwise.
-    const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
-      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    let lastAppliedH = -1, lastAppliedT = '';
-    function applyViewportHeight() {
-      const vv = window.visualViewport;
-      if (!IS_IOS || !vv) {
-        // Android / desktop: CSS 100dvh drives layout. Make sure no stale
-        // inline override is left clamping it.
-        if (lastAppliedH !== 0) { document.body.style.height = ''; lastAppliedH = 0; }
-        if (lastAppliedT !== '') { document.body.style.transform = ''; lastAppliedT = ''; }
-        return;
-      }
-      const h = Math.round(vv.height);
-      // iOS can scroll the visual viewport down under the keyboard; shift
-      // the body to follow it so the top of the terminal stays visible.
-      const t = vv.offsetTop ? 'translateY(' + Math.round(vv.offsetTop) + 'px)' : '';
-      if (h !== lastAppliedH) { document.body.style.height = h + 'px'; lastAppliedH = h; }
-      if (t !== lastAppliedT) { document.body.style.transform = t; lastAppliedT = t; }
-    }
-    function fitTerminal(force) {
-      if (force) publishSize();
-      else scheduleSize();
-    }
-    function scheduleFit() { scheduleSize(); }
-    function relayout() { scheduleSize(); }
+    // applyViewportHeight / IS_IOS live above TermSize so keybar init
+    // cannot hit a TDZ. Listeners stay here, after TermSize exists.
 
     // Viewport changes (keyboard open/close, rotation, desktop resize)
-    // update body height and re-fit. visualViewport is the accurate
+    // update body height and re-sync. visualViewport is the accurate
     // signal on mobile; window.resize covers browsers without it.
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', relayout);
@@ -6089,7 +6073,7 @@
       applyViewportHeight();
       const kbTop = keybar ? Math.round(keybar.getBoundingClientRect().top) : 0;
       const wrap = document.getElementById('terminal-wrap');
-      const boxDrift = wrap && (wrap.clientWidth !== lastFitW || wrap.clientHeight !== lastFitH);
+      const boxDrift = TermSize.boxDrift(wrap);
       if (kbTop !== lastKbTop || boxDrift) {
         lastKbTop = kbTop;
         scheduleSize();
@@ -6102,7 +6086,7 @@
     document.addEventListener('focusin', () => setTimeout(relayout, 100), true);
     // Initial layout.
     applyViewportHeight();
-    requestAnimationFrame(() => fitTerminal(true));
+    requestAnimationFrame(() => TermSize.sync());
 
     // Tap-to-focus: on mobile, tapping an empty area of the terminal
     // wrapper should always open the soft keyboard, even if xterm.js

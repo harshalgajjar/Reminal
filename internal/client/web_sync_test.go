@@ -54,12 +54,32 @@ func TestPaneGestureContracts(t *testing.T) {
 		"const residualX = fingerDX - (pane.panX - beforeX)",
 		"queueScroll(f.fx, f.fy, -residualX * scaleX, -residualY * scaleY)",
 		"targets here before preventing touchmove's browser default",
+		"const TermSize = (() => {",
+		"TermSize.adoptPty",
+		"Must live above TermSize: keybar init",
+		"never grow past the PTY",
+		"Match the visible wrap, including keyboard-open",
+		"min of every viewer's wrap, including keyboard-open",
+		"the very lines the grow needs",
+		"auto-refresh while live",
+		"parseInt(payload.cols, 10) || 0",
 	} {
 		if !strings.Contains(s, required) {
 			t.Fatalf("viewer is missing pane gesture contract %q", required)
 		}
 	}
+	if strings.Contains(s, "pendingRemoteSize") {
+		t.Fatal("viewer still has the old remote-size echo dance")
+	}
+	if strings.Contains(s, "fitAddon.fit()") {
+		t.Fatal("viewer still drives the grid with fit() instead of TermSize")
+	}
 	if strings.Contains(s, "mode: pane.zoom > 1.001 ? 'view' : null") {
 		t.Fatal("zoomed panes still force local-only view mode; remote edge scrolling is unreachable")
+	}
+	applyAt := strings.Index(s, "function applyViewportHeight()")
+	termAt := strings.Index(s, "const TermSize = (() => {")
+	if applyAt < 0 || termAt < 0 || applyAt > termAt {
+		t.Fatal("applyViewportHeight must be defined before TermSize so keybar init cannot TDZ on IS_IOS")
 	}
 }

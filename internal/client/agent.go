@@ -238,21 +238,14 @@ type Agent struct {
 	currentConnMu sync.Mutex
 	currentConn   *websocket.Conn
 
-	// viewerSizeMu guards viewerCols / viewerRows / viewerCount / viewerSizes.
-	// viewerSizes is each attached viewer's latest report (keyed by the
-	// per-tab id they send). viewerCols/Rows are the settled min of those
-	// reports — zero = "no viewer size known", host wins.
-	viewerSizeMu   sync.Mutex
-	viewerCols     uint16
-	viewerRows     uint16
-	viewerCount    int
-	viewerSizes    map[string][2]uint16
-	lastAppliedCol uint16
-	lastAppliedRow uint16
+	// sizeBook is the source of PTY geometry: each viewer's wrap, the
+	// settled min of those wraps, and the last size applied to the PTY.
+	// See viewersize.go. viewerCount (how many sockets are attached) is
+	// separate — the relay only gives us a count, not which id left.
+	sizeBook viewerSizeBook
 
-	// szMu guards the viewer-resize coalescing timers (coalesceViewerResize).
-	szMu               sync.Mutex
-	szShrinkT, szGrowT *time.Timer
+	viewerSizeMu sync.Mutex
+	viewerCount  int
 
 	// headless disables every interaction with the host terminal: no raw
 	// mode, no host indicator (cursor color / window title / banner),
@@ -887,126 +880,32 @@ func (a *Agent) syncSizeToPTY() {
 	a.applyEffectiveSize()
 }
 
-// storeViewerReport remembers one viewer's latest viewport. id is the
-// per-tab token they send on resize; an empty id is the anonymous slot
-// shared by older viewers that don't send one.
-func (a *Agent) storeViewerReport(id string, cols, rows uint16) {
-	if !validViewerSize(cols, rows) {
-		return
-	}
-	a.viewerSizeMu.Lock()
-	if a.viewerSizes == nil {
-		a.viewerSizes = map[string][2]uint16{}
-	}
-	a.viewerSizes[id] = [2]uint16{cols, rows}
-	a.viewerSizeMu.Unlock()
-}
-
-// validViewerSize rejects the garbage measurements a mobile browser emits
-// mid-keyboard-animation (a 5-row wrap, an unmounted pane's 80×24 default).
-func validViewerSize(cols, rows uint16) bool {
-	return cols >= 20 && rows >= 8
-}
-
-// minViewerSize is min(widths)×min(heights) across the live reports, so
-// every attached screen can show the whole terminal. An empty map returns
-// 0×0 (applyEffectiveSize then falls back to the host).
-func minViewerSize(sizes map[string][2]uint16) (cols, rows uint16) {
-	for _, sz := range sizes {
-		if cols == 0 || sz[0] < cols {
-			cols = sz[0]
-		}
-		if rows == 0 || sz[1] < rows {
-			rows = sz[1]
-		}
-	}
-	return cols, rows
-}
-
-// adoptViewerMin copies the current min of viewerSizes into viewerCols/Rows
-// so applyEffectiveSize will use it. Separate from storeViewerReport so a
-// burst of reports can update the map immediately while the PTY waits for
-// the settle timer.
-func (a *Agent) adoptViewerMin() {
-	a.viewerSizeMu.Lock()
-	a.viewerCols, a.viewerRows = minViewerSize(a.viewerSizes)
-	a.viewerSizeMu.Unlock()
-}
-
-// resizeSettle is how long a burst of viewport reports is allowed to run
-// before the PTY is resized to the latest of them. Long enough that a soft
-// keyboard's slide becomes one resize; short enough that it still feels
-// immediate.
-var resizeSettle = 200 * time.Millisecond
-
-// resizeGrowStable is how long a 1–2 row address-bar twitch must hold still
-// before it is applied. Keyboard open/close is tens of rows and uses
-// resizeSettle instead.
-var resizeGrowStable = 2 * time.Second
-
-// coalesceViewerResize waits for the viewport to stop moving, then applies
-// min(width)×min(height) across every attached viewer once.
-//
-// One timer. The last report in a burst wins that viewer's slot. Keyboard
-// animation, window drags, and a second viewer joining all look the same:
-// store, reset the timer, apply when quiet. A 1–2 row same-width grow is
-// the mobile address bar showing and hiding — that waits longer so it
-// does not SIGWINCH the app on every scroll.
+// coalesceViewerResize records one viewer's wrap and resizes the PTY to
+// the min of every wrap once the viewport is quiet. See viewersize.go.
 func (a *Agent) coalesceViewerResize(id string, cols, rows uint16) {
-	if !validViewerSize(cols, rows) {
-		return
-	}
-	a.storeViewerReport(id, cols, rows)
-
-	a.viewerSizeMu.Lock()
-	firstSize := a.viewerCols == 0 || a.viewerRows == 0
-	curC, curR := a.lastAppliedCol, a.lastAppliedRow
-	nextC, nextR := minViewerSize(a.viewerSizes)
-	a.viewerSizeMu.Unlock()
-	if firstSize {
-		a.adoptViewerMin()
+	if a.sizeBook.report(id, cols, rows) {
 		a.applyEffectiveSize()
 		return
 	}
-
-	wait := resizeSettle
-	if nextC == curC && nextR > curR && nextR-curR <= 2 {
-		wait = resizeGrowStable
+	if cols < minTermCols || rows < minTermRows {
+		return
 	}
-
-	a.szMu.Lock()
-	defer a.szMu.Unlock()
-	if a.szShrinkT != nil {
-		a.szShrinkT.Stop()
-	}
-	if a.szGrowT != nil {
-		a.szGrowT.Stop()
-		a.szGrowT = nil
-	}
-	a.szShrinkT = time.AfterFunc(wait, func() {
-		a.szMu.Lock()
-		a.szShrinkT = nil
-		a.szMu.Unlock()
-		a.adoptViewerMin()
-		a.applyEffectiveSize()
-	})
+	a.sizeBook.schedule(func() { a.applyEffectiveSize() })
 }
 
-// resetViewerSize forgets the tracked viewer size — called when the last
-// viewer leaves, so a fresh single viewer joining later sizes the PTY to
-// itself instead of inheriting whatever a long-gone phone once requested.
+// resetViewerSize forgets every wrap so a later viewer sizes the PTY to
+// itself instead of inheriting a long-gone phone's keyboard-open height.
 func (a *Agent) resetViewerSize() {
+	a.sizeBook.clear()
 	a.viewerSizeMu.Lock()
-	a.viewerCols = 0
-	a.viewerRows = 0
 	a.viewerCount = 0
-	a.viewerSizes = nil
 	a.viewerSizeMu.Unlock()
 }
 
-// applyEffectiveSize resizes the PTY to the right dimensions for the
-// currently attached viewer(s). The settled min of their reports
-// (viewerCols × viewerRows) drives the PTY:
+// applyEffectiveSize resizes the PTY to the settled min of every viewer's
+// wrap (sizeBook). Rows are not capped to the host; the host terminal
+// scrolls vertically. Columns are capped to the host width so the host
+// never wraps the shell's output and strands zsh's PROMPT_EOL_MARK.
 //
 //   - ROWS: the active viewer's rows, NOT capped by the host terminal.
 //     The host just scrolls past any extra rows. This is what lets a tall
@@ -1034,13 +933,12 @@ func (a *Agent) applyEffectiveSize() {
 	if c, r, err := xterm.GetSize(int(os.Stdout.Fd())); err == nil {
 		hostCols, hostRows = uint16(c), uint16(r)
 	}
-	a.viewerSizeMu.Lock()
-	vc, vr := a.viewerCols, a.viewerRows
-	a.viewerSizeMu.Unlock()
+	s := a.sizeBook.settledSize()
+	vc, vr := s.cols, s.rows
 
 	var cols, rows uint16
 	if vc > 0 && vr > 0 {
-		// A viewer is attached — the min of their current sizes drives the
+		// A viewer is attached — the min of their current wraps drives the
 		// PTY, so every screen can show the whole terminal. ROWS are taken
 		// as-is; the host terminal scrolls vertically, so a tall phone is
 		// never capped to a short host window (or, in a headless/dev run,
@@ -1058,11 +956,7 @@ func (a *Agent) applyEffectiveSize() {
 	if cols == 0 || rows == 0 {
 		return
 	}
-	a.viewerSizeMu.Lock()
-	last := a.lastAppliedCol == cols && a.lastAppliedRow == rows
-	a.lastAppliedCol, a.lastAppliedRow = cols, rows
-	a.viewerSizeMu.Unlock()
-	if last {
+	if !a.sizeBook.setApplied(cols, rows) {
 		return
 	}
 	_ = a.term.Resize(cols, rows)
@@ -1088,7 +982,13 @@ func (a *Agent) applyEffectiveSize() {
 // grow the PTY back after the smallest viewer left. Viewers handle
 // it by refitting + sendResize-ing their own viewport dimensions.
 func (a *Agent) broadcastSize(cols, rows uint16) {
-	payload, err := json.Marshal(protocol.Message{Cols: cols, Rows: rows})
+	// Must not use protocol.Message: Cols/Rows are omitempty, so the
+	// (0, 0) "re-report your wrap" sentinel would serialize as {} and
+	// the remaining viewer would never grow after a smaller one left.
+	payload, err := json.Marshal(struct {
+		Cols uint16 `json:"cols"`
+		Rows uint16 `json:"rows"`
+	}{cols, rows})
 	if err != nil {
 		return
 	}
@@ -1960,7 +1860,8 @@ func (a *Agent) initScreen() {
 	if a.term != nil {
 		ptySize = a.term.Getsize
 	}
-	cols, rows := resolveSeedGeometry(a.lastAppliedCol, a.lastAppliedRow, ptySize)
+	applied := a.sizeBook.lastApplied()
+	cols, rows := resolveSeedGeometry(applied.cols, applied.rows, ptySize)
 	a.screenMu.Lock()
 	a.screen = vt.NewEmulator(int(cols), int(rows))
 	if a.scrollbackLines > 0 {
@@ -2758,9 +2659,8 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// everyone) the authoritative size — otherwise a viewer
 			// that grew its own viewport keeps rendering at the wrong
 			// width while the shell formats for the unchanged PTY.
-			a.viewerSizeMu.Lock()
-			pc, pr := a.lastAppliedCol, a.lastAppliedRow
-			a.viewerSizeMu.Unlock()
+			applied := a.sizeBook.lastApplied()
+			pc, pr := applied.cols, applied.rows
 			if pc > 0 && pr > 0 && (pc != rs.Cols || pr != rs.Rows) {
 				a.broadcastSize(pc, pr)
 			}
@@ -2858,8 +2758,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.viewerSizeMu.Lock()
 			prevCount := a.viewerCount
 			a.viewerCount = msg.Count
-			pc, pr := a.lastAppliedCol, a.lastAppliedRow
 			a.viewerSizeMu.Unlock()
+			applied := a.sizeBook.lastApplied()
+			pc, pr := applied.cols, applied.rows
 			// Re-publish the PTY size so the freshly-joined viewer
 			// can size its xterm.js to match. Existing viewers
 			// no-op this since they're already at the right size.
@@ -2911,16 +2812,14 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			prevCount := a.viewerCount
 			a.viewerCount = msg.Count
 			// Someone left and we cannot tell which id was theirs (the
-			// relay only sends a count). Drop every stored report and
+			// relay only sends a count). Drop every stored wrap and
 			// ask whoever is still here to re-publish, so a departed
 			// phone's keyboard-open height cannot keep pinning the PTY.
 			rebroadcast := msg.Count > 0 && msg.Count < prevCount
-			if rebroadcast {
-				a.viewerCols = 0
-				a.viewerRows = 0
-				a.viewerSizes = nil
-			}
 			a.viewerSizeMu.Unlock()
+			if rebroadcast {
+				a.sizeBook.forgetWraps()
+			}
 			a.updateActiveViewers(msg.Count)
 			a.syncViewerList(msg.Count, false)
 			// Sentinel (cols=0, rows=0) means "tell me your size".
