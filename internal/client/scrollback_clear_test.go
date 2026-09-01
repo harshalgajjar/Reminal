@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/vt"
 	"github.com/reminal/reminal/internal/crypto"
@@ -80,6 +81,9 @@ func TestSnapshotSurvivesScrollbackClear(t *testing.T) {
 	}
 
 	// The clear: screen + scrollback wiped, exactly as conhost emits it.
+	// Zero the post-resize ED3 window first — this test is an explicit
+	// app clear, not the SIGWINCH echo resizeScreen guards against.
+	a.ignoreED3Until = time.Time{}
 	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
 	if n := a.screen.Scrollback().Len(); n != 0 {
 		t.Fatalf("setup: scrollback should be empty after ESC[3J, got %d lines", n)
@@ -113,6 +117,21 @@ func TestSnapshotSurvivesScrollbackClear(t *testing.T) {
 	}
 	if view = snapshotText(t, a, frm); !strings.Contains(view, "TAIL2-0020") {
 		t.Error("snapshot lost output written after the post-clear resizes")
+	}
+}
+
+// TestRecordKeepsScrollbackWhenResizeEmitsED3 is the Windows keyboard-open
+// case: conhost emits ESC[3J on SIGWINCH, which is not the user clearing
+// history. For a short window after resizeAnchoredBottom we drop that
+// sequence so the lines just moved into scrollback stay there.
+func TestRecordKeepsScrollbackWhenResizeEmitsED3(t *testing.T) {
+	a := clearingAgent(t, 80, 24)
+	a.record(fillerLines("HIST", 40))
+	a.resizeScreen(80, 16)
+	a.ignoreED3Until = time.Now().Add(time.Second)
+	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
+	if n := a.screen.Scrollback().Len(); n == 0 {
+		t.Fatal("ESC[3J during the post-resize window wiped scrollback")
 	}
 }
 

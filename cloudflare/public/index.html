@@ -4018,8 +4018,7 @@
         term.write('\r\n\x1b[2m[reminal] Reconnected to ' + sessionId + ' — press Enter to refresh the prompt.\x1b[0m\r\n');
       }
       sendResume();
-      fitAddon.fit();
-      sendResize();
+      publishSize();
       term.focus();
       if (winStreamsNeedRestart) {
         winStreamsNeedRestart = false;
@@ -4209,19 +4208,72 @@
     // Remote size mirrors held briefly before applying (see the 'resize' case):
     // a local measurement is always fresher than an in-flight echo of an older one.
     let pendingRemoteSize = null, remoteSizeTimer = null;
-    function sendResize() {
+    const MIN_TERM_COLS = 20, MIN_TERM_ROWS = 8;
+    let sizeTimer = 0, lastSentC = 0, lastSentR = 0;
+    let lastFitW = 0, lastFitH = 0;
+
+    // xterm.js resize is top-anchored. After a keyboard open the live prompt
+    // is still at the BOTTOM of the buffer, but the viewport is left on the
+    // first rows — a handful of old lines and a screen of empty cells, with
+    // "Jump to bottom" as the only way back. Remember whether we were live
+    // BEFORE the resize; never treat the post-resize top as "user is reading".
+    function atLiveBottom() {
+      try {
+        const buf = term.buffer.active;
+        return !buf || buf.viewportY >= buf.baseY;
+      } catch (_) { return true; }
+    }
+    function pinLive(wasLive) {
+      if (wasLive) {
+        try { term.scrollToBottom(); } catch (_) {}
+      }
+      if (typeof updateJumpBtn === 'function') updateJumpBtn();
+    }
+
+    function publishSize() {
       // A pane tab must never drive the PTY. Its terminal is display:none, so
       // fitAddon measures nothing and xterm falls back to its 80x24 default —
       // and that 80x24 would enter the agent's per-viewer min, shrinking
       // everyone. Each resize also makes Ink re-emit its whole frame, so
-      // this was corrupting scrollback as well as geometry. Guarded here
-      // rather than at the call sites: there are five, and gating them one at
-      // a time is precisely how this was missed.
+      // this was corrupting scrollback as well as geometry.
       if (!ownsTerminal) return;
-      // Our own measurement supersedes any stale mirror still waiting to apply.
+      applyViewportHeight();
+      const wrap = document.getElementById('terminal-wrap');
+      if (!wrap || wrap.clientWidth < 80 || wrap.clientHeight < 80) return;
+      const wasLive = atLiveBottom();
+      const prevC = term.cols, prevR = term.rows;
+      if (predictions.length > 0) resetPredictionsSoft();
+      try { fitAddon.fit(); } catch (_) {}
+      lastFitW = wrap.clientWidth;
+      lastFitH = wrap.clientHeight;
+      // Mid-keyboard-animation can measure 5 rows. Do not leave the local
+      // grid there (empty black below a handful of lines) and do not send
+      // it — keep the last honest size until the wrap is real again.
+      if (term.cols < MIN_TERM_COLS || term.rows < MIN_TERM_ROWS) {
+        if (lastSentC >= MIN_TERM_COLS && lastSentR >= MIN_TERM_ROWS) {
+          try { term.resize(lastSentC, lastSentR); } catch (_) {}
+        }
+        pinLive(wasLive);
+        return;
+      }
+      pinLive(wasLive);
       pendingRemoteSize = null;
       if (remoteSizeTimer) { clearTimeout(remoteSizeTimer); remoteSizeTimer = null; }
+      if (!agentLive) return;
+      if (term.cols === lastSentC && term.rows === lastSentR) return;
+      lastSentC = term.cols;
+      lastSentR = term.rows;
       send({ type: 'resize', cols: term.cols, rows: term.rows });
+      if (term.cols !== prevC || term.rows !== prevR) {
+        markResizeDirty();
+        scheduleSoftRefresh();
+      }
+    }
+    function sendResize() { publishSize(); }
+    function scheduleSize() {
+      applyViewportHeight();
+      if (sizeTimer) clearTimeout(sizeTimer);
+      sizeTimer = setTimeout(() => { sizeTimer = 0; publishSize(); }, 200);
     }
 
     function sendResume() {
@@ -4727,18 +4779,11 @@
             const c = parseInt(payload.cols, 10);
             const r = parseInt(payload.rows, 10);
             if (c === 0 && r === 0) {
-              try { fitAddon.fit(); } catch (_) {}
-              if (agentLive) sendResize();
+              publishSize();
             } else if (c > 0 && r > 0) {
-              // DEBOUNCED, never immediate: during a keyboard open/close the
-              // viewport animates through several sizes; the agent applies one
-              // mid-animation and mirrors it back, and applying that stale echo
-              // over our fresher local fit made the height visibly flicker
-              // back and forth before settling. Hold the latest mirror briefly;
-              // a newer local measurement (sendResize) cancels it outright —
-              // if the agent truly wants a different size (multi-viewer
-              // letterbox), it re-broadcasts after applying ours and THAT
-              // mirror lands here again.
+              // Hold the latest mirror briefly. A newer local measurement
+              // cancels it. If the agent truly wants a different size
+              // (another viewer is smaller), that broadcast lands here.
               pendingRemoteSize = { c, r };
               if (remoteSizeTimer) clearTimeout(remoteSizeTimer);
               remoteSizeTimer = setTimeout(() => {
@@ -4746,14 +4791,11 @@
                 const p = pendingRemoteSize;
                 pendingRemoteSize = null;
                 if (!p || (p.c === term.cols && p.r === term.rows)) return;
-                // Erase the visible dim chars FIRST (cursor still sits at
-                // end-of-run pre-resize), then resize — skipping the erase
-                // orphans the dim chars against the agent's echo.
+                if (p.c < MIN_TERM_COLS || p.r < MIN_TERM_ROWS) return;
+                const wasLive = atLiveBottom();
                 resetPredictionsSoft();
                 term.resize(p.c, p.r);
-                // This is the path a phone joining/leaving resizes us through
-                // (fitTerminal never runs) — the app's SIGWINCH repaint stacks
-                // duplicates here too, so pull the clean snapshot on settle.
+                pinLive(wasLive);
                 markResizeDirty();
                 scheduleSoftRefresh();
               }, 450);
@@ -6007,35 +6049,12 @@
       if (h !== lastAppliedH) { document.body.style.height = h + 'px'; lastAppliedH = h; }
       if (t !== lastAppliedT) { document.body.style.transform = t; lastAppliedT = t; }
     }
-    let lastFitW = 0, lastFitH = 0, fitFrame = 0;
     function fitTerminal(force) {
-      const wrap = document.getElementById('terminal-wrap');
-      if (!wrap) return;
-      const w = wrap.clientWidth, h = wrap.clientHeight;
-      if (!force && w === lastFitW && h === lastFitH) return; // box unchanged → nothing to do
-      lastFitW = w; lastFitH = h;
-      // Erase any in-flight dim predictions before fit() reflows the
-      // buffer (cell columns may move). No-op while predictions are off.
-      if (term && predictions.length > 0) resetPredictionsSoft();
-      const prevCols = term.cols, prevRows = term.rows;
-      try { fitAddon.fit(); } catch (_) {}
-      if (agentLive) {
-        sendResize();
-        // After a genuine grid resize, re-pull the clean deduped snapshot so
-        // resize-repaint duplicates don't linger until a manual reload. This was
-        // temporarily disabled while chasing the scroll-yank bug; the yank turned
-        // out to be the snapshot broadcast (fixed: position-preserving repaint),
-        // and scheduleSoftRefresh itself skips scrolled-up readers — so it's safe.
-        if (term.cols !== prevCols || term.rows !== prevRows) { markResizeDirty(); scheduleSoftRefresh(); }
-      }
+      if (force) publishSize();
+      else scheduleSize();
     }
-    function scheduleFit() {
-      if (fitFrame) return;            // coalesce a burst into one fit per frame
-      fitFrame = requestAnimationFrame(() => { fitFrame = 0; fitTerminal(); });
-    }
-    // Public entry point used by the rest of the app (keybar toggle, font
-    // size, connect). Re-pins height, then fits on the next frame.
-    function relayout() { applyViewportHeight(); scheduleFit(); }
+    function scheduleFit() { scheduleSize(); }
+    function relayout() { scheduleSize(); }
 
     // Viewport changes (keyboard open/close, rotation, desktop resize)
     // update body height and re-fit. visualViewport is the accurate
@@ -6073,7 +6092,7 @@
       const boxDrift = wrap && (wrap.clientWidth !== lastFitW || wrap.clientHeight !== lastFitH);
       if (kbTop !== lastKbTop || boxDrift) {
         lastKbTop = kbTop;
-        fitTerminal(true); // keybar moved or box drifted → force the grid to match
+        scheduleSize();
       }
     }, 300);
     // Keyboard open/close toggles focus on xterm's hidden textarea,

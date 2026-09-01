@@ -74,3 +74,16 @@ func TestMinViewerSizeEmpty(t *testing.T) {
 		t.Errorf("empty map = %dx%d, want 0x0", c, r)
 	}
 }
+
+func TestCoalesceRejectsTinyViewport(t *testing.T) {
+	a := sizedAgent(80, 40)
+	a.viewerSizes = map[string][2]uint16{"phone": {80, 40}}
+	a.coalesceViewerResize("phone", 80, 5)
+	time.Sleep(resizeSettle + 150*time.Millisecond)
+	a.viewerSizeMu.Lock()
+	gotR := a.viewerRows
+	a.viewerSizeMu.Unlock()
+	if gotR != 40 {
+		t.Errorf("5-row garbage report settled at %d, want 40", gotR)
+	}
+}
