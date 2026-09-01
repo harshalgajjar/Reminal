@@ -91,6 +91,17 @@ func startDirect(shell string, cols, rows uint16, inheritCursor bool, env ...str
 	if inheritCursor {
 		flags |= windows.PSEUDOCONSOLE_INHERIT_CURSOR
 	}
+	// RESIZE_QUIRK (undocumented, 0x2): ConPTY will not dump its viewport
+	// back onto the output pipe on ResizePseudoConsole. Windows Terminal
+	// and wezterm set this because they own reflow themselves — "quirky
+	// resize" is "don't InvalidateAll when the terminal resizes"
+	// (microsoft/terminal #4741, #16911). Reminal already bottom-anchors
+	// the agent emulator and every viewer; without the flag, ConPTY's dump
+	// is a second, top-anchored buffer fighting ours, and PowerShell's
+	// whole-buffer fill on that dump is what WriteClearScreen translates
+	// into ESC[H ESC[2J ESC[3J. Unknown on older OS builds: retry without.
+	const pseudoConsoleResizeQuirk = 0x2
+	flags |= pseudoConsoleResizeQuirk
 	var hpc windows.Handle
 	err = windows.CreatePseudoConsole(
 		windows.Coord{X: int16(cols), Y: int16(rows)},
@@ -99,6 +110,16 @@ func startDirect(shell string, cols, rows uint16, inheritCursor bool, env ...str
 		flags,
 		&hpc,
 	)
+	if err != nil && flags&pseudoConsoleResizeQuirk != 0 {
+		flags &^= pseudoConsoleResizeQuirk
+		err = windows.CreatePseudoConsole(
+			windows.Coord{X: int16(cols), Y: int16(rows)},
+			windows.Handle(inRead.Fd()),
+			windows.Handle(outWrite.Fd()),
+			flags,
+			&hpc,
+		)
+	}
 	// CreatePseudoConsole duplicates the handles it needs, so the ConPTY-side
 	// ends are ours to drop immediately — success or failure.
 	inRead.Close()

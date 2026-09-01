@@ -9,7 +9,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/x/vt"
 	"github.com/reminal/reminal/internal/crypto"
@@ -81,9 +80,9 @@ func TestSnapshotSurvivesScrollbackClear(t *testing.T) {
 	}
 
 	// The clear: screen + scrollback wiped, exactly as conhost emits it.
-	// Zero the post-resize ED3 window first — this test is an explicit
-	// app clear, not the SIGWINCH echo resizeScreen guards against.
-	a.ignoreED3Until = time.Time{}
+	// Pay any Resize-owed shim first — this test is an explicit app clear,
+	// not the WriteClearScreen echo resizeScreen guards against.
+	a.conhostClear.reset()
 	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
 	if n := a.screen.Scrollback().Len(); n != 0 {
 		t.Fatalf("setup: scrollback should be empty after ESC[3J, got %d lines", n)
@@ -122,13 +121,14 @@ func TestSnapshotSurvivesScrollbackClear(t *testing.T) {
 
 // TestRecordKeepsScrollbackWhenResizeEmitsED3 is the Windows keyboard-open
 // case: conhost emits ESC[3J on SIGWINCH, which is not the user clearing
-// history. For a short window after resizeAnchoredBottom we drop that
-// sequence so the lines just moved into scrollback stay there.
+// history. A Resize is owed that one WriteClearScreen, so we drop it
+// (even when ConPTY splits it) and the lines just moved into scrollback stay.
 func TestRecordKeepsScrollbackWhenResizeEmitsED3(t *testing.T) {
 	a := clearingAgent(t, 80, 24)
 	a.record(fillerLines("HIST", 40))
 	a.resizeScreen(80, 16)
-	a.ignoreED3Until = time.Now().Add(time.Second)
+	a.conhostClear.reset()
+	a.conhostClear.arm()
 	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
 	if n := a.screen.Scrollback().Len(); n == 0 {
 		t.Fatal("ESC[3J during the post-resize window wiped scrollback")
@@ -138,19 +138,124 @@ func TestRecordKeepsScrollbackWhenResizeEmitsED3(t *testing.T) {
 	}
 }
 
-func TestStripConhostResizeClear(t *testing.T) {
-	got := stripConhostResizeClear([]byte("before\x1b[H\x1b[2J\x1b[3Jafter"))
-	if string(got) != "beforeafter" {
-		t.Errorf("full shim: got %q, want beforeafter", got)
+func TestConhostClearFilterStreaming(t *testing.T) {
+	const shim = "\x1b[H\x1b[2J\x1b[3J"
+	feed := func(chunks ...string) string {
+		var f conhostClearFilter
+		f.arm()
+		var b strings.Builder
+		for _, c := range chunks {
+			b.Write(f.feed([]byte(c)))
+		}
+		return b.String()
 	}
-	got = stripConhostResizeClear([]byte("x\x1b[2J\x1b[3Jy"))
-	if string(got) != "xy" {
-		t.Errorf("ED2+ED3: got %q, want xy", got)
-	}
-	got = stripConhostResizeClear([]byte("plain"))
-	if string(got) != "plain" {
-		t.Errorf("untouched: got %q", got)
-	}
+
+	t.Run("full shim in one chunk", func(t *testing.T) {
+		if got := feed("before" + shim + "after"); got != "beforeafter" {
+			t.Errorf("got %q, want beforeafter", got)
+		}
+	})
+	t.Run("ED2+ED3", func(t *testing.T) {
+		if got := feed("x\x1b[2J\x1b[3Jy"); got != "xy" {
+			t.Errorf("got %q, want xy", got)
+		}
+	})
+	t.Run("untouched", func(t *testing.T) {
+		if got := feed("plain"); got != "plain" {
+			t.Errorf("got %q", got)
+		}
+	})
+	t.Run("split one byte at a time", func(t *testing.T) {
+		chunks := make([]string, 0, 2+len(shim))
+		chunks = append(chunks, "keep-")
+		for i := 0; i < len(shim); i++ {
+			chunks = append(chunks, shim[i:i+1])
+		}
+		chunks = append(chunks, "-going")
+		if got := feed(chunks...); got != "keep--going" {
+			t.Errorf("got %q, want keep--going", got)
+		}
+	})
+	t.Run("CUP then ED2+ED3", func(t *testing.T) {
+		if got := feed("a\x1b[H", "\x1b[2J\x1b[3Jb"); got != "ab" {
+			t.Errorf("got %q, want ab", got)
+		}
+	})
+	t.Run("ED2 then ED3", func(t *testing.T) {
+		if got := feed("a\x1b[2J", "\x1b[3Jb"); got != "ab" {
+			t.Errorf("got %q, want ab", got)
+		}
+	})
+	t.Run("false prefix is released", func(t *testing.T) {
+		if got := feed("a\x1b[", "31mb"); got != "a\x1b[31mb" {
+			t.Errorf("got %q, want a ESC[31mb", got)
+		}
+	})
+	t.Run("unarmed passes the shim through", func(t *testing.T) {
+		var f conhostClearFilter
+		got := string(f.feed([]byte("x" + shim + "y")))
+		if got != "x"+shim+"y" {
+			t.Errorf("unarmed stripped: got %q", got)
+		}
+	})
+	t.Run("genuine clear after consume still lands", func(t *testing.T) {
+		var f conhostClearFilter
+		f.arm()
+		if got := string(f.feed([]byte("a" + shim + "b"))); got != "ab" {
+			t.Fatalf("first shim: got %q, want ab", got)
+		}
+		if got := string(f.feed([]byte("c" + shim + "d"))); got != "c"+shim+"d" {
+			t.Errorf("second clear was eaten: got %q", got)
+		}
+	})
+	t.Run("two resizes two shims", func(t *testing.T) {
+		var f conhostClearFilter
+		f.arm()
+		f.arm()
+		if got := string(f.feed([]byte(shim + shim + "xy"))); got != "xy" {
+			t.Errorf("got %q, want xy", got)
+		}
+	})
+	t.Run("one resize drains a burst of two shims", func(t *testing.T) {
+		// Keyboard collapse changes cols and rows together. ConPTY
+		// emits WriteClearScreen once per axis; consecutive copies
+		// are one opcode, not two Clears.
+		var f conhostClearFilter
+		f.arm()
+		if got := string(f.feed([]byte(shim + shim + "keep"))); got != "keep" {
+			t.Errorf("got %q, want keep", got)
+		}
+	})
+	t.Run("gap after echo is an application clear", func(t *testing.T) {
+		var f conhostClearFilter
+		f.arm()
+		if got := string(f.feed([]byte(shim + "keep" + shim))); got != "keep"+shim {
+			t.Errorf("got %q, want keep+shim", got)
+		}
+	})
+	t.Run("unarmed ED3 is still reminal history", func(t *testing.T) {
+		var f conhostClearFilter
+		f.forceED3 = true
+		if got := string(f.feed([]byte("x\x1b[3Jy"))); got != "xy" {
+			t.Errorf("got %q, want xy", got)
+		}
+		if got := string(f.feed([]byte("a\x1b[H\x1b[2Jb"))); got != "a\x1b[H\x1b[2Jb" {
+			t.Errorf("ED2 of Clear-Host was eaten: got %q", got)
+		}
+	})
+	t.Run("leftover then burst then prompt", func(t *testing.T) {
+		var f conhostClearFilter
+		f.arm()
+		if got := string(f.feed([]byte("QR-LINE"))); got != "QR-LINE" {
+			t.Fatalf("leftover: got %q", got)
+		}
+		if got := string(f.feed([]byte(shim + shim + "PS>"))); got != "PS>" {
+			t.Errorf("burst: got %q, want PS>", got)
+		}
+		if got := string(f.feed([]byte("c" + shim + "d"))); got != "c"+shim+"d" {
+			t.Errorf("later clear was eaten: got %q", got)
+		}
+	})
 }
 
 // TestGrowThenConhostClearKeepsBottomAnchor is the keyboard-collapse case
@@ -168,7 +273,8 @@ func TestGrowThenConhostClearKeepsBottomAnchor(t *testing.T) {
 		t.Fatalf("setup: last content row %d after grow, want %d", wantLast, grown-2)
 	}
 	sb := a.screen.Scrollback().Len()
-	a.ignoreED3Until = time.Now().Add(time.Second)
+	a.conhostClear.reset()
+	a.conhostClear.arm()
 	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
 
 	rows := screenRows(a)
@@ -180,6 +286,82 @@ func TestGrowThenConhostClearKeepsBottomAnchor(t *testing.T) {
 	}
 	if n := a.screen.Scrollback().Len(); n != sb {
 		t.Errorf("conhost shim changed scrollback from %d to %d", sb, n)
+	}
+}
+
+// TestRecordStripsSplitConhostClear is why a timer-gated ReplaceAll on one
+// chunk was not enough: ConPTY delivers WriteClearScreen across Read
+// calls. CUP home, then ED2, then ED3 must not reach the emulator.
+func TestRecordStripsSplitConhostClear(t *testing.T) {
+	a := clearingAgent(t, 80, 10)
+	feedLines(a, 30)
+	const grown = 20
+	a.resizeScreen(80, grown)
+	wantLast := lastNonBlankRow(screenRows(a))
+	sb := a.screen.Scrollback().Len()
+	a.conhostClear.reset()
+	a.conhostClear.arm()
+	for _, b := range []byte("\x1b[H\x1b[2J\x1b[3J") {
+		a.record([]byte{b})
+	}
+	rows := screenRows(a)
+	if got := lastNonBlankRow(rows); got != wantLast {
+		t.Errorf("split shim moved last content from %d to %d", wantLast, got)
+	}
+	if n := a.screen.Scrollback().Len(); n != sb {
+		t.Errorf("split shim changed scrollback from %d to %d", sb, n)
+	}
+}
+
+// TestRecordInfoThenGrowKeepsBanner is the tablet sequence: reminal info
+// on the keyboard-open (short) screen, header scrolls off, then keyboard
+// collapse grows cols+rows and ConPTY emits a burst of WriteClearScreen.
+// The second ED3 used to wipe the header while leaving the QR.
+func TestRecordInfoThenGrowKeepsBanner(t *testing.T) {
+	a := clearingAgent(t, 80, 12)
+	a.record([]byte("  reminal — remote terminal\r\n"))
+	a.record([]byte("  Session:  CX2DN9RU\r\n"))
+	a.record([]byte("  PIN:      664772\r\n"))
+	a.record([]byte("  Scan to join from your phone:\r\n"))
+	a.record(fillerLines("QR", 24))
+	a.resizeScreen(80, 40)
+	a.conhostClear.reset()
+	a.conhostClear.arm()
+	const shim = "\x1b[H\x1b[2J\x1b[3J"
+	a.record([]byte(shim + shim))
+
+	frm, _ := a.snapshotFrame()
+	view := snapshotText(t, a, frm)
+	for _, want := range []string{"remote terminal", "Session:  CX2DN9RU", "PIN:      664772", "Scan to join"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("keyboard-collapse burst wiped %q from history", want)
+		}
+	}
+}
+
+// TestWindowsTranscriptED3NeverClearsHistory is the product model: ConPTY's
+// CSI 3 J is the cls shim asking the connected terminal to forget a
+// scrollback ConPTY does not have. Reminal's session log is not that
+// buffer. ED 2 still clears the screen (Clear-Host, cls).
+func TestWindowsTranscriptED3NeverClearsHistory(t *testing.T) {
+	a := clearingAgent(t, 80, 24)
+	a.record(fillerLines("HIST", 40))
+	if a.screen.Scrollback().Len() == 0 {
+		t.Fatal("setup: expected scrollback")
+	}
+	a.conhostClear.reset()
+	a.conhostClear.forceED3 = true
+	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
+	if n := a.screen.Scrollback().Len(); n == 0 {
+		t.Fatal("CSI 3 J wiped reminal history")
+	}
+	if lastNonBlankRow(screenRows(a)) >= 0 {
+		t.Error("ED 2 should still have cleared the screen")
+	}
+	frm, _ := a.snapshotFrame()
+	view := snapshotText(t, a, frm)
+	if !strings.Contains(view, "HIST-0001") {
+		t.Error("snapshot lost history that CSI 3 J must not delete")
 	}
 }
 

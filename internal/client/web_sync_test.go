@@ -65,12 +65,19 @@ func TestPaneGestureContracts(t *testing.T) {
 		"Match the visible wrap, including keyboard-open",
 		"min of every viewer's wrap, including keyboard-open",
 		"the very lines the grow needs",
+		"function resizeAnchoredBottom(cols, rows)",
+		"function pullScrollbackToBottom(term)",
+		"that is a control loop",
+		"Pin only when the grid actually changed",
 		"auto-refresh while live",
 		"parseInt(payload.cols, 10) || 0",
 	} {
 		if !strings.Contains(s, required) {
 			t.Fatalf("viewer is missing pane gesture contract %q", required)
 		}
+	}
+	if strings.Contains(s, "resizeDirtyUntil") {
+		t.Fatal("viewer still uses a timed wipe window; conhost clear is the agent's stream filter")
 	}
 	if strings.Contains(s, "pendingRemoteSize") {
 		t.Fatal("viewer still has the old remote-size echo dance")

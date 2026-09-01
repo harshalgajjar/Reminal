@@ -127,11 +127,11 @@ type Agent struct {
 	// spot a shrink (an app's ESC[3J) and retire the now-stale segment indices
 	// above. Guarded by screenMu.
 	sbLen int
-	// ignoreED3Until, when set, strips conhost's resize-clear shim
-	// (ESC[H ESC[2J ESC[3J) from record() so it cannot undo the screen
-	// resizeAnchoredBottom just laid out or wipe the scrollback those
-	// lines moved into. Guarded by screenMu.
-	ignoreED3Until time.Time
+	// conhostClear owns ConPTY's WriteClearScreen in the recorded stream
+	// (emulator + viewers). CSI 3 J is never reminal history; CUP+ED2 is
+	// dropped only while a Resize we issued is still echoing. See
+	// conhostClearFilter. Guarded by screenMu.
+	conhostClear conhostClearFilter
 	// rebuildEmu is the persistent tall emulator snapshots replay history
 	// through (see rebuildView). Guarded by rebuildMu; lazily created.
 	rebuildEmu      *vt.Emulator
@@ -946,10 +946,9 @@ func (a *Agent) applyEffectiveSize() {
 		sizeLog("skip pty already %dx%d", cols, rows)
 		return
 	}
-	// Bottom-anchor the emulator and arm the conhost-clear guard BEFORE
-	// the PTY hears the new size. ConPTY emits ESC[H ESC[2J ESC[3J from
-	// inside term.Resize; if that lands first, ED2 wipes the screen we
-	// were about to re-anchor and ED3 drops the scrollback it needs.
+	// Bottom-anchor the emulator and mark WriteClearScreen on the pipe as
+	// ConPTY echoing this Resize — BEFORE the PTY hears the new size. If
+	// that opcode lands first, ED2 undoes the screen we just re-anchored.
 	a.resizeScreen(cols, rows)
 	_ = a.term.Resize(cols, rows)
 	// Tell every viewer the new PTY size so their xterm.js matches.
@@ -1897,13 +1896,7 @@ func (a *Agent) initScreen() {
 // tagged with that seq without duplicating or dropping a chunk on the joiner.
 func (a *Agent) record(p []byte) {
 	a.screenMu.Lock()
-	if !a.ignoreED3Until.IsZero() && time.Now().Before(a.ignoreED3Until) {
-		// conhost turns a PowerShell buffer-fill on SIGWINCH into
-		// ESC[H ESC[2J ESC[3J. That is not the user clearing history —
-		// ED2 would wipe the screen resizeAnchoredBottom just laid out
-		// and ED3 would drop the lines it moved into scrollback.
-		p = stripConhostResizeClear(p)
-	}
+	p = a.conhostClear.feed(p)
 	if a.screen != nil {
 		_, _ = a.screen.Write(p)
 		a.noteScrollbackLen()
@@ -2038,13 +2031,12 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	a.screenMu.Unlock()
 }
 
-const resizeClearGuard = 800 * time.Millisecond
-
-// armResizeClearGuardLocked starts the post-resize window during which
-// record() drops conhost's WriteClearScreen shim. Caller holds screenMu.
+// armResizeClearGuardLocked records that WriteClearScreen on the PTY
+// stream is ConPTY echoing THIS Resize, not application output.
+// Caller holds screenMu.
 func (a *Agent) armResizeClearGuardLocked() {
 	if filterHostMirror {
-		a.ignoreED3Until = time.Now().Add(resizeClearGuard)
+		a.conhostClear.arm()
 	}
 }
 
@@ -2799,6 +2791,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				if prevCount == 0 {
 					a.armResizeClearGuard()
 					_ = a.term.Resize(pc, pr+1)
+					a.armResizeClearGuard()
 					_ = a.term.Resize(pc, pr)
 				}
 			}

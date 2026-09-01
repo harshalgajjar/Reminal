@@ -5,7 +5,7 @@
   <meta http-equiv="Cache-Control" content="no-store">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>reminal</title>
-  <!-- reminal-web 3.3.2-iso 2026-09-01 -->
+  <!-- reminal-web 3.3.3 2026-09-01 -->
   <meta name="theme-color" content="#0d1117">
   <!-- iOS "Add to Home Screen": fullscreen, black status bar, no Safari chrome. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -143,9 +143,10 @@
        page-level URL-bar collapse or pull-to-refresh. */
     .xterm-viewport { overscroll-behavior: contain !important; }
     /* xterm parks this at the cursor and Chrome Android pans the visual
-       viewport to keep it on screen. The wrap already shrank for the
-       keyboard; that pan clips the 25-row grid to the few rows above
-       the IME. Pin it to the layout origin so a keystroke cannot scroll. */
+       viewport to keep it on screen. Pin it to the layout origin so a
+       keystroke cannot scroll. Do not translate <body> to chase that
+       pan — that is a control loop against Chrome (stable HUD, infinite
+       scroll). */
     .xterm .xterm-helper-textarea {
       position: fixed !important;
       left: 0 !important;
@@ -1327,7 +1328,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
-    window.__REMINAL_WEB = '3.3.2-iso';
+    window.__REMINAL_WEB = '3.3.3';
     const statusEl = document.getElementById('status');
     const sessionInput = document.getElementById('session-input');
     const pinInput = document.getElementById('pin-input');
@@ -4271,14 +4272,6 @@
       // today's behavior.
       const bufA = term.buffer.active;
       const distUp = bufA.baseY - bufA.viewportY;
-      if (hasWipeSignature(merged) && Date.now() < resizeDirtyUntil) {
-        // Windows conhost resize-clear. Keep the local screen and
-        // scrollback; writing ED2 here is what stuck reminal info at
-        // the top of a tall grid with a black void you could not scroll.
-        const kept = stripWipeSignature(merged);
-        if (kept.byteLength > 0) term.write(kept);
-        return;
-      }
       if (hasWipeSignature(merged)) {
         term.write(merged, () => {
           const b2 = term.buffer.active;
@@ -4296,32 +4289,6 @@
             u8[i + 4] === 0x1b && u8[i + 5] === 0x5b && u8[i + 6] === 0x33 && u8[i + 7] === 0x4a) return true;
       }
       return false;
-    }
-    function stripWipeSignature(u8) {
-      const seqs = [
-        [0x1b, 0x5b, 0x48, 0x1b, 0x5b, 0x32, 0x4a, 0x1b, 0x5b, 0x33, 0x4a],
-        [0x1b, 0x5b, 0x32, 0x4a, 0x1b, 0x5b, 0x33, 0x4a],
-        [0x1b, 0x5b, 0x33, 0x4a],
-        [0x1b, 0x5b, 0x32, 0x4a],
-      ];
-      let buf = u8;
-      for (const seq of seqs) buf = stripByteSeq(buf, seq);
-      return buf;
-    }
-    function stripByteSeq(u8, seq) {
-      if (!u8 || !u8.length) return u8;
-      const out = [];
-      for (let i = 0; i < u8.length; ) {
-        let hit = i + seq.length <= u8.length;
-        if (hit) {
-          for (let j = 0; j < seq.length; j++) {
-            if (u8[i + j] !== seq[j]) { hit = false; break; }
-          }
-        }
-        if (hit) i += seq.length;
-        else { out.push(u8[i]); i++; }
-      }
-      return new Uint8Array(out);
     }
     function enqueueData(bytes) {
       // Skip any prefix the user already saw via local echo (mosh-
@@ -4381,29 +4348,23 @@
     // the rest of the page (Connect never runs).
     const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    let lastAppliedH = -1, lastAppliedT = '';
+    let lastAppliedH = -1;
     function applyViewportHeight() {
-      const vv = window.visualViewport;
-      if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
-      if (!vv) return;
+      // One job on iOS: pin <body> height to the visual viewport so the
+      // overlay keyboard does not cover the keybar. Do not translate the
+      // body to chase visualViewport.offsetTop — that is a control loop
+      // against Chrome/Safari's own pan (stable HUD, infinite scroll).
+      // Do not scrollTo from here either: window.scroll fires this path
+      // and a reset-that-fires-scroll is the same loop.
       if (!IS_IOS) {
-        // Android / desktop: CSS 100dvh drives layout height. Do not
-        // write an inline height — a stale visualViewport.height after
-        // keyboard-close fights the grow. DO cancel a visualViewport
-        // pan: Chrome scrolls the visual viewport to chase xterm's
-        // hidden textarea, which is what clips a correct 25-row grid
-        // down to the top ~6 rows when typing starts.
         if (lastAppliedH !== 0) { document.body.style.height = ''; lastAppliedH = 0; }
-        const t = vv.offsetTop ? 'translateY(' + Math.round(vv.offsetTop) + 'px)' : '';
-        if (t !== lastAppliedT) { document.body.style.transform = t; lastAppliedT = t; }
+        if (document.body.style.transform) document.body.style.transform = '';
         return;
       }
+      const vv = window.visualViewport;
+      if (!vv) return;
       const h = Math.round(vv.height);
-      // iOS can scroll the visual viewport down under the keyboard; shift
-      // the body to follow it so the top of the terminal stays visible.
-      const t = vv.offsetTop ? 'translateY(' + Math.round(vv.offsetTop) + 'px)' : '';
       if (h !== lastAppliedH) { document.body.style.height = h + 'px'; lastAppliedH = h; }
-      if (t !== lastAppliedT) { document.body.style.transform = t; lastAppliedT = t; }
     }
 
     // Size-pipeline trace. ?sizelog=1 or Settings → Size debug. Shows wrap
@@ -4505,6 +4466,58 @@
         // painted grid back into the min — never report the canvas as the wrap.
         return peekWrap(wrapEl);
       }
+      function pullScrollbackToBottom(term) {
+        // Same arithmetic as the agent's growAnchoredBottom: if the grid
+        // grew and xterm left blank rows under the cursor while history
+        // sits above, pull that history onto the screen so the bottom
+        // does not move. xterm.resize only does this when there are
+        // already no empty rows below the cursor; a column change
+        // reflow, or a cursor that is not on the last row, skips it
+        // and the prompt sits in a void — the keyboard-collapse case.
+        let b, lines;
+        try {
+          b = term._core.buffer;
+          lines = b && b.lines;
+        } catch (_) { return; }
+        if (!b || !lines || typeof lines.get !== 'function') return;
+        const rows = term.rows;
+        const ybase = b.ybase | 0;
+        const cursorY = b.y | 0;
+        if (ybase <= 0) return;
+        function trimmed(abs) {
+          try {
+            const line = lines.get(abs);
+            if (!line || typeof line.getTrimmedLength !== 'function') return 0;
+            return line.getTrimmedLength();
+          } catch (_) { return 0; }
+        }
+        let lastUsed = cursorY;
+        for (let y = rows - 1; y > cursorY; y--) {
+          if (trimmed(ybase + y) > 0) { lastUsed = y; break; }
+        }
+        const pull = Math.min(rows - 1 - lastUsed, ybase);
+        if (pull <= 0) return;
+        let popped = 0;
+        while (popped < pull && lines.length > ybase + cursorY + 1) {
+          if (trimmed(lines.length - 1) > 0) break;
+          if (typeof lines.pop !== 'function') break;
+          lines.pop();
+          popped++;
+        }
+        if (popped <= 0) return;
+        const n = Math.min(popped, b.ybase | 0);
+        b.ybase -= n;
+        b.y = Math.min((b.y | 0) + n, rows - 1);
+        if ((b.ydisp | 0) > b.ybase) b.ydisp = b.ybase;
+        try { term.refresh(0, rows - 1); } catch (_) {}
+      }
+      function resizeAnchoredBottom(cols, rows) {
+        const oldRows = term.rows;
+        const alt = term.buffer.active !== term.buffer.normal;
+        try { term.resize(cols, rows); } catch (_) { return; }
+        if (alt || rows <= oldRows) return;
+        pullScrollbackToBottom(term);
+      }
       function paint(cols, rows) {
         if (cols < MIN_C || rows < MIN_R) return;
         const shrinking = rows < term.rows;
@@ -4514,8 +4527,7 @@
         const changed = term.cols !== cols || term.rows !== rows;
         if (changed && predictions.length > 0) resetPredictionsSoft();
         if (changed) {
-          if (rows !== term.rows) markResizeDirty();
-          try { term.resize(cols, rows); } catch (_) {}
+          resizeAnchoredBottom(cols, rows);
         }
         try {
           const cell = cellSize();
@@ -4526,12 +4538,10 @@
             term.element.style.marginTop = 'auto';
           }
         } catch (_) {}
-        // xterm.js already bottom-anchors when there is scrollback: shrink
-        // pushes the top rows into history, grow pulls them back. Do not
-        // follow this with a snapshot — those start with ESC[3J and wipe
-        // the very lines the grow needs. Pin to the live bottom so the
-        // prompt stays on screen; the top lines come back with the grow.
-        pinLive(wasLive);
+        // Pin only when the grid actually changed. scrollToBottom on every
+        // paint (the 300ms poll, a visualViewport pan) is itself a scroll
+        // loop — the very lines the grow needs stay put unless rows moved.
+        if (changed) pinLive(wasLive);
       }
       function display(wrap) {
         if (!ownsTerminal) return;
@@ -4817,8 +4827,6 @@
     // are for join/reconnect only — sendResume() on connect. Do not
     // auto-refresh while live.
     let lastDataAt = 0, cleanBaseY = 0;
-    let resizeDirtyUntil = 0;
-    function markResizeDirty() { resizeDirtyUntil = Date.now() + 8000; }
     function scheduleSoftRefresh() {
       // Kept as a no-op so older call sites cannot resurrect the stall.
     }
@@ -6452,15 +6460,10 @@
     // / keybar) sized to the viewport. JS does exactly two things, and
     // neither can feed back into the other:
     //
-    //   1. applyViewportHeight() — pin body's height to the *visual*
-    //      viewport. On iOS the soft keyboard overlays the page without
-    //      resizing the layout, so 100dvh alone would let the keyboard
-    //      cover the keybar/terminal; tracking visualViewport.height
-    //      shrinks the body to exactly the visible area instead. On
-    //      Android (interactive-widget=resizes-content) and desktop,
-    //      visualViewport.height already equals the layout height, so
-    //      this is a harmless no-op there. Setting a height value that
-    //      doesn't depend on the terminal box means it can't loop.
+    //   1. applyViewportHeight() — iOS only: pin body's height to the
+    //      visual viewport (keyboard overlays, 100dvh does not shrink).
+    //      Never translateY(offsetTop). That chase is a control loop
+    //      against the browser's pan.
     //
     //   2. TermSize.sync() — report the wrap to the agent, then paint
     //      min(wrap, PTY). The box's size is owned entirely by flexbox;
@@ -6475,11 +6478,14 @@
     // Viewport changes (keyboard open/close, rotation, desktop resize)
     // update body height and re-sync. visualViewport is the accurate
     // signal on mobile; window.resize covers browsers without it.
+    // visualViewport.scroll is NOT a size signal — listening and writing
+    // transform/scroll in response is the infinite-scroll loop.
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', relayout);
-      window.visualViewport.addEventListener('scroll', applyViewportHeight);
     }
-    window.addEventListener('scroll', applyViewportHeight, { passive: true });
+    window.addEventListener('scroll', () => {
+      if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+    }, { passive: true });
     window.addEventListener('resize', relayout);
     window.addEventListener('orientationchange', relayout);
     // The box changing size (header wrapping, keybar collapse, height
