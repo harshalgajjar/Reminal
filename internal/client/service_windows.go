@@ -6,6 +6,7 @@
 package client
 
 import (
+	"encoding/binary"
 	"errors"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/windows/registry"
 
@@ -27,6 +29,11 @@ import (
 // fires at the NEXT logon — so install also starts the daemon immediately,
 // detached, and liveness is tracked through the daemon's own pid file.
 //
+// Explorer (Win10 1703+) also gates Run-key apps through StartupApproved\Run.
+// Writing only the Run value leaves reminal invisible to Task Manager → Startup
+// and skipped at logon — which is why a reboot left this machine offline until
+// `reminal new` spawned the daemon itself. install writes both.
+//
 // The sudo/target-user dance the other platforms do doesn't apply here: there's
 // no SUDO_USER model on Windows and HKCU is by definition the current user's
 // hive, so u is accepted for signature parity but the registry write always
@@ -35,11 +42,46 @@ import (
 const (
 	runKeyPath   = `Software\Microsoft\Windows\CurrentVersion\Run`
 	runValueName = "reminal-daemon"
+	// startupApprovedPath is Explorer's enable/disable list for HKCU Run values.
+	// Same value name as the Run key. Missing = Explorer often skips the launch.
+	startupApprovedPath = `Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`
 )
 
-// installService writes the Run-key entry and starts the daemon now (the key
-// alone would only take effect at next logon). Idempotent: re-writing the value
-// is harmless and an already-live daemon (per its pid file) isn't double-spawned.
+// filetimeEpochOffset is 100-ns ticks between 1601-01-01 and the Unix epoch.
+const filetimeEpochOffset = 116444736000000000
+
+// startupApprovedEnabled is the 12-byte REG_BINARY Explorer treats as "enabled":
+// 02 00 00 00 + FILETIME of when we approved it. 03 00 00 00… is user-disabled.
+func startupApprovedEnabled() []byte {
+	b := make([]byte, 12)
+	b[0] = 0x02
+	ft := uint64(time.Now().UTC().UnixNano()/100 + filetimeEpochOffset)
+	binary.LittleEndian.PutUint64(b[4:], ft)
+	return b
+}
+
+func approveLogonStartup() error {
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, startupApprovedPath, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer k.Close()
+	return k.SetBinaryValue(runValueName, startupApprovedEnabled())
+}
+
+func revokeLogonStartup() {
+	k, err := registry.OpenKey(registry.CURRENT_USER, startupApprovedPath, registry.SET_VALUE)
+	if err != nil {
+		return
+	}
+	defer k.Close()
+	_ = k.DeleteValue(runValueName)
+}
+
+// installService writes the Run-key entry (and Explorer's StartupApproved
+// enable-bit) and starts the daemon now (the key alone would only take effect
+// at next logon). Idempotent: re-writing the values is harmless and an
+// already-live daemon (per its pid file) isn't double-spawned.
 func installService(exe string, u *user.User) error {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKeyPath, registry.SET_VALUE)
 	if err != nil {
@@ -49,6 +91,9 @@ func installService(exe string, u *user.User) error {
 	// Quote the path: Run-key values are parsed like command lines, and an
 	// unquoted `C:\Program Files\…` splits at the space.
 	if err := k.SetStringValue(runValueName, `"`+exe+`" daemon`); err != nil {
+		return err
+	}
+	if err := approveLogonStartup(); err != nil {
 		return err
 	}
 
@@ -71,6 +116,7 @@ func uninstallService(u *user.User) error {
 	} else if !errors.Is(err, registry.ErrNotExist) {
 		return err
 	}
+	revokeLogonStartup()
 
 	// No service manager to stop it for us: kill the pid the daemon recorded.
 	if pid, ok := daemonPID(); ok {
@@ -117,6 +163,9 @@ func restartService(u *user.User) error {
 	if pid, ok := daemonPID(); ok {
 		_ = proc.Kill(pid)
 	}
+	// Heal machines that got the Run key from an older reminal but never
+	// an Explorer approval — otherwise the next logon skips the daemon again.
+	_ = approveLogonStartup()
 	return spawnDetachedDaemon(exe)
 }
 

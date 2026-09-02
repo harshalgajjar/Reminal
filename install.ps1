@@ -200,6 +200,7 @@ Get-Process reminal | Stop-Process -Force
 Start-Sleep 1
 # autostart + Apps & Features entries
 Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name "reminal-daemon"
+Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" -Name "reminal-daemon"
 Remove-Item -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\reminal" -Recurse
 # user PATH entry
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
