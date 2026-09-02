@@ -49,6 +49,13 @@ func controlSockPath(pid int) (string, error) {
 // (or an error). Lets the directory host drive another local session on a remote
 // owner's behalf — e.g. renaming a session shown in the Machines panel.
 func sendControlTo(pid int, cmd string) (string, error) {
+	return sendControlToDeadline(pid, cmd, 0)
+}
+
+// sendControlToDeadline is sendControlTo with an optional exchange deadline.
+// Zero means no deadline (large `send` transfers). Search / listing verbs
+// pass a short one so a hung agent cannot stall the whole fleet query.
+func sendControlToDeadline(pid int, cmd string, d time.Duration) (string, error) {
 	sock, err := controlSockPath(pid)
 	if err != nil {
 		return "", err
@@ -58,6 +65,9 @@ func sendControlTo(pid int, cmd string) (string, error) {
 		return "", fmt.Errorf("connect to agent %d: %w", pid, err)
 	}
 	defer conn.Close()
+	if d > 0 {
+		_ = conn.SetDeadline(time.Now().Add(d))
+	}
 	if _, err := fmt.Fprintln(conn, cmd); err != nil {
 		return "", err
 	}
@@ -169,6 +179,29 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			return
 		}
 		_, _ = fmt.Fprintln(conn, "ok")
+	case strings.HasPrefix(line, "keys "):
+		if err := a.handleKeysControl(strings.TrimPrefix(line, "keys ")); err != nil {
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		_, _ = fmt.Fprintln(conn, "ok")
+	case line == "transcript":
+		body, err := a.handleTranscriptControl()
+		if err != nil {
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		_, _ = fmt.Fprintln(conn, "ok", body)
+	case strings.HasPrefix(line, "search "):
+		// Regex over this session's live scrollback (stripped of ANSI).
+		// Used by MCP search_sessions and by a directory host answering
+		// an owner query that carried a pattern.
+		body, err := a.handleSearchControl(strings.TrimPrefix(line, "search "))
+		if err != nil {
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		_, _ = fmt.Fprintln(conn, "ok", body)
 	case strings.HasPrefix(line, "notify "):
 		msg := strings.TrimSpace(strings.TrimPrefix(line, "notify "))
 		if err := a.broadcastNotify(msg); err != nil {

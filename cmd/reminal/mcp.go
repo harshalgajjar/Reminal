@@ -62,9 +62,16 @@ const (
 // mcpInstructions is handed to the client on initialize and is what the model
 // actually reads. It matters as much as the schemas: the difference between a
 // badge used well and a badge that becomes noise is almost entirely here.
-const mcpInstructions = `reminal lets you leave notes attached to a specific window on the user's screen — a small floating badge on that window, rather than text buried in a terminal they may not be looking at.
+const mcpInstructions = `reminal is two things for an agent: notes on a window, and a view of every reminal this device owns.
 
-Use it when what you want to say is ABOUT a particular window: the editor holding the file you changed, the browser showing the failing page, the app whose settings need fixing. Do not use it for ordinary conversation — answer in chat as normal.
+Sessions — every machine this device owns (this box and any you have owner-connected to):
+  1. list_sessions to see machines and their live terminals: id, name, path (cwd), title, viewers, idle time.
+  2. search_sessions with a regex to find which session mentioned something. It matches name/path/title/id on every machine, and live terminal scrollback on this machine (and on remotes that have been upgraded).
+  3. read_transcript to pull one session's current scrollback as plain text (ANSI stripped; long buffers return the newest tail).
+  4. send_keys to type into a session. Owned sessions need only the id; any other reminal needs session id + PIN (or a join URL). Set enter=true to press Return after the text.
+If the user just arrived from another reminal, list or search, then read that transcript before asking them to recap. To run a command in a reminal, send_keys then read_transcript.
+
+Notes — a small floating badge ON a window, not text buried in a terminal they may not be looking at. Use when what you want to say is ABOUT a particular window. Do not use notes for ordinary conversation.
 
 Workflow:
   1. list_windows to find the window your note belongs to.
@@ -511,6 +518,50 @@ func mcpToolList() []map[string]any {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 	return []map[string]any{
 		{
+			"name": "list_sessions",
+			"description": "List every reminal this device owns: this machine and any enrolled box, " +
+				"each with live sessions (id, name, path/cwd, title, viewers, idle). " +
+				"Does not include PINs. Call this to find which session to search or talk about.",
+			"inputSchema": obj(map[string]any{}),
+		},
+		{
+			"name": "search_sessions",
+			"description": "Regex-search reminal sessions this device owns. Matches name, path, title, " +
+				"and id on every machine; also searches live terminal scrollback on this machine " +
+				"(and on remotes whose reminal is new enough). Returns snippets, not a full dump.",
+			"inputSchema": obj(map[string]any{
+				"pattern": str("Go/RE2 regular expression. Use (?i) for case-insensitive."),
+			}, "pattern"),
+		},
+		{
+			"name": "read_transcript",
+			"description": "Read one reminal session's live terminal as plain text (ANSI stripped). " +
+				"Use list_sessions to get the id. Long history is truncated to the newest tail. " +
+				"Does not attach a viewer and does not include the PIN.",
+			"inputSchema": obj(map[string]any{
+				"session": str("Session id from list_sessions (or a unique session name)."),
+				"machine": str("Optional machine name or id when the session id exists on more than one box."),
+			}, "session"),
+		},
+		{
+			"name": "send_keys",
+			"description": "Type keystrokes into a reminal session's live terminal (the PTY). " +
+				"Owned sessions: pass session id from list_sessions. Any other reminal: pass session + pin " +
+				"(or a join URL). Newlines become Enter. Set enter=true to press Return. " +
+				"Does not return command output — follow with read_transcript if you own the session.",
+			"inputSchema": obj(map[string]any{
+				"session": str("Session id, or a join URL like https://live.reminal.app/?s=ID#p=PIN."),
+				"keys":    str("Characters to type. Use \\n for Enter. Ctrl-C is the U+0003 character."),
+				"pin":     str("Session PIN. Required unless this device owns the machine (list_sessions) or the URL already has #p=."),
+				"enter": map[string]any{
+					"type":        "boolean",
+					"default":     false,
+					"description": "If true, press Return after keys (run a line).",
+				},
+				"machine": str("Optional machine name or id when the session id exists on more than one owned box."),
+			}, "session", "keys"),
+		},
+		{
 			"name": "list_windows",
 			"description": "List the windows open on the user's screen with the window_id the other tools need. " +
 				"Call this first — window ids are ephemeral and change when an app restarts.",
@@ -580,7 +631,33 @@ func argStr(args map[string]any, key, def string) string {
 	return def
 }
 
+func argBool(args map[string]any, key string, def bool) bool {
+	switch v := args[key].(type) {
+	case bool:
+		return v
+	case string:
+		return v == "true" || v == "1" || strings.EqualFold(v, "yes")
+	}
+	return def
+}
+
 func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
+	switch name {
+	case "list_sessions":
+		return mcpListSessions()
+	case "search_sessions":
+		return mcpSearchSessions(argStr(args, "pattern", argStr(args, "regex", "")))
+	case "read_transcript":
+		return mcpReadTranscript(argStr(args, "session", argStr(args, "id", "")), argStr(args, "machine", ""))
+	case "send_keys":
+		return mcpSendKeys(
+			argStr(args, "session", argStr(args, "id", "")),
+			argStr(args, "machine", ""),
+			argStr(args, "keys", argStr(args, "text", "")),
+			argStr(args, "pin", argStr(args, "PIN", "")),
+			argBool(args, "enter", false) || argBool(args, "newline", false),
+		)
+	}
 	if runtime.GOOS != "darwin" && name != "read_replies" {
 		return "", errors.New("window notes are macOS-only for now")
 	}

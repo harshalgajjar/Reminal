@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -39,6 +40,27 @@ const maxDirMessageBytes = 1 << 20
 // machine's live sessions. The reply is end-to-end encrypted; the relay only
 // ever sees opaque frames on an opaque channel id.
 func QueryDirectory(machinePub ed25519.PublicKey, timeout time.Duration) (protocol.DirResponse, error) {
+	return queryDirectory(machinePub, timeout, dirQueryReq{})
+}
+
+// dirQueryReq is the optional encrypted TypeDirQuery payload. Older hosts
+// ignore Data and still return the session list.
+type dirQueryReq struct {
+	Pattern    string `json:"pattern,omitempty"`
+	Transcript string `json:"transcript,omitempty"` // session id to dump
+	KeysID     string `json:"keys_id,omitempty"`    // session id to type into
+	Keys       string `json:"keys,omitempty"`       // base64 of PTY bytes
+}
+
+func (r dirQueryReq) empty() bool {
+	return strings.TrimSpace(r.Pattern) == "" &&
+		strings.TrimSpace(r.Transcript) == "" &&
+		strings.TrimSpace(r.KeysID) == "" &&
+		strings.TrimSpace(r.Keys) == ""
+}
+
+// queryDirectory is QueryDirectory with optional search / one-session dump.
+func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dirQueryReq) (protocol.DirResponse, error) {
 	var zero protocol.DirResponse
 	if len(machinePub) != ed25519.PublicKeySize {
 		return zero, fmt.Errorf("machine key must be %d bytes", ed25519.PublicKeySize)
@@ -103,8 +125,25 @@ func QueryDirectory(machinePub ed25519.PublicKey, timeout time.Duration) (protoc
 		return zero, err
 	}
 
-	// Ask, and read the encrypted session list.
-	if err := writeDir(conn, protocol.Message{Type: protocol.TypeDirQuery}); err != nil {
+	// Ask, and read the encrypted session list. Search / dump ride as
+	// encrypted Data so older hosts (which ignore Data) still answer.
+	qmsg := protocol.Message{Type: protocol.TypeDirQuery}
+	req.Pattern = strings.TrimSpace(req.Pattern)
+	req.Transcript = strings.TrimSpace(req.Transcript)
+	req.KeysID = strings.TrimSpace(req.KeysID)
+	req.Keys = strings.TrimSpace(req.Keys)
+	if !req.empty() {
+		raw, err := json.Marshal(req)
+		if err != nil {
+			return zero, err
+		}
+		enc, err := box.Encrypt(raw)
+		if err != nil {
+			return zero, err
+		}
+		qmsg.Data = enc
+	}
+	if err := writeDir(conn, qmsg); err != nil {
 		return zero, err
 	}
 	for {
@@ -218,4 +257,25 @@ func waitAuthOK(conn *websocket.Conn) error {
 			return nil
 		}
 	}
+}
+
+// parseDirQuery decrypts an optional TypeDirQuery payload. Empty / garbage
+// returns a zero req so the host still answers with a plain session list.
+func parseDirQuery(box *crypto.Box, data string) dirQueryReq {
+	if box == nil || data == "" {
+		return dirQueryReq{}
+	}
+	plain, err := box.Decrypt(data)
+	if err != nil {
+		return dirQueryReq{}
+	}
+	var req dirQueryReq
+	if json.Unmarshal(plain, &req) != nil {
+		return dirQueryReq{}
+	}
+	req.Pattern = strings.TrimSpace(req.Pattern)
+	req.Transcript = strings.TrimSpace(req.Transcript)
+	req.KeysID = strings.TrimSpace(req.KeysID)
+	req.Keys = strings.TrimSpace(req.Keys)
+	return req
 }

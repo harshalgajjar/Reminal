@@ -294,6 +294,16 @@ type DirSession struct {
 	Headless bool   `json:"headless,omitempty"`
 	Viewers  int    `json:"viewers,omitempty"`
 	IdleSecs int64  `json:"idle_secs,omitempty"` // seconds since last PTY activity
+	// SearchHits is filled when the directory query carried a regex: snippets
+	// from this session's live scrollback. Omitted on a plain listing, and by
+	// hosts that do not search yet (they still return the session list).
+	SearchHits []string `json:"search_hits,omitempty"`
+	// Transcript is filled when the query asked for this session's scrollback
+	// dump (stripped ANSI, tail-capped). TranscriptOK distinguishes "host is
+	// old and ignored the request" from "host answered, buffer was empty".
+	Transcript          string `json:"transcript,omitempty"`
+	TranscriptTruncated bool   `json:"transcript_truncated,omitempty"`
+	TranscriptOK        bool   `json:"transcript_ok,omitempty"`
 }
 
 // DirResponse is the encrypted payload of a TypeDirResp: the machine's hostname
@@ -301,4 +311,8 @@ type DirSession struct {
 type DirResponse struct {
 	Hostname string       `json:"hostname,omitempty"`
 	Sessions []DirSession `json:"sessions"`
+	// KeysOK/KeysError are set when the query asked to inject keystrokes into
+	// one session. Omitted by older hosts (they still return the session list).
+	KeysOK    bool   `json:"keys_ok,omitempty"`
+	KeysError string `json:"keys_error,omitempty"`
 }

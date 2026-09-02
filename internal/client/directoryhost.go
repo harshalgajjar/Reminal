@@ -250,7 +250,7 @@ func serveDirectoryOnce(stop <-chan struct{}, machineKey ed25519.PrivateKey) (se
 		case protocol.TypeOwnerInit:
 			dh.handleOwnerInit(msg)
 		case protocol.TypeDirQuery:
-			dh.handleDirQuery()
+			dh.handleDirQuery(msg)
 		case protocol.TypeNewSession:
 			safeGoDir(func() { dh.handleNewSession(msg) })
 		case protocol.TypeDirRename:
@@ -408,13 +408,24 @@ func (dh *dirHost) handleOwnerInit(msg protocol.Message) {
 // channel key. The reply is broadcast; only owners who completed the handshake
 // hold the key, so a party that merely knows the channel id learns nothing. Rate
 // limited so a spammer can't turn the host into an amplifier.
-func (dh *dirHost) handleDirQuery() {
+func (dh *dirHost) handleDirQuery(msg protocol.Message) {
 	if !dh.queryLimit.allow(time.Now()) {
 		return
 	}
 	resp := protocol.DirResponse{Sessions: dh.localSessions()}
 	if host, err := os.Hostname(); err == nil {
 		resp.Hostname = host
+	}
+	// Optional encrypted payload. Older hosts ignore Data and still list.
+	q := parseDirQuery(dh.box, msg.Data)
+	if q.Pattern != "" {
+		applyLocalSearchHits(&resp, q.Pattern)
+	}
+	if q.Transcript != "" {
+		applyLocalTranscriptDump(&resp, q.Transcript)
+	}
+	if q.KeysID != "" && q.Keys != "" {
+		applyLocalKeys(&resp, q.KeysID, q.Keys)
 	}
 	payload, err := json.Marshal(resp)
 	if err != nil {
