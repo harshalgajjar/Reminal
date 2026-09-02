@@ -5,7 +5,7 @@
   <meta http-equiv="Cache-Control" content="no-store">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>reminal</title>
-  <!-- reminal-web 3.4.1 2026-09-01 -->
+  <!-- reminal-web 3.5.2 2026-09-02 -->
   <meta name="theme-color" content="#0d1117">
   <!-- iOS "Add to Home Screen": fullscreen, black status bar, no Safari chrome. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -33,6 +33,15 @@
       overflow: hidden;
       margin: 0;
       background: #0d1117;
+      /* Chrome Touch to Search runs on selectable, non-interactive text
+         (developer.chrome.com/blog/tap-to-search). The documented opt-out
+         is user-select:none. Copy is xterm's highlight + the Copy control. */
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    input, textarea, [contenteditable="true"] {
+      -webkit-user-select: text;
+      user-select: text;
     }
     /* The whole app is a single flex column: header / terminal / keybar.
        The terminal flexes to fill whatever space is left, and the keybar
@@ -458,16 +467,6 @@
        720px clause, so a primary-pointer flip silently erased the whole bar
        mid-session. The touchscreen never stops existing; gate on that. */
     @media (pointer: coarse), (any-pointer: coarse), (max-width: 720px) {
-      /* Chrome Android's Touch to Search fires on any tap that lands on
-         selectable, NON-interactive text (developer.chrome.com/blog/
-         tap-to-search) and slides a Google sheet over the keybar. The
-         terminal grid was already unselectable — the triggers were the app
-         chrome around it: header status text, panel rows, labels. Nothing
-         on a touch device needs native selection (terminal copy is xterm's
-         own selection + the Copy button), so make the page unselectable
-         and opt the real text inputs back in. */
-      body { -webkit-user-select: none; user-select: none; }
-      input, textarea { -webkit-user-select: text; user-select: text; }
       #keybar {
         display: flex;
         /* Single horizontal row that scrolls instead of wrapping. */
@@ -1399,7 +1398,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
-    window.__REMINAL_WEB = '3.4.1';
+    window.__REMINAL_WEB = '3.5.2';
     const statusEl = document.getElementById('status');
     const sessionInput = document.getElementById('session-input');
     const pinInput = document.getElementById('pin-input');
