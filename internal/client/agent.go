@@ -320,6 +320,11 @@ type Agent struct {
 	// resync. A flag rather than a channel: many gapped frames coalesce into
 	// one key request. Guarded by winMu.
 	winKeyReq map[string]*atomic.Bool
+	// winFlush is raised when a viewer just sent input, so the relay batch
+	// ships on the next access unit instead of waiting out wsFrameMinInterval.
+	// A click's result frame otherwise sits up to 200ms in the batch — on top
+	// of whatever the viewer was already playing out. Guarded by winMu.
+	winFlush map[string]*atomic.Bool
 	// viewerCaps records what each viewer announced it can decode, so a viewer
 	// that never establishes P2P can still be sent video over the relay.
 	// Guarded by rtcMu (it's populated from the same signalling path).

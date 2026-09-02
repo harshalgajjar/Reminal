@@ -5,7 +5,7 @@
   <meta http-equiv="Cache-Control" content="no-store">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>reminal</title>
-  <!-- reminal-web 3.5.2 2026-09-02 -->
+  <!-- reminal-web 3.5.3 2026-09-02 -->
   <meta name="theme-color" content="#0d1117">
   <!-- iOS "Add to Home Screen": fullscreen, black status bar, no Safari chrome. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1398,7 +1398,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
-    window.__REMINAL_WEB = '3.5.2';
+    window.__REMINAL_WEB = '3.5.3';
     const statusEl = document.getElementById('status');
     const sessionInput = document.getElementById('session-input');
     const pinInput = document.getElementById('pin-input');
@@ -7715,7 +7715,14 @@
       // stop playing buffered frames out and jump to the newest.
       if (type === 'window_input' && obj && obj.id) {
         const ip = panes.get(obj.id);
-        if (ip) dropQueuedFrames(ip);
+        if (ip) {
+          // Stay live for a beat after input. Paced playout of a relay batch
+          // is how "30 fps" became a two-second-old movie: arrivals were
+          // counted, then scheduled into the future. A click must see the
+          // frame that contains its result, not the one still in the queue.
+          ip.liveUntil = performance.now() + 1500;
+          dropQueuedFrames(ip);
+        }
       }
       if (!ws || ws.readyState !== WebSocket.OPEN || !cryptoKey) return;
       const frame = { type };
@@ -8621,7 +8628,9 @@
       // still learns that a full frame traversed the FRAME channel — that is
       // what confirmation has always meant, and an ack arriving on a channel
       // of its own proves nothing about the other one on its own.
-      if (viaDC && rtcCtlOpen()) { try { rtcCtl.send(JSON.stringify({ id, seq, dc: true })); return; } catch (_) {} }
+      // Relay-video acks ride ctl too when it is up: same pacing, no Durable
+      // Object hop, so they are both faster and free.
+      if (rtcCtlOpen()) { try { rtcCtl.send(JSON.stringify({ id, seq, dc: !!viaDC })); return; } catch (_) {} }
       if (viaDC && rtcActive()) { try { rtcDc.send(JSON.stringify({ id, seq })); return; } catch (_) {} }
       sendWin('window_ack', { id, seq });
     }
@@ -9112,8 +9121,10 @@
     // another frame's timing. Silent, permanent, and it looks like plain lag.
     // In normal operation this holds a handful of entries, so a queue this
     // long means the pairing is already lost: drop it and resync on a keyframe
-    // rather than carry a corrupt mapping for the life of the pane.
-    const H264_PENDING_MAX = 64;
+    // rather than carry a corrupt mapping for the life of the pane. 64 was
+    // ~2s at 30fps — enough to make clicks feel dead while the counter
+    // still read 30. A dozen is past any healthy decoder burst.
+    const H264_PENDING_MAX = 12;
 
     // decodeAU hands one in-order access unit to the decoder.
     function decodeAU(p, au, key, seq, ackSeq) {
@@ -9157,27 +9168,25 @@
     }
 
     // queueVideoFrame schedules a batched frame for its turn on screen instead
-    // of painting it instantly. Spacing self-tunes to the delivery cadence
-    // (batch period / frames per batch) so playout matches the capture rate.
+    // of painting it instantly. Spacing matches arrival rate so a 200ms relay
+    // batch does not flash as one frame — but the schedule is hard-capped so
+    // a decoder burst cannot turn into a 2s backlog. Extra frames are late
+    // already; showing them in order is how 30fps became a delayed movie.
+    const LIVE_QUEUE_MS = 33;
+    const LIVE_QUEUE_MAX = 2;
     function queueVideoFrame(p, frame) {
       const now = performance.now();
-      // Play out at the rate frames are ARRIVING, which markFrameTime already
-      // tracks as a rolling one-second count. Pacing off the batch cadence
-      // instead was wrong: one late batch inflated the estimate, playout fell
-      // behind arrival, and the buffer grew without bound. A deep buffer is
-      // pure latency, so drain harder the deeper it gets.
       const rate = (p.frameTimes || []).length || 30;
       let spacing = 1000 / rate;
-      if (p.renderQ && p.renderQ.length > 6) spacing *= 0.8;
-      spacing = Math.max(8, Math.min(60, spacing));
+      if (p.renderQ && p.renderQ.length > 2) spacing *= 0.8;
+      spacing = Math.max(8, Math.min(33, spacing));
       if (!p.nextShowAt || p.nextShowAt < now) p.nextShowAt = now;
       (p.renderQ || (p.renderQ = [])).push({ f: frame, at: p.nextShowAt });
       p.nextShowAt += spacing;
-      // A backgrounded or overloaded tab must not accumulate GPU frames or
-      // drift ever further behind: collapse to the newest and resume live.
-      if (p.renderQ.length > 16) {
+      if (p.nextShowAt - now > LIVE_QUEUE_MS || p.renderQ.length > LIVE_QUEUE_MAX) {
         while (p.renderQ.length > 1) p.renderQ.shift().f.close();
-        p.nextShowAt = now;
+        p.renderQ[0].at = now;
+        p.nextShowAt = now + spacing;
       }
       pumpRenderQ(p);
     }
@@ -9235,7 +9244,7 @@
             // they must be played OUT over time or the display (one refresh per
             // 16ms) only ever shows the last of each group: honest 30fps by the
             // counter, visibly 5fps to a human.
-            if (e && e.paced) queueVideoFrame(p, frame);
+            if (e && e.paced && !(p.liveUntil && performance.now() < p.liveUntil)) queueVideoFrame(p, frame);
             else { paintVideoFrame(p, frame); frame.close(); }
             if (e && e.ack != null) sendWindowAck(p.w.id, e.ack, true);
           },

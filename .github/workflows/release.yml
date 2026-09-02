@@ -254,9 +254,25 @@ jobs:
 
       - name: Write release notes
         # The release commit message IS the changelog — surface it on the
-        # GitHub release page instead of leaving the body empty. The CLA
-        # trailer stays in git history but is noise on a release page.
-        run: git log -1 --pretty=%B | sed '/^Co-Authored-By:/d' > release-notes.md
+        # GitHub release page instead of leaving the body empty. Trailers stay
+        # in git history but are noise on a release page, and one of them is
+        # worse than noise: Claude-Session carries a claude.ai URL that has no
+        # business on a public page. Matched case-insensitively because both
+        # Co-authored-by and Co-Authored-By occur in this history — the old
+        # filter pinned one casing and silently shipped the other, which is how
+        # v3.5.0 through v3.5.2 published a Cursor trailer.
+        # awk, not sed: this step runs on every matrix leg including macos-14,
+        # and BSD sed has no case-insensitive address flag. tolower() is POSIX.
+        run: |
+          git log -1 --pretty=%B | awk '
+            { lower = tolower($0) }
+            lower ~ /^(co-authored-by|claude-session|signed-off-by):/ { next }
+            { buf[n++] = $0 }
+            END {
+              while (n > 0 && buf[n-1] ~ /^[ \t]*$/) n--
+              for (i = 0; i < n; i++) print buf[i]
+            }
+          ' > release-notes.md
 
       - name: Upload release asset
         uses: softprops/action-gh-release@v2

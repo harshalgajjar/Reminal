@@ -459,6 +459,7 @@ func (a *Agent) handleWindowInput(encData string) {
 		// a.winMenu to region-capture (through the daemon) so the menu shows.
 		mirrorForwardInput(string(plaintext))
 		a.updateMenuState(plaintext)
+		a.noteWindowFlush(windowInputID(plaintext))
 		return
 	}
 	var ev windowInput
@@ -470,6 +471,7 @@ func (a *Agent) handleWindowInput(encData string) {
 		return
 	}
 	a.noteInputBlocked(inputBlocker(ev.ID))
+	a.noteWindowFlush(ev.ID)
 	applyWindowInput(b, &a.winInput, ev, func(w winInfo, right bool) {
 		// A right-click opens a context menu drawn as its own window (missed by
 		// capture-by-id). Snapshot this window's bounds and region-capture it
@@ -509,6 +511,34 @@ func (a *Agent) handleWindowAck(encData string) {
 		a.requestWindowKey(ev.ID)
 	}
 	a.deliverWindowAck(ev.ID, ev.Seq)
+}
+
+// windowInputID pulls the target window id out of an already-decrypted
+// window_input payload. Used to mark the stream for an immediate relay flush
+// without a second JSON parse of the full event.
+func windowInputID(plaintext []byte) string {
+	var ev struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(plaintext, &ev) != nil {
+		return ""
+	}
+	return ev.ID
+}
+
+// noteWindowFlush asks the window's stream to ship its next relay batch now.
+// Viewer input just happened; waiting out the 200ms billing interval would
+// hold the frame that contains the click. No-op if that window is not live.
+func (a *Agent) noteWindowFlush(id string) {
+	if id == "" {
+		return
+	}
+	a.winMu.Lock()
+	f := a.winFlush[id]
+	a.winMu.Unlock()
+	if f != nil {
+		f.Store(true)
+	}
 }
 
 // requestWindowKey marks a window's stream as needing an immediate keyframe.
@@ -627,11 +657,15 @@ func (a *Agent) startWindowStream(id, viewer string) {
 		a.winStreams = map[string]chan struct{}{}
 		a.winAck = map[string]chan uint64{}
 		a.winKeyReq = map[string]*atomic.Bool{}
+		a.winFlush = map[string]*atomic.Bool{}
 	}
 	// Keep this independent of winStreams for tests and hot-restart state made
 	// by an older image, where the pre-existing maps do not include quality.
 	if a.winQuality == nil {
 		a.winQuality = map[string]chan windowQuality{}
+	}
+	if a.winFlush == nil {
+		a.winFlush = map[string]*atomic.Bool{}
 	}
 	if _, ok := a.winStreams[id]; ok {
 		a.winMu.Unlock() // already streaming this window
@@ -649,10 +683,12 @@ func (a *Agent) startWindowStream(id, viewer string) {
 	ack := make(chan uint64, 4)
 	quality := make(chan windowQuality, 1)
 	keyReq := &atomic.Bool{}
+	flush := &atomic.Bool{}
 	a.winStreams[id] = stop
 	a.winAck[id] = ack
 	a.winQuality[id] = quality
 	a.winKeyReq[id] = keyReq
+	a.winFlush[id] = flush
 	// First window under mirror → keep the display awake so the host can't
 	// idle-lock and strand remote control (see winAwake).
 	if a.winAwake == nil {
@@ -660,7 +696,7 @@ func (a *Agent) startWindowStream(id, viewer string) {
 	}
 	a.winMu.Unlock()
 
-	go a.streamWindow(w, stop, ack, quality, keyReq)
+	go a.streamWindow(w, stop, ack, quality, keyReq, flush)
 }
 
 // stopWindowStream ends the stream for one window id (its pane was closed).
@@ -676,12 +712,14 @@ func (a *Agent) stopWindowStream(id string) {
 		a.winAck = map[string]chan uint64{}
 		a.winQuality = map[string]chan windowQuality{}
 		a.winKeyReq = map[string]*atomic.Bool{}
+		a.winFlush = map[string]*atomic.Bool{}
 	} else if ch, ok := a.winStreams[id]; ok {
 		close(ch)
 		delete(a.winStreams, id)
 		delete(a.winAck, id)
 		delete(a.winQuality, id)
 		delete(a.winKeyReq, id)
+		delete(a.winFlush, id)
 	}
 	// Last window stopped → let the display sleep/lock again. Capture and run the
 	// stop func outside the lock (it kills+waits a child process).
@@ -1390,6 +1428,13 @@ type winStream struct {
 	// keyReq is raised by a viewer that saw a sequence gap and needs a fresh
 	// IDR to resync its decoder (see requestWindowKey).
 	keyReq *atomic.Bool
+	// flush is raised by viewer input so the next relay batch ships immediately
+	// instead of waiting out wsFrameMinInterval (see noteWindowFlush).
+	flush *atomic.Bool
+	// shipNow is set when input just landed: drop unsent pre-click AUs, re-key,
+	// and send the next frame without waiting for the billing interval. Does
+	// not add messages — it only moves the next one earlier.
+	shipNow bool
 
 	// Frame source: the native SCK helper when available (hardware capture +
 	// JPEG at winHelperFPS with its own change detection), else per-frame
@@ -1458,8 +1503,8 @@ type winStream struct {
 // the viewer acks one over them. The stream is ack-paced: at most
 // maxFramesInFlight unacknowledged frames, so latency can't accumulate on a
 // slow link and the rate adapts to what the viewer actually consumes.
-func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, quality <-chan windowQuality, keyReq *atomic.Bool) {
-	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, lastGeoCheck: time.Now()}
+func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, quality <-chan windowQuality, keyReq, flush *atomic.Bool) {
+	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, flush: flush, lastGeoCheck: time.Now()}
 	defer s.cleanup()
 	s.run()
 }
@@ -1479,6 +1524,7 @@ func (s *winStream) cleanup() {
 		delete(a.winAck, s.w.ID)
 		delete(a.winQuality, s.w.ID)
 		delete(a.winKeyReq, s.w.ID)
+		delete(a.winFlush, s.w.ID)
 	}
 	delete(a.winMenu, s.w.ID)
 	// A stream that exits on its own — window closed, viewer went silent —
@@ -1517,6 +1563,7 @@ func (s *winStream) run() {
 		}
 		s.drainAcks()
 		s.applyQuality()
+		s.takeInputFlush()
 		if !s.watched() {
 			return
 		}
@@ -1749,7 +1796,14 @@ func (s *winStream) drainAcks() {
 func (s *winStream) waitCapacity() bool {
 	limit := uint64(maxFramesInFlight)
 	if s.codec == "h264" {
-		limit = maxFramesInFlightH264
+		// The relay acks once per 200ms batch, so more than one batch in
+		// flight is just click-to-photon delay. P2P keeps the deeper
+		// pipeline — those frames never touch the billed path.
+		if s.wsVideo {
+			limit = 6
+		} else {
+			limit = maxFramesInFlightH264
+		}
 	}
 	for s.seq-s.acked >= limit {
 		select {
@@ -2104,7 +2158,23 @@ func (s *winStream) wsFrameDue(vc, confirmed int, now time.Time) bool {
 	if !wsSinkNeeded(vc, confirmed) {
 		return false
 	}
-	return s.forceSend || now.Sub(s.lastWSFrame) >= wsFrameMinInterval
+	return s.forceSend || s.shipNow || now.Sub(s.lastWSFrame) >= wsFrameMinInterval
+}
+
+// takeInputFlush reacts to a viewer click/key: throw away unsent pre-click
+// frames (they would only delay the result) and ask the encoder for a key so
+// the next AU is a valid entry point. Same number of relay messages — the
+// next one just leaves sooner and is current.
+func (s *winStream) takeInputFlush() {
+	if s.flush == nil || !s.flush.Swap(false) {
+		return
+	}
+	s.wsBatch = s.wsBatch[:0]
+	s.wsBatchBytes = 0
+	if s.helper != nil {
+		s.helper.rekey()
+	}
+	s.shipNow = true
 }
 
 func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
@@ -2209,7 +2279,7 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
 		// if the WS window isn't open yet, drop without advancing seq and let
 		// the next iteration carry fresher content.
 		sinks.confirmed, sinks.probe = nil, nil
-		sinks.ws = time.Since(s.lastWSFrame) >= wsFrameMinInterval
+		sinks.ws = time.Since(s.lastWSFrame) >= wsFrameMinInterval || s.shipNow
 		if !sinks.ws {
 			return
 		}
@@ -2221,6 +2291,7 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
 	if sinks.ws {
 		s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
 		s.lastWSFrame = time.Now()
+		s.shipNow = false
 	}
 	if len(sinks.probe) > 0 {
 		for _, p := range sinks.probe {
@@ -2323,8 +2394,9 @@ func (s *winStream) appendWSBatch(conn *websocket.Conn, f winFrame) {
 	}
 	s.wsBatch = append(s.wsBatch, f)
 	s.wsBatchBytes += len(f.Data)
-	if s.wsBatchBytes >= wsBatchMaxBytes || time.Since(s.lastWSFrame) >= wsFrameMinInterval {
+	if s.wsBatchBytes >= wsBatchMaxBytes || time.Since(s.lastWSFrame) >= wsFrameMinInterval || s.shipNow {
 		s.flushWSBatch(conn)
+		s.shipNow = false
 	}
 }
 

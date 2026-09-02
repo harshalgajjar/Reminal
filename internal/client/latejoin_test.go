@@ -90,3 +90,21 @@ func TestForcedFrameStaysArmedUntilItShips(t *testing.T) {
 		t.Error("still bypassing pacing after the newcomer was served")
 	}
 }
+
+func TestInputFlushShipsNextRelayFrameNow(t *testing.T) {
+	s := lateJoinStream()
+	s.flush = &atomic.Bool{}
+	s.wsBatch = []winFrame{{Data: []byte("old")}}
+	s.wsBatchBytes = 3
+	s.flush.Store(true)
+	s.takeInputFlush()
+	if len(s.wsBatch) != 0 || s.wsBatchBytes != 0 {
+		t.Fatal("pre-click batch should be dropped, not billed a beat later")
+	}
+	if !s.shipNow {
+		t.Fatal("the next frame must leave without waiting out the interval")
+	}
+	if !s.wsFrameDue(s.a.framesWantedBy(), 0, time.Now()) {
+		t.Error("shipNow did not open the relay gate")
+	}
+}
