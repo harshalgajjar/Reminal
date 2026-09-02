@@ -103,9 +103,26 @@ That single pane works because you *own* the machines. Enroll a device once — 
 
 ---
 
-## Point an AI agent at your fleet
+## Your agents can see each other
 
-Hand the session ID and PIN to an agent and it connects like any other viewer — to every machine you've shared. One credential, and it can triage an incident, run scans, and kick off or delegate long-running jobs across all your hardware at once, while you watch it happen in the same browser.
+```bash
+reminal integrate
+```
+
+One command registers reminal's **MCP server** with every agent CLI you have — Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity, Amp. From then on your agents can:
+
+- **`list_sessions`** — every session you own, on this machine and every enrolled box
+- **`search_sessions`** — regex across live terminal scrollback, on all of them
+- **`read_transcript`** — read another session's terminal as plain text
+- **`send_keys`** — type into another session's PTY, across machines
+
+Which means an agent on your laptop can watch what an agent on your build box is doing, and answer it. **They don't have to be the same agent, or from the same vendor** — Claude Code can drive a Codex session. There's no protocol to adopt and nothing to integrate against: the bus is the terminal. If it runs in a PTY, it can be read and typed into.
+
+Agents can also raise a hand. `add_note` pins a badge on the actual window it's about — the editor, the browser it's driving — and that reaches your phone, where you can answer it.
+
+> `send_keys` types real keystrokes into a real shell on a machine you own. It only reaches boxes you've enrolled yourself, and everything it does is visible live in the viewer — but treat it with the respect you'd give any tool that can type Ctrl+C into your terminal.
+
+Prefer no MCP? Hand an agent a session ID and PIN and it connects like any other viewer, to every machine you've shared.
 
 <div align="center">
 <img src="docs/agent.gif" alt="An AI agent given the session key dispatches jobs in parallel to three machines — run test suite on studio-mac, scan and patch on aws-eu-1, rotate backups on mini-01" width="900">
@@ -360,6 +377,8 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | `reminal kill [id\|name]` | Fully terminate a session (kills the shell — irreversible) |
 | `reminal prune [dur] [-y]` | Kill idle, unwatched sessions in one go (default idle ≥ 30m) |
 | `reminal restart [--all]` | Hot-swap the running agent(s) onto the latest binary — the shell stays alive |
+| `reminal integrate [--remove]` | Register reminal's MCP server with your agent CLIs (Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity, Amp) |
+| `reminal mcp` | Run the MCP server on stdio — list, search, read and type into sessions across your machines |
 | `reminal expose <port> [--public]` | Forward a local HTTP port to a public URL (PIN-protected by default) |
 | `reminal send <file>` | Push a file to every connected viewer (web client auto-downloads) |
 | `reminal copy [--ttl <dur>] <file>` | Offer a file for pickup anywhere; prints a one-time code |
