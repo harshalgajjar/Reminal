@@ -72,6 +72,10 @@ func LoadResumeState() (*ResumeState, error) {
 	if os.Getenv(envResume) != "1" {
 		return nil, nil
 	}
+	// Consume first so a later validation / attach error cannot leave plaintext.
+	dump := takeScrollbackDump(os.Getenv(envResumeScrollback))
+	defer scrubWindowsResumeEnv()
+
 	id := os.Getenv(envResumeSessionID)
 	pin := os.Getenv(envResumePIN)
 	pinHash := os.Getenv(envResumePinHash)
@@ -92,15 +96,6 @@ func LoadResumeState() (*ResumeState, error) {
 		return nil, fmt.Errorf("resume: reattach pty holder: %w", err)
 	}
 
-	headless := os.Getenv(envResumeHeadless) == "1"
-
-	// Scrub the resume env so children of the new agent never see it.
-	for _, k := range []string{envResume, envResumeSessionID, envResumePIN,
-		envResumePinHash, envResumeToken, envResumeStartedAt, envResumePTYSock,
-		envResumeName, envResumeHeadless} {
-		_ = os.Unsetenv(k)
-	}
-
 	return &ResumeState{
 		SessionID: id,
 		PIN:       pin,
@@ -109,12 +104,21 @@ func LoadResumeState() (*ResumeState, error) {
 		StartedAt: startedAt,
 		PTY:       sess,
 		Name:      name,
-		Headless:  headless,
+		Headless:  os.Getenv(envResumeHeadless) == "1",
+		Dump:      dump,
 		// The old agent set up a loopback handshake (prepareHandshake put the
 		// address on our argv); report registration back so it knows it may
 		// exit. Empty when nothing was passed — then nobody is waiting.
 		HandshakeAddr: ParseHandshakeAddr(os.Args),
 	}, nil
+}
+
+func scrubWindowsResumeEnv() {
+	for _, k := range []string{envResume, envResumeSessionID, envResumePIN,
+		envResumePinHash, envResumeToken, envResumeStartedAt, envResumePTYSock,
+		envResumeName, envResumeHeadless, envResumeScrollback} {
+		_ = os.Unsetenv(k)
+	}
 }
 
 // boolEnv renders a bool for the resume env.
@@ -188,16 +192,22 @@ func (a *Agent) executeRestart() error {
 		// process becomes a viewer, not a host terminal.
 		envResumeHeadless+"="+boolEnv(a.headless || a.localActive),
 	)
+	dumpPath := a.dumpScrollbackForRestart()
+	if dumpPath != "" {
+		cmd.Env = append(cmd.Env, envResumeScrollback+"="+dumpPath)
+	}
 	// prepareHandshake appends --handshake-addr to argv (ignored by the
 	// resume path except for ParseHandshakeAddr) and sets the detach attrs.
 	recv, afterStart, err := prepareHandshake(cmd)
 	if err != nil {
 		a.restarting.Store(false) // nothing spawned — we remain sole owner
+		removeScrollbackDump(dumpPath)
 		return err
 	}
 	if err := cmd.Start(); err != nil {
 		afterStart()
 		a.restarting.Store(false) // successor never existed — we remain sole owner
+		removeScrollbackDump(dumpPath)
 		return fmt.Errorf("start successor: %w", err)
 	}
 	afterStart()
@@ -222,8 +232,12 @@ func (a *Agent) executeRestart() error {
 			// The successor never adopted the holder — we still own the
 			// shell, so reclaim sole ownership and keep serving.
 			a.restarting.Store(false)
+			removeScrollbackDump(dumpPath)
 			return fmt.Errorf("successor didn't come up (still serving on the old binary): %w", err)
 		}
+		// Successor may already have take()n the dump; removing a missing
+		// file is fine. If they died before LoadResumeState, this clears it.
+		removeScrollbackDump(dumpPath)
 		// The successor adopted the holder and THEN failed to register: our
 		// PTY connection is superseded, so nobody can serve the shell — the
 		// holder's grace timer ends the session. The flag stays SET so we

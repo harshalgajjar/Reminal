@@ -273,6 +273,10 @@ type Agent struct {
 	// from a previous binary image via syscall.Exec hot-restart. When
 	// true, Run() skips spawning a fresh shell and uses a.term as-is.
 	resumed bool
+	// resumeDump is scrollback carried across a hot restart (plaintext, then
+	// re-encrypted under the new session key). Applied after initScreen so
+	// the emulator and buffer match what viewers had before the exec.
+	resumeDump *scrollbackDump
 	// hostOldState is the cooked-mode terminal state captured by
 	// xterm.MakeRaw when Run() entered raw mode. Used by the hot-restart
 	// path to restore the terminal before Exec'ing the new binary, so
@@ -455,6 +459,7 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 			term:           r.PTY,
 			startedAt:      r.StartedAt,
 			resumed:        true,
+			resumeDump:     r.Dump,
 			headless:       opts.Headless || r.Headless,
 			handshakeFD:    opts.HandshakeFD,
 			handshakeAddr:  opts.HandshakeAddr,
@@ -722,6 +727,7 @@ func (a *Agent) Run() error {
 	// Build the emulator before the pump starts so it sees output from the
 	// very first byte (snapshot-on-attach; REMINAL_SNAPSHOT=0 disables it).
 	a.initScreen()
+	a.restoreResumedScrollback()
 
 	// Created before the PTY pump starts: the pump's OSC sniffer kicks this
 	// channel the moment the shell announces a cwd change.

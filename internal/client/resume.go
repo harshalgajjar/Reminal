@@ -35,4 +35,8 @@ type ResumeState struct {
 	// resumed agent can report "registered" and release it to exit. Unix's
 	// exec-based restart has no separate process to notify.
 	HandshakeAddr string
+	// Dump is the predecessor's scrollback, decrypted on the old side and
+	// re-encrypted here under the new session key. Nil when the predecessor
+	// was an older binary, or when the dump was empty / unreadable.
+	Dump *scrollbackDump
 }

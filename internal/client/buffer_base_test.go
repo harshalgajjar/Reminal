@@ -31,3 +31,29 @@ func TestBaseAdvancesPastEvictedResizeMarker(t *testing.T) {
 		t.Errorf("Base()=%dx%d after evicting the resize marker, want 120x40 (replay would start at the wrong width)", bc, br)
 	}
 }
+
+func TestScrollbackRestoreCopiesEntries(t *testing.T) {
+	sb := newScrollback(1 << 20)
+	entries := []scrollEntry{{Seq: 1, Data: "aaa"}}
+	sb.restore(entries, 1, 80, 24)
+	entries[0].Data = "mutated"
+	got := sb.From(0)
+	if len(got) != 1 || got[0].Data != "aaa" {
+		t.Fatalf("restore must copy, got %+v", got)
+	}
+}
+
+func TestScrollbackRestoreRespectsMaxBytes(t *testing.T) {
+	sb := newScrollback(8)
+	sb.restore([]scrollEntry{
+		{Seq: 1, Cols: 100, Rows: 30},
+		{Seq: 2, Data: "12345678XX"}, // 10 bytes, over the cap
+	}, 2, 80, 24)
+	got := sb.From(0)
+	if len(got) != 1 || got[0].Data != "12345678XX" {
+		t.Fatalf("expected only the last entry after cap, got %+v", got)
+	}
+	if c, r := sb.Base(); c != 100 || r != 30 {
+		t.Fatalf("base after evicting resize marker = %dx%d, want 100x30", c, r)
+	}
+}

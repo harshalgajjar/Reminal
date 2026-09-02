@@ -18,13 +18,14 @@ package client
 //   2. The CLI sends "restart" over the local control socket.
 //   3. The receiving agent calls executeRestart below, which:
 //        a) tells viewers we're going dark briefly
-//        b) restores the host terminal to cooked mode
-//        c) closes the listening control socket (so the new image can
+//        b) writes a 0600 plaintext scrollback dump (re-encrypted after exec)
+//        c) restores the host terminal to cooked mode
+//        d) closes the listening control socket (so the new image can
 //           re-bind the same path) and any other goroutine-y work
-//        d) clears O_CLOEXEC on the PTY master fd so it survives Exec
-//        e) marshals session state (id, pin, pin_hash, started_at,
-//           pty_fd) into env vars
-//        f) calls syscall.Exec with REMINAL_RESUME=1 in env so the
+//        e) clears O_CLOEXEC on the PTY master fd so it survives Exec
+//        f) marshals session state (id, pin, pin_hash, started_at,
+//           pty_fd, dump path) into env vars
+//        g) calls syscall.Exec with REMINAL_RESUME=1 in env so the
 //           new binary takes the resume boot path instead of
 //           generating a fresh session
 //   4. The new binary starts up. main detects REMINAL_RESUME=1, opens
@@ -52,10 +53,10 @@ import (
 	xterm "golang.org/x/term"
 )
 
-// Env vars used to thread state across the Exec boundary. Anything not
-// in this set is lost (scrollback, viewer counts, etc.) — they'll be
-// rebuilt as viewers reconnect. The receiving end reads these in
-// LoadResumeState() below.
+// Env vars used to thread state across the Exec boundary. Scrollback
+// crosses via a 0600 file (REMINAL_RESUME_SCROLLBACK), not env — the
+// buffer is up to 2 MiB of session text. Viewer counts still reset.
+// The receiving end reads these in LoadResumeState() below.
 const (
 	envResume          = "REMINAL_RESUME"
 	envResumeSessionID = "REMINAL_RESUME_SESSION_ID"
@@ -92,6 +93,10 @@ func LoadResumeState() (*ResumeState, error) {
 	if os.Getenv(envResume) != "1" {
 		return nil, nil
 	}
+	// Consume first so a later validation error cannot leave plaintext on disk.
+	dump := takeScrollbackDump(os.Getenv(envResumeScrollback))
+	defer scrubUnixResumeEnv()
+
 	id := os.Getenv(envResumeSessionID)
 	pin := os.Getenv(envResumePIN)
 	pinHash := os.Getenv(envResumePinHash)
@@ -115,28 +120,26 @@ func LoadResumeState() (*ResumeState, error) {
 		return nil, fmt.Errorf("resume: failed to open inherited pty fd %d", ptyFD)
 	}
 
-	headless := os.Getenv(envResumeHeadless) == "1"
-
-	// Scrub env so nothing downstream (the shell we never spawn, any
-	// child commands, `reminal info` from inside it) sees these.
-	_ = os.Unsetenv(envResume)
-	_ = os.Unsetenv(envResumeSessionID)
-	_ = os.Unsetenv(envResumePIN)
-	_ = os.Unsetenv(envResumePinHash)
-	_ = os.Unsetenv(envResumeToken)
-	_ = os.Unsetenv(envResumePTYFD)
-	_ = os.Unsetenv(envResumeStartedAt)
-	_ = os.Unsetenv(envResumeHeadless)
-
 	return &ResumeState{
 		SessionID: id,
 		PIN:       pin,
 		PinHash:   pinHash,
 		Token:     token,
 		StartedAt: startedAt,
-		Headless:  headless,
+		Headless:  os.Getenv(envResumeHeadless) == "1",
 		PTY:       pty.Attach(ptyFile),
+		Dump:      dump,
 	}, nil
+}
+
+func scrubUnixResumeEnv() {
+	for _, k := range []string{
+		envResume, envResumeSessionID, envResumePIN, envResumePinHash,
+		envResumeToken, envResumePTYFD, envResumeStartedAt, envResumeHeadless,
+		envResumeScrollback,
+	} {
+		_ = os.Unsetenv(k)
+	}
 }
 
 // executeRestart performs the in-place Exec into a fresh binary image.
@@ -157,6 +160,11 @@ func (a *Agent) executeRestart() error {
 
 	agentNotify("\n  [%s] Restarting reminal in place — viewers will briefly disconnect…\n",
 		time.Now().Format("15:04:05"))
+
+	// Decrypt + write here, while the runtime is still healthy. Doing this
+	// after the fd dance (phase 2) would allocate megabytes and take buf's
+	// mutex with the netpoller already in a fragile state.
+	dumpPath := a.dumpScrollbackForRestart()
 
 	// Restore the host terminal to cooked mode so the new agent can
 	// re-enter raw mode and capture the correct "previous" state for
@@ -190,6 +198,7 @@ func (a *Agent) executeRestart() error {
 	// Clear O_CLOEXEC so Exec doesn't shut the fd before the new image
 	// gets to see it. Default on most Go-opened fds is to set it.
 	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, uintptr(ptyFD), uintptr(syscall.F_SETFD), 0); errno != 0 {
+		removeScrollbackDump(dumpPath)
 		return fmt.Errorf("clear cloexec on pty fd %d: %w", ptyFD, errno)
 	}
 
@@ -210,8 +219,12 @@ func (a *Agent) executeRestart() error {
 		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
 		envResumeHeadless+"="+headlessEnv,
 	)
+	if dumpPath != "" {
+		env = append(env, envResumeScrollback+"="+dumpPath)
+	}
 
 	if err := syscall.Exec(exe, []string{exe}, env); err != nil {
+		removeScrollbackDump(dumpPath)
 		return fmt.Errorf("exec %s: %w", exe, err)
 	}
 	return nil // unreachable

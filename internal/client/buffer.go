@@ -160,3 +160,29 @@ func (s *scrollback) NextSeq() uint64 {
 func (s *scrollback) Notify() <-chan struct{} {
 	return s.notify
 }
+
+// restore replaces the buffer with a previously dumped history, including
+// sequence numbers so reconnecting viewers can resume where they left off.
+// The entries slice is copied; the caller may reuse or discard it.
+func (s *scrollback) restore(entries []scrollEntry, nextSeq uint64, baseCols, baseRows int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entries = append([]scrollEntry(nil), entries...)
+	s.nextSeq = nextSeq
+	s.baseCols, s.baseRows = baseCols, baseRows
+	s.bytes = 0
+	for _, e := range s.entries {
+		s.bytes += len(e.Data)
+		if e.Seq > s.nextSeq {
+			s.nextSeq = e.Seq
+		}
+	}
+	// Defensive: a newer binary may have a smaller cap than the predecessor.
+	for s.bytes > s.maxBytes && len(s.entries) > 1 {
+		if s.entries[0].Cols > 0 {
+			s.baseCols, s.baseRows = s.entries[0].Cols, s.entries[0].Rows
+		}
+		s.bytes -= len(s.entries[0].Data)
+		s.entries = s.entries[1:]
+	}
+}
