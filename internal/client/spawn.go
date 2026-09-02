@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -36,11 +37,16 @@ type SpawnedSession struct {
 // binary and blocks until the child writes its credentials back over
 // the inherited fd 3, or until spawnHandshakeTimeout fires.
 //
+// cwd, when set, is the directory the new shell starts in (absolute,
+// must exist). Empty keeps the previous default: inherit this process's
+// directory, or the user's home when we ourselves are at "/" (the
+// launchd/systemd host).
+//
 // The child is fully decoupled from this process — it gets its own
 // session leader (Setsid) and stdin/stdout/stderr are wired to
 // /dev/null, so the parent can exit immediately after printing the
 // credentials and the agent keeps running in the background.
-func Spawn(name string) (*SpawnedSession, error) {
+func Spawn(name, cwd string) (*SpawnedSession, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, fmt.Errorf("locate self: %w", err)
@@ -71,24 +77,20 @@ func Spawn(name string) (*SpawnedSession, error) {
 	cmd.Stdout = devnull
 	cmd.Stderr = devnull
 
+	dir, err := resolveSpawnDir(cwd)
+	if err != nil {
+		return nil, err
+	}
+	if dir != "" {
+		cmd.Dir = dir
+	}
+
 	// The handshake channel (fd-3 pipe on Unix, loopback socket on Windows) +
 	// the platform's detach attributes. The child writes one JSON line once
 	// startup is complete; we read it back here and surface it to the user.
 	recv, afterStart, err := prepareHandshake(cmd)
 	if err != nil {
 		return nil, err
-	}
-
-	// Start the session in the user's home when we have no meaningful working
-	// directory of our own — i.e. when spawned by the background host, which runs
-	// under launchd/systemd with cwd "/". A shell that opens at "/" isn't what a
-	// real terminal gives you; "~" is. When `reminal new` is run from an actual
-	// directory, that directory is inherited (cmd.Dir left unset), so it still
-	// opens where the user invoked it.
-	if wd, werr := os.Getwd(); werr != nil || wd == "/" {
-		if home, herr := os.UserHomeDir(); herr == nil {
-			cmd.Dir = home
-		}
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -175,4 +177,36 @@ func ParseHandshakeFD(args []string) int {
 		}
 	}
 	return 0
+}
+
+// resolveSpawnDir picks cmd.Dir for a new headless session. An explicit
+// absolute directory that exists wins; otherwise inherit (or home when the
+// host itself is at "/").
+func resolveSpawnDir(cwd string) (string, error) {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		// Start the session in the user's home when we have no meaningful working
+		// directory of our own — i.e. when spawned by the background host, which runs
+		// under launchd/systemd with cwd "/". A shell that opens at "/" isn't what a
+		// real terminal gives you; "~" is. When `reminal new` is run from an actual
+		// directory, that directory is inherited (empty return → cmd.Dir unset).
+		if wd, err := os.Getwd(); err != nil || wd == "/" {
+			if home, err := os.UserHomeDir(); err == nil {
+				return home, nil
+			}
+		}
+		return "", nil
+	}
+	if !filepath.IsAbs(cwd) {
+		return "", fmt.Errorf("cwd must be an absolute path")
+	}
+	cwd = filepath.Clean(cwd)
+	st, err := os.Stat(cwd)
+	if err != nil {
+		return "", fmt.Errorf("cwd: %w", err)
+	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("cwd is not a directory")
+	}
+	return cwd, nil
 }

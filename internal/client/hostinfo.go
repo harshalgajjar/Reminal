@@ -50,6 +50,7 @@ func (a *Agent) handleNewSession(conn *websocket.Conn, data string) {
 	}
 	var req struct {
 		Name string `json:"name"`
+		Cwd  string `json:"cwd"`
 	}
 	if data != "" {
 		if pt, err := a.box.Decrypt(data); err == nil {
@@ -61,7 +62,7 @@ func (a *Agent) handleNewSession(conn *websocket.Conn, data string) {
 		PIN   string `json:"pin,omitempty"`
 		Error string `json:"error,omitempty"`
 	}
-	if sp, err := Spawn(req.Name); err != nil {
+	if sp, err := Spawn(req.Name, req.Cwd); err != nil {
 		payload.Error = err.Error()
 	} else {
 		payload.ID, payload.PIN = sp.ID, sp.PIN

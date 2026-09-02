@@ -281,7 +281,7 @@ type dirHost struct {
 	spawnLimit  *tokenBucket // new_session (expensive — spawns a process)
 	renameLimit *tokenBucket // dir_rename
 
-	spawn func(name string) (*SpawnedSession, error) // Spawn; injectable for tests
+	spawn func(name, cwd string) (*SpawnedSession, error) // Spawn; injectable for tests
 }
 
 // tokenBucket is a simple refilling rate limiter. Unlike a fixed min-interval
@@ -327,6 +327,9 @@ func (dh *dirHost) write(msg protocol.Message) error {
 	}
 	dh.writeMu.Lock()
 	defer dh.writeMu.Unlock()
+	if dh.conn == nil {
+		return errors.New("not connected")
+	}
 	_ = dh.conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return dh.conn.WriteMessage(websocket.TextMessage, data)
 }
@@ -463,6 +466,7 @@ func (dh *dirHost) handleNewSession(msg protocol.Message) {
 	}
 	var req struct {
 		Name  string `json:"name"`
+		Cwd   string `json:"cwd"`
 		ReqID string `json:"req_id"`
 	}
 	_ = json.Unmarshal(pt, &req)
@@ -473,7 +477,7 @@ func (dh *dirHost) handleNewSession(msg protocol.Message) {
 		Error string `json:"error,omitempty"`
 	}
 	payload.ReqID = req.ReqID
-	if sp, err := dh.spawn(req.Name); err != nil {
+	if sp, err := dh.spawn(req.Name, req.Cwd); err != nil {
 		payload.Error = err.Error()
 	} else {
 		payload.ID, payload.PIN = sp.ID, sp.PIN

@@ -131,7 +131,10 @@ func TestDirectoryNewSessionRequiresOwnerKey(t *testing.T) {
 	dh := &dirHost{
 		box:        box,
 		spawnLimit: newTokenBucket(8, 8),
-		spawn:      func(string) (*SpawnedSession, error) { spawned++; return &SpawnedSession{ID: "X", PIN: "1"}, nil },
+		spawn: func(string, string) (*SpawnedSession, error) {
+			spawned++
+			return &SpawnedSession{ID: "X", PIN: "1"}, nil
+		},
 	}
 	// No data → no spawn.
 	dh.handleNewSession(protocol.Message{Type: protocol.TypeNewSession})
@@ -144,6 +147,37 @@ func TestDirectoryNewSessionRequiresOwnerKey(t *testing.T) {
 
 	if spawned != 0 {
 		t.Fatalf("spawned %d times for unauthenticated requests — must be 0", spawned)
+	}
+}
+
+// TestDirectoryNewSessionPassesCwd is the duplicate-into-folder path: an
+// authenticated owner request carries cwd, and Spawn is called with it.
+func TestDirectoryNewSessionPassesCwd(t *testing.T) {
+	key, err := crypto.NewSessionKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	box, err := crypto.NewBox(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotName, gotCwd string
+	dh := &dirHost{
+		box:        box,
+		spawnLimit: newTokenBucket(8, 8),
+		spawn: func(name, cwd string) (*SpawnedSession, error) {
+			gotName, gotCwd = name, cwd
+			return &SpawnedSession{ID: "X", PIN: "1"}, nil
+		},
+	}
+	pt, _ := json.Marshal(map[string]string{"name": "dup", "cwd": "/tmp", "req_id": "r1"})
+	enc, err := box.Encrypt(pt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dh.handleNewSession(protocol.Message{Type: protocol.TypeNewSession, Data: enc})
+	if gotName != "dup" || gotCwd != "/tmp" {
+		t.Fatalf("spawn(%q, %q), want dup /tmp", gotName, gotCwd)
 	}
 }
 

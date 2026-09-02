@@ -3628,7 +3628,7 @@
               box = await crypto.subtle.importKey('raw', skRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
               if (opts.spawn) {
                 att.reqId = Math.random().toString(36).slice(2);
-                const enc = await encrypt(box, JSON.stringify({ name: opts.spawnName || '', req_id: att.reqId }));
+                const enc = await encrypt(box, JSON.stringify({ name: opts.spawnName || '', cwd: opts.spawnCwd || '', req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'new_session', data: enc }));
                 state = 'spawn';
               } else if (opts.rename) {
@@ -3726,6 +3726,7 @@
       down:  '<path d="M6 9l6 6 6-6"/>',
       right: '<path d="M9 6l6 6-6 6"/>',
       plus:  '<path d="M12 5v14M5 12h14"/>',
+      copy:  '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
       edit:  '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19.5 3 20.5l1-4z"/>',
       x:     '<path d="M18 6 6 18M6 6l12 12"/>',
     };
@@ -4023,6 +4024,20 @@
             ev.preventDefault(); // don't navigate this tab away; connect in place
             connectOwned(s.id);
           });
+          const dup = document.createElement('button');
+          dup.className = 'ms-btn';
+          dup.title = (s.cwd
+            ? 'New session in ' + s.cwd
+            : 'New session on this machine')
+            + ' (' + NEW_TAB_KEY + '-click opens it in a new tab)';
+          dup.innerHTML = mIcon('copy');
+          dup.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            ev.preventDefault();
+            const machineName = box.querySelector('.machine-name')?.textContent || 'this machine';
+            spawnOnMachine(b64, machineName, wantsNewTab(ev) ? window.open('', '_blank') : null, s.cwd || '');
+          });
+          actions.appendChild(dup);
           const ren = document.createElement('button');
           ren.className = 'ms-btn';
           ren.title = 'Rename this session';
@@ -4086,14 +4101,15 @@
     // the popup blocker eats it, so it arrives blank and we point it at the
     // session once the spawn lands — or close it again if the spawn never does,
     // rather than leaving a stranded about:blank behind.
-    async function spawnOnMachine(b64, name, tab) {
+    async function spawnOnMachine(b64, name, tab, cwd) {
       try {
-        setStatus('Starting a session on ' + name + (tab ? ' in a new tab…' : '…'), 'info');
+        const where = cwd ? ' in ' + cwd : '';
+        setStatus('Starting a session on ' + name + where + (tab ? ' in a new tab…' : '…'), 'info');
         // DIR_SPAWN_TIMEOUT_MS covers the host's spawn budget + the directory
         // channel's owner handshake, so a slow-but-successful spawn isn't reported
         // as a failure here (which would strand a session the user was told never
         // started).
-        const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { spawn: true, spawnName: '', timeout: DIR_SPAWN_TIMEOUT_MS });
+        const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { spawn: true, spawnName: '', spawnCwd: cwd || '', timeout: DIR_SPAWN_TIMEOUT_MS });
         if (!r || !r.id) {
           if (tab) tab.close();
           setStatus('Could not start a session on ' + name, 'error');

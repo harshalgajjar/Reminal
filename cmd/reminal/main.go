@@ -1457,7 +1457,7 @@ func runNew(name string) error {
 	if os.Getenv("REMINAL_NEW_NESTED") == "1" {
 		return errors.New("refusing to spawn from inside another reminal new — protection against runaway recursion")
 	}
-	sp, err := client.Spawn(name)
+	sp, err := client.Spawn(name, "")
 	if err != nil {
 		return err
 	}
