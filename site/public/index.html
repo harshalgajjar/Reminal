@@ -563,12 +563,36 @@ h2{
    Both cards sit OUTSIDE .scene — inside a preserve-3d parent they would be
    z-sorted against the flyers (z up to 210) and magnified by the perspective.
    .sc-frame just mirrors the scene's box so they line up with it anyway. */
+/* The badge a window actually wears on a Mac: a notch standing proud of the
+   top edge, not a dot inside the title bar — a dot there is lost against the
+   traffic lights. Both this and the spec chip are inverse-scaled in JS so they
+   stay a fixed size on screen while the window they are pinned to travels
+   from 0.62 up to 1 and back down to 0.6 inside the phone. That is also how
+   the real one behaves: it is drawn over the window, not scaled with it. */
+.flyer.has-chrome{overflow:visible}
+.flyer.has-chrome .bar{border-radius:8px 8px 0 0}
 .flybadge{
-  position:absolute; top:5px; right:6px; z-index:3; opacity:0;
-  display:inline-flex; align-items:center; gap:3px; padding:2px 5px; border-radius:99px;
-  background:rgba(9,10,13,.9); border:1px solid rgba(255,255,255,.18);
+  position:absolute; bottom:100%; right:14px; margin-bottom:-2px; z-index:4; opacity:0;
+  display:inline-flex; align-items:center; gap:5px; white-space:nowrap;
+  padding:4px 9px 5px; border-radius:9px 9px 3px 3px;
+  background:rgba(10,11,15,.95); border:1px solid rgba(255,255,255,.2);
+  box-shadow:0 6px 18px rgba(0,0,0,.65), 0 0 0 4px rgba(255,69,58,.09);
+  font:650 9px/1 -apple-system,BlinkMacSystemFont,sans-serif; letter-spacing:.01em;
+  color:rgba(255,255,255,.88); transform-origin:100% 100%;
 }
-.flybadge .nm-dot{width:5px; height:5px}
+.flybadge .nm-dot{width:7px; height:7px}
+.flyspec{
+  position:absolute; left:50%; bottom:11px; z-index:4; opacity:0;
+  display:inline-flex; align-items:center; gap:6px; white-space:nowrap;
+  padding:4px 10px; border-radius:99px;
+  background:rgba(9,11,15,.74); border:1px solid rgba(255,255,255,.16);
+  font:600 8.5px/1 ui-monospace,Menlo,monospace; color:rgba(255,255,255,.84);
+  transform-origin:50% 100%;
+}
+.flyspec i{
+  width:5px; height:5px; border-radius:50%; background:#3fb950; flex:none;
+  box-shadow:0 0 0 0 rgba(63,185,80,.7); animation:pulse 2s infinite;
+}
 .stage-cards{position:absolute; inset:0; display:grid; place-items:center; z-index:6; pointer-events:none}
 .sc-frame{position:relative; width:min(940px,92vw); height:min(560px,64vh)}
 .stagecard{
@@ -637,6 +661,8 @@ h2{
     margin-left:calc(min(340px,88vw) / -2);
     top:auto !important; bottom:0 !important;
   }
+  .flybadge b{display:none}
+  .flybadge{gap:0; padding:4px 6px 5px}
   .stage-cap{font-size:13px; bottom:2.5%}
   .stage-hint{top:1.5%}
 }
@@ -916,9 +942,9 @@ footer a{color:var(--muted)}
           </div>
         </div>
 
-        <div class="flyer" id="fly0" style="width:254px;height:152px">
+        <div class="flyer has-chrome" id="fly0" style="width:254px;height:152px">
           <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">relay.ts</span></div>
-          <span class="flybadge" id="flybadge" aria-hidden="true"><i class="nm-dot attention"></i></span>
+          <span class="flybadge" id="flybadge" aria-hidden="true"><i class="nm-dot attention"></i><b>needs you</b></span>
           <div class="win code">
             <u>18</u><s><span class="kw">export</span> <span class="kw">async</span> <span class="fn">fetch</span>(req) {</s>
             <u>19</u><s>  <span class="kw">const</span> <span class="nm">url</span> = <span class="kw">new</span> <span class="fn">URL</span>(req.url)</s>
@@ -927,6 +953,7 @@ footer a{color:var(--muted)}
             <u>22</u><s>    <span class="kw">return</span> <span class="fn">upgrade</span>(req)</s>
             <u>23</u><s>}</s>
           </div>
+          <span class="flyspec" id="flyspec" aria-hidden="true"><i></i>2560 &times; 1440 &middot; 60 fps</span>
         </div>
 
         <div class="flyer" id="fly1" style="width:214px;height:134px">
@@ -1147,32 +1174,6 @@ footer a{color:var(--muted)}
     </ol>
   </div>
   <figcaption class="reveal">Four calls, two vendors, two machines — and nothing was installed on the far side.</figcaption>
-  <div class="grid">
-    <div class="card reveal">
-      <h3><code>list_sessions</code></h3>
-      <p>Every live terminal on every machine you own — name, working directory, title, viewers, idle time. No PINs in the output.</p>
-    </div>
-    <div class="card reveal">
-      <h3><code>search_sessions</code></h3>
-      <p>One regex across names, paths, titles and live scrollback, on every enrolled machine at once.</p>
-    </div>
-    <div class="card reveal">
-      <h3><code>read_transcript</code></h3>
-      <p>A session's terminal as plain text, ANSI stripped, without attaching a viewer to it.</p>
-    </div>
-    <div class="card reveal">
-      <h3><code>send_keys</code></h3>
-      <p>Type into another session's PTY, across machines. Real keystrokes, visible live in the viewer.</p>
-    </div>
-    <div class="card reveal">
-      <h3><code>add_note</code> · <code>list_windows</code></h3>
-      <p>Pin a badge on the window a question is <em>about</em> — the browser it's driving, the editor it's editing.</p>
-    </div>
-    <div class="card reveal">
-      <h3><code>read_replies</code></h3>
-      <p>Learn that you pressed Done. A handback is the agent's turn again — the loop closes without you tailing a log.</p>
-    </div>
-  </div>
   <p class="body reveal" style="margin-top:28px">
     <strong>An agent can raise a hand, too.</strong> Instead of a line of text in a terminal you
     aren't looking at, it pins a note to the actual window — red if it's blocked on you. The badge
@@ -1503,6 +1504,7 @@ if (FEATURES.lidStage) {
   const residents = ["res0", "res1"].map(id => document.getElementById(id));
   const scene     = document.querySelector("#lidstage .scene");
   const badge     = document.getElementById("flybadge");
+  const spec      = document.getElementById("flyspec");
   const noteCard  = document.getElementById("stagenote");
   const seekCard  = document.getElementById("stageseek");
 
@@ -1512,6 +1514,7 @@ if (FEATURES.lidStage) {
   // authored in. The cards live outside .scene and stay full size — the point
   // of them is that they are readable.
   const narrow = () => innerWidth <= 820;
+  let stageK = 1;
   const fit = () => {
     if (!scene) return;
     // Wide: the set is authored at ~1020x760 and only shrinks below that.
@@ -1521,7 +1524,8 @@ if (FEATURES.lidStage) {
     const k = narrow()
       ? Math.min(innerWidth / 720, innerHeight / 1180)
       : Math.min(1, innerWidth / 1020, innerHeight / 760);
-    scene.style.setProperty("--stage-k", String(Math.max(0.32, Math.min(1, k))));
+    stageK = Math.max(0.32, Math.min(1, k));
+    scene.style.setProperty("--stage-k", String(stageK));
   };
   fit();
 
@@ -1558,6 +1562,7 @@ if (FEATURES.lidStage) {
     ];
 
     let ticking = false;
+    let fly0Scale = 1;
     function draw() {
       ticking = false;
       const r  = sec.getBoundingClientRect();
@@ -1601,7 +1606,22 @@ if (FEATURES.lidStage) {
         }
         el.style.transform = `translate(-50%,-50%) translate3d(${x}px, ${y}px, ${z}px) scale(${sc})`;
         el.style.opacity = String(mix(0.55, 1, Math.min(1, t * 2)));
+        if (i === 0) fly0Scale = sc;
       });
+
+      // Undo whatever scale relay.ts is under, so the badge and the spec chip
+      // read at the same size all the way through — the window shrinks, the
+      // things drawn over it do not.
+      const inv = 1 / Math.max(0.2, fly0Scale * stageK);
+      if (badge) badge.style.transform = `scale(${inv})`;
+      if (spec) {
+        // On screen only while the window is actually growing off the laptop.
+        // On one column it is held back from full screen-space size: a chip as
+        // wide as the window it labels stops reading as an overlay on it.
+        const shown = span(p, 0.09, 0.16) * (1 - span(p, 0.26, 0.33));
+        spec.style.opacity = String(shown);
+        spec.style.transform = `translateX(-50%) scale(${inv * (narrow() ? 0.72 : 1)})`;
+      }
 
       // The remote desktop is already populated; those windows fade away when
       // the composition folds into the phone, so the small screen stays legible.
@@ -1683,6 +1703,8 @@ if (FEATURES.lidStage) {
       if (hint) hint.style.display = "none";
       if (phone) phone.style.display = "none";
       [noteCard, seekCard].forEach(el => { if (el) el.style.display = "none"; });
+      if (badge) badge.style.opacity = "1";
+      if (spec) spec.style.display = "none";
       sec.style.height = "100vh";
     } else {
       addEventListener("scroll", onScroll, { passive: true });
