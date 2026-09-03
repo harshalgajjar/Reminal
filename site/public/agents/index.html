@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>A home for long-running AI agents — Claude Code, Codex, pi | reminal</title>
-<meta name="description" content="AI agents can run for hours if you let them — and a long-running agent needs a machine that never sleeps, a view you can glance at, and a hand that can reach in. reminal keeps the Mac awake with the lid shut and puts every agent, terminal and window in any browser — with input.">
+<meta name="description" content="AI agents can run for hours if you let them — and a long-running agent needs a machine that never sleeps, a view you can glance at, and a hand that can reach in. reminal keeps the Mac awake with the lid shut, puts every agent, terminal and window in any browser, and gives your agents an MCP server so they can read and answer each other across machines.">
 <link rel="canonical" href="https://reminal.app/agents/">
 <link rel="icon" href="/assets/icon.png" type="image/png">
 <link rel="apple-touch-icon" href="/assets/icon.png">
@@ -13,7 +13,7 @@
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://reminal.app/agents/">
 <meta property="og:title" content="Your agents can run for hours. Give them a home.">
-<meta property="og:description" content="A machine that never sleeps (lid shut, virtual display), a view of every agent and window at a glance, and a hand that can reach in from any browser. Agent-agnostic, E2E-encrypted, open source.">
+<meta property="og:description" content="A machine that never sleeps (lid shut, virtual display), a view of every agent and window at a glance, and an MCP server that lets your agents read and answer each other across machines. Agent-agnostic, E2E-encrypted, open source.">
 <meta property="og:image" content="https://reminal.app/poster.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -59,6 +59,22 @@
           "acceptedAnswer": {
             "@type": "Answer",
             "text": "No. Each vendor's remote steers only its own agent: /remote-control mirrors a Claude Code session, and Codex pairs with the ChatGPT mobile app. reminal is agent-agnostic — it streams the terminal and the windows themselves, so anything that runs in a terminal (pi, aider, opencode, plain build scripts) is reachable from any browser."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can one AI agent talk to another one on a different machine?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. `reminal integrate` registers reminal's MCP server with the agent CLIs you have installed — Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity and Amp. An agent can then call list_sessions to see every terminal on every machine you own, search_sessions to regex their live scrollback, read_transcript to read one, and send_keys to type into it. The two agents need not come from the same vendor, and the far side needs no integration at all: it is just a terminal."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "How does an AI agent tell me it is blocked without me watching the terminal?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "It calls add_note with status attention, which pins a red badge to the window the question is about — the browser it is driving, the editor it is editing. The badge shows on the desktop and in every viewer, so it reaches your phone. Press Done and the agent's next read_replies call returns a handback, and it picks the work back up. Window notes need the desktop badge helper, which is macOS today; the session tools work on macOS, Linux and Windows."
           }
         },
         {
@@ -307,6 +323,102 @@ footer .wrap{display:flex; flex-wrap:wrap; gap:14px 28px; align-items:center; ju
 footer a{color:var(--muted)}
 .footlinks{display:flex; flex-wrap:wrap; gap:20px}
 
+/* ── the tool trace: an agent's own calls, rendered as a log ──────────── */
+.trace{
+  margin-top:38px; border:1px solid var(--line); border-radius:14px; overflow:hidden;
+  background:linear-gradient(180deg,rgba(26,31,39,.92),rgba(17,21,27,.92));
+  box-shadow:0 30px 80px -46px rgba(0,0,0,.95);
+}
+.trace ol{list-style:none; margin:0; padding:4px 0}
+.trace li{padding:13px 18px}
+.trace li + li{border-top:1px solid var(--line-soft)}
+.trace .call{
+  margin:0; font-family:ui-monospace,Menlo,monospace; font-size:13px;
+  color:var(--accent); word-break:break-word;
+}
+.trace .call b{color:#79c0ff; font-weight:650}
+.trace .call .arg{color:#a5d6ff; font-weight:400}
+.trace .ret{
+  margin:5px 0 0 0; padding-left:18px; position:relative;
+  font-size:13px; color:var(--muted); line-height:1.55;
+}
+.trace .ret::before{content:"↳"; position:absolute; left:0; color:var(--dim)}
+.trace .ret b{color:var(--fg); font-weight:600}
+.trace .ret code{font-size:12.5px; color:#a5d6ff}
+
+/* ── window notes: a badge on the window, drawn in CSS ────────────────── */
+.notemock{display:grid; grid-template-columns:1.1fr .9fr; gap:26px; align-items:start; margin-top:44px}
+.nm-win{position:relative; border:1px solid var(--line); border-radius:14px; background:var(--surface);
+  box-shadow:0 30px 80px -44px rgba(0,0,0,.95); margin-top:12px}
+.nm-win .bar{border-radius:13px 13px 0 0}
+.nm-canvas{
+  min-height:212px; border-radius:0 0 13px 13px;
+  background:
+    radial-gradient(ellipse 70% 60% at 30% 0%, rgba(88,166,255,.10), transparent 70%),
+    linear-gradient(rgba(139,148,158,.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(139,148,158,.055) 1px, transparent 1px),
+    #10151b;
+  background-size:auto, 34px 34px, 34px 34px, auto;
+}
+.nm-badge{
+  position:absolute; top:-13px; right:20px; display:inline-flex; align-items:center; gap:6px;
+  padding:6px 11px; border-radius:999px; background:rgba(9,10,13,.95);
+  border:1px solid rgba(255,255,255,.16); box-shadow:0 10px 26px rgba(0,0,0,.55);
+}
+.nm-badge b{font-size:10.5px; color:rgba(255,255,255,.7); font-weight:650; letter-spacing:.02em}
+.nm-dot{width:8px; height:8px; border-radius:50%; display:block; flex:none}
+.nm-dot.attention{background:#ff453a; animation:notespulse 1.9s ease-in-out infinite}
+.nm-dot.working{background:#ffbd21}
+.nm-dot.info{background:#2a8cff}
+.nm-dot.done{background:#33d158}
+@keyframes notespulse{0%,100%{box-shadow:0 0 0 0 rgba(255,69,58,.55)} 50%{box-shadow:0 0 0 5px rgba(255,69,58,0)}}
+.nm-page{padding:22px 24px 26px; display:grid; gap:10px; max-width:330px}
+.nm-sk{height:9px; border-radius:5px; background:rgba(255,255,255,.14)}
+.nm-field{
+  font-family:ui-monospace,Menlo,monospace; font-size:12px; color:rgba(255,255,255,.62);
+  background:rgba(255,255,255,.045); border:1px solid rgba(255,255,255,.10);
+  border-radius:8px; padding:9px 11px;
+}
+.nm-fieldrow{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+.nm-err{margin:2px 0 0; font-size:12px; color:#ff6b60}
+.nm-cta{
+  margin-top:4px; justify-self:start; font-size:12.5px; font-weight:600; color:rgba(255,255,255,.45);
+  background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.14);
+  border-radius:8px; padding:9px 16px;
+}
+.nm-pop{
+  border:1px solid rgba(255,255,255,.13); border-radius:12px; background:rgba(28,28,34,.97);
+  padding:6px; box-shadow:0 22px 50px -18px rgba(0,0,0,.75);
+}
+.nm-head{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:7px 10px 9px; border-bottom:1px solid rgba(255,255,255,.08);
+  font-size:11px; color:rgba(255,255,255,.5);
+}
+.nm-row{display:flex; gap:9px; padding:10px; align-items:flex-start}
+.nm-row + .nm-row{border-top:1px solid rgba(255,255,255,.08)}
+.nm-row .nm-dot{margin-top:5px}
+.nm-t{font-size:12.5px; font-weight:600; color:#fff}
+.nm-b{font-size:12px; color:rgba(255,255,255,.62); margin:3px 0 0; line-height:1.5}
+.nm-m{font-size:10.5px; color:rgba(255,255,255,.42); margin-top:5px}
+.nm-btns{display:flex; gap:6px; margin-top:10px}
+.nm-btn{
+  font:inherit; font-size:11.5px; font-weight:600; padding:5px 11px; border-radius:999px;
+  background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.18);
+  color:rgba(255,255,255,.8); cursor:default;
+}
+.nm-btn.primary{background:rgba(255,255,255,.92); border-color:transparent; color:#14141a}
+.legend{display:flex; flex-wrap:wrap; gap:8px; margin-top:28px}
+.legend span{
+  display:inline-flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted);
+  background:rgba(22,27,34,.7); border:1px solid var(--line-soft); border-radius:99px; padding:6px 13px;
+}
+.legend b{color:var(--fg); font-weight:600}
+@media (max-width:820px){ .notemock{grid-template-columns:1fr; gap:20px} }
+/* Narrow: the badge sits over the title bar's right end, so let the title
+   truncate rather than run under it. */
+@media (max-width:560px){ .nm-win .bar .url{max-width:150px} }
+
 @media (max-width:640px){
   .wrap{padding-left:20px; padding-right:20px}
   header{padding:38px 0 4px}
@@ -439,7 +551,182 @@ footer a{color:var(--muted)}
   <p class="body" style="margin-top:28px">
     <strong>An agent can use the same door.</strong> Hand a session ID and PIN to an agent and it connects
     like any other viewer — triaging an incident on one box while it patches another, with you watching
-    both in the same browser.
+    both in the same browser. Since v3.5.0 it doesn't even need the PIN: see below.
+  </p>
+</section>
+
+<section class="wrap" id="bus">
+  <p class="eyebrow">Agent bus</p>
+  <h2>Your agents can see each other.</h2>
+  <p class="body">
+    Claude Code on the laptop, Codex on the build box. Same problem, no shared anything — every
+    vendor's answer is subagents inside its own product, which doesn't help when the agents come
+    from different vendors. reminal makes the terminal the bus: one MCP server, nine tools, and
+    every session on every machine you own becomes something an agent can read and answer.
+  </p>
+  <div class="cta" style="max-width:520px; margin:30px 0 0">
+    <div class="cmd">
+      <span class="sigil" aria-hidden="true">$</span>
+      <pre id="integrate"><code>reminal integrate</code></pre>
+      <button class="copy" type="button" data-copy="#integrate code">Copy</button>
+    </div>
+    <p class="sub-cta">
+      Registers the MCP server with whichever agent CLIs you already have —
+      Claude Code, Codex CLI, Cursor CLI, Gemini CLI, OpenCode, Antigravity CLI, Amp.
+    </p>
+  </div>
+  <div class="trace" role="img"
+       aria-label="A trace of an agent's tool calls: it lists sessions across three machines, searches every scrollback for a failure, reads the failing session's transcript, and types an answer into it">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">claude-code — studio-mac</span><span class="live">live</span></div>
+    <ol>
+      <li>
+        <p class="call"><b>list_sessions</b></p>
+        <p class="ret">3 machines · 7 live sessions — <b>studio-mac</b>, <b>aws-eu-1</b>, <b>mini-01</b></p>
+      </li>
+      <li>
+        <p class="call"><b>search_sessions</b> <span class="arg">pattern: "FAIL|Traceback"</span></p>
+        <p class="ret"><b>aws-eu-1 · agent-7</b> — <code>pytest: 2 failed, 118 passed</code></p>
+      </li>
+      <li>
+        <p class="call"><b>read_transcript</b> <span class="arg">session: "agent-7"</span></p>
+        <p class="ret">…<code>AssertionError: expected 200, got 502</code> — it has been retrying the same request for nine minutes</p>
+      </li>
+      <li>
+        <p class="call"><b>send_keys</b> <span class="arg">session: "agent-7", keys: "the 502 is the proxy in front of you, not your handler — check X-Forwarded-Proto", enter: true</span></p>
+        <p class="ret">Typed into <b>agent-7</b> on aws-eu-1. It carries on from there.</p>
+      </li>
+    </ol>
+  </div>
+  <figcaption style="text-align:left">
+    Four calls, two vendors, two machines — and nothing was installed on the far side.
+    The other agent never learns it was read.
+  </figcaption>
+  <div class="grid">
+    <div class="card">
+      <h3><code>list_sessions</code></h3>
+      <p>Every live terminal on every machine you own — name, working directory, title, who's
+      watching it, how long it's been idle. No PINs, ever, in the output.</p>
+    </div>
+    <div class="card">
+      <h3><code>search_sessions</code></h3>
+      <p>One regex across session names, paths, titles and live scrollback, on every enrolled
+      machine at once. Find the box where the build is actually failing.</p>
+    </div>
+    <div class="card">
+      <h3><code>read_transcript</code></h3>
+      <p>Pull a session's terminal as plain text, ANSI stripped — so one agent can read what
+      another is stuck on instead of asking you to copy it across. It doesn't attach a viewer.</p>
+    </div>
+    <div class="card">
+      <h3><code>send_keys</code></h3>
+      <p>Type into a session's PTY, across machines. The other side needs no integration at all:
+      it's just a terminal, and it never knows anything is watching.</p>
+    </div>
+  </div>
+  <p class="body" style="margin-top:28px">
+    <strong>They don't have to be the same agent, or from the same vendor.</strong> Claude Code can
+    read a Codex session and answer it; a Gemini CLI on your Mac mini can watch a build the
+    laptop started. There is no protocol for anyone to adopt, because the bus is the terminal —
+    if it runs in a PTY, it can be read and typed into.
+  </p>
+  <p class="body" style="margin-top:14px; color:var(--dim); font-size:15px">
+    <code>send_keys</code> types real keystrokes into a real shell. It only reaches machines you
+    enrolled yourself, everything it does is visible live in the viewer — and it's still a tool
+    that can type Ctrl+C into your terminal. Treat it with the respect that deserves.
+  </p>
+</section>
+
+<section class="wrap" id="notes">
+  <p class="eyebrow">Window notes</p>
+  <h2>And an agent can raise a hand.</h2>
+  <p class="body">
+    An agent that gets stuck has exactly one channel today: a line of text in a terminal you
+    aren't looking at. reminal gives it another — a badge pinned to <em>the window the question is
+    actually about</em>. The browser it's driving, the editor it's editing, the simulator it can't
+    get past. Colour carries the meaning, and red is the only one that moves.
+  </p>
+  <div class="notemock">
+    <figure class="nm-win">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="url">Google Chrome — checkout flow</span></div>
+      <div class="nm-canvas" aria-hidden="true">
+        <div class="nm-page">
+          <div class="nm-sk" style="width:38%"></div>
+          <div class="nm-field">4242 4242 4242 4242</div>
+          <div class="nm-fieldrow"><div class="nm-field">04 / 29</div><div class="nm-field">123</div></div>
+          <p class="nm-err">Your card was declined.</p>
+          <div class="nm-cta">Pay $148.00</div>
+        </div>
+      </div>
+      <div class="nm-badge" aria-hidden="true">
+        <i class="nm-dot attention"></i><i class="nm-dot working"></i><b>2</b>
+      </div>
+    </figure>
+    <div class="nm-pop" role="img"
+         aria-label="The note list for that window: a red 'needs you' note asking which card to use, with Done and Dismiss buttons, and an amber 'working' note below it">
+      <div class="nm-head"><span>Google Chrome</span><span>2 notes</span></div>
+      <div class="nm-row">
+        <i class="nm-dot attention"></i>
+        <div class="nm-txt">
+          <div class="nm-t">Which test card should I use?</div>
+          <p class="nm-b">Every 4242 number is declined on this account. I've paused before placing a real order.</p>
+          <div class="nm-m">claude-code · 2m</div>
+          <div class="nm-btns"><button class="nm-btn primary" tabindex="-1">Done</button><button class="nm-btn" tabindex="-1">Dismiss</button></div>
+        </div>
+      </div>
+      <div class="nm-row">
+        <i class="nm-dot working"></i>
+        <div class="nm-txt">
+          <div class="nm-t">Replaying the cart fixture</div>
+          <p class="nm-b">No action needed — this one just says what it's doing.</p>
+          <div class="nm-m">claude-code · now</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <figcaption style="text-align:left">
+    The badge is on the desktop <em>and</em> in every viewer — so it reaches the phone in your
+    pocket, and Done is a button you can press from there.
+  </figcaption>
+  <div class="legend" aria-hidden="true">
+    <span><i class="nm-dot attention"></i><b>attention</b> — blocked on you. Pulses.</span>
+    <span><i class="nm-dot working"></i><b>working</b> — mid-task, no action wanted</span>
+    <span><i class="nm-dot info"></i><b>info</b> — worth seeing</span>
+    <span><i class="nm-dot done"></i><b>done</b> — nothing owed</span>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <h3><code>list_windows</code></h3>
+      <p>Every window on screen with the id the other tools take, its app and its bounds. Ids are
+      ephemeral on purpose — they die with the window, so an agent looks them up fresh.</p>
+    </div>
+    <div class="card">
+      <h3><code>add_note</code></h3>
+      <p>Pin a badge on one window: a short title, a line of detail, a status. Pass the same
+      <code>note_id</code> again and it updates in place — <code>working</code> becomes
+      <code>done</code> instead of a pile of stale notes.</p>
+    </div>
+    <div class="card">
+      <h3><code>read_replies</code></h3>
+      <p>What you did about them. <code>handback</code> means you pressed Done and it's the
+      agent's turn again; <code>dismiss</code> means you cleared it; <code>closed</code> means the
+      window went away. Delivered once, then forgotten.</p>
+    </div>
+    <div class="card">
+      <h3><code>remove_note</code> · <code>clear_notes</code></h3>
+      <p>Take one note off, or the whole badge. Notes live exactly as long as their window, so
+      there is never anything left to tidy up — nothing is written to disk.</p>
+    </div>
+  </div>
+  <p class="body" style="margin-top:28px">
+    <strong>It's a handshake, not a notification.</strong> The agent posts
+    <code>attention</code> and stops; you see a red dot on the actual window, from your desk or
+    your phone; you fix the thing and press Done; the agent's next <code>read_replies</code>
+    returns a handback and it picks the work back up. That's the loop a long-running agent has
+    been missing — a way to ask, and a way to be answered, without you tailing a log.
+  </p>
+  <p class="body" style="margin-top:14px; color:var(--dim); font-size:15px">
+    Window notes need the desktop badge helper, which is macOS today. The four session tools above
+    work on macOS, Linux and Windows alike.
   </p>
 </section>
 
@@ -502,6 +789,23 @@ footer a{color:var(--muted)}
       is reachable from any browser.</p>
     </details>
     <details>
+      <summary>Can one AI agent talk to another one on a different machine?</summary>
+      <p>Yes. <code>reminal integrate</code> registers reminal's MCP server with the agent CLIs you have
+      installed — Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity, Amp. An agent can then call
+      <code>list_sessions</code> to see every terminal on every machine you own,
+      <code>search_sessions</code> to regex their live scrollback, <code>read_transcript</code> to read
+      one, and <code>send_keys</code> to type into it. The two agents don't have to come from the same
+      vendor, and the far side needs no integration — it's just a terminal.</p>
+    </details>
+    <details>
+      <summary>How does an agent tell me it's blocked without me watching the terminal?</summary>
+      <p>It calls <code>add_note</code> with status <code>attention</code>, which pins a red badge to the
+      window the question is about — the browser it's driving, the editor it's editing. The badge shows
+      on the desktop and in every viewer, so it reaches your phone. Press <em>Done</em> and the agent's
+      next <code>read_replies</code> returns a handback, and it picks the work back up. Window notes
+      need the desktop badge helper, which is macOS today.</p>
+    </details>
+    <details>
       <summary>Can I watch several agents at once?</summary>
       <p>Yes. <code>reminal machines</code> is one live view of every machine you own — every session,
       what's running, who's watching. Attach to whichever needs input, from the CLI or the browser.</p>
@@ -543,13 +847,17 @@ footer a{color:var(--muted)}
 
 <script>
 document.getElementById("year").textContent = new Date().getFullYear();
-const copyBtn = document.getElementById("copy");
-copyBtn.addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(document.querySelector("#install code").textContent);
-    copyBtn.textContent = "Copied"; copyBtn.classList.add("done");
-    setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.classList.remove("done"); }, 1600);
-  } catch {}
+// Every .cmd block copies its own command; the hero's is the one without a
+// data-copy, so it keeps pointing at #install.
+document.querySelectorAll(".cmd .copy").forEach((btn) => {
+  const sel = btn.dataset.copy || "#install code";
+  btn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(document.querySelector(sel).textContent);
+      btn.textContent = "Copied"; btn.classList.add("done");
+      setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("done"); }, 1600);
+    } catch {}
+  });
 });
 </script>
 
