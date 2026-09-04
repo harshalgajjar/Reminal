@@ -64,6 +64,17 @@ func main() {
 			fmt.Fprintf(os.Stderr, "resume error: %v\n", err)
 			os.Exit(1)
 		}
+		// THIS is the path ReapOrphans was written for, and it was the one
+		// path that never called it. A hot restart keeps our PID, so the old
+		// image's inhibitors stay alive (their `-w <pid>` still resolves) with
+		// nothing holding a handle on them — one leaked caffeinate per restart,
+		// per agent, forever. The two cold-start call sites below can never
+		// find anything: a genuinely new PID has no `-w <ourpid>` orphans.
+		// Reap BEFORE Start/agent.Run so we kill the previous image's and not
+		// our own fresh ones.
+		keepawake.ReapOrphans()
+		stopKeepAwake := keepawake.Start()
+		defer stopKeepAwake()
 		if err := agent.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
