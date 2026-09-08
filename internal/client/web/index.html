@@ -1010,8 +1010,19 @@
        appears only when there is actually a count to separate from — a machine
        with no sessions must not start with a stray dot. */
     .machine-count:not(:empty) + .machine-batt::before { content: "\00b7"; opacity: 0.55; }
+    /* The dot before the session count earns its place only when the hostname
+       has been ellipsised and the count is sitting right against it. With room
+       to spare the name is far to the left and a lone dot in the gap reads as
+       punctuation with nothing to punctuate. .tight is set from JS, because
+       "is this text truncated" is a measurement CSS cannot make. */
+    .machine-title.tight > .machine-count::before { content: "\00b7"; opacity: 0.55; margin-right: 5px; }
+    /* Same, for a truncated name with no sessions to separate it from. */
+    .machine-title.tight > .machine-count:empty + .machine-batt::before { content: "\00b7"; opacity: 0.55; }
     .machine-batt.low { color: #f85149; }
-    .machine-batt.charging { color: #3fb950; }
+    /* Both plugged-in states are green: a laptop on mains reads as "fine"
+       whether it is still filling or already full. Only .charging animates —
+       at 100% nothing is moving, so a pulsing gauge would be a lie. */
+    .machine-batt.charging, .machine-batt.plugged { color: #3fb950; }
     .machine-batt.stale { color: #6e7681; font-style: italic; }
     .batt-meter { position: relative; box-sizing: border-box; flex: none;
                   width: 20px; height: 10px; border: 1px solid currentColor;
@@ -3996,6 +4007,27 @@
       return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time;
     }
 
+    // syncMachineTight marks the headers whose hostname has been ellipsised.
+    // The separator dot before the session count is shown only for those: with
+    // room to spare the name sits far to the left and the dot floats alone in
+    // the gap. Truncation is a measured fact, so it is recomputed whenever the
+    // list changes or the panel is resized.
+    function syncMachineTight(root) {
+      const scope = root || document;
+      scope.querySelectorAll('.machine-title').forEach(t => {
+        const n = t.querySelector('.machine-name');
+        if (!n) return;
+        // 1px of slack: sub-pixel text metrics make scrollWidth exceed
+        // clientWidth by a hair on names that are not actually clipped.
+        t.classList.toggle('tight', n.scrollWidth > n.clientWidth + 1);
+      });
+    }
+    let battTightRAF = 0;
+    addEventListener('resize', () => {
+      if (battTightRAF) return;
+      battTightRAF = requestAnimationFrame(() => { battTightRAF = 0; syncMachineTight(); });
+    });
+
     // An open battery bubble closes on the next tap anywhere else, the way
     // every other transient popover in here behaves. Registered once.
     let battCloserWired = false;
@@ -4049,6 +4081,7 @@
       let cls = 'machine-batt';
       if (stale) cls += ' stale';
       else if (b.state === 'charging') cls += ' charging';
+      else if (b.state === 'charged') cls += ' plugged';
       else if (b.pct <= 10) cls += ' low';
       el.className = cls;
       el.querySelector('.batt-meter i').style.width = Math.max(0, Math.min(100, b.pct)) + '%';
@@ -4085,6 +4118,9 @@
         + (stale ? ' \u00b7 last seen before it went offline' : '');
       el.title = title;
       el.setAttribute('aria-label', title);
+      // The badge just took (or freed) width, so whether the name is clipped
+      // may have changed with it.
+      syncMachineTight(box);
     }
 
     async function fillMachineSessions(b64, rec, gen) {
@@ -4178,7 +4214,8 @@
       const countEl = box.querySelector('.machine-count');
       if (!sessions) return;
       list = (Array.isArray(list) ? list : []).filter(s => !killedSessionIds.has(s.id));
-      if (countEl) countEl.textContent = list.length ? '· ' + list.length : '';
+      if (countEl) countEl.textContent = list.length ? String(list.length) : '';
+      syncMachineTight(box);
       if (list.length === 0) {
         sessions.innerHTML = '<div class="machine-sub">no sessions running</div>';
         return;

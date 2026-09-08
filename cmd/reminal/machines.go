@@ -268,7 +268,9 @@ func batteryLabel(b *client.BatterySnapshot) string {
 		}
 		return cGreen(out)
 	case "charged":
-		return cDim(fmt.Sprintf("%d%% charged", b.Pct))
+		// Plugged in and full is a good state, not a neutral one — same green
+		// as charging, because what matters at a glance is "on mains".
+		return cGreen(fmt.Sprintf("%d%% charged", b.Pct))
 	default:
 		out := fmt.Sprintf("%d%%", b.Pct)
 		if dur != "" {
