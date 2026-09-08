@@ -1003,21 +1003,24 @@
       /* Negative margin keeps the row height unchanged while the padding
          grows the hit area: a 10px gauge is not a finger target. */
       .machine-batt { padding: 10px 7px; margin: -10px -3px; }
-      .machine-batt::before { display: none; } /* the separator has nothing left to separate */
     }
     /* Separator matching the one before the session count, so name / count /
        battery read as one series. Adjacent-sibling + :not(:empty) so it
        appears only when there is actually a count to separate from — a machine
        with no sessions must not start with a stray dot. */
-    .machine-count:not(:empty) + .machine-batt::before { content: "\00b7"; opacity: 0.55; }
-    /* The dot before the session count earns its place only when the hostname
-       has been ellipsised and the count is sitting right against it. With room
-       to spare the name is far to the left and a lone dot in the gap reads as
-       punctuation with nothing to punctuate. .tight is set from JS, because
-       "is this text truncated" is a measurement CSS cannot make. */
-    .machine-title.tight > .machine-count::before { content: "\00b7"; opacity: 0.55; margin-right: 5px; }
-    /* Same, for a truncated name with no sessions to separate it from. */
-    .machine-title.tight > .machine-count:empty + .machine-batt::before { content: "\00b7"; opacity: 0.55; }
+    /* Header order is: name, battery, session count.
+       Two separators, each earning its place:
+       1. Between the battery and the count, which are always adjacent.
+       2. Directly after the name, but ONLY when the name has been ellipsised
+          and whatever follows is sitting right against it. With room to spare
+          the name is far to the left and a lone dot in the gap reads as
+          punctuation with nothing to punctuate. .tight is set from JS, because
+          "is this text truncated" is a measurement CSS cannot make.
+       The two "after the name" rules are mutually exclusive by construction:
+       whichever element actually follows the name is the one that matches. */
+    .machine-batt + .machine-count:not(:empty)::before { content: "\00b7"; opacity: 0.55; margin-right: 5px; }
+    .machine-title.tight > .machine-name + .machine-batt::before { content: "\00b7"; opacity: 0.55; }
+    .machine-title.tight > .machine-name + .machine-count:not(:empty)::before { content: "\00b7"; opacity: 0.55; margin-right: 5px; }
     .machine-batt.low { color: #f85149; }
     /* Both plugged-in states are green: a laptop on mains reads as "fine"
        whether it is still filling or already full. Only .charging animates —
@@ -4078,9 +4081,12 @@
       if (!el) {
         el = document.createElement('span');
         el.className = 'machine-batt';
+        // Battery sits between the name and the session count, so insert
+        // rather than append — paintBattery runs after the header is built.
         el.innerHTML = '<span class="batt-meter"><i></i></span>'
           + '<span class="batt-main"></span><span class="batt-est"></span>'
           + '<span class="batt-detail"></span>';
+        head.insertBefore(el, head.querySelector('.machine-count'));
         el.setAttribute('role', 'button');
         el.setAttribute('tabindex', '0');
         // Tapping the gauge opens the reading. stopPropagation because the
@@ -4097,7 +4103,6 @@
           if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(ev); }
         });
         wireBattCloser();
-        head.appendChild(el);
       }
       const dur = battDur(b.mins);
       let cls = 'machine-batt';

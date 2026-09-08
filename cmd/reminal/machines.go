@@ -149,7 +149,10 @@ func printMachine(r machineResult, isLocal bool) {
 	if n := len(r.resp.Sessions); n > 0 {
 		count = " " + cDim(fmt.Sprintf("· %d", n))
 	}
-	fmt.Printf("  %s %s%s%s%s%s\n", cGreen("●"), cBold(name), count, idPart, battPart, localTag)
+	// Battery before the session count, matching the Machines panel: the two
+	// surfaces show the same two facts and should not disagree about which
+	// comes first.
+	fmt.Printf("  %s %s%s%s%s%s\n", cGreen("●"), cBold(name), battPart, count, idPart, localTag)
 	if len(r.resp.Sessions) == 0 {
 		fmt.Println("      " + cDim("no sessions running"))
 		return
