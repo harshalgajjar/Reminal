@@ -945,6 +945,9 @@
     .machine-box + .machine-box { border-top: 1px solid #21262d; margin-top: 2px; }
     .machine-head {
       display: flex; align-items: center; gap: 8px; padding: 6px 6px; border-radius: 6px;
+      /* Containing block for the battery bubble, which must escape the badge's
+         own overflow:hidden. */
+      position: relative;
     }
     .machine-head:hover { background: #1c222b; }
     /* Hairline before the Recents list, only when both sections have content, so
@@ -953,10 +956,75 @@
     /* name + count share a flex:1 track so the hostname gets all the free header
        width (it was truncating early while empty space sat to its right). */
     .machine-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; }
-    .machine-name { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    /* min-width is a floor, not 0: the battery badge is flex:none and would
+       otherwise win the space fight outright, squeezing the hostname to
+       nothing on a phone. The name is what identifies the row, so it keeps a
+       few characters no matter what and the badge yields instead. */
+    .machine-name { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 5.5em; flex: 1 1 auto; }
     .machine-caret { display: inline-flex; align-items: center; justify-content: center; color: #8b949e; flex: none; width: 16px; }
     .machine-count { font-size: 11px; color: #8b949e; font-family: monospace; flex: none; }
     .machine-sessions.collapsed { display: none; }
+    /* Battery in the machine header. Only ever rendered for machines that
+       actually reported one, so a desktop's header is unchanged.
+       The gauge is drawn, not typed: a bordered cell with a proportional fill
+       and a terminal nub, the shape every OS menu bar uses. It inherits
+       currentColor, so state colouring needs no second set of rules and the
+       meter can never disagree with the text beside it.
+       The stale variant is dimmer and italic on purpose: it is history, and
+       must not be mistaken for a live reading. */
+    .machine-batt { font-size: 11px; color: #8b949e; font-family: monospace;
+                    flex: 0 1 auto; min-width: 0; overflow: hidden;
+                    display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+    /* The estimate is the first thing to go when the row is tight: the charge
+       level and (for a stale reading) the time it was taken are what matter,
+       and the full sentence stays in the title tooltip either way. */
+    @media (max-width: 560px) { .batt-est { display: none; } }
+    /* Detail bubble for the collapsed state. Anchored to the badge, right
+       aligned so it can't run off the panel's edge, and above the session
+       list. Hidden until the badge is tapped. */
+    .batt-detail { display: none; position: absolute; top: calc(100% - 2px); right: 6px; z-index: 30;
+                   background: rgba(28,28,34,.98); border: 1px solid rgba(255,255,255,.14);
+                   border-radius: 8px; padding: 6px 9px; font-size: 11.5px; font-style: normal;
+                   color: #c9d1d9; box-shadow: 0 10px 26px rgba(0,0,0,.55);
+                   /* Sized to content, but capped so a long stale reading wraps
+                      to a second line instead of running off the panel's left
+                      edge — it is anchored right, so overflow goes leftward. */
+                   width: max-content; max-width: min(232px, 62vw);
+                   white-space: normal; line-height: 1.45; text-align: left; }
+    .machine-batt.open .batt-detail { display: block; }
+    .machine-batt { cursor: pointer; }
+    /* Extremely narrow: the row has no width to spend on words, so the badge
+       becomes the gauge alone — a glyph you tap to get the full reading. The
+       padding is there to make a 10px-tall gauge a finger-sized target. */
+    @media (max-width: 400px) {
+      .machine-batt .batt-main, .machine-batt .batt-est { display: none; }
+      /* Negative margin keeps the row height unchanged while the padding
+         grows the hit area: a 10px gauge is not a finger target. */
+      /* Negative margin keeps the row height unchanged while the padding
+         grows the hit area: a 10px gauge is not a finger target. */
+      .machine-batt { padding: 10px 7px; margin: -10px -3px; }
+      .machine-batt::before { display: none; } /* the separator has nothing left to separate */
+    }
+    /* Separator matching the one before the session count, so name / count /
+       battery read as one series. Adjacent-sibling + :not(:empty) so it
+       appears only when there is actually a count to separate from — a machine
+       with no sessions must not start with a stray dot. */
+    .machine-count:not(:empty) + .machine-batt::before { content: "\00b7"; opacity: 0.55; }
+    .machine-batt.low { color: #f85149; }
+    .machine-batt.charging { color: #3fb950; }
+    .machine-batt.stale { color: #6e7681; font-style: italic; }
+    .batt-meter { position: relative; box-sizing: border-box; flex: none;
+                  width: 20px; height: 10px; border: 1px solid currentColor;
+                  border-radius: 2.5px; opacity: 0.85; padding: 1px; }
+    .batt-meter i { display: block; height: 100%; background: currentColor; border-radius: 1px; }
+    .batt-meter::after { content: ""; position: absolute; left: 100%; top: 2.5px;
+                         width: 1.5px; height: 4px; background: currentColor;
+                         border-radius: 0 1px 1px 0; opacity: 0.7; }
+    /* A charging cell reads as filling rather than sitting still. Slow and
+       low-contrast — a header badge that throbs is a badge people switch off. */
+    .machine-batt.charging .batt-meter i { animation: battfill 2.4s ease-in-out infinite; }
+    @keyframes battfill { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
+    @media (prefers-reduced-motion: reduce) { .machine-batt.charging .batt-meter i { animation: none; } }
     .machine-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
     .machine-dot.online { background: #3fb950; box-shadow: 0 0 0 2px rgba(63,185,80,0.18); }
     .machine-dot.offline { background: #6e7681; }
@@ -1378,6 +1446,7 @@
     <button data-key="ctrl-k" title="Kill to end of line">^K</button>
     <button data-key="ctrl-z" title="Suspend">^Z</button>
     <button data-key="ctrl-l" title="Clear screen">^L</button>
+    <button data-key="ctrl-o" title="Ctrl-O — expand output in Claude Code, save in nano">^O</button>
     <button data-key="pipe">|</button>
     <button data-key="tilde">~</button>
     <button id="kb-focus-btn" title="Show keyboard">⌨</button>
@@ -3846,6 +3915,10 @@
         } else {
           sessions.innerHTML = '<div class="machine-sub">checking…</div>';
         }
+        // Remembered battery, painted as history until this refresh's query
+        // proves otherwise. A machine we have never seen a reading from paints
+        // nothing, which is what a desktop should look like forever.
+        if (rec.batt) paintBattery(box, rec.batt, true);
       }
       // Fire the fills in the background — each box updates itself as its query
       // resolves, so one offline machine never blocks the others (or the panel).
@@ -3885,6 +3958,133 @@
       } finally {
         machinesPolling = false;
       }
+    }
+
+    // ── battery ────────────────────────────────────────────────────────
+    // A machine's power state, remembered in the same per-machine record that
+    // already caches its sessions and hostname. The remembering is the point:
+    // a laptop that has gone dark cannot tell you anything, so the last thing
+    // it said — and when — is the whole answer.
+    //
+    // battFromResp returns null when the host reported no battery. Desktops,
+    // VMs and older agents all land there, and null renders nothing at all:
+    // absence is the signal, so there is no "unknown" state to draw.
+    function battFromResp(resp) {
+      if (!resp || typeof resp.battery_pct !== 'number') return null;
+      const pct = Math.max(0, Math.min(100, Math.round(resp.battery_pct)));
+      return { pct, state: resp.battery_state || '', mins: resp.battery_mins || 0, at: Date.now() };
+    }
+
+    function battDur(mins) {
+      if (!mins || mins <= 0) return '';
+      if (mins < 60) return mins + 'm';
+      const h = Math.floor(mins / 60), m = mins % 60;
+      return m ? h + 'h ' + m + 'm' : h + 'h';
+    }
+
+    // battWhen renders the moment a stale reading was taken. A clock time for
+    // today, a day name beyond that — "was 20% at 3:04pm" is useless if you
+    // cannot tell which day it means.
+    function battWhen(ts) {
+      const d = new Date(ts), now = new Date();
+      const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      if (now - d < 60000) return 'just now';
+      const sameDay = d.toDateString() === now.toDateString();
+      if (sameDay) return 'at ' + time;
+      const y = new Date(now); y.setDate(y.getDate() - 1);
+      if (d.toDateString() === y.toDateString()) return 'yesterday ' + time;
+      return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time;
+    }
+
+    // An open battery bubble closes on the next tap anywhere else, the way
+    // every other transient popover in here behaves. Registered once.
+    let battCloserWired = false;
+    function wireBattCloser() {
+      if (battCloserWired) return;
+      battCloserWired = true;
+      document.addEventListener('click', (e) => {
+        if (e.target && e.target.closest && e.target.closest('.machine-batt')) return;
+        document.querySelectorAll('.machine-batt.open').forEach(o => o.classList.remove('open'));
+      });
+    }
+
+    // paintBattery writes the gauge into a machine header. stale=true renders
+    // the remembered reading in past tense; a machine with no battery removes
+    // the element entirely rather than leaving an empty one behind.
+    //
+    // The estimate is always labelled with what it counts down TO. While
+    // charging the OS reports time until full, and calling that "left" would
+    // read as time until dead — the exact opposite of the truth.
+    function paintBattery(box, b, stale) {
+      if (!box) return;
+      const head = box.querySelector('.machine-title');
+      if (!head) return;
+      let el = head.querySelector('.machine-batt');
+      if (!b) { if (el) el.remove(); return; }
+      if (!el) {
+        el = document.createElement('span');
+        el.className = 'machine-batt';
+        el.innerHTML = '<span class="batt-meter"><i></i></span>'
+          + '<span class="batt-main"></span><span class="batt-est"></span>'
+          + '<span class="batt-detail"></span>';
+        el.setAttribute('role', 'button');
+        el.setAttribute('tabindex', '0');
+        // Tapping the gauge opens the reading. stopPropagation because the
+        // header's own click toggles the machine's session list, and opening
+        // the battery must not also collapse the machine underneath it.
+        const toggle = (ev) => {
+          ev.stopPropagation();
+          const wasOpen = el.classList.contains('open');
+          document.querySelectorAll('.machine-batt.open').forEach(o => o.classList.remove('open'));
+          if (!wasOpen) el.classList.add('open');
+        };
+        el.addEventListener('click', toggle);
+        el.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(ev); }
+        });
+        wireBattCloser();
+        head.appendChild(el);
+      }
+      const dur = battDur(b.mins);
+      let cls = 'machine-batt';
+      if (stale) cls += ' stale';
+      else if (b.state === 'charging') cls += ' charging';
+      else if (b.pct <= 10) cls += ' low';
+      el.className = cls;
+      el.querySelector('.batt-meter i').style.width = Math.max(0, Math.min(100, b.pct)) + '%';
+
+      // main survives every width; est is dropped on a narrow screen. For a
+      // stale reading the TIME lives in main, because "was 20%" without a when
+      // is the one thing this feature exists to avoid saying.
+      let main, est, title;
+      if (stale) {
+        main = 'was ' + b.pct + '%';
+        est = ' \u00b7 ' + battWhen(b.at).replace(/^at /, '');
+        title = 'Last reading before this machine stopped answering'
+          + (dur && b.state === 'discharging' ? ' \u2014 about ' + dur + ' left at that point' : '');
+      } else if (b.state === 'charging') {
+        // The meter is green and filling, so "charging" is reinforcement, not
+        // information — it goes in the half that can be dropped.
+        main = b.pct + '%';
+        est = ' charging' + (dur ? ' \u00b7 ' + dur + ' to full' : '');
+        title = dur ? 'About ' + dur + ' until fully charged' : 'Charging';
+      } else if (b.state === 'charged') {
+        main = b.pct + '%';
+        est = ' charged';
+        title = 'Plugged in and fully charged';
+      } else {
+        main = b.pct + '%';
+        est = dur ? ' \u00b7 ' + dur + ' left' : '';
+        title = dur ? 'About ' + dur + ' of battery left' : 'On battery';
+      }
+      el.querySelector('.batt-main').textContent = main;
+      el.querySelector('.batt-est').textContent = est;
+      // The bubble is the ONLY thing visible when collapsed, so it carries the
+      // whole reading rather than the abbreviation the row would have shown.
+      el.querySelector('.batt-detail').textContent = (main + est).trim()
+        + (stale ? ' \u00b7 last seen before it went offline' : '');
+      el.title = title;
+      el.setAttribute('aria-label', title);
     }
 
     async function fillMachineSessions(b64, rec, gen) {
@@ -3928,6 +4128,9 @@
         }
         dot.className = 'machine-dot offline';
         dot.title = 'offline';
+        // This is the case the whole feature is for: it cannot tell us
+        // anything now, so show what it last said and when.
+        if (rec.batt) paintBattery(box, rec.batt, true);
         // Keep the last-known (cached) list visible so a transient blip doesn't
         // blank the card; only show "offline" when there's nothing cached to show.
         if (!Array.isArray(rec.sessions)) {
@@ -3951,11 +4154,20 @@
         // each other; re-check the name inside the lock (someone may have set it).
         await withOwnedMachines(m => { if (m[b64] && !m[b64].name) m[b64].name = resp.hostname; else return false; });
       }
+      const batt = battFromResp(resp);
+      if (batt) {
+        paintBattery(box, batt, false);
+      } else if (rec.batt) {
+        // The host answered but reported no battery — an older agent that
+        // cannot read one. Keep the remembered value rather than blanking it,
+        // still marked as history. A true desktop has no rec.batt to keep.
+        paintBattery(box, rec.batt, true);
+      }
       const list = (resp.sessions || []);
       renderMachineSessions(box, list, b64);
       // Remember this snapshot so the NEXT time the panel opens it paints these
       // sessions instantly from cache while the fresh query runs in the background.
-      await withOwnedMachines(m => { if (!m[b64]) return false; m[b64].sessions = list; if (resp.hostname) m[b64].host = resp.hostname; });
+      await withOwnedMachines(m => { if (!m[b64]) return false; m[b64].sessions = list; if (resp.hostname) m[b64].host = resp.hostname; if (batt) m[b64].batt = batt; });
     }
 
     // Render a machine's session list into its card. Shared by the instant cached
@@ -5825,6 +6037,8 @@
       'ctrl-e': '\x05', // end of line
       'ctrl-k': '\x0b', // kill to end of line
       'ctrl-l': '\x0c', // clear screen
+      'ctrl-o': '\x0f', // SI — readline operate-and-get-next; expand output in
+      //                   Claude Code, save in nano. Sent raw like the rest.
       'ctrl-r': '\x12', // reverse history search
       'ctrl-u': '\x15', // clear line
       'ctrl-w': '\x17', // delete word back
@@ -5873,6 +6087,7 @@
       pipe: { text: '|' }, tilde: { text: '~' },
       'ctrl-a': { special: 'ctrl-a' }, 'ctrl-c': { special: 'ctrl-c' }, 'ctrl-d': { special: 'ctrl-d' },
       'ctrl-e': { special: 'ctrl-e' }, 'ctrl-k': { special: 'ctrl-k' }, 'ctrl-l': { special: 'ctrl-l' },
+      'ctrl-o': { special: 'ctrl-o' },
       'ctrl-r': { special: 'ctrl-r' }, 'ctrl-u': { special: 'ctrl-u' }, 'ctrl-w': { special: 'ctrl-w' },
       'ctrl-z': { special: 'ctrl-z' },
     };
