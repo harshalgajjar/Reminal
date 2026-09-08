@@ -146,6 +146,28 @@ func Upgrade(currentVersion string) (updated bool, err error) {
 	return true, nil
 }
 
+// UpgradeQuiet is Upgrade without the printing. The interactive one writes to
+// stdout, which for an agent IS the shared shell's terminal — a viewer
+// pressing a button in a panel must not spray progress into somebody's tmux.
+// Same checks, same apply, results returned instead of printed.
+func UpgradeQuiet(currentVersion string) (updated bool, err error) {
+	clearCache() // an explicit request always hits the network
+	latestTag, assetURL, _, err := check(currentVersion, httpTimeoutInteractive)
+	if errors.Is(err, errNoAssetForPlatform) {
+		return false, fmt.Errorf("the latest release has no %s/%s build yet — it may still be publishing", runtime.GOOS, runtime.GOARCH)
+	}
+	if err != nil {
+		return false, fmt.Errorf("check for updates: %w", err)
+	}
+	if latestTag == "" {
+		return false, nil // already current
+	}
+	if err := apply(assetURL); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // shouldCheck reports whether the version-check is meaningful for this build.
 // Dev builds and unknown versions skip the check entirely.
 func shouldCheck(currentVersion string) bool {

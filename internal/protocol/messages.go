@@ -215,6 +215,28 @@ const (
 	// access could already run `reminal new`; this just makes it one tap.
 	TypeNewSession MessageType = "new_session"
 
+	// TypeChangelog is bidirectional. Viewer→agent: an empty-Data request for
+	// the release notes between the host's version and the newest one.
+	// Agent→viewer: Data = encrypted JSON {"current":"3.5.4","releases":[…],
+	// "error":"…"}. The notes cannot come from the host's own binary — a
+	// machine on 3.5.4 has no 3.5.6 file — so the host fetches them, which is
+	// also why this is a separate request rather than a field on host_info:
+	// it costs a network round trip and should only happen when someone opens
+	// the panel and asks.
+	TypeChangelog MessageType = "changelog"
+
+	// TypeUpgrade is bidirectional. Viewer→agent: an empty-Data request to
+	// upgrade the host's binary and hot-restart every session on it.
+	// Agent→viewer: one message per step, Data = encrypted JSON
+	// {"stage":"download|install|restart|done","pct":38,"detail":"…",
+	// "version":"3.6.0","error":"…"} — a stream rather than one reply because
+	// the whole point is watching it happen.
+	//
+	// No new capability: a viewer that can send this already has shell access
+	// on the host and could run `reminal upgrade && reminal restart --all`
+	// itself. Same argument as TypeNewSession.
+	TypeUpgrade MessageType = "upgrade"
+
 	// ---- WebRTC signaling (peer-to-peer frame transport) ----
 	// Window frames are high-volume; when a viewer and agent can open a
 	// WebRTC DataChannel, frames (and their acks) flow directly peer-to-peer

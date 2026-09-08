@@ -619,6 +619,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		// Keep the Host panel's "a newer version is available" answer current.
+		// Quiet and non-applying — see updater.RefreshAvailable. Without it a
+		// machine that only ever runs background sessions never populates the
+		// version cache, so the panel can never offer the upgrade.
+		updater.StartAvailableRefresh(version)
 		keepawake.ReapOrphans() // clean up any inhibitors a previous (hot-restarted) incarnation leaked
 		stopKeepAwake := keepawake.Start()
 		defer stopKeepAwake()

@@ -68,6 +68,32 @@ func OwnerServerTranscript(sessionID string, viewerEph, agentEph, devicePub, mac
 	return ownerHash(ownerServerTag, sessionID, viewerEph, agentEph, devicePub, machinePub)
 }
 
+// ownerActionTag domain-separates a privileged ACTION request from the
+// handshake transcripts above. Reusing either of those would let a signature
+// captured during a connect be replayed as an authorisation to act.
+const ownerActionTag = "reminal-owner-action-v1:"
+
+// OwnerActionTranscript is what a device signs to authorise a privileged
+// action on a machine it owns — today, upgrading the binary and restarting
+// every session on it.
+//
+// This exists because the session key CANNOT carry authorisation: every viewer
+// on a session shares the same key, so a PIN guest can encrypt, decrypt and
+// forge any message an owner can. Ownership therefore has to be proved by the
+// request itself, with a key only an enrolled device holds.
+//
+// The transcript binds four things, and each one closes a specific hole:
+//   - sessionID — a signature for one session cannot authorise another
+//   - action    — an "upgrade" proof cannot be replayed as some future verb
+//   - nonce     — one-time use, so a guest who decrypts an owner's request
+//     (they hold the same session key) cannot replay it
+//   - unix      — bounds how long a captured proof stays interesting at all
+func OwnerActionTranscript(sessionID, action string, nonce []byte, unix int64) []byte {
+	var ts [8]byte
+	binary.BigEndian.PutUint64(ts[:], uint64(unix))
+	return ownerHash(ownerActionTag, sessionID, []byte(action), nonce, ts[:])
+}
+
 const directoryTag = "reminal-directory-v1:"
 
 // directoryAlphabet matches session.NewID's Crockford-ish set so a directory id

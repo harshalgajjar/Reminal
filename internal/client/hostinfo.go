@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/reminal/reminal/internal/protocol"
+	"github.com/reminal/reminal/internal/updater"
 )
 
 // handleHostInfo replies to a viewer's TypeHostInfo request with the machine's
@@ -22,6 +23,9 @@ func (a *Agent) handleHostInfo(conn *websocket.Conn) {
 		return
 	}
 	info := gatherHostInfo()
+	info.Version = a.version
+	info.Update = updater.Available(a.version)
+	info.Sessions = countRestartableSessions()
 	// Owners connect PIN-free, so the browser never typed the PIN. The share
 	// menu still needs it to mint a Join link / `reminal connect` line. This
 	// rides the session channel, encrypted — anyone who can read it already
@@ -113,6 +117,20 @@ type HostInfo struct {
 	// PIN is this session's join PIN. Sent so an owner-connected viewer can
 	// share the session; omitted from directory listings on purpose.
 	PIN string `json:"pin,omitempty"`
+	// Version is the reminal this host is running. Absent from an older host,
+	// which is exactly what the panel needs to know to hide the upgrade
+	// button rather than offer one the host cannot act on.
+	Version string `json:"version,omitempty"`
+	// Sessions is how many shells on this machine an upgrade would restart.
+	// The panel promises a number before you press the button, and guessing
+	// one would be worse than omitting it — an old host sends nothing and the
+	// wording falls back to "every session".
+	Sessions int `json:"sessions,omitempty"`
+	// Update is the newest version the host's last update check saw, empty
+	// when it is current or has never checked. Read from the on-disk cache,
+	// so it costs nothing on a host-info poll — the check that fills it
+	// already runs on its own schedule.
+	Update string `json:"update,omitempty"`
 }
 
 // gatherHostInfo collects the cross-platform basics, then lets the per-OS hook

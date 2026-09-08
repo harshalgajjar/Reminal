@@ -853,6 +853,73 @@
     .own-owned { margin-top: 8px; font-size: 12px; color: #3fb950; text-align: center; padding: 6px; }
     .own-fp { margin-top: 8px; font-size: 11px; color: #8b949e; text-align: center; }
     .own-fp code { background: #010409; border: 1px solid #21262d; border-radius: 4px; padding: 1px 6px; color: #c9d1d9; }
+    /* ── version line, upgrade button, changelog sheet ────────────────
+       The version sits with the other host facts and stays quiet when there
+       is nothing to do. The button borrows .host-new's shape so it cannot
+       drift from the two buttons already in the panel; only the accent
+       differs, because this one changes the machine rather than opening
+       something. */
+    .host-ver { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: #8b949e;
+                margin: -4px 0 8px; flex-wrap: wrap; }
+    .host-ver code { background: #010409; border: 1px solid #21262d; border-radius: 4px;
+                     padding: 1px 5px; color: #c9d1d9; font-size: 10px; }
+    .host-ver .new { color: #3fb950; font-weight: 600; }
+    .host-upgrade { width: 100%; margin-top: 6px; font: inherit; font-size: 12px; cursor: pointer;
+                    background: #1f6feb; border: 1px solid #388bfd; color: #fff; border-radius: 6px;
+                    padding: 7px 10px; display: flex; align-items: center; justify-content: center; gap: 7px; }
+    .host-upgrade:hover { background: #388bfd; }
+    .host-upgrade:disabled { opacity: .8; cursor: default; background: #21262d; border-color: #30363d; color: #c9d1d9; }
+    .host-upgrade.done { background: #238636; border-color: #2ea043; }
+    .host-upgrade.fail { background: #21262d; border-color: #f85149; color: #f85149; }
+    .up-sub { font-size: 10.5px; color: #8b949e; text-align: center; margin-top: 5px; line-height: 1.45; }
+    .up-sub b { color: #c9d1d9; font-weight: 600; }
+    .up-rail { height: 3px; background: #21262d; border-radius: 2px; margin-top: 7px; overflow: hidden; }
+    .up-rail i { display: block; height: 100%; background: #388bfd; width: 0; transition: width .35s ease; }
+    .up-rail.done i { background: #3fb950; }
+    .up-rail.fail i { background: #f85149; }
+    .up-spin { width: 11px; height: 11px; border: 1.6px solid rgba(255,255,255,.35); border-top-color: #fff;
+               border-radius: 50%; animation: upspin .7s linear infinite; flex: none; }
+    @keyframes upspin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .up-spin { animation: none; } }
+    /* A link, not a third button: this is a thing you read, not a thing that
+       changes the machine. */
+    .host-whatsnew { display: block; width: 100%; margin-top: 6px; background: none; border: 0;
+                     cursor: pointer; font: inherit; font-size: 11px; color: #58a6ff;
+                     text-align: center; padding: 2px; }
+    .host-whatsnew:hover { text-decoration: underline; }
+
+    /* The sheet lives outside the 290px panel: release notes are prose, and a
+       250px column turns three bullets into fourteen lines. */
+    .cl-back { position: fixed; inset: 0; background: rgba(1,4,9,.72); z-index: 60; display: none; }
+    .cl-back.open { display: block; }
+    .cl-sheet { position: fixed; left: 50%; top: 50%; transform: translate(-50%,-50%); z-index: 61;
+                width: min(460px, 92vw); max-height: 82vh; overflow: auto; display: none;
+                background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+                box-shadow: 0 26px 70px rgba(0,0,0,.7); }
+    .cl-sheet.open { display: block; }
+    .cl-head { position: sticky; top: 0; background: #161b22; border-bottom: 1px solid #21262d;
+               padding: 13px 16px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .cl-title { font-size: 13.5px; font-weight: 640; }
+    .cl-behind { font-size: 11px; color: #8b949e; }
+    .cl-x { background: none; border: 0; color: #8b949e; font-size: 17px; cursor: pointer; line-height: 1; padding: 0 2px; }
+    .cl-x:hover { color: #e6edf3; }
+    .cl-body { padding: 4px 16px 14px; }
+    .cl-rel { padding: 13px 0; border-bottom: 1px solid #21262d; }
+    .cl-rel:last-child { border-bottom: 0; }
+    .cl-relhead { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; flex-wrap: wrap; }
+    .cl-ver { font-size: 12.5px; font-weight: 660; color: #e6edf3; font-family: ui-monospace, Menlo, monospace; }
+    .cl-when { font-size: 10.5px; color: #6e7681; }
+    .cl-tag { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em; padding: 1px 6px; border-radius: 99px; }
+    .cl-tag.next { background: rgba(63,185,80,.15); color: #3fb950; border: 1px solid rgba(63,185,80,.3); }
+    .cl-tag.skipped { background: rgba(139,148,158,.12); color: #8b949e; border: 1px solid #30363d; }
+    .cl-list { margin: 0; padding-left: 17px; color: #c9d1d9; font-size: 12.5px; line-height: 1.6; }
+    .cl-list li { margin-bottom: 3px; }
+    .cl-list code, .cl-sub code { background: rgba(110,118,129,.2); padding: .08em .34em; border-radius: 4px; font-size: 11.5px; }
+    .cl-sub { font-size: 11px; color: #8b949e; margin: 7px 0 3px; text-transform: uppercase; letter-spacing: .06em; }
+    .cl-here { padding: 11px 0 2px; font-size: 11.5px; color: #6e7681; display: flex; align-items: center; gap: 7px; }
+    .cl-here::before, .cl-here::after { content: ""; height: 1px; background: #30363d; flex: 1; }
+    .cl-foot { position: sticky; bottom: 0; background: #161b22; border-top: 1px solid #21262d; padding: 11px 16px; }
+    .cl-empty { padding: 26px 16px; text-align: center; color: #8b949e; font-size: 12.5px; line-height: 1.6; }
     .recents-list {
       position: absolute;
       top: 100%;
@@ -1476,6 +1543,9 @@
     <button id="keybar-toggle" title="Hide / show the key bar">≡</button>
   </div>
 
+  <div class="cl-back" id="clback" hidden></div>
+  <div class="cl-sheet" id="clsheet" role="dialog" aria-modal="true" aria-label="What's new" hidden></div>
+
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
@@ -1658,6 +1728,27 @@
     const HOST_WAIT_MS = 4000;
     function onHostInfo(info) {
       lastHostInfo = info;
+      // Completion for an upgrade can only arrive HERE. The host's last word
+      // before it re-execs is "restart", and then it is gone — there is no
+      // "done" to send, because the process that would send it has been
+      // replaced. So the reconnect IS the completion signal: the host is
+      // answering again, and its version says whether it moved.
+      //
+      // Without this the button spins forever after a perfectly successful
+      // upgrade, which is the one outcome that must not look like a hang.
+      if (upgradeState && upgradeState.stage === 'restart' && !upgradeState.error) {
+        const was = upgradeState.version;
+        if (info.version && was && info.version !== was) {
+          upgradeState = { stage: 'done', pct: 100, version: info.version,
+                           detail: 'Now on v' + info.version };
+          changelog = null; // the notes we cached are about versions we now have
+        } else {
+          // It came back on the same version, or on a build too old to report
+          // one. We cannot claim success, so stop asserting anything and let
+          // the button be pressable again.
+          upgradeState = null;
+        }
+      }
       if (info.hostname) rememberHost(sessionId, info.hostname);
       // Owner (PIN-free) connects never typed the PIN. The agent includes it
       // on host_info so Share can show it and mint a real Join link.
@@ -1832,6 +1923,269 @@
       return 'rmnl_' + b64url(pub);
     }
 
+    // ── upgrade & changelog ───────────────────────────────────────────
+    // upgradeState is the live progress of a host upgrade, or null when idle.
+    // It survives the Host panel's periodic re-render the same way
+    // creatingSession does, so watching an upgrade does not depend on the
+    // panel not repainting under you.
+    let upgradeState = null;
+    let changelog = null;      // {current, releases[], error} once fetched
+    let changelogPending = false;
+
+    function hostVersionHTML(i) {
+      if (!i.version) return ''; // pre-3.5.8 host: it cannot act on any of this
+      let h = '<div class="host-ver">reminal <code>v' + escHTML(i.version) + '</code>';
+      if (upgradeState && upgradeState.stage === 'done' && upgradeState.version) {
+        h += '<span class="new">\u00b7 now on v' + escHTML(upgradeState.version) + '</span>';
+      } else if (i.update) {
+        h += '<span class="new">\u00b7 v' + escHTML(i.update) + ' available</span>';
+      } else {
+        h += '<span>\u00b7 up to date</span>';
+      }
+      return h + '</div>';
+    }
+
+    // One renderer for every upgrade state, so the button and its subtitle
+    // cannot disagree about what is happening.
+    function upgradeButtonHTML(i) {
+      if (!i.version) return '';
+      const u = upgradeState;
+      // A failure carries the stage it failed AT, so "still working" has to
+      // exclude it — otherwise the retry button is permanently disabled and
+      // the only way out of a failed upgrade is reloading the page.
+      const busy = u && !u.error && ['download', 'verify', 'install', 'restart'].includes(u.stage);
+      const failed = u && u.error;
+      const done = u && u.stage === 'done' && !u.error;
+      if (!i.update && !u) return ''; // nothing to offer
+      // Owners only. This is the cosmetic half of the rule — the host verifies
+      // a signed owner proof on the request and refuses without one — but a
+      // button that cannot work should not be shown.
+      //
+      // `!u` matters: once something IS in flight or has failed, it must stay
+      // visible. Returning unconditionally here swallowed the error from a
+      // browser that could not produce a proof, so the press did nothing and
+      // said nothing.
+      if (!iOwnThisMachine && !u) return '';
+      // pct lands unquoted inside a style attribute below, and everything in
+      // `u` came off the wire. A number is the only shape that cannot break
+      // out of it, so coerce rather than trust — Number() on a hostile string
+      // gives NaN, which the clamp turns into 0.
+      let label, sub;
+      const pct = u ? Math.max(0, Math.min(100, Math.round(Number(u.pct)) || 0)) : 0;
+      if (failed)      { label = escHTML(u.error); sub = 'Nothing was replaced. This host is still on v' + escHTML(i.version) + ' and every session is untouched.'; }
+      else if (done)   { label = '\u2713 ' + (u.detail ? escHTML(u.detail) : 'Now on v' + escHTML(u.version || '')); sub = ''; }
+      else if (busy)   { label = escHTML(u.detail || 'Working\u2026'); sub = ''; }
+      else             { label = 'Upgrade &amp; restart';
+                         sub = 'v' + escHTML(i.update) + ' \u00b7 <b>' + hostSessionCount() + '</b> restart in place. '
+                             + 'Shells and everything running in them are kept.'; }
+      let h = '<button class="host-upgrade' + (done ? ' done' : failed ? ' fail' : '') + '"'
+            + (busy || done ? ' disabled' : '') + '>'
+            + (busy ? '<span class="up-spin"></span>' : '') + label + '</button>';
+      if (u && !failed) h += '<div class="up-rail' + (done ? ' done' : '') + '"><i style="width:' + pct + '%"></i></div>';
+      if (u && failed)  h += '<div class="up-rail fail"><i style="width:' + pct + '%"></i></div>';
+      if (sub) h += '<div class="up-sub">' + sub + '</div>';
+      return h;
+    }
+
+    // How many sessions a restart would move, from the Machines panel's own
+    // cache of this host when we have it. Falls back to neutral wording rather
+    // than guessing a number.
+    function hostSessionCount() {
+      const n = Number((lastHostInfo && lastHostInfo.sessions) || 0);
+      return n > 0 ? n + ' session' + (n === 1 ? '' : 's') : 'every session';
+    }
+
+    function escHTML(v) {
+      return String(v == null ? '' : v).replace(/[&<>"]/g, c =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    }
+
+    // Renders one changelog file. Deliberately not a markdown engine: the
+    // format in changelog/README.md is a heading, bullets and plain-line
+    // subheadings precisely so that this stays about thirty lines and nobody
+    // reaches for a table that would break on a phone.
+    function renderNotes(md) {
+      const out = [];
+      let list = null;
+      const flush = () => { if (list) { out.push(list + '</ul>'); list = null; } };
+      for (const raw of String(md || '').split('\n')) {
+        const line = raw.replace(/\s+$/, '');
+        if (!line.trim()) { flush(); continue; }
+        if (/^#{1,3} /.test(line)) continue;          // the version, already in the header
+        if (/^[-*] /.test(line)) {
+          if (!list) list = '<ul class="cl-list">';
+          list += '<li>' + inlineNotes(line.slice(2)) + '</li>';
+          continue;
+        }
+        if (list && /^\s{2,}\S/.test(raw)) {          // a wrapped bullet, folded back in
+          list = list.replace(/<\/li>$/, ' ' + inlineNotes(line.trim()) + '</li>');
+          continue;
+        }
+        flush();
+        out.push('<div class="cl-sub">' + inlineNotes(line) + '</div>');
+      }
+      flush();
+      return out.join('') || '<div class="cl-sub">No notes for this release.</div>';
+    }
+    // Escape first, then allow exactly one inline form: `code`. Notes come off
+    // the network, so nothing else may become markup.
+    function inlineNotes(t) {
+      return escHTML(t).replace(/`([^`]+)`/g, '<code>$1</code>');
+    }
+
+    function openChangelog() {
+      const back = document.getElementById('clback'), sheet = document.getElementById('clsheet');
+      if (!back || !sheet) return;
+      back.hidden = false; sheet.hidden = false;
+      back.classList.add('open'); sheet.classList.add('open');
+      // Mark the fetch as in flight BEFORE the first paint. Painting first
+      // rendered the not-yet-fetched empty list as "You're on the latest" —
+      // an answer, and the wrong one — for as long as the round trip took,
+      // then silently corrected itself.
+      const needFetch = !changelog && !changelogPending;
+      if (needFetch) changelogPending = true;
+      paintChangelog();
+      if (needFetch) {
+        renderHost();
+        sendWin('changelog', {});
+      }
+    }
+    function closeChangelog() {
+      const back = document.getElementById('clback'), sheet = document.getElementById('clsheet');
+      if (!back || !sheet) return;
+      back.classList.remove('open'); sheet.classList.remove('open');
+      back.hidden = true; sheet.hidden = true;
+    }
+
+    function paintChangelog() {
+      const sheet = document.getElementById('clsheet');
+      if (!sheet || sheet.hidden) return;
+      const cur = (lastHostInfo && lastHostInfo.version) || (changelog && changelog.current) || '';
+      const rels = (changelog && changelog.releases) || [];
+      let sub;
+      if (changelogPending) sub = 'Fetching release notes\u2026';
+      else if (changelog && changelog.error) sub = 'Could not reach the release notes';
+      else if (rels.length) sub = 'You\u2019re on v' + escHTML(cur) + ' \u00b7 ' + rels.length
+             + ' release' + (rels.length > 1 ? 's' : '') + ' behind';
+      else sub = 'You\u2019re on the latest, v' + escHTML(cur);
+
+      let h = '<div class="cl-head"><div><div class="cl-title">What\u2019s new</div>'
+            + '<div class="cl-behind">' + sub + '</div></div>'
+            + '<button class="cl-x" id="clx" aria-label="Close">\u00d7</button></div>';
+
+      if (changelogPending) {
+        h += '<div class="cl-empty">Fetching from the release feed\u2026</div>';
+      } else if (changelog && changelog.error) {
+        h += '<div class="cl-empty">' + escHTML(changelog.error)
+           + '<br><br>Upgrading still works \u2014 this only affects reading about it first.</div>';
+      } else if (!rels.length) {
+        h += '<div class="cl-empty">Nothing newer has been published.</div>';
+      } else {
+        h += '<div class="cl-body">';
+        // Newest first, then everything between here and there: a host three
+        // releases behind has no other way to learn what landed in the middle.
+        rels.forEach((r, idx) => {
+          const tag = idx === 0 ? '<span class="cl-tag next">next</span>'
+                                : '<span class="cl-tag skipped">skipped</span>';
+          h += '<div class="cl-rel"><div class="cl-relhead">'
+             + '<span class="cl-ver">v' + escHTML(r.version) + '</span>' + tag
+             + '<span class="cl-when">' + escHTML(relWhen(r.published)) + '</span></div>'
+             + renderNotes(r.notes) + '</div>';
+        });
+        if (cur) h += '<div class="cl-here">you are here \u00b7 v' + escHTML(cur) + '</div>';
+        h += '</div>';
+        h += '<div class="cl-foot">' + (upgradeButtonHTML(lastHostInfo || {}) || '') + '</div>';
+      }
+      sheet.innerHTML = h;
+      const x = sheet.querySelector('#clx');
+      if (x) x.onclick = closeChangelog;
+      const up = sheet.querySelector('.host-upgrade');
+      if (up) up.onclick = () => {
+        if (up.disabled) return;
+        upgradeState = { stage: 'download', pct: 3, detail: 'Starting\u2026' };
+        renderHost(); paintChangelog();
+        sendOwnerAction('upgrade', 'upgrade');
+      };
+    }
+
+    (function wireChangelogDismiss() {
+      const back = document.getElementById('clback');
+      if (back) back.addEventListener('click', closeChangelog);
+      addEventListener('keydown', (e) => {
+        const sheet = document.getElementById('clsheet');
+        if (e.key === 'Escape' && sheet && !sheet.hidden) { e.stopPropagation(); closeChangelog(); }
+      });
+    })();
+
+    function relWhen(iso) {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d)) return '';
+      const days = Math.floor((Date.now() - d) / 86400000);
+      if (days <= 0) return 'today';
+      if (days === 1) return 'yesterday';
+      if (days < 30) return days + ' days ago';
+      return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    // Sign a privileged request with this browser's enrolled device key. The
+    // agent verifies the signature and checks the key is an owner of that
+    // machine, so the authorisation travels WITH the request rather than being
+    // implied by having connected — every viewer on a session shares one
+    // encryption key, so "I could send this message" proves nothing.
+    //
+    // Returns null when this browser holds no device key, which is exactly the
+    // case where the action is not offered.
+    async function signOwnerAction(action) {
+      const dk = await loadDeviceKeyPair();
+      if (!dk) return null;
+      const nonce = crypto.getRandomValues(new Uint8Array(24));
+      const unix = Math.floor(Date.now() / 1000);
+      const ts = new Uint8Array(8);
+      // Big-endian uint64, matching OwnerActionTranscript. Only the low 32
+      // bits vary for any plausible clock, but the full width is written so
+      // the two transcripts are byte-identical.
+      new DataView(ts.buffer).setBigUint64(0, BigInt(unix), false);
+      const tr = await ownerTranscript('reminal-owner-action-v1:', sessionId,
+        [new TextEncoder().encode(action), nonce, ts]);
+      const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
+      return { device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig),
+               nonce: u8ToBase64(nonce), unix };
+    }
+
+    // Sends a privileged request, or reports why it cannot. The button is
+    // hidden for non-owners, but this path must still refuse rather than send
+    // something the host will reject with a confusing error.
+    async function sendOwnerAction(type, action) {
+      const proof = await signOwnerAction(action);
+      if (!proof) {
+        upgradeState = { stage: 'download', pct: 0,
+          error: 'This browser is not enrolled as an owner of this machine' };
+        renderHost(); paintChangelog();
+        return false;
+      }
+      sendWin(type, proof);
+      return true;
+    }
+
+    function onChangelog(payload) {
+      changelogPending = false;
+      changelog = payload || {};
+      renderHost();
+      paintChangelog();
+    }
+
+    function onUpgrade(payload) {
+      upgradeState = payload || null;
+      renderHost();
+      paintChangelog();
+      // A finished upgrade invalidates what we know: the host is on a new
+      // version, so the cached notes and the pending-update flag are both
+      // stale. The reconnect re-reads host_info; drop the notes so the next
+      // open re-fetches rather than showing releases we already have.
+      if (payload && payload.stage === 'done' && !payload.error) changelog = null;
+    }
+
     function renderHost() {
       const root = document.getElementById('host-list');
       if (!root) return;
@@ -1847,8 +2201,14 @@
         root.innerHTML = '<div class="recents-empty">' + msg + '</div>';
         return;
       }
-      const name = (i.hostname || 'this computer').replace(/\.local$/, '');
-      const sub = [i.os, i.arch, i.cpu_model, i.cpus ? i.cpus + ' cores' : ''].filter(Boolean).join(' · ');
+      // Every one of these comes off the wire from the host, and a viewer
+      // joins hosts it does not control — a PIN is enough to connect, so the
+      // machine on the other end is not trusted to hand us markup. Escaped at
+      // the point of interpolation, the same reason the CLI runs remote
+      // hostnames through cleanTerm before printing them.
+      const name = escHTML((i.hostname || 'this computer').replace(/\.local$/, ''));
+      const sub = [i.os, i.arch, i.cpu_model, i.cpus ? i.cpus + ' cores' : '']
+        .filter(Boolean).map(escHTML).join(' · ');
       let html = '<div class="host-wrap">'
         + '<div class="host-name">' + name + '</div>'
         + '<div class="host-sub">' + sub + '</div>';
@@ -1868,6 +2228,7 @@
         html += hostMeter('Load',
           '<b>' + i.load1.toFixed(2) + '</b> <span class="dim">· ' + i.cpus + ' cores</span>', p);
       }
+      html += hostVersionHTML(i);
       const foot = [];
       if (i.load5 !== undefined) foot.push('load ' + i.load1.toFixed(2) + ' ' + i.load5.toFixed(2) + ' ' + i.load15.toFixed(2));
       if (i.uptime) foot.push('up ' + fmtUptime(i.uptime));
@@ -1876,12 +2237,21 @@
       // offered once we have host stats (proves the host runs a reminal new
       // enough to handle the request). Label reflects the in-flight/error state,
       // which survives the panel's periodic re-render via creatingSession.
-      const label = hostNewError ? hostNewError : (creatingSession ? 'Starting…' : '+ New session on this host');
+      html += upgradeButtonHTML(i);
+      // The link is offered whenever the host can answer it, including when
+      // up to date — a dead end there would make "what changed?" unanswerable
+      // for anyone who is already current.
+      if (i.version) {
+        const pending = changelog && changelog.releases ? changelog.releases.length : 0;
+        html += '<button class="host-whatsnew">' + (changelogPending ? 'Loading notes\u2026'
+              : 'What\u2019s new' + (pending > 1 ? ' \u00b7 ' + pending + ' releases' : '')) + ' \u2192</button>';
+      }
+      const label = hostNewError ? escHTML(hostNewError) : (creatingSession ? 'Starting…' : '+ New session on this host');
       html += '<button class="host-new"' + (creatingSession ? ' disabled' : '') + '>' + label + '</button>';
       // Mirror the whole desktop (every display) as panes — same streaming and
       // input pipeline as single windows, keyed by "display:<id>" entries the
       // agent appends to the window list.
-      html += '<button class="host-desktop">' + (hostDesktopErr ? hostDesktopErr : 'View full desktop') + '</button>';
+      html += '<button class="host-desktop">' + (hostDesktopErr ? escHTML(hostDesktopErr) : 'View full desktop') + '</button>';
       if (hostDesktopHint) html += '<div class="windows-hint">' + permHintHTML(hostDesktopHint) + '</div>';
       // Always show this browser's device fingerprint so it can be matched to a
       // row in `reminal owners` (or the web owners list) without a label.
@@ -1894,7 +2264,7 @@
         // possibly-stale "you own this" (the browser only knows it once did).
         html += '<div class="own-owned">✓ You own this machine <span class="own-reenroll">re-enroll?</span></div>';
       } else if (ownErr) {
-        html += '<div class="own-box"><div class="own-label">' + ownErr + '</div></div>';
+        html += '<div class="own-box"><div class="own-label">' + escHTML(ownErr) + '</div></div>';
       } else if (ownIdShown) {
         const cmd = 'sudo reminal add owner ' + ownIdShown;
         html += '<div class="own-box">'
@@ -5591,6 +5961,22 @@
           } catch (_) {}
           break;
         }
+        case 'changelog': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            onChangelog(JSON.parse(new TextDecoder().decode(bytes)));
+          } catch (_) {}
+          break;
+        }
+        case 'upgrade': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            onUpgrade(JSON.parse(new TextDecoder().decode(bytes)));
+          } catch (_) {}
+          break;
+        }
         case 'window_frame': {
           if (!cryptoKey) break;
           try {
@@ -7778,6 +8164,20 @@
     // "+ New session" button lives inside the (re-rendered) host panel, so bind
     // it by delegation. Asks the host to spawn a headless reminal, then connects.
     document.getElementById('host-list').addEventListener('click', (e) => {
+      if (e.target.closest('.host-upgrade')) {
+        const b = e.target.closest('.host-upgrade');
+        if (b.disabled) return;
+        // Retrying after a failure starts clean: the old error must not sit
+        // under the new attempt's progress.
+        // Optimistic first frame: the host's own first message can take a
+        // moment on a slow link, and a button that does nothing when pressed
+        // reads as broken.
+        upgradeState = { stage: 'download', pct: 3, detail: 'Starting\u2026' };
+        renderHost();
+        sendOwnerAction('upgrade', 'upgrade');
+        return;
+      }
+      if (e.target.closest('.host-whatsnew')) { openChangelog(); return; }
       // Every branch below re-renders the panel (renderHost), which detaches the
       // clicked element. The document-level outside-click closer then sees
       // host.contains(e.target)===false and closes the dropdown. Stop the event

@@ -12,41 +12,41 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Windows twin of the flock-based directory-host lock: LockFileEx gives the
-// same process-tied exclusive semantics (the kernel releases the lock when the
-// holder dies), and LOCKFILE_FAIL_IMMEDIATELY matches LOCK_NB.
+// Windows twin of the flock-based single-holder lock: LockFileEx gives the same
+// process-tied exclusive semantics (the kernel releases the lock when the holder
+// dies), and LOCKFILE_FAIL_IMMEDIATELY matches LOCK_NB.
 
-func dirHostLockPath() (string, error) {
+func lockFilePath(name string) (string, error) {
 	dir, err := reminalDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "dirhost.lock"), nil
+	return filepath.Join(dir, name), nil
 }
 
-func tryLockDirHost() (*os.File, bool) {
-	path, err := dirHostLockPath()
+func tryLockFile(name string) (f *os.File, held bool, err error) {
+	path, err := lockFilePath(name)
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, false
+		return nil, false, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 	ol := new(windows.Overlapped)
 	if err := windows.LockFileEx(windows.Handle(f.Fd()),
 		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
 		0, 1, 0, ol); err != nil {
 		_ = f.Close()
-		return nil, false
+		return nil, false, nil // held by someone else — not a failure
 	}
-	return f, true
+	return f, true, nil
 }
 
-func unlockDirHost(f *os.File) {
+func unlockFile(f *os.File) {
 	if f == nil {
 		return
 	}

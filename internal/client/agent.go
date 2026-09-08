@@ -336,6 +336,16 @@ type Agent struct {
 	// into the frame. Cleared on the next click (menu dismissed / item chosen) or
 	// on timeout. Guarded by winMu. See streamWindow / handleWindowInput.
 	winMenu map[string]winMenuState
+	// ownerNonces remembers the one-time proofs spent on privileged actions,
+	// so a guest who decrypts an owner's request cannot replay it.
+	ownerNonces ownerNonces
+
+	// upgrade holds the state of a viewer-triggered upgrade. One machine, one
+	// upgrade: a second viewer pressing the button joins the run in progress
+	// and is replayed every step so far, rather than starting a second install
+	// or being told "no".
+	upgrade upgradeRun
+
 	// winAwake holds a display-sleep inhibitor (caffeinate -d) while ANY window
 	// is being mirrored, so the host can't idle-lock — a locked Mac drops
 	// synthetic input, making remote window control silently dead. Held from the
@@ -2751,6 +2761,16 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			go a.handleHostInfo(conn)
 		case protocol.TypeNewSession:
 			go a.handleNewSession(conn, msg.Data)
+		case protocol.TypeChangelog:
+			// Network round trip to the release API — its own goroutine so a
+			// slow or rate-limited GitHub never stalls the reader carrying
+			// viewer keystrokes.
+			go a.handleChangelog(conn)
+		case protocol.TypeUpgrade:
+			// Long-running and ends by re-execing this very process, so it
+			// cannot run on the reader goroutine. The owner proof travels in
+			// Data and is checked inside, before anything happens.
+			go a.handleUpgrade(conn, msg.Data)
 		case protocol.TypeAppList:
 			a.enqueueWinOp(func() { a.handleAppList(conn) })
 		case protocol.TypeAppOpen:
