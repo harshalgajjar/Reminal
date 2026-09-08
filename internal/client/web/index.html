@@ -912,6 +912,7 @@
     .cl-tag { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em; padding: 1px 6px; border-radius: 99px; }
     .cl-tag.next { background: rgba(63,185,80,.15); color: #3fb950; border: 1px solid rgba(63,185,80,.3); }
     .cl-tag.skipped { background: rgba(139,148,158,.12); color: #8b949e; border: 1px solid #30363d; }
+    .cl-tag.here { background: rgba(88,166,255,.14); color: #58a6ff; border: 1px solid rgba(88,166,255,.32); }
     .cl-list { margin: 0; padding-left: 17px; color: #c9d1d9; font-size: 12.5px; line-height: 1.6; }
     .cl-list li { margin-bottom: 3px; }
     .cl-list code, .cl-sub code { background: rgba(110,118,129,.2); padding: .08em .34em; border-radius: 4px; font-size: 11.5px; }
@@ -2062,11 +2063,16 @@
       if (!sheet || sheet.hidden) return;
       const cur = (lastHostInfo && lastHostInfo.version) || (changelog && changelog.current) || '';
       const rels = (changelog && changelog.releases) || [];
+      // The running version now rides along in the list so its notes can
+      // be read. It is not somewhere to upgrade to, so it never counts as
+      // behind, and never decides whether the upgrade button is drawn.
+      const behind = rels.filter(r => !r.current).length;
+      const haveCurrent = rels.some(r => r.current);
       let sub;
       if (changelogPending) sub = 'Fetching release notes\u2026';
       else if (changelog && changelog.error) sub = 'Could not reach the release notes';
-      else if (rels.length) sub = 'You\u2019re on v' + escHTML(cur) + ' \u00b7 ' + rels.length
-             + ' release' + (rels.length > 1 ? 's' : '') + ' behind';
+      else if (behind) sub = 'You\u2019re on v' + escHTML(cur) + ' \u00b7 ' + behind
+             + ' release' + (behind > 1 ? 's' : '') + ' behind';
       else sub = 'You\u2019re on the latest, v' + escHTML(cur);
 
       let h = '<div class="cl-head"><div><div class="cl-title">What\u2019s new</div>'
@@ -2079,22 +2085,27 @@
         h += '<div class="cl-empty">' + escHTML(changelog.error)
            + '<br><br>Upgrading still works \u2014 this only affects reading about it first.</div>';
       } else if (!rels.length) {
-        h += '<div class="cl-empty">Nothing newer has been published.</div>';
+        h += '<div class="cl-empty">No release notes published for v' + escHTML(cur) + ' or anything newer.</div>';
       } else {
         h += '<div class="cl-body">';
         // Newest first, then everything between here and there: a host three
         // releases behind has no other way to learn what landed in the middle.
         rels.forEach((r, idx) => {
-          const tag = idx === 0 ? '<span class="cl-tag next">next</span>'
+          const tag = r.current ? '<span class="cl-tag here">you are here</span>'
+                    : idx === 0 ? '<span class="cl-tag next">next</span>'
                                 : '<span class="cl-tag skipped">skipped</span>';
           h += '<div class="cl-rel"><div class="cl-relhead">'
              + '<span class="cl-ver">v' + escHTML(r.version) + '</span>' + tag
              + '<span class="cl-when">' + escHTML(relWhen(r.published)) + '</span></div>'
              + renderNotes(r.notes) + '</div>';
         });
-        if (cur) h += '<div class="cl-here">you are here \u00b7 v' + escHTML(cur) + '</div>';
+        // Only needed when the running version has no entry of its own to
+        // tag: an unreleased build, or one whose release was pulled.
+        if (cur && !haveCurrent) h += '<div class="cl-here">you are here \u00b7 v' + escHTML(cur) + '</div>';
         h += '</div>';
-        h += '<div class="cl-foot">' + (upgradeButtonHTML(lastHostInfo || {}) || '') + '</div>';
+        // Nothing newer means nothing to press: the sheet is open to be
+        // read, not to start an upgrade that would be a no-op.
+        if (behind) h += '<div class="cl-foot">' + (upgradeButtonHTML(lastHostInfo || {}) || '') + '</div>';
       }
       sheet.innerHTML = h;
       const x = sheet.querySelector('#clx');

@@ -22,6 +22,7 @@ type Release struct {
 	Version   string `json:"version"`             // "3.5.7", no leading v
 	Published string `json:"published,omitempty"` // RFC3339
 	Notes     string `json:"notes,omitempty"`
+	Current   bool   `json:"current,omitempty"` // the version this host is running
 }
 
 // availableTTL memoizes the answer. No network is involved, but the call does
@@ -146,8 +147,16 @@ var (
 // the button down cannot hammer the API.
 const releaseErrTTL = 30 * time.Second
 
-// ReleasesSince returns every published release newer than currentVersion,
-// newest first, with the notes the release body carries.
+// ReleasesSince returns the release currentVersion is itself running plus
+// every published release newer than it, newest first, with the notes the
+// release body carries.
+//
+// Inclusive of the current version because "what's new" is also asked by
+// someone who has just upgraded and wants to read what they got. Filtering it
+// out left the panel empty at exactly the moment it was up to date, which
+// reads as broken rather than as finished. The current release is flagged
+// Current so the panel marks it instead of counting it as something to
+// upgrade to.
 //
 // Notes for a version you do not have cannot come from your own binary — a
 // host on 3.5.4 has no 3.5.6 file — so they are fetched. One request covers
@@ -238,13 +247,14 @@ func fetchReleases(ctx context.Context, currentVersion string) ([]Release, error
 		if r.Draft || r.Prerelease {
 			continue // release candidates are not what an upgrade lands on
 		}
-		if !newer(currentVersion, r.TagName) {
+		if !atOrNewer(currentVersion, r.TagName) {
 			continue
 		}
 		out = append(out, Release{
 			Version:   strings.TrimPrefix(r.TagName, "v"),
 			Published: r.PublishedAt,
 			Notes:     strings.TrimSpace(r.Body),
+			Current:   sameVersion(currentVersion, r.TagName),
 		})
 	}
 	// The API returns newest-first already, but it is not documented to, and
@@ -259,6 +269,18 @@ func fetchReleases(ctx context.Context, currentVersion string) ([]Release, error
 func sortReleases(rs []Release) {
 	sort.Slice(rs, func(i, j int) bool { return newer(rs[j].Version, "v"+rs[i].Version) })
 }
+
+// atOrNewer reports whether tag names the version currentVersion is running,
+// or a newer one. Available() deliberately goes on using newer(): the upgrade
+// offer must still mean "there is somewhere to move to". Only the notes panel
+// starts at the version you are on.
+func atOrNewer(currentVersion, tag string) bool {
+	return newer(currentVersion, tag) || sameVersion(currentVersion, tag)
+}
+
+// sameVersion compares on the parsed triple, so "3.6.0" and a "v3.6.0" tag are
+// one release rather than two.
+func sameVersion(a, b string) bool { return parseVer(a) == parseVer(b) }
 
 // ReleaseNotesTimeout bounds the fetch: the user is waiting with a sheet open.
 const ReleaseNotesTimeout = 10 * time.Second

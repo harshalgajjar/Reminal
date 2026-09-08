@@ -116,3 +116,22 @@ func TestReleasesSinceCachesFailuresBriefly(t *testing.T) {
 		t.Errorf("a stale failure was still being served: %v", err)
 	}
 }
+
+// The notes panel opens on the version you are running, so the filter behind
+// it has to keep that release. The upgrade offer must go on refusing it — a
+// host on the latest being told to upgrade to what it already has is the
+// regression this pins down.
+func TestReleaseFilterKeepsTheRunningVersion(t *testing.T) {
+	if !atOrNewer("3.6.0", "v3.6.0") {
+		t.Error("the running version was filtered out of its own release notes")
+	}
+	if !atOrNewer("3.5.7", "v3.6.0") {
+		t.Error("a newer release was filtered out")
+	}
+	if atOrNewer("3.6.0", "v3.5.7") {
+		t.Error("an older release was kept")
+	}
+	if newer("3.6.0", "v3.6.0") {
+		t.Error("the upgrade offer treated the running version as an update")
+	}
+}

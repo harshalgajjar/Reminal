@@ -16,11 +16,11 @@ import (
 	"github.com/reminal/reminal/internal/updater"
 )
 
-// handleChangelog answers a viewer's request for the release notes between
-// this host's version and the newest published one.
+// handleChangelog answers a viewer's request for the release notes from this
+// host's own version through the newest published one.
 //
-// Fetched, not embedded: a host on 3.5.4 has no 3.5.6 file, and the version
-// someone wants to read about is by definition one they do not have. Runs on
+// Fetched, not embedded: a host on 3.5.4 has no 3.5.6 file, so most of what is
+// worth reading about is not carried by the binary asking. Runs on
 // its own goroutine (the caller dispatches it that way) because it is a
 // network round trip and must not stall the shell stream.
 func (a *Agent) handleChangelog(conn *websocket.Conn) {
