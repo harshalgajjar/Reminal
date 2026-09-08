@@ -17,10 +17,16 @@ func snap(pct int, state string, mins int, at time.Time, stale bool) *client.Bat
 
 func TestBatteryLabel(t *testing.T) {
 	now := time.Now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 15, 4, 0, 0, now.Location())
-	// Anchor "yesterday" off today's date so the test can't straddle midnight
-	// into a wrong-day assertion.
-	yest := today.AddDate(0, 0, -1)
+	// Deterministic offsets, not wall-clock times: a fixed "3:04pm today" is in
+	// the FUTURE on a runner whose clock has not reached 3pm, and whenLabel
+	// (correctly) calls a future timestamp "just now". Three hours ago is
+	// always in the past, and stays on the same calendar day unless the test
+	// runs in the first three hours of one — which the guard below handles.
+	today := now.Add(-3 * time.Hour)
+	if today.Day() != now.Day() {
+		today = now.Add(-2 * time.Minute) // just after midnight: still today
+	}
+	yest := now.AddDate(0, 0, -1)
 
 	cases := []struct {
 		name string
@@ -47,12 +53,12 @@ func TestBatteryLabel(t *testing.T) {
 		{
 			name: "stale reads as past tense with a clock time",
 			in:   snap(20, "discharging", 62, today, true),
-			want: []string{"was 20%", "at 3:04pm", "1h 2m", "then"},
+			want: []string{"was 20%", "at " + today.Format("3:04pm"), "1h 2m", "then"},
 		},
 		{
 			name: "stale from yesterday says so",
 			in:   snap(20, "discharging", 0, yest, true),
-			want: []string{"was 20%", "yesterday", "3:04pm"},
+			want: []string{"was 20%", "yesterday", yest.Format("3:04pm")},
 		},
 		{
 			name: "no OS estimate omits the duration entirely",
@@ -138,5 +144,30 @@ func TestBatteryChargingShowsTimeToFull(t *testing.T) {
 	}
 	if strings.Contains(got, "left") {
 		t.Errorf("charging label %q says \"left\", which reads as time until dead", got)
+	}
+}
+
+// TestWhenLabelAt pins the wording against a fixed clock, so it cannot depend
+// on when or where the suite runs.
+func TestWhenLabelAt(t *testing.T) {
+	now := time.Date(2026, 9, 8, 14, 30, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		at   time.Time
+		want string
+	}{
+		{"seconds ago", now.Add(-20 * time.Second), "just now"},
+		{"earlier today", now.Add(-4 * time.Hour), "at 10:30am"},
+		{"yesterday", now.AddDate(0, 0, -1), "yesterday 2:30pm"},
+		{"last week", now.AddDate(0, 0, -6), "on Sep 2, 2:30pm"},
+		{"zero value", time.Time{}, "at an unknown time"},
+		// A backwards clock correction can leave a stored reading in the
+		// future; it must not render as a time that has not happened.
+		{"slightly ahead", now.Add(30 * time.Second), "just now"},
+	}
+	for _, c := range cases {
+		if got := whenLabelAt(c.at, now); got != c.want {
+			t.Errorf("%s: whenLabelAt = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

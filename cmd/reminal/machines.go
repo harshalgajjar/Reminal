@@ -301,13 +301,21 @@ func durLabel(mins int) string {
 // whenLabel says when a stale reading was taken: a clock time for today, and a
 // date once it is older than that, because "was 20% at 3:04pm" is useless if
 // you cannot tell which day.
-func whenLabel(t time.Time) string {
+func whenLabel(t time.Time) string { return whenLabelAt(t, time.Now()) }
+
+// whenLabelAt takes "now" so the wording can be tested without depending on
+// the wall clock or the runner's timezone — the first version of this was
+// exercised with a hardcoded 3:04pm that read as "just now" on a CI box whose
+// clock had not reached 3pm yet.
+func whenLabelAt(t, now time.Time) string {
 	if t.IsZero() {
 		return "at an unknown time"
 	}
-	now := time.Now()
 	switch {
-	case t.After(now.Add(-time.Minute)):
+	case !t.Before(now.Add(-time.Minute)):
+		// Also catches a timestamp slightly in the future, which a backwards
+		// NTP correction between writing and reading can produce. "Just now"
+		// is the honest reading; a future clock time would not be.
 		return "just now"
 	case sameDay(t, now):
 		return "at " + t.Format("3:04pm")
