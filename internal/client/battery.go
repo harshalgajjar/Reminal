@@ -47,9 +47,24 @@ func CurrentBattery() *Battery {
 	batMu.Lock()
 	defer batMu.Unlock()
 	if !batRead.IsZero() && time.Since(batRead) < batteryTTL {
-		return batVal
+		return batCopy()
 	}
 	batVal = readBattery()
 	batRead = time.Now()
-	return batVal
+	return batCopy()
+}
+
+// batCopy hands out a copy rather than the cached value itself: the cache is
+// shared by every caller for batteryTTL, and one of them mutating the struct
+// (or the Pct it points at) would poison the reading for all the others.
+func batCopy() *Battery {
+	if batVal == nil {
+		return nil
+	}
+	out := *batVal
+	if batVal.Pct != nil {
+		pct := *batVal.Pct
+		out.Pct = &pct
+	}
+	return &out
 }

@@ -89,12 +89,48 @@ func TestObserveBatteryUpdatesToNewerReading(t *testing.T) {
 	}
 }
 
-func TestForgetBattery(t *testing.T) {
+func TestObserveBatteryForgetsAncientReadings(t *testing.T) {
 	isolateHome(t) // temp HOME: never touch the real ~/.reminal
-	const id = "mach_gone"
-	ObserveBattery(id, protocol.DirResponse{BatteryPct: intp(42), BatteryState: "discharging"})
-	ForgetBattery(id)
+	const id = "mach_drawer"
+	ObserveBattery(id, protocol.DirResponse{BatteryPct: intp(20), BatteryState: "discharging"})
+
+	// Age the stored reading past the TTL by rewriting the file directly —
+	// the same thing a month in a drawer does.
+	h := loadBatteryHistory()
+	rec := h.Machines[id]
+	rec.At = time.Now().Add(-batteryHistoryTTL - time.Hour)
+	h.Machines[id] = rec
+	saveBatteryHistory(h)
+
 	if got := ObserveBattery(id, protocol.DirResponse{}); got != nil {
-		t.Errorf("a disowned machine still has history: %+v", got)
+		t.Errorf("a reading older than the TTL was still asserted: %+v", got)
+	}
+	// Just inside the window is still worth showing.
+	rec.At = time.Now().Add(-batteryHistoryTTL + time.Hour)
+	h.Machines[id] = rec
+	saveBatteryHistory(h)
+	if got := ObserveBattery(id, protocol.DirResponse{}); got == nil || !got.Stale {
+		t.Errorf("a reading inside the TTL was dropped: %+v", got)
+	}
+}
+
+func TestCurrentBatteryDoesNotHandOutItsCache(t *testing.T) {
+	// The cache is shared by every caller for batteryTTL. If it returned the
+	// cached pointer, one caller mutating the struct — or the int Pct points
+	// at — would corrupt the reading for all the others until it expired.
+	a := CurrentBattery()
+	if a == nil {
+		t.Skip("this host has no battery")
+	}
+	if a.Pct != nil {
+		*a.Pct = 3
+	}
+	a.State = "mangled"
+	b := CurrentBattery()
+	if b == nil {
+		t.Fatal("second read returned nothing")
+	}
+	if b.State == "mangled" || (b.Pct != nil && *b.Pct == 3) {
+		t.Errorf("mutating one caller's copy changed the cache: %+v", b)
 	}
 }

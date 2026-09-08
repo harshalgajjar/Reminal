@@ -3929,7 +3929,8 @@
         // Remembered battery, painted as history until this refresh's query
         // proves otherwise. A machine we have never seen a reading from paints
         // nothing, which is what a desktop should look like forever.
-        if (rec.batt) paintBattery(box, rec.batt, true);
+        const remembered = battRemembered(rec);
+        if (remembered) paintBattery(box, remembered, true);
       }
       // Fire the fills in the background — each box updates itself as its query
       // resolves, so one offline machine never blocks the others (or the panel).
@@ -3980,6 +3981,27 @@
     // battFromResp returns null when the host reported no battery. Desktops,
     // VMs and older agents all land there, and null renders nothing at all:
     // absence is the signal, so there is no "unknown" state to draw.
+    // battRemembered returns a stored reading only while it is still worth
+    // asserting. Anything older reads as "we know nothing about this machine",
+    // which is exactly what the row showed before we first heard from it.
+    //
+    // The TTL is local rather than a module const on purpose: this function is
+    // called from renderMachines, which is declared ABOVE it. A function
+    // declaration hoists and a `const` does not, so a module-level constant
+    // here would sit in the temporal dead zone for any caller that ever runs
+    // during script evaluation. None do today; this makes that impossible to
+    // get wrong later. Mirrors batteryHistoryTTL in batteryhistory.go — past a
+    // week, a laptop shut in a drawer is not "at 20%" in any useful sense, and
+    // the same expiry stops a machine that is UP but running a pre-battery
+    // agent from showing a stale charge beside a green online dot forever.
+    function battRemembered(rec) {
+      const TTL_MS = 7 * 24 * 60 * 60 * 1000;
+      const b = rec && rec.batt;
+      if (!b || typeof b.pct !== 'number' || !b.at) return null;
+      if (Date.now() - b.at > TTL_MS) return null;
+      return b;
+    }
+
     function battFromResp(resp) {
       if (!resp || typeof resp.battery_pct !== 'number') return null;
       const pct = Math.max(0, Math.min(100, Math.round(resp.battery_pct)));
@@ -4166,7 +4188,8 @@
         dot.title = 'offline';
         // This is the case the whole feature is for: it cannot tell us
         // anything now, so show what it last said and when.
-        if (rec.batt) paintBattery(box, rec.batt, true);
+        const rememberedOffline = battRemembered(rec);
+        if (rememberedOffline) paintBattery(box, rememberedOffline, true);
         // Keep the last-known (cached) list visible so a transient blip doesn't
         // blank the card; only show "offline" when there's nothing cached to show.
         if (!Array.isArray(rec.sessions)) {
@@ -4193,11 +4216,14 @@
       const batt = battFromResp(resp);
       if (batt) {
         paintBattery(box, batt, false);
-      } else if (rec.batt) {
+      } else {
         // The host answered but reported no battery — an older agent that
         // cannot read one. Keep the remembered value rather than blanking it,
-        // still marked as history. A true desktop has no rec.batt to keep.
-        paintBattery(box, rec.batt, true);
+        // still marked as history, until it ages out. A true desktop has
+        // nothing remembered to keep.
+        const kept = battRemembered(rec);
+        if (kept) paintBattery(box, kept, true);
+        else paintBattery(box, null, false); // clear a badge that just expired
       }
       const list = (resp.sessions || []);
       renderMachineSessions(box, list, b64);

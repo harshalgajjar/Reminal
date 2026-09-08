@@ -36,6 +36,15 @@ const batteryHistoryMax = 256
 // rewrite the file every few seconds for no new information.
 const batteryRewriteAfter = 2 * time.Minute
 
+// batteryHistoryTTL is how long a remembered reading is worth showing. A
+// laptop that has been shut in a drawer for a month is not "at 20%" in any
+// useful sense, and the same expiry quietly handles a machine that is UP but
+// running a pre-battery agent: without it, that machine would show a stale
+// charge next to a green online dot forever. Past this, the row goes back to
+// showing no battery at all, which is what a machine we know nothing about
+// should look like.
+const batteryHistoryTTL = 7 * 24 * time.Hour
+
 // BatterySnapshot is a reading plus when it was taken. Stale marks one that
 // came from history rather than from the machine just now — the difference
 // between "is at 20%" and "was at 20% at 3pm".
@@ -80,6 +89,14 @@ func loadBatteryHistory() batteryHistory {
 }
 
 func saveBatteryHistory(h batteryHistory) {
+	// Expired entries are already invisible to ObserveBattery; drop them here
+	// so the file does not accumulate machines that were retired years ago and
+	// then evict live ones when it hits the cap.
+	for k, v := range h.Machines {
+		if v.At.IsZero() || time.Since(v.At) > batteryHistoryTTL {
+			delete(h.Machines, k)
+		}
+	}
 	if len(h.Machines) > batteryHistoryMax {
 		type kv struct {
 			k string
@@ -160,6 +177,9 @@ func ObserveBattery(machineID string, resp protocol.DirResponse) *BatterySnapsho
 	if !ok {
 		return nil
 	}
+	if prev.At.IsZero() || time.Since(prev.At) > batteryHistoryTTL {
+		return nil // too old to be worth asserting
+	}
 	prev.Stale = true
 	return &prev
 }
@@ -175,16 +195,5 @@ func recordBattery(machineID string, snap BatterySnapshot) {
 		}
 	}
 	h.Machines[machineID] = snap
-	saveBatteryHistory(h)
-}
-
-// ForgetBattery drops a machine's history — called when it is disowned, so a
-// retired machine doesn't linger in the file forever.
-func ForgetBattery(machineID string) {
-	h := loadBatteryHistory()
-	if _, ok := h.Machines[machineID]; !ok {
-		return
-	}
-	delete(h.Machines, machineID)
 	saveBatteryHistory(h)
 }

@@ -34,15 +34,6 @@ import (
 // replacement within seconds.
 const vdisplayPoll = 12 * time.Second
 
-// vdisplayDeferPoll is how often a SESSION re-checks whether the daemon is
-// still the one doing this. The census belongs to the daemon — it is the
-// machine's singleton — and a session that defers must not pay the osascript
-// at all: with ten sessions open on a laptop, a per-session census meant ~50
-// AppleScript spawns a minute on an idle, lid-shut, battery-powered machine,
-// every one of them redundant. Coarse because the only thing it can change is
-// "the daemon service was uninstalled while I was running", which is rare.
-const vdisplayDeferPoll = 2 * time.Minute
-
 // vdisplayName must match the descriptor name in reminal-capture's vdisplay
 // subcommand — it's how the census tells our software display from real ones.
 const vdisplayName = "reminal"
@@ -124,20 +115,27 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 	defer reap()
 
 	for {
-		// The daemon owns the census. A session that defers drops any display
-		// it was holding from before the daemon appeared, then checks back
-		// rarely — and crucially spawns nothing while it waits. launchd owns
-		// the daemon's lifecycle here, so a crashed one is restarted for us
-		// rather than needing the resurrect the directory host does on Windows.
-		if !isDaemon && DaemonServiceInstalled() {
-			reap()
-			if sleepOrStop(stop, vdisplayDeferPoll) {
-				return
-			}
-			continue
-		}
 		if sleepOrStop(stop, vdisplayPoll) {
 			return
+		}
+
+		// The daemon owns the census; a session defers to it and spawns
+		// nothing while it does — this branch is a pid-file read and a
+		// signal-0 probe, which is the entire point of the deferral.
+		//
+		// The test is "is the daemon RUNNING", not "is it installed". Those
+		// come apart more often than they look: launchctl unload, a kill, the
+		// window where watchBinaryAndExit has exited on an upgrade and launchd
+		// has not restarted yet. Deferring on merely-installed would mean
+		// nobody at all provides the display in any of those, and closed-lid
+		// mode would fail silently — where before this change any session
+		// would have covered it. On daemonAlive the fallback is automatic and
+		// arrives within one poll.
+		if !isDaemon && daemonAlive() {
+			// Yield anything we were holding from before the daemon appeared.
+			// The daemon picks it up on its next tick, once the lock is clear.
+			reap()
+			continue
 		}
 
 		if !config.LoadSettings().ClosedLid {
