@@ -168,6 +168,30 @@ func UpgradeQuiet(currentVersion string) (updated bool, err error) {
 	return true, nil
 }
 
+// refreshCache fetches the latest tag and rewrites the cache unconditionally.
+//
+// It exists because check() is cache-FIRST: within cacheTTL it answers from
+// disk and never touches the network, which is right for the startup prompt
+// (one prompt a day is plenty) but wrong for the Host panel's upgrade offer.
+// A release published an hour ago would stay invisible for the rest of the day
+// — the machine cannot offer an upgrade it has not heard of.
+//
+// A failed fetch leaves the previous answer in place, rather than clearing the
+// cache the way an explicit `reminal upgrade` does: a momentary network blip
+// must not make the button disappear from a panel someone is looking at.
+func refreshCache(timeout time.Duration) {
+	tag, err := fetchLatestTag(timeout)
+	if err != nil || tag == "" {
+		return
+	}
+	writeCache(cacheEntry{
+		CheckedAt:   time.Now(),
+		LatestTag:   tag,
+		AssetURL:    assetURLFor(tag, runtime.GOOS, runtime.GOARCH),
+		CriticalMin: fetchCriticalMin(timeout),
+	})
+}
+
 // shouldCheck reports whether the version-check is meaningful for this build.
 // Dev builds and unknown versions skip the check entirely.
 func shouldCheck(currentVersion string) bool {
@@ -274,11 +298,14 @@ func fetchCriticalMin(timeout time.Duration) string {
 // during the day with a "403 Forbidden" instead of a clean upgrade.
 // The web route has separate, much higher anonymous limits and
 // returns the redirect regardless.
+// latestTagURL is the "latest release" pointer we resolve. A variable only so
+// tests can aim it at a stub — nothing in the program reassigns it.
+var latestTagURL = "https://github.com/" + repo + "/releases/latest"
+
 func fetchLatestTag(timeout time.Duration) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET",
-		"https://github.com/"+repo+"/releases/latest", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", latestTagURL, nil)
 	if err != nil {
 		return "", err
 	}

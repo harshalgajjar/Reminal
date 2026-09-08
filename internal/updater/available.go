@@ -64,11 +64,14 @@ func Available(currentVersion string) string {
 	return availVal
 }
 
-// availableRefreshInterval is how often a long-lived agent re-asks. cacheTTL
-// still gates the network, so this costs at most one request a day; the loop
-// exists so a host that stays up for weeks does not go on reporting the version
-// that was current the day it started.
-const availableRefreshInterval = 6 * time.Hour
+// availableRefreshInterval is how often a long-lived agent re-asks GitHub.
+//
+// An hour, and it really asks: deferring to cacheTTL (a day) made this loop a
+// no-op, so a machine could not offer a release published that morning. Two
+// requests an hour per machine is nothing against an unauthenticated limit of
+// sixty, and it means "I just published" and "my machines know" are the same
+// afternoon.
+const availableRefreshInterval = time.Hour
 
 // RefreshAvailable updates the cached answer to "is there a newer release"
 // without prompting and without installing anything.
@@ -86,7 +89,7 @@ func RefreshAvailable(currentVersion string) {
 	if !shouldCheck(currentVersion) {
 		return
 	}
-	_, _, _, _ = check(currentVersion, httpTimeoutBackground)
+	refreshCache(httpTimeoutBackground)
 }
 
 // StartAvailableRefresh keeps that answer fresh for as long as this process

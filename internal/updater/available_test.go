@@ -6,6 +6,8 @@ package updater
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -133,5 +135,67 @@ func TestReleaseFilterKeepsTheRunningVersion(t *testing.T) {
 	}
 	if newer("3.6.0", "v3.6.0") {
 		t.Error("the upgrade offer treated the running version as an update")
+	}
+}
+
+// stubLatestTag points the release-pointer lookup at a local server that
+// redirects to tag, the way github's /releases/latest does.
+func stubLatestTag(t *testing.T, tag string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "https://example.invalid/releases/tag/"+tag)
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+	old := latestTagURL
+	latestTagURL = srv.URL
+	t.Cleanup(func() { latestTagURL = old })
+	t.Setenv("REMINAL_WEB", "") // no criticality beacon to reach in a test
+}
+
+// The Host panel can only offer a release the machine has heard of. check() is
+// cache-first for a day, so the background refresh has to go past the cache —
+// otherwise a release published this morning is invisible until tomorrow.
+func TestRefreshCacheIgnoresAFreshCache(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: "v3.6.0", AssetURL: "stale"})
+	stubLatestTag(t, "v3.6.1")
+
+	// Through the exported entry point the agent actually calls: the bug was
+	// that this deferred to check(), which answers from a day-old cache.
+	RefreshAvailable("3.6.0")
+
+	entry, ok := readCache()
+	if !ok {
+		t.Fatal("the cache went missing")
+	}
+	if entry.LatestTag != "v3.6.1" {
+		t.Fatalf("refresh deferred to the day-old cache: still %q, want v3.6.1", entry.LatestTag)
+	}
+	if got := Available("3.6.0"); got != "3.6.1" {
+		t.Fatalf("Available reported %q; the panel would not offer the upgrade", got)
+	}
+}
+
+// A network blip must not empty the answer out from under a panel someone is
+// looking at — unlike an explicit `reminal upgrade`, which clears first.
+func TestRefreshCacheKeepsTheOldAnswerOnFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: "v3.6.1", AssetURL: "keep"})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	old := latestTagURL
+	latestTagURL = srv.URL
+	defer func() { latestTagURL = old }()
+	t.Setenv("REMINAL_WEB", "")
+
+	refreshCache(httpTimeoutBackground)
+
+	entry, ok := readCache()
+	if !ok || entry.LatestTag != "v3.6.1" {
+		t.Fatalf("a failed refresh discarded the known answer: %+v (ok=%v)", entry, ok)
 	}
 }
