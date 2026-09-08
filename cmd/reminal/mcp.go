@@ -66,6 +66,7 @@ const mcpInstructions = `reminal is two things for an agent: notes on a window, 
 
 Sessions — every machine this device owns (this box and any you have owner-connected to):
   1. list_sessions to see machines and their live terminals: id, name, path (cwd), title, viewers, idle time.
+     Laptops also report battery: percent, state, and minutes_to_empty OR minutes_to_full (check which — they mean opposite things). No battery field = desktop or server. A stale battery with as_of is the last reading before the machine went dark, not its charge now. Check it before starting long work somewhere.
   2. search_sessions with a regex to find which session mentioned something. It matches name/path/title/id on every machine, and live terminal scrollback on this machine (and on remotes that have been upgraded).
   3. read_transcript to pull one session's current scrollback as plain text (ANSI stripped; long buffers return the newest tail).
   4. send_keys to type into a session. Owned sessions need only the id; any other reminal needs session id + PIN (or a join URL). Set enter=true to press Return after the text.
@@ -521,7 +522,14 @@ func mcpToolList() []map[string]any {
 			"name": "list_sessions",
 			"description": "List every reminal this device owns: this machine and any enrolled box, " +
 				"each with live sessions (id, name, path/cwd, title, viewers, idle). " +
-				"Does not include PINs. Call this to find which session to search or talk about.",
+				"Does not include PINs. Call this to find which session to search or talk about. " +
+				"A laptop also reports `battery`: percent, state (charging/discharging/charged), " +
+				"and minutes_to_empty OR minutes_to_full — check which one is present rather than " +
+				"assuming, they mean opposite things. Machines with no battery omit the field, so " +
+				"its presence means laptop and its absence means desktop or server. " +
+				"`battery.stale` with `as_of` means the machine is not answering and this is the " +
+				"last reading before it went dark, not its charge now. Worth reading before you " +
+				"start long work somewhere: an unplugged box at 8% will not finish it.",
 			"inputSchema": obj(map[string]any{}),
 		},
 		{

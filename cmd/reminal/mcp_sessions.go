@@ -10,6 +10,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/reminal/reminal/internal/client"
 	"github.com/reminal/reminal/internal/protocol"
@@ -30,13 +31,59 @@ type mcpSessionRow struct {
 }
 
 type mcpMachineRow struct {
-	ID       string          `json:"id"`
-	Name     string          `json:"name"`
-	Hostname string          `json:"hostname,omitempty"`
-	Local    bool            `json:"local,omitempty"`
-	Online   bool            `json:"online"`
-	Error    string          `json:"error,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Hostname string `json:"hostname,omitempty"`
+	Local    bool   `json:"local,omitempty"`
+	Online   bool   `json:"online"`
+	Error    string `json:"error,omitempty"`
+	// Battery is omitted entirely for machines that have no battery, so an
+	// agent can read its presence as "this is a laptop" and its absence as
+	// "this is a desktop or a server" without a second field to consult.
+	Battery  *mcpBattery     `json:"battery,omitempty"`
 	Sessions []mcpSessionRow `json:"sessions"`
+}
+
+// mcpBattery is a machine's power state as an agent sees it. Fields are named
+// for what they mean rather than what a UI would draw, and the estimate says
+// what it counts down TO — an agent deciding where to put a two-hour job needs
+// "43 minutes until dead" and "43 minutes until full" to be unmistakable.
+type mcpBattery struct {
+	Percent int `json:"percent"`
+	// State is "charging", "discharging" or "charged".
+	State string `json:"state,omitempty"`
+	// MinutesToEmpty is set only while discharging; MinutesToFull only while
+	// charging. Both omitted when the OS had no estimate (common for a minute
+	// or two after a power change, and always on Windows while charging).
+	MinutesToEmpty int `json:"minutes_to_empty,omitempty"`
+	MinutesToFull  int `json:"minutes_to_full,omitempty"`
+	// AsOf is when this reading was taken, RFC3339. Stale marks a reading kept
+	// from the last time the machine answered rather than read just now — an
+	// offline laptop still reports its last known charge, and an agent must be
+	// able to tell that apart from a live one.
+	AsOf  string `json:"as_of,omitempty"`
+	Stale bool   `json:"stale,omitempty"`
+}
+
+// mcpBatteryOf projects a snapshot for the wire, or nil when the machine has
+// no battery to report.
+func mcpBatteryOf(b *client.BatterySnapshot) *mcpBattery {
+	if b == nil {
+		return nil
+	}
+	out := &mcpBattery{Percent: b.Pct, State: b.State, Stale: b.Stale}
+	if !b.At.IsZero() {
+		out.AsOf = b.At.Format(time.RFC3339)
+	}
+	switch b.State {
+	case "charging":
+		out.MinutesToFull = b.Mins
+	case "charged":
+		// "0:00 remaining" on a full battery is not a countdown to anything.
+	default:
+		out.MinutesToEmpty = b.Mins
+	}
+	return out
 }
 
 type mcpSearchHit struct {
@@ -125,6 +172,7 @@ func fleetMachineRow(m client.FleetMachine, currentID string) mcpMachineRow {
 		Local:    m.Local,
 		Online:   m.Online,
 		Error:    m.Error,
+		Battery:  mcpBatteryOf(m.Battery),
 		Sessions: make([]mcpSessionRow, 0, len(m.Sessions)),
 	}
 	for _, s := range m.Sessions {

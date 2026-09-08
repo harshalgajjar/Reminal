@@ -419,6 +419,7 @@ func (dh *dirHost) handleDirQuery(msg protocol.Message) {
 	if host, err := os.Hostname(); err == nil {
 		resp.Hostname = host
 	}
+	fillBattery(&resp)
 	// Optional encrypted payload. Older hosts ignore Data and still list.
 	q := parseDirQuery(dh.box, msg.Data)
 	if q.Pattern != "" {
@@ -722,7 +723,22 @@ func LocalDirectory() protocol.DirResponse {
 	if host, err := os.Hostname(); err == nil {
 		resp.Hostname = host
 	}
+	fillBattery(&resp)
 	return resp
+}
+
+// fillBattery attaches this machine's power state to a directory reply, and
+// leaves every field zero on a machine that has no battery. Shared by the
+// local path above and the remote one an owner queries, so the two can't drift.
+func fillBattery(resp *protocol.DirResponse) {
+	b := CurrentBattery()
+	if b == nil || b.Pct == nil {
+		return
+	}
+	pct := *b.Pct
+	resp.BatteryPct = &pct
+	resp.BatteryState = b.State
+	resp.BatteryMins = b.Mins
 }
 
 // localDirSessions is the shared projection used by both the directory host (for

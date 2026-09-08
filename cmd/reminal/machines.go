@@ -132,15 +132,24 @@ func printMachine(r machineResult, isLocal bool) {
 		localTag = "  " + cGreen("[this machine]")
 	}
 
+	// A machine that did not answer still has a battery history, and that is
+	// exactly when it is worth reading: "was 20% at 3:04pm" is the only thing
+	// a dark laptop can tell you.
+	batt := batteryLabel(client.ObserveBattery(client.MachineID(r.m.Key), r.resp))
+	battPart := ""
+	if batt != "" {
+		battPart = "  " + batt
+	}
+
 	if r.err != nil { // offline — nothing to enumerate
-		fmt.Printf("  %s %s%s  %s%s\n", cDim("○"), cBold(name), idPart, cRed("(offline)"), localTag)
+		fmt.Printf("  %s %s%s  %s%s%s\n", cDim("○"), cBold(name), idPart, cRed("(offline)"), battPart, localTag)
 		return
 	}
 	count := ""
 	if n := len(r.resp.Sessions); n > 0 {
 		count = " " + cDim(fmt.Sprintf("· %d", n))
 	}
-	fmt.Printf("  %s %s%s%s%s\n", cGreen("●"), cBold(name), count, idPart, localTag)
+	fmt.Printf("  %s %s%s%s%s%s\n", cGreen("●"), cBold(name), count, idPart, battPart, localTag)
 	if len(r.resp.Sessions) == 0 {
 		fmt.Println("      " + cDim("no sessions running"))
 		return
@@ -222,4 +231,95 @@ func sessionMeta(s protocol.DirSession) string {
 		parts = append(parts, "idle "+humanShort(time.Duration(s.IdleSecs)*time.Second))
 	}
 	return strings.Join(parts, "  ")
+}
+
+// batteryLabel renders a machine's power state for the machine header, or ""
+// when there is nothing to show — a desktop, or a machine we have never seen a
+// reading from. Absence is deliberate: no battery, no text.
+//
+//	62% · 2h 14m left
+//	41% charging · 1h 12m to full
+//	100% charged
+//	was 20% at 3:04pm · 1h 2m left then
+//
+// Plain words, no glyphs: this sits in a terminal next to hostnames and
+// session ids, and colour already carries the urgency. The stale form is the
+// reason the feature exists — a machine that has gone dark cannot tell you
+// anything, so the last thing it said, and when, is the whole answer.
+func batteryLabel(b *client.BatterySnapshot) string {
+	if b == nil {
+		return ""
+	}
+	dur := durLabel(b.Mins)
+	if b.Stale {
+		out := fmt.Sprintf("was %d%% %s", b.Pct, whenLabel(b.At))
+		// Quoted as of that moment, not extrapolated to now: we have no idea
+		// what the machine did after it stopped answering.
+		if dur != "" && b.State == "discharging" {
+			out += " · " + dur + " left then"
+		}
+		return cDim(out)
+	}
+	switch b.State {
+	case "charging":
+		out := fmt.Sprintf("%d%% charging", b.Pct)
+		if dur != "" {
+			out += " · " + dur + " to full"
+		}
+		return cGreen(out)
+	case "charged":
+		return cDim(fmt.Sprintf("%d%% charged", b.Pct))
+	default:
+		out := fmt.Sprintf("%d%%", b.Pct)
+		if dur != "" {
+			out += " · " + dur + " left"
+		}
+		// Running out is the one state worth interrupting the eye for.
+		if b.Pct <= 10 {
+			return cRed(out)
+		}
+		return cDim(out)
+	}
+}
+
+// durLabel turns minutes into "2h 5m" / "45m". 0 means the OS declined to
+// estimate, which is common right after plugging in or unplugging.
+func durLabel(mins int) string {
+	if mins <= 0 {
+		return ""
+	}
+	if mins < 60 {
+		return fmt.Sprintf("%dm", mins)
+	}
+	h, m := mins/60, mins%60
+	if m == 0 {
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dh %dm", h, m)
+}
+
+// whenLabel says when a stale reading was taken: a clock time for today, and a
+// date once it is older than that, because "was 20% at 3:04pm" is useless if
+// you cannot tell which day.
+func whenLabel(t time.Time) string {
+	if t.IsZero() {
+		return "at an unknown time"
+	}
+	now := time.Now()
+	switch {
+	case t.After(now.Add(-time.Minute)):
+		return "just now"
+	case sameDay(t, now):
+		return "at " + t.Format("3:04pm")
+	case sameDay(t, now.AddDate(0, 0, -1)):
+		return "yesterday " + t.Format("3:04pm")
+	default:
+		return "on " + t.Format("Jan 2, 3:04pm")
+	}
+}
+
+func sameDay(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
 }

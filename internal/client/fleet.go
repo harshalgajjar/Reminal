@@ -27,6 +27,11 @@ type FleetMachine struct {
 	Online   bool
 	Error    string
 	Sessions []protocol.DirSession
+	// Battery is the machine's power state: fresh when it answered, otherwise
+	// the last reading we ever saw with the time it was taken. Nil for a
+	// machine with no battery, and for one we have never heard a reading from
+	// — callers render nothing at all in that case.
+	Battery *BatterySnapshot
 }
 
 // CollectFleet lists every machine this device owns and the sessions on each.
@@ -85,6 +90,7 @@ func fleetFrom(m OwnedMachine, resp protocol.DirResponse, err error, local bool)
 		Online:   err == nil,
 		Sessions: resp.Sessions,
 	}
+	fm.Battery = ObserveBattery(fm.ID, resp)
 	if err != nil {
 		fm.Error = err.Error()
 		fm.Online = false

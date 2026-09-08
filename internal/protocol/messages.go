@@ -317,4 +317,20 @@ type DirResponse struct {
 	// one session. Omitted by older hosts (they still return the session list).
 	KeysOK    bool   `json:"keys_ok,omitempty"`
 	KeysError string `json:"keys_error,omitempty"`
+	// Battery* describe the machine's power state when it answered. A machine
+	// with no battery — desktop, VM, server — and any host too old to report
+	// omit all three, and the UI then shows no battery at all: absence is the
+	// signal, so there is no "unknown" state anyone has to render.
+	//
+	// BatteryPct is a pointer because 0% is a real and alarming reading that
+	// must not collapse into "not reported" the way an omitempty int would.
+	BatteryPct *int `json:"battery_pct,omitempty"`
+	// BatteryState is "charging", "discharging" or "charged" (on mains and
+	// full). Three states rather than a bool: "on AC at 100%" and "on AC
+	// climbing through 80%" read differently to a human.
+	BatteryState string `json:"battery_state,omitempty"`
+	// BatteryMins is the OS's own estimate of minutes remaining — to empty
+	// while discharging, to full while charging. 0 means the OS declined to
+	// estimate, which it does for a minute or two after any power change.
+	BatteryMins int `json:"battery_mins,omitempty"`
 }
