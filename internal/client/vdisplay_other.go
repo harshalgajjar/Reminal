@@ -7,4 +7,4 @@ package client
 
 // vdisplayLoop is macOS-only: closed-lid mode's virtual display rides the
 // ScreenCaptureKit helper, which doesn't exist elsewhere.
-func (a *Agent) vdisplayLoop(stop <-chan struct{}) {}
+func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {}

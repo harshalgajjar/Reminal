@@ -757,7 +757,7 @@ func (a *Agent) Run() error {
 	// virtual display up while the machine is headless so remote view/control
 	// survive "unplug everything and shut the lid". Gated at runtime by the
 	// closed-lid setting, which it re-reads every poll.
-	go a.vdisplayLoop(shellExit)
+	go vdisplayLoop(shellExit, false) // sessions defer to the daemon; see vdisplayLoop
 
 	// Serve this machine's owner-derived directory channel so owners can list
 	// every session across the machines they own (`reminal machines`). No-op

@@ -50,6 +50,12 @@ func RunDaemon() error {
 		// capture + input injection; sessions delegate to it over mirror.sock so
 		// one reminal.app grant covers every session.
 		go serveMirror(stop)
+		// And it owns the closed-lid display census, for the same reason it
+		// owns the notes: one machine, one singleton. Ten sessions each running
+		// their own ~100ms osascript every 12s is ~50 AppleScript spawns a
+		// minute on an idle laptop, all but one of them answering a question
+		// that has a single machine-wide answer.
+		go vdisplayLoop(stop, true)
 	}
 	// The daemon also owns the window notes and the one badge helper, so the N
 	// `reminal mcp` processes a machine runs can't each hold a private copy and

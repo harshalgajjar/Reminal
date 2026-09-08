@@ -13,10 +13,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/reminal/reminal/internal/config"
+	"github.com/reminal/reminal/internal/proc"
 )
 
 // Closed-lid ("leave & forget") mode, display half. A Mac that goes fully
@@ -33,6 +33,15 @@ import (
 // enough to be invisible, fast enough that a yanked monitor grows a virtual
 // replacement within seconds.
 const vdisplayPoll = 12 * time.Second
+
+// vdisplayDeferPoll is how often a SESSION re-checks whether the daemon is
+// still the one doing this. The census belongs to the daemon — it is the
+// machine's singleton — and a session that defers must not pay the osascript
+// at all: with ten sessions open on a laptop, a per-session census meant ~50
+// AppleScript spawns a minute on an idle, lid-shut, battery-powered machine,
+// every one of them redundant. Coarse because the only thing it can change is
+// "the daemon service was uninstalled while I was running", which is rare.
+const vdisplayDeferPoll = 2 * time.Minute
 
 // vdisplayName must match the descriptor name in reminal-capture's vdisplay
 // subcommand — it's how the census tells our software display from real ones.
@@ -79,12 +88,18 @@ out.join("\n");`)
 	return real, w, h, nil
 }
 
-// vdisplayLoop runs for the agent's lifetime and keeps the closed-lid promise:
-// while settings.ClosedLid is on and no real display is attached, a virtual
-// display exists. Settings are re-read every poll (a settings-page toggle needs
-// no push channel), and the helper child carries the same stdin lifeline as
-// capture streams, so it can't outlive a killed or hot-restarted agent.
-func (a *Agent) vdisplayLoop(stop <-chan struct{}) {
+// vdisplayLoop keeps the closed-lid promise: while settings.ClosedLid is on
+// and no real display is attached, a virtual display exists. Settings are
+// re-read every poll (a settings-page toggle needs no push channel), and the
+// helper child carries the same stdin lifeline as capture streams, so it can't
+// outlive a killed or hot-restarted process.
+//
+// isDaemon says whether this is the machine's daemon. Only the daemon runs the
+// census; sessions defer to it, exactly as the directory host does, and while
+// deferring they never spawn the osascript. Sessions still carry the loop as a
+// fallback for a machine with no daemon service installed — a bare `reminal`
+// on a box that never ran install.sh.
+func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 	var child *exec.Cmd
 	var childStdin io.WriteCloser
 	var childDone chan struct{} // closed by the waiter goroutine when the child exits
@@ -108,13 +123,21 @@ func (a *Agent) vdisplayLoop(stop <-chan struct{}) {
 	}
 	defer reap()
 
-	tick := time.NewTicker(vdisplayPoll)
-	defer tick.Stop()
 	for {
-		select {
-		case <-stop:
+		// The daemon owns the census. A session that defers drops any display
+		// it was holding from before the daemon appeared, then checks back
+		// rarely — and crucially spawns nothing while it waits. launchd owns
+		// the daemon's lifecycle here, so a crashed one is restarted for us
+		// rather than needing the resurrect the directory host does on Windows.
+		if !isDaemon && DaemonServiceInstalled() {
+			reap()
+			if sleepOrStop(stop, vdisplayDeferPoll) {
+				return
+			}
+			continue
+		}
+		if sleepOrStop(stop, vdisplayPoll) {
 			return
-		case <-tick.C:
 		}
 
 		if !config.LoadSettings().ClosedLid {
@@ -129,6 +152,13 @@ func (a *Agent) vdisplayLoop(stop <-chan struct{}) {
 				reap()
 			default:
 			}
+		}
+		// Someone else already provides the display: nothing to decide, and no
+		// reason to pay for an osascript to find that out. Only safe while we
+		// hold no child of our own — if we do, the census is how we learn a
+		// real display came back and we should stand down.
+		if child == nil && vdisplayHeldByOther() {
+			continue
 		}
 		real, w, h, err := displayCensus()
 		if err != nil {
@@ -148,7 +178,7 @@ func (a *Agent) vdisplayLoop(stop <-chan struct{}) {
 		}
 		if p := vdisplayLockPath(); p != "" {
 			if b, err := os.ReadFile(p); err == nil {
-				if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); pid > 0 && pidAliveQuick(pid) {
+				if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); pid > 0 && proc.Alive(pid) {
 					continue
 				}
 			}
@@ -177,12 +207,25 @@ func (a *Agent) vdisplayLoop(stop <-chan struct{}) {
 	}
 }
 
-// pidAliveQuick reports whether pid exists (signal-0 probe — good enough for
-// the lockfile check; a zombie holder just delays takeover one poll).
-func pidAliveQuick(pid int) bool {
-	proc, err := os.FindProcess(pid)
+// vdisplayHeldByOther reports whether another live process already owns the
+// virtual display, read from the lock file. A stat plus a liveness probe —
+// orders of magnitude cheaper than the census it lets us skip.
+//
+// Liveness is internal/proc.Alive rather than the bare signal-0 probe this
+// used to carry: Alive counts EPERM as alive, and a signal-0 probe does not.
+// That distinction did not matter while every lock holder was one of this
+// user's own sessions. It does now the daemon holds it — a daemon running
+// under another account would have read as dead, and the machine would have
+// grown a second virtual display on top of the working one.
+func vdisplayHeldByOther() bool {
+	p := vdisplayLockPath()
+	if p == "" {
+		return false
+	}
+	b, err := os.ReadFile(p)
 	if err != nil {
 		return false
 	}
-	return proc.Signal(syscall.Signal(0)) == nil
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	return pid > 0 && pid != os.Getpid() && proc.Alive(pid)
 }
