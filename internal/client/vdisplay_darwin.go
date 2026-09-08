@@ -34,6 +34,12 @@ import (
 // replacement within seconds.
 const vdisplayPoll = 12 * time.Second
 
+// censusLeaseTTL is how long a census claim stands without being refreshed.
+// The owner rewrites the lease every vdisplayPoll, so this is ~2.5 missed
+// refreshes: long enough to ride out a slow tick, short enough that a dead
+// owner is replaced before anyone notices the display is gone.
+const censusLeaseTTL = 30 * time.Second
+
 // vdisplayName must match the descriptor name in reminal-capture's vdisplay
 // subcommand — it's how the census tells our software display from real ones.
 const vdisplayName = "reminal"
@@ -113,30 +119,25 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		child, childStdin, childDone = nil, nil, nil
 	}
 	defer reap()
+	defer releaseCensusLease()
 
 	for {
 		if sleepOrStop(stop, vdisplayPoll) {
 			return
 		}
 
-		// The daemon owns the census; a session defers to it and spawns
-		// nothing while it does — this branch is a pid-file read and a
-		// signal-0 probe, which is the entire point of the deferral.
-		//
-		// The test is "is the daemon RUNNING", not "is it installed". Those
-		// come apart more often than they look: launchctl unload, a kill, the
-		// window where watchBinaryAndExit has exited on an upgrade and launchd
-		// has not restarted yet. Deferring on merely-installed would mean
-		// nobody at all provides the display in any of those, and closed-lid
-		// mode would fail silently — where before this change any session
-		// would have covered it. On daemonAlive the fallback is automatic and
-		// arrives within one poll.
-		if !isDaemon && daemonAlive() {
-			// Yield anything we were holding from before the daemon appeared.
-			// The daemon picks it up on its next tick, once the lock is clear.
+		// Someone else is already doing this. A deferring session spawns
+		// nothing — a stat, a small read and a signal-0 probe — which is the
+		// entire point. The daemon never defers: it is the machine singleton
+		// and takes the census back from any session that stood in for it
+		// while it was down.
+		if !isDaemon && censusHeldByOther() {
+			// Yield anything we were holding from before the owner appeared;
+			// it picks the display up on its next tick, once the lock is free.
 			reap()
 			continue
 		}
+		claimCensusLease()
 
 		if !config.LoadSettings().ClosedLid {
 			reap()
@@ -202,6 +203,82 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		if p := vdisplayLockPath(); p != "" {
 			_ = os.WriteFile(p, []byte(fmt.Sprintf("%d\n", cmd.Process.Pid)), 0o600)
 		}
+	}
+}
+
+// vdisplayCensusLeasePath is where whoever runs the census says so. Distinct
+// from vdisplayLockPath, which names the holder of an existing DISPLAY: the
+// census runs whether or not a display currently exists (that is how a newly
+// headless machine grows one), so "who is watching" needs a claim of its own.
+func vdisplayCensusLeasePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".reminal", "vdisplay-census.pid")
+}
+
+// censusHeldByOther reports whether another live process has claimed the
+// census recently.
+//
+// This exists instead of "is the daemon running", and the difference is a
+// version-compatibility one. Deferring to a live daemon assumes that daemon
+// does the census — true only of a daemon new enough to have this code. A
+// NEW session next to an OLD daemon would have deferred to a process that
+// never censuses, and nobody would have provided the virtual display:
+// closed-lid mode failing silently on every upgrade window, and permanently
+// if the daemon never restarted. A lease cannot lie about that. An old daemon
+// writes none, so sessions see no claim and do the work themselves.
+//
+// It pays a second dividend on a machine with no daemon at all: the sessions
+// elect ONE census owner among themselves instead of all running it, which is
+// most of the saving even in the fallback path.
+func censusHeldByOther() bool {
+	p := vdisplayCensusLeasePath()
+	if p == "" {
+		return false
+	}
+	fi, err := os.Stat(p)
+	if err != nil || time.Since(fi.ModTime()) > censusLeaseTTL {
+		return false // no claim, or an abandoned one
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return false
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	return pid > 0 && pid != os.Getpid() && proc.Alive(pid)
+}
+
+// claimCensusLease records that we are the one doing this, and refreshes the
+// mtime the staleness check reads. Best-effort: a machine where this cannot be
+// written simply falls back to every session censusing, which is what it did
+// before the lease existed.
+func claimCensusLease() {
+	p := vdisplayCensusLeasePath()
+	if p == "" {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return
+	}
+	_ = os.WriteFile(p, []byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
+}
+
+// releaseCensusLease drops our claim on the way out, so a survivor takes over
+// on its next poll instead of waiting out censusLeaseTTL. Only ever removes
+// our OWN claim: a successor that has already taken the lease must keep it.
+func releaseCensusLease() {
+	p := vdisplayCensusLeasePath()
+	if p == "" {
+		return
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return
+	}
+	if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); pid == os.Getpid() {
+		_ = os.Remove(p)
 	}
 }
 
