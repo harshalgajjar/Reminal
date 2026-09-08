@@ -910,8 +910,6 @@
     .cl-ver { font-size: 12.5px; font-weight: 660; color: #e6edf3; font-family: ui-monospace, Menlo, monospace; }
     .cl-when { font-size: 10.5px; color: #6e7681; }
     .cl-tag { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em; padding: 1px 6px; border-radius: 99px; }
-    .cl-tag.next { background: rgba(63,185,80,.15); color: #3fb950; border: 1px solid rgba(63,185,80,.3); }
-    .cl-tag.skipped { background: rgba(139,148,158,.12); color: #8b949e; border: 1px solid #30363d; }
     .cl-tag.here { background: rgba(88,166,255,.14); color: #58a6ff; border: 1px solid rgba(88,166,255,.32); }
     .cl-list { margin: 0; padding-left: 17px; color: #c9d1d9; font-size: 12.5px; line-height: 1.6; }
     .cl-list li { margin-bottom: 3px; }
@@ -1957,10 +1955,14 @@
       const busy = u && !u.error && ['download', 'verify', 'install', 'restart'].includes(u.stage);
       const failed = u && u.error;
       const done = u && u.stage === 'done' && !u.error;
-      if (!i.update && !u) return ''; // nothing to offer
-      // Owners only. This is the cosmetic half of the rule — the host verifies
-      // a signed owner proof on the request and refuses without one — but a
-      // button that cannot work should not be shown.
+      // Owners only, and always offered to one — not merely when the cached
+      // check happens to have heard of a release. The owner half is cosmetic
+      // (the host verifies a signed proof on the request and refuses without
+      // one), but a button that CAN work should not be hidden behind a cache
+      // that refreshes on a slow timer: noticing a new version yourself and
+      // being unable to act on it is the whole problem. Pressing it runs a
+      // real check, and a host already on the latest is told so with nothing
+      // replaced and nothing restarted.
       //
       // `!u` matters: once something IS in flight or has failed, it must stay
       // visible. Returning unconditionally here swallowed the error from a
@@ -1976,9 +1978,12 @@
       if (failed)      { label = escHTML(u.error); sub = 'Nothing was replaced. This host is still on v' + escHTML(i.version) + ' and every session is untouched.'; }
       else if (done)   { label = '\u2713 ' + (u.detail ? escHTML(u.detail) : 'Now on v' + escHTML(u.version || '')); sub = ''; }
       else if (busy)   { label = escHTML(u.detail || 'Working\u2026'); sub = ''; }
-      else             { label = 'Upgrade &amp; restart';
+      else if (i.update) { label = 'Upgrade &amp; restart';
                          sub = 'v' + escHTML(i.update) + ' \u00b7 <b>' + hostSessionCount() + '</b> restart in place. '
                              + 'Shells and everything running in them are kept.'; }
+      else             { label = 'Check for updates';
+                         sub = 'On v' + escHTML(i.version) + '. Checks now \u2014 nothing is replaced or '
+                             + 'restarted unless there is a newer release.'; }
       let h = '<button class="host-upgrade' + (done ? ' done' : failed ? ' fail' : '') + '"'
             + (busy || done ? ' disabled' : '') + '>'
             + (busy ? '<span class="up-spin"></span>' : '') + label + '</button>';
@@ -2091,9 +2096,11 @@
         // Newest first, then everything between here and there: a host three
         // releases behind has no other way to learn what landed in the middle.
         rels.forEach((r, idx) => {
-          const tag = r.current ? '<span class="cl-tag here">you are here</span>'
-                    : idx === 0 ? '<span class="cl-tag next">next</span>'
-                                : '<span class="cl-tag skipped">skipped</span>';
+          // Only the release you are on is tagged. Every other entry is
+          // something one upgrade gives you, so ranking them — "next" for the
+          // newest, "skipped" for the rest — described a staged rollout that
+          // does not happen and read as "you did not get these".
+          const tag = r.current ? '<span class="cl-tag here">you are here</span>' : '';
           h += '<div class="cl-rel"><div class="cl-relhead">'
              + '<span class="cl-ver">v' + escHTML(r.version) + '</span>' + tag
              + '<span class="cl-when">' + escHTML(relWhen(r.published)) + '</span></div>'

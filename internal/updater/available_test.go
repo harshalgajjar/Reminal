@@ -153,49 +153,24 @@ func stubLatestTag(t *testing.T, tag string) {
 	t.Setenv("REMINAL_WEB", "") // no criticality beacon to reach in a test
 }
 
-// The Host panel can only offer a release the machine has heard of. check() is
-// cache-first for a day, so the background refresh has to go past the cache —
-// otherwise a release published this morning is invisible until tomorrow.
-func TestRefreshCacheIgnoresAFreshCache(t *testing.T) {
+// A machine whose sessions all run in the background has nobody to prompt, so
+// the interactive check never runs there — but the Host panel reads the cache
+// that check writes. Without this the upgrade could not be offered at all on
+// exactly the always-on hosts it is meant for.
+func TestRefreshAvailablePopulatesAnEmptyCache(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: "v3.6.0", AssetURL: "stale"})
-	stubLatestTag(t, "v3.6.1")
+	if _, ok := readCache(); ok {
+		t.Fatal("expected no cache to start from")
+	}
+	stubLatestTag(t, "v3.6.2")
 
-	// Through the exported entry point the agent actually calls: the bug was
-	// that this deferred to check(), which answers from a day-old cache.
 	RefreshAvailable("3.6.0")
 
 	entry, ok := readCache()
-	if !ok {
-		t.Fatal("the cache went missing")
+	if !ok || entry.LatestTag != "v3.6.2" {
+		t.Fatalf("background refresh did not record the answer: %+v (ok=%v)", entry, ok)
 	}
-	if entry.LatestTag != "v3.6.1" {
-		t.Fatalf("refresh deferred to the day-old cache: still %q, want v3.6.1", entry.LatestTag)
-	}
-	if got := Available("3.6.0"); got != "3.6.1" {
-		t.Fatalf("Available reported %q; the panel would not offer the upgrade", got)
-	}
-}
-
-// A network blip must not empty the answer out from under a panel someone is
-// looking at — unlike an explicit `reminal upgrade`, which clears first.
-func TestRefreshCacheKeepsTheOldAnswerOnFailure(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: "v3.6.1", AssetURL: "keep"})
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-	old := latestTagURL
-	latestTagURL = srv.URL
-	defer func() { latestTagURL = old }()
-	t.Setenv("REMINAL_WEB", "")
-
-	refreshCache(httpTimeoutBackground)
-
-	entry, ok := readCache()
-	if !ok || entry.LatestTag != "v3.6.1" {
-		t.Fatalf("a failed refresh discarded the known answer: %+v (ok=%v)", entry, ok)
+	if got := Available("3.6.0"); got != "3.6.2" {
+		t.Fatalf("Available reported %q, so the panel would show nothing", got)
 	}
 }
