@@ -208,30 +208,33 @@ func check(currentVersion string, timeout time.Duration) (latestTag, assetURL st
 	// machine's cached latest (see recordLatest), which is what we read back.
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	rs, err := releaseFeed(ctx)
-	if err != nil {
-		return "", "", false, err
+	// The upgrade offer reads the "latest release" redirect — no api.github.com,
+	// so it never trips the 60/hour rate limit and keeps working on a busy day.
+	// If the redirect is unreachable, fall back to reminal's own notes feed,
+	// which is also rate-limit-free.
+	tag, err := fetchLatestTag(ctx)
+	if err != nil || tag == "" {
+		rs, ferr := releaseFeed(ctx)
+		if ferr != nil {
+			return "", "", false, err
+		}
+		if len(rs) == 0 {
+			return "", "", false, nil
+		}
+		tag = "v" + rs[0].Version
 	}
-	if len(rs) == 0 {
-		return "", "", false, nil
-	}
+	// Records the newest as this machine's cached latest (what Available and the
+	// startup prompt read), with the download URL and criticality beacon along.
+	recordLatest(tag)
 	entry, _ := readCache()
-	tag, url, criticalMin := "v"+rs[0].Version, assetURLFor("v"+rs[0].Version, runtime.GOOS, runtime.GOARCH), entry.CriticalMin
-
-	critical = criticalMin != "" && newer(currentVersion, criticalMin)
-	if !critical && !newer(currentVersion, tag) {
+	critical = entry.CriticalMin != "" && newer(currentVersion, entry.CriticalMin)
+	if !critical && !newer(currentVersion, entry.LatestTag) {
 		return "", "", false, nil
 	}
-	if url == "" {
-		// A newer release exists but carries nothing this platform can run.
-		// That is not "you are up to date", and reporting it as such is how a
-		// release that published only some of its builds becomes invisible:
-		// the tag is right there, the binary simply is not, and every client on
-		// the missing platform is told it has nothing to do. Releases are built
-		// one platform per job, so any single job failing leaves exactly this.
+	if entry.AssetURL == "" {
 		return "", "", false, errNoAssetForPlatform
 	}
-	return tag, url, critical, nil
+	return entry.LatestTag, entry.AssetURL, critical, nil
 }
 
 // fetchCriticalMin reads the relay's /version beacon and returns its
@@ -267,6 +270,10 @@ func fetchCriticalMin(timeout time.Duration) string {
 	return strings.TrimSpace(body.CriticalMin)
 }
 
+// latestReleaseURL is the /releases/latest web route whose 302 names the newest
+// tag. A var so tests can point it at a local redirect server.
+var latestReleaseURL = "https://github.com/" + repo + "/releases/latest"
+
 // fetchLatestTag returns the latest release tag (e.g. "v0.8.3") by
 // reading the Location header on a request to the public release URL
 // — github.com/<repo>/releases/latest redirects to /releases/tag/<tag>.
@@ -275,6 +282,29 @@ func fetchCriticalMin(timeout time.Duration) string {
 // during the day with a "403 Forbidden" instead of a clean upgrade.
 // The web route has separate, much higher anonymous limits and
 // returns the redirect regardless.
+func fetchLatestTag(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, latestReleaseURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "reminal")
+	// Read the redirect, don't follow it — the Location is all we need.
+	cl := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := cl.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	loc := resp.Header.Get("Location") // .../releases/tag/<tag>
+	if i := strings.LastIndex(loc, "/tag/"); i >= 0 {
+		if tag := strings.TrimSpace(loc[i+len("/tag/"):]); tag != "" {
+			return tag, nil
+		}
+	}
+	return "", nil // no redirect = nothing to offer, not an error
+}
 
 // assetURLFor builds the direct binary-download URL for the given
 // tag + platform. Pattern matches the release-workflow's archive

@@ -71,28 +71,37 @@ func TestReleaseFilterKeepsTheRunningVersion(t *testing.T) {
 	}
 }
 
-// stubFeed points the release feed at a local server returning these tags (as
-// GitHub's list endpoint would), counting how often it is hit, and clears the
-// memo so the test starts from nothing.
+// stubFeed points the notes feed at a local server returning these tags as
+// GitHub's releases Atom feed (newest first), and the upgrade offer at a local
+// /releases/latest redirect naming the newest — the two rate-limit-free sources
+// the real code reads. It counts hits on the notes feed, and clears the memo so
+// the test starts from nothing.
 func stubFeed(t *testing.T, tags ...string) *int {
 	t.Helper()
 	hits := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	feed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
-		w.Header().Set("Content-Type", "application/json")
-		out := "["
-		for i, tag := range tags {
-			if i > 0 {
-				out += ","
-			}
-			out += `{"tag_name":"` + tag + `","body":"notes for ` + tag + `","published_at":"2026-09-08T00:00:00Z"}`
+		w.Header().Set("Content-Type", "application/atom+xml")
+		out := `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom">`
+		for _, tag := range tags {
+			out += `<entry><title>` + tag + `</title><updated>2026-09-08T00:00:00Z</updated>` +
+				`<content type="html">&lt;ul&gt;&lt;li&gt;notes for ` + tag + `&lt;/li&gt;&lt;/ul&gt;</content></entry>`
 		}
-		_, _ = w.Write([]byte(out + "]"))
+		_, _ = w.Write([]byte(out + `</feed>`))
 	}))
-	t.Cleanup(srv.Close)
-	old := releasesURL
-	releasesURL = srv.URL
-	t.Cleanup(func() { releasesURL = old })
+	t.Cleanup(feed.Close)
+	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		newest := ""
+		if len(tags) > 0 {
+			newest = tags[0]
+		}
+		w.Header().Set("Location", "/releases/tag/"+newest)
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(redir.Close)
+	oldFeed, oldLatest := releasesURL, latestReleaseURL
+	releasesURL, latestReleaseURL = feed.URL, redir.URL
+	t.Cleanup(func() { releasesURL, latestReleaseURL = oldFeed, oldLatest })
 	t.Setenv("REMINAL_WEB", "") // no criticality beacon to reach in a test
 	resetFeed()
 	t.Cleanup(resetFeed)

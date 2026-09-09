@@ -5,15 +5,18 @@ package updater
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/html"
 )
 
 // Release is one published release as the Host panel shows it: the version,
@@ -130,7 +133,12 @@ func UpgradeBlockedReason(currentVersion string) string {
 // behind needs the middle ones too, and — the point — everything that asks
 // "what is newest" reads the same answer. A variable only so tests can aim it
 // at a stub; nothing in the program reassigns it.
-var releasesURL = "https://api.github.com/repos/harshalgajjar/Reminal/releases?per_page=30"
+// releasesURL is GitHub's per-repo releases Atom feed — the WEB route
+// (github.com), NOT api.github.com. It carries every release's notes yet shares
+// the redirect's much higher anonymous limits, so reading "what's new" never
+// trips the API's 60/hour-per-IP rate limit either. A var so tests point it at
+// a local server.
+var releasesURL = "https://github.com/" + repo + "/releases.atom"
 
 // One feed, one memo, every consumer.
 //
@@ -257,12 +265,16 @@ func capReleases(rs []Release, limit int) []Release {
 }
 
 // fetchReleases reads the list endpoint: every stable release, newest first.
+// fetchReleases reads GitHub's releases Atom feed and returns every stable
+// release, newest first, with its notes. The Atom route is not rate-limited the
+// way the JSON API is (see releasesURL), so a busy machine still gets "what's
+// new". The notes ride the feed as GitHub-rendered HTML; atomNotesToText turns
+// them back into the plain heading/bullet text the viewer renders.
 func fetchReleases(ctx context.Context) ([]Release, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releasesURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "reminal")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -270,44 +282,103 @@ func fetchReleases(ctx context.Context) ([]Release, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		// Rate limiting is the common one (60/hour unauthenticated), and it is
-		// worth saying so rather than "failed".
 		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
 			return nil, fmt.Errorf("GitHub rate-limited this machine; try again shortly")
 		}
-		return nil, fmt.Errorf("release list: HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("release feed: HTTP %d", resp.StatusCode)
 	}
-	// Bounded read: a compromised or confused endpoint must not be able to hand
-	// us an unbounded body to buffer.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	// Bounded read: a confused or hostile endpoint must not hand us an unbounded
+	// body to buffer.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
 	}
-	var raw []struct {
-		TagName     string `json:"tag_name"`
-		Body        string `json:"body"`
-		Draft       bool   `json:"draft"`
-		Prerelease  bool   `json:"prerelease"`
-		PublishedAt string `json:"published_at"`
+	var feed struct {
+		Entries []struct {
+			Title   string `xml:"title"`
+			Updated string `xml:"updated"`
+			Content string `xml:"content"`
+		} `xml:"entry"`
 	}
-	if err := json.Unmarshal(body, &raw); err != nil {
+	if err := xml.Unmarshal(body, &feed); err != nil {
 		return nil, err
 	}
 	var out []Release
-	for _, r := range raw {
-		if r.Draft || r.Prerelease {
-			continue // release candidates are not what an upgrade lands on
+	for _, e := range feed.Entries {
+		ver := strings.TrimPrefix(strings.TrimSpace(e.Title), "v")
+		if ver == "" {
+			continue
 		}
 		out = append(out, Release{
-			Version:   strings.TrimPrefix(r.TagName, "v"),
-			Published: r.PublishedAt,
-			Notes:     strings.TrimSpace(r.Body),
+			Version:   ver,
+			Published: strings.TrimSpace(e.Updated),
+			Notes:     atomNotesToText(e.Content),
 		})
 	}
-	// The API returns newest-first already, but it is not documented to, and
-	// "newest" is exactly what everything reads off the front of this list.
 	sortReleases(out)
 	return out, nil
+}
+
+var blankRuns = regexp.MustCompile(`\n{3,}`)
+
+// atomNotesToText turns a release's GitHub-rendered HTML body (what the Atom
+// feed carries) back into the plain heading / bullet / subheading text the
+// viewer's note renderer reads. A real HTML walk, not tag-stripping, so nested
+// or unexpected markup degrades to its text instead of leaking angle brackets.
+func atomNotesToText(fragment string) string {
+	fragment = strings.TrimSpace(fragment)
+	if fragment == "" {
+		return ""
+	}
+	doc, err := html.Parse(strings.NewReader(fragment))
+	if err != nil {
+		return fragment
+	}
+	var b strings.Builder
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			switch n.Data {
+			case "h1", "h2", "h3", "h4", "h5", "h6":
+				if t := nodeText(n); t != "" {
+					b.WriteString("# " + t + "\n\n")
+				}
+				return
+			case "li":
+				if t := nodeText(n); t != "" {
+					b.WriteString("- " + t + "\n")
+				}
+				return
+			case "p":
+				if t := nodeText(n); t != "" {
+					b.WriteString(t + "\n\n")
+				}
+				return
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return strings.TrimSpace(blankRuns.ReplaceAllString(b.String(), "\n\n"))
+}
+
+// nodeText collects an element's descendant text with runs of whitespace
+// collapsed to single spaces.
+func nodeText(n *html.Node) string {
+	var b strings.Builder
+	var f func(*html.Node)
+	f = func(n *html.Node) {
+		if n.Type == html.TextNode {
+			b.WriteString(n.Data)
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			f(c)
+		}
+	}
+	f(n)
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 // sortReleases puts the newest first. Separate so it is testable without a
