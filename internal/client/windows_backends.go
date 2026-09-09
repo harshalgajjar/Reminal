@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // This file holds the concrete windowBackend implementations. They only shell
@@ -156,6 +157,10 @@ function run(argv) {
 
 var darwinIconCache sync.Map // bundle path -> data URL (empty string caches failures)
 
+// iconFetchTimeout caps one icon batch. Generous for a cold cache of a few
+// hundred apps; nothing like the forever a blocked consent prompt would cost.
+const iconFetchTimeout = 20 * time.Second
+
 func darwinIcons(paths []string) map[string]string {
 	icons := make(map[string]string, len(paths))
 	missing := make([]string, 0, len(paths))
@@ -175,7 +180,11 @@ func darwinIcons(paths []string) map[string]string {
 	}
 	if len(missing) != 0 {
 		args := append([]string{"-l", "JavaScript", "-e", jxaAppIconsScript, "--"}, missing...)
-		out, err := run("osascript", args...)
+		// Icons are decoration. Bounded, because this is osascript and on a
+		// machine that has not granted Automation it can sit on a consent
+		// dialog indefinitely — and the app list must still arrive without
+		// icons rather than never.
+		out, err := runTimeout(iconFetchTimeout, "osascript", args...)
 		found := make(map[string]string, len(missing))
 		if err == nil {
 			for _, line := range strings.Split(out, "\n") {

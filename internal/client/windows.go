@@ -5,6 +5,7 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -197,13 +198,34 @@ func (a *Agent) windows() windowBackend {
 							recoverLog("winOps", r)
 						}
 					}()
+					started := time.Now()
+					winLog("op start (queued %d)", len(a.winOps))
 					op()
+					winLog("op done in %s", time.Since(started).Round(time.Millisecond))
+					// A slow op delays every request queued behind it; say so in
+					// the log rather than letting the panel look dead in silence.
+					if d := time.Since(started); d > winOpSlow {
+						agentNotify("  reminal: a window operation took %s — later requests were waiting behind it\n", d.Round(time.Second))
+					}
 				}()
 			}
 		}()
 	})
 	return a.winBackend
 }
+
+// winLog traces the window-op queue (enqueue, start, finish, drop) when
+// REMINAL_WINLOG is set — for chasing a request that never answers, without
+// a special build. Off, it costs one env lookup per call.
+func winLog(format string, args ...interface{}) {
+	if os.Getenv("REMINAL_WINLOG") == "" {
+		return
+	}
+	agentNotify("  winlog "+time.Now().Format("15:04:05.000")+" "+format+"\n", args...)
+}
+
+// winOpSlow is the point past which a window op is reported in the log.
+const winOpSlow = 10 * time.Second
 
 // enqueueWinOp schedules a window operation (list / ctl / input) to run on the
 // single worker goroutine, off the relay reader. Drops the op if the queue is
@@ -214,6 +236,7 @@ func (a *Agent) enqueueWinOp(op func()) {
 	select {
 	case a.winOps <- op:
 	default:
+		winLog("op DROPPED: queue full (%d)", len(a.winOps))
 	}
 }
 
@@ -276,6 +299,7 @@ func (a *Agent) handleAppList(conn *websocket.Conn) {
 	} else {
 		payload.Apps = apps
 	}
+	winLog("app_list: %d apps, unsupported=%q err=%q", len(payload.Apps), payload.Unsupported, payload.Error)
 	a.sendWindowMsg(conn, protocol.TypeAppList, payload)
 }
 
@@ -2601,9 +2625,14 @@ func (a *Agent) sendWindowMsg(conn *websocket.Conn, t protocol.MessageType, payl
 	}
 	enc, err := a.box.Encrypt(raw)
 	if err != nil {
+		winLog("%s: encrypt failed: %v", t, err)
 		return
 	}
-	_ = a.writeMsg(conn, protocol.Message{Type: t, Data: enc})
+	if err := a.writeMsg(conn, protocol.Message{Type: t, Data: enc}); err != nil {
+		winLog("%s: write failed (%d bytes): %v", t, len(enc), err)
+	} else {
+		winLog("%s: sent %d bytes", t, len(enc))
+	}
 }
 
 // sendWindowClosed tells the viewer a mirrored window is gone so it drops the
@@ -2619,8 +2648,38 @@ func (a *Agent) sendWindowClosed(conn *websocket.Conn, id string) {
 
 // run executes name with args and returns trimmed stdout, or an error carrying
 // stderr for diagnostics (permission prompts, missing tools).
+// runCeiling bounds every plain run(). None of these commands — osascript,
+// screencapture, sips, open, xdotool — should take more than a few seconds,
+// and in the daemon they execute on the serialized window-op worker: one that
+// never returns (a consent prompt nobody is there to answer) would hold every
+// request queued behind it for as long as the daemon lives.
+const runCeiling = 30 * time.Second
+
 func run(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+	return runTimeout(runCeiling, name, args...)
+}
+
+// runTimeout is run with a ceiling. For anything that can block on something
+// outside our control — a subprocess that stops on a consent dialog, say —
+// because several of these run on the serialized window-op worker: one that
+// never returns holds every request queued behind it, on the whole machine
+// channel, for as long as the daemon lives.
+func runTimeout(d time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// Killing the child is not enough: a grandchild it spawned can keep the
+	// stdout pipe open, and Output() then waits on the pipe, not the process.
+	// WaitDelay is what makes the ceiling real.
+	cmd.WaitDelay = 2 * time.Second
+	out, err := runOutput(cmd, name)
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("%s: gave up after %s", name, d)
+	}
+	return out, err
+}
+
+func runOutput(cmd *exec.Cmd, name string) (string, error) {
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
