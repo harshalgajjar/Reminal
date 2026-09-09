@@ -15,9 +15,11 @@ package client
 // winbackend_win32_input.go (SendInput injection).
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -25,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -414,7 +417,95 @@ func (win32Windows) listApps() ([]appInfo, error) {
 	sort.Slice(apps, func(i, j int) bool {
 		return strings.ToLower(apps[i].Name) < strings.ToLower(apps[j].Name)
 	})
+	paths := make([]string, len(apps))
+	for i := range apps {
+		paths[i] = apps[i].ID
+	}
+	icons := win32Icons(paths)
+	// Same headroom the darwin path keeps under the relay's frame cap.
+	const iconBudget = 600 << 10
+	used := 0
+	for i := range apps {
+		ic := icons[apps[i].ID]
+		if ic == "" || used+len(ic) > iconBudget {
+			continue
+		}
+		apps[i].Icon = ic
+		used += len(ic)
+	}
 	return apps, nil
+}
+
+var win32IconCache sync.Map // .lnk path -> data URL ("" caches a failure)
+
+// win32IconScript reads shortcut paths on stdin (one per line) and prints
+// "path<TAB>base64png" per line, extracting the associated icon at 24px. One
+// PowerShell process handles the whole batch — the Windows analogue of
+// darwinIcons' single osascript call.
+const win32IconScript = `Add-Type -AssemblyName System.Drawing
+$ErrorActionPreference='SilentlyContinue'
+while($null -ne ($p = [Console]::In.ReadLine())){
+  try {
+    $ic = [System.Drawing.Icon]::ExtractAssociatedIcon($p)
+    if($ic){
+      $bmp = New-Object System.Drawing.Bitmap 24,24
+      $g = [System.Drawing.Graphics]::FromImage($bmp)
+      $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+      $g.DrawIcon($ic, (New-Object System.Drawing.Rectangle 0,0,24,24))
+      $ms = New-Object System.IO.MemoryStream
+      $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+      [Console]::Out.WriteLine($p + [char]9 + [Convert]::ToBase64String($ms.ToArray()))
+      $g.Dispose(); $bmp.Dispose(); $ms.Dispose(); $ic.Dispose()
+    }
+  } catch {}
+}`
+
+// win32Icons returns cached data-URL PNG icons for the shortcut paths. Bounded
+// by iconFetchTimeout — icons are decoration; the app list must still arrive.
+func win32Icons(paths []string) map[string]string {
+	icons := make(map[string]string, len(paths))
+	seen := make(map[string]bool, len(paths))
+	missing := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		if cached, ok := win32IconCache.Load(p); ok {
+			if v, _ := cached.(string); v != "" {
+				icons[p] = v
+			}
+			continue
+		}
+		missing = append(missing, p)
+	}
+	if len(missing) == 0 {
+		return icons
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), iconFetchTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", win32IconScript)
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Stdin = strings.NewReader(strings.Join(missing, "\r\n") + "\r\n")
+	out, err := cmd.Output()
+	found := make(map[string]string, len(missing))
+	if err == nil {
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimRight(line, "\r")
+			f := strings.SplitN(line, "\t", 2)
+			if len(f) == 2 && f[0] != "" && f[1] != "" {
+				found[f[0]] = "data:image/png;base64," + f[1]
+			}
+		}
+	}
+	for _, p := range missing {
+		ic := found[p]
+		win32IconCache.Store(p, ic)
+		if ic != "" {
+			icons[p] = ic
+		}
+	}
+	return icons
 }
 
 func (win32Windows) openApp(id string) error {
