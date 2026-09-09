@@ -2771,6 +2771,8 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// cannot run on the reader goroutine. The owner proof travels in
 			// Data and is checked inside, before anything happens.
 			go a.handleUpgrade(conn, msg.Data)
+		case protocol.TypeCheckUpdate:
+			go a.handleCheckUpdate(conn) // network round trip; throttled inside
 		case protocol.TypeAppList:
 			a.enqueueWinOp(func() { a.handleAppList(conn) })
 		case protocol.TypeAppOpen:

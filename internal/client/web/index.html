@@ -859,14 +859,19 @@
        drift from the two buttons already in the panel; only the accent
        differs, because this one changes the machine rather than opening
        something. */
+    /* Sits below the load line now, so it needs a normal gap above rather than
+       the negative margin that used to tuck it under the meters. */
     .host-ver { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: #8b949e;
-                margin: -4px 0 8px; flex-wrap: wrap; }
+                margin: 8px 0 0; white-space: nowrap; }
+    .host-ver .host-whatsnew { margin: 0 0 0 auto; width: auto; flex: 0 0 auto; }
     .host-ver code { background: #010409; border: 1px solid #21262d; border-radius: 4px;
                      padding: 1px 5px; color: #c9d1d9; font-size: 10px; }
     .host-ver .new { color: #3fb950; font-weight: 600; }
-    .host-upgrade { width: 100%; margin-top: 6px; font: inherit; font-size: 12px; cursor: pointer;
-                    background: #1f6feb; border: 1px solid #388bfd; color: #fff; border-radius: 6px;
-                    padding: 7px 10px; display: flex; align-items: center; justify-content: center; gap: 7px; }
+    /* Compact on purpose: these sit under the main actions, and at the panel's
+       full button size the pair out-weighed "New session" and "View desktop". */
+    .host-upgrade { width: 100%; margin-top: 8px; font: inherit; font-size: 11.5px; cursor: pointer;
+                    background: #1f6feb; border: 1px solid #388bfd; color: #fff; border-radius: 5px;
+                    padding: 5px 10px; display: flex; align-items: center; justify-content: center; gap: 7px; }
     .host-upgrade:hover { background: #388bfd; }
     .host-upgrade:disabled { opacity: .8; cursor: default; background: #21262d; border-color: #30363d; color: #c9d1d9; }
     .host-upgrade.done { background: #238636; border-color: #2ea043; }
@@ -883,10 +888,15 @@
     @media (prefers-reduced-motion: reduce) { .up-spin { animation: none; } }
     /* A link, not a third button: this is a thing you read, not a thing that
        changes the machine. */
-    .host-whatsnew { display: block; width: 100%; margin-top: 6px; background: none; border: 0;
-                     cursor: pointer; font: inherit; font-size: 11px; color: #58a6ff;
-                     text-align: center; padding: 2px; }
-    .host-whatsnew:hover { text-decoration: underline; }
+    /* Everything about which reminal this machine runs, kept together at the
+       bottom of the panel and fenced off by a rule: it is the least-used part
+       and the only part that changes the machine, so it should not sit between
+       the vitals and the actions people open this panel for. */
+    .host-vblock { margin-top: 14px; padding-top: 12px; border-top: 1px solid #21262d; }
+    .host-whatsnew { font: inherit; font-size: 10px; cursor: pointer; white-space: nowrap;
+                     background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+                     border-radius: 5px; padding: 2px 7px; }
+    .host-whatsnew:hover { background: #2a313a; border-color: #3d444d; }
 
     /* The sheet lives outside the 290px panel: release notes are prose, and a
        250px column turns three bullets into fourteen lines. */
@@ -1726,7 +1736,11 @@
     let hostWaitSince = 0;
     const HOST_WAIT_MS = 4000;
     function onHostInfo(info) {
+      const first = !lastHostInfo;
       lastHostInfo = info;
+      // The panel was opened before the host had told us anything; now that it
+      // has, ask the one question the panel exists to answer.
+      if (first && updateCheckWanted && document.getElementById('host').open) requestUpdateCheck();
       // Completion for an upgrade can only arrive HERE. The host's last word
       // before it re-execs is "restart", and then it is gone — there is no
       // "done" to send, because the process that would send it has been
@@ -1930,18 +1944,65 @@
     let upgradeState = null;
     let changelog = null;      // {current, releases[], error} once fetched
     let changelogPending = false;
+    // The panel asks the host for a fresh answer every time it is opened, and
+    // shows "checking…" until one arrives. There is no button for this: the
+    // question is asked by opening the panel, and the answer is either an
+    // upgrade to press or "up to date".
+    let updateChecking = false;
+    let updateCheckTimer = null;
+    const UPDATE_CHECK_WAIT_MS = 8000; // a host too old to answer never will
+
+    let updateCheckWanted = false; // opened before host_info arrived; ask on arrival
+
+    function requestUpdateCheck() {
+      if (!lastHostInfo || !lastHostInfo.version) { updateCheckWanted = true; return; }
+      if (typeof sendWin !== 'function') return;
+      updateCheckWanted = false;
+      updateChecking = true;
+      clearTimeout(updateCheckTimer);
+      updateCheckTimer = setTimeout(() => { updateChecking = false; renderHost(); }, UPDATE_CHECK_WAIT_MS);
+      sendWin('check_update', {});
+      renderHost();
+    }
+
+    function onCheckUpdate(payload) {
+      clearTimeout(updateCheckTimer);
+      updateChecking = false;
+      if (lastHostInfo && payload) lastHostInfo.update = payload.update || undefined;
+      renderHost();
+    }
+
+    // The notes link is offered whenever the host can answer it, including when
+    // up to date — a dead end there would make "what changed?" unanswerable for
+    // anyone already current.
+    function whatsNewHTML(i) {
+      if (!i.version) return '';
+      const pending = changelog && changelog.releases ? changelog.releases.length : 0;
+      return '<button class="host-whatsnew">' + (changelogPending ? 'Loading notes\u2026'
+           : 'What\u2019s new' + (pending > 1 ? ' \u00b7 ' + pending : '')) + '</button>';
+    }
+
+    // Version, the control that changes it, and the notes for it — one block,
+    // last in the panel.
+    function hostVersionBlockHTML(i) {
+      if (!i.version) return '';
+      return '<div class="host-vblock">' + hostVersionHTML(i) + upgradeButtonHTML(i) + '</div>';
+    }
 
     function hostVersionHTML(i) {
       if (!i.version) return ''; // pre-3.5.8 host: it cannot act on any of this
+      // One version number, once. This row says what the machine IS; the
+      // button below says what it would become. Naming the target here too —
+      // and a third time in the button's subtitle — put the same number on
+      // screen three times in a panel eight lines tall. The state still reads
+      // at a glance, in words rather than a repeated number.
       let h = '<div class="host-ver">reminal <code>v' + escHTML(i.version) + '</code>';
-      if (upgradeState && upgradeState.stage === 'done' && upgradeState.version) {
-        h += '<span class="new">\u00b7 now on v' + escHTML(upgradeState.version) + '</span>';
-      } else if (i.update) {
-        h += '<span class="new">\u00b7 v' + escHTML(i.update) + ' available</span>';
-      } else {
-        h += '<span>\u00b7 up to date</span>';
-      }
-      return h + '</div>';
+      const u = upgradeState;
+      if (u && u.stage === 'done' && !u.error) h += '<span class="new">\u00b7 updated</span>';
+      else if (i.update)                       h += '<span class="new">\u00b7 update available</span>';
+      else if (updateChecking)                 h += '<span>\u00b7 checking\u2026</span>';
+      else                                     h += '<span>\u00b7 up to date</span>';
+      return h + whatsNewHTML(i) + '</div>';
     }
 
     // One renderer for every upgrade state, so the button and its subtitle
@@ -1955,14 +2016,14 @@
       const busy = u && !u.error && ['download', 'verify', 'install', 'restart'].includes(u.stage);
       const failed = u && u.error;
       const done = u && u.stage === 'done' && !u.error;
-      // Owners only, and always offered to one — not merely when the cached
-      // check happens to have heard of a release. The owner half is cosmetic
-      // (the host verifies a signed proof on the request and refuses without
-      // one), but a button that CAN work should not be hidden behind a cache
-      // that refreshes on a slow timer: noticing a new version yourself and
-      // being unable to act on it is the whole problem. Pressing it runs a
-      // real check, and a host already on the latest is told so with nothing
-      // replaced and nothing restarted.
+      // Only when there is something to do. Opening the panel already asked the
+      // host for a fresh answer (requestUpdateCheck), so "nothing to offer"
+      // means the host is current — the row above says so — not that nobody
+      // has looked.
+      if (!i.update && !u) return '';
+      // Owners only. This is the cosmetic half of the rule — the host verifies
+      // a signed owner proof on the request and refuses without one — but a
+      // button that cannot work should not be shown.
       //
       // `!u` matters: once something IS in flight or has failed, it must stay
       // visible. Returning unconditionally here swallowed the error from a
@@ -1975,15 +2036,16 @@
       // gives NaN, which the clamp turns into 0.
       let label, sub;
       const pct = u ? Math.max(0, Math.min(100, Math.round(Number(u.pct)) || 0)) : 0;
-      if (failed)      { label = escHTML(u.error); sub = 'Nothing was replaced. This host is still on v' + escHTML(i.version) + ' and every session is untouched.'; }
-      else if (done)   { label = '\u2713 ' + (u.detail ? escHTML(u.detail) : 'Now on v' + escHTML(u.version || '')); sub = ''; }
-      else if (busy)   { label = escHTML(u.detail || 'Working\u2026'); sub = ''; }
-      else if (i.update) { label = 'Upgrade &amp; restart';
-                         sub = 'v' + escHTML(i.update) + ' \u00b7 <b>' + hostSessionCount() + '</b> restart in place. '
-                             + 'Shells and everything running in them are kept.'; }
-      else             { label = 'Check for updates';
-                         sub = 'On v' + escHTML(i.version) + '. Checks now \u2014 nothing is replaced or '
-                             + 'restarted unless there is a newer release.'; }
+      // The button carries a SHORT label in every state and the line under it
+      // carries the detail. It shares a row with "What's new", so a sentence
+      // in the button — a status, an error — wrapped to four lines and the
+      // whole row ballooned with it.
+      if (failed)      { label = 'Retry upgrade';
+                         sub = escHTML(u.error) + ' \u2014 nothing was replaced, every session is untouched.'; }
+      else if (done)   { label = '\u2713 Up to date'; sub = u.detail ? escHTML(u.detail) : ''; }
+      else if (busy)   { label = 'Upgrading\u2026'; sub = escHTML(u.detail || ''); }
+      else             { label = 'Upgrade to v' + escHTML(i.update);
+                         sub = hostRestartClause() + ' Shells are kept.'; }
       let h = '<button class="host-upgrade' + (done ? ' done' : failed ? ' fail' : '') + '"'
             + (busy || done ? ' disabled' : '') + '>'
             + (busy ? '<span class="up-spin"></span>' : '') + label + '</button>';
@@ -1996,9 +2058,12 @@
     // How many sessions a restart would move, from the Machines panel's own
     // cache of this host when we have it. Falls back to neutral wording rather
     // than guessing a number.
-    function hostSessionCount() {
+    // A whole clause, not a noun: "every session" spliced into "<n> restart in
+    // place" produced "every session restart in place", which is not a sentence.
+    function hostRestartClause() {
       const n = Number((lastHostInfo && lastHostInfo.sessions) || 0);
-      return n > 0 ? n + ' session' + (n === 1 ? '' : 's') : 'every session';
+      return n > 0 ? '<b>' + n + ' session' + (n === 1 ? '' : 's') + '</b> restart in place.'
+                   : '<b>Every session</b> restarts in place.';
     }
 
     function escHTML(v) {
@@ -2246,7 +2311,9 @@
         html += hostMeter('Load',
           '<b>' + i.load1.toFixed(2) + '</b> <span class="dim">· ' + i.cpus + ' cores</span>', p);
       }
-      html += hostVersionHTML(i);
+      // Load and uptime finish the machine's vitals, so they sit with the
+      // meters. They used to land between the version and the button that
+      // upgrades it, splitting the one pair in this panel that belongs together.
       const foot = [];
       if (i.load5 !== undefined) foot.push('load ' + i.load1.toFixed(2) + ' ' + i.load5.toFixed(2) + ' ' + i.load15.toFixed(2));
       if (i.uptime) foot.push('up ' + fmtUptime(i.uptime));
@@ -2255,15 +2322,6 @@
       // offered once we have host stats (proves the host runs a reminal new
       // enough to handle the request). Label reflects the in-flight/error state,
       // which survives the panel's periodic re-render via creatingSession.
-      html += upgradeButtonHTML(i);
-      // The link is offered whenever the host can answer it, including when
-      // up to date — a dead end there would make "what changed?" unanswerable
-      // for anyone who is already current.
-      if (i.version) {
-        const pending = changelog && changelog.releases ? changelog.releases.length : 0;
-        html += '<button class="host-whatsnew">' + (changelogPending ? 'Loading notes\u2026'
-              : 'What\u2019s new' + (pending > 1 ? ' \u00b7 ' + pending + ' releases' : '')) + ' \u2192</button>';
-      }
       const label = hostNewError ? escHTML(hostNewError) : (creatingSession ? 'Starting…' : '+ New session on this host');
       html += '<button class="host-new"' + (creatingSession ? ' disabled' : '') + '>' + label + '</button>';
       // Mirror the whole desktop (every display) as panes — same streaming and
@@ -2303,6 +2361,8 @@
       } else {
         html += '<button class="host-desktop host-own">Own this machine</button>';
       }
+      // Last: which reminal this machine runs, and the controls for changing it.
+      html += hostVersionBlockHTML(i);
       html += '</div>';
       root.innerHTML = html;
     }
@@ -5995,6 +6055,14 @@
           } catch (_) {}
           break;
         }
+        case 'check_update': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            onCheckUpdate(JSON.parse(new TextDecoder().decode(bytes)));
+          } catch (_) {}
+          break;
+        }
         case 'window_frame': {
           if (!cryptoKey) break;
           try {
@@ -8167,6 +8235,10 @@
         if (!lastHostInfo && !hostWaitSince) hostWaitSince = Date.now();
         renderHost();
         if (typeof sendWin === 'function') sendWin('host_info');
+        // Ask for a fresh "is there a newer version" while the panel is open.
+        // If host_info has not arrived yet the check goes out with the first
+        // one that does (see onHostInfo).
+        requestUpdateCheck();
         // Poll: re-request the stats AND re-render, so the Loading → "update
         // the host" transition happens off elapsed time even if a timer stalls.
         hostPollTimer = setInterval(() => {

@@ -174,3 +174,37 @@ func TestRefreshAvailablePopulatesAnEmptyCache(t *testing.T) {
 		t.Fatalf("Available reported %q, so the panel would show nothing", got)
 	}
 }
+
+// Opening the Host panel asks the host to check for real. A viewer opening
+// and closing it in a loop — or a PIN guest sending the message by hand —
+// must not be able to turn that into a stream of requests at GitHub.
+func TestCheckNowIsThrottled(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Location", "https://example.invalid/releases/tag/v3.6.3")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+	old := latestTagURL
+	latestTagURL = srv.URL
+	defer func() { latestTagURL = old }()
+	t.Setenv("REMINAL_WEB", "")
+	checkNowMu.Lock()
+	checkNowLast = time.Time{}
+	checkNowMu.Unlock()
+
+	for i := 0; i < 5; i++ {
+		got, err := CheckNow("3.6.0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != "3.6.3" {
+			t.Fatalf("call %d: CheckNow reported %q, want 3.6.3", i, got)
+		}
+	}
+	if hits != 1 {
+		t.Fatalf("five panel opens reached the network %d times; want 1", hits)
+	}
+}

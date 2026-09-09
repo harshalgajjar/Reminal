@@ -48,6 +48,26 @@ func (a *Agent) handleChangelog(conn *websocket.Conn) {
 	a.sendWindowMsg(conn, protocol.TypeChangelog, payload)
 }
 
+// handleCheckUpdate answers "is there a newer release, as of right now". Sent
+// when the Host panel opens, so the panel shows an upgrade or "up to date"
+// without a button to press first. Read-only: it changes nothing but the
+// cached answer, and CheckNow throttles it, so no owner proof is required.
+func (a *Agent) handleCheckUpdate(conn *websocket.Conn) {
+	if a.box == nil {
+		return
+	}
+	var payload struct {
+		Update string `json:"update"`
+		Error  string `json:"error,omitempty"`
+	}
+	update, err := updater.CheckNow(a.version)
+	payload.Update = update
+	if err != nil {
+		payload.Error = err.Error()
+	}
+	a.sendWindowMsg(conn, protocol.TypeCheckUpdate, payload)
+}
+
 // handleUpgrade upgrades the host's binary and hot-restarts every session on
 // it, reporting each step to the viewer that asked.
 //

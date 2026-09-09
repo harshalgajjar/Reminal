@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -104,6 +105,53 @@ func StartAvailableRefresh(currentVersion string) {
 			time.Sleep(availableRefreshInterval)
 		}
 	}()
+}
+
+// checkNowThrottle is the least time between two on-demand checks. Opening the
+// Host panel asks; a viewer who opens and closes it in a loop — or a PIN guest
+// sending the message by hand — must not be able to turn that into a stream
+// of requests at GitHub. Within the window the cached answer is returned.
+const checkNowThrottle = 30 * time.Second
+
+var (
+	checkNowMu   sync.Mutex
+	checkNowLast time.Time
+)
+
+// CheckNow finds out whether a newer release exists, reaching the network
+// rather than trusting the daily cache, and returns the version to offer ("" if
+// current). It rewrites the cache so host_info agrees from then on, and leaves
+// the previous answer in place if the fetch fails — an open panel must not lose
+// an update it already knew about because of a momentary network problem.
+func CheckNow(currentVersion string) (string, error) {
+	if !shouldCheck(currentVersion) {
+		return "", nil
+	}
+	checkNowMu.Lock()
+	recent := !checkNowLast.IsZero() && time.Since(checkNowLast) < checkNowThrottle
+	if !recent {
+		checkNowLast = time.Now()
+	}
+	checkNowMu.Unlock()
+	if recent {
+		return Available(currentVersion), nil
+	}
+	tag, err := fetchLatestTag(httpTimeoutInteractive)
+	if err != nil {
+		return Available(currentVersion), err
+	}
+	writeCache(cacheEntry{
+		CheckedAt:   time.Now(),
+		LatestTag:   tag,
+		AssetURL:    assetURLFor(tag, runtime.GOOS, runtime.GOARCH),
+		CriticalMin: fetchCriticalMin(httpTimeoutBackground),
+	})
+	// The memo would otherwise keep reporting the pre-check answer for up to
+	// availableTTL after the cache changed underneath it.
+	availMu.Lock()
+	availRead = time.Time{}
+	availMu.Unlock()
+	return Available(currentVersion), nil
 }
 
 // UpgradeBlockedReason explains why this build must not be upgraded in place,

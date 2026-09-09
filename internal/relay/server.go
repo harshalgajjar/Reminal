@@ -136,7 +136,7 @@ var forwardableTypes = map[protocol.MessageType]bool{
 	protocol.TypeNotify: true, protocol.TypeDownload: true,
 	protocol.TypeWindowNotes: true, protocol.TypeWindowNoteAct: true,
 	protocol.TypeUpload: true, protocol.TypeUploadAck: true,
-	protocol.TypeChangelog: true, protocol.TypeUpgrade: true,
+	protocol.TypeChangelog: true, protocol.TypeUpgrade: true, protocol.TypeCheckUpdate: true,
 	protocol.TypeWebRTCHello: true, protocol.TypeWebRTCOffer: true,
 	protocol.TypeWebRTCAnswer: true, protocol.TypeWebRTCICE: true,
 }
