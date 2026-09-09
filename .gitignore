@@ -22,3 +22,7 @@
 
 # Compiled native helpers (built by scripts/build.sh)
 /native/reminal-overlay/reminal-overlay
+
+# stray local builds in repo root
+/reminal
+/reminal.exe
