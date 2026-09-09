@@ -203,19 +203,20 @@ func check(currentVersion string, timeout time.Duration) (latestTag, assetURL st
 		return "", "", false, nil
 	}
 
-	tag, err := fetchLatestTag(timeout)
+	// The same release feed the Host panel reads, so the startup prompt and
+	// the panel's offer are one answer. Fetching it records the newest as this
+	// machine's cached latest (see recordLatest), which is what we read back.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	rs, err := releaseFeed(ctx)
 	if err != nil {
 		return "", "", false, err
 	}
-	url := assetURLFor(tag, runtime.GOOS, runtime.GOARCH)
-	// Online criticality signal (best-effort — a fetch failure just means no
-	// forced upgrade this round). critical_min <= latest, so being below it
-	// implies a newer release exists to upgrade to.
-	criticalMin := fetchCriticalMin(timeout)
-
-	// Always cache so we don't refetch within the TTL, even if no matching asset
-	// exists for this platform.
-	writeCache(cacheEntry{CheckedAt: time.Now(), LatestTag: tag, AssetURL: url, CriticalMin: criticalMin})
+	if len(rs) == 0 {
+		return "", "", false, nil
+	}
+	entry, _ := readCache()
+	tag, url, criticalMin := "v"+rs[0].Version, assetURLFor("v"+rs[0].Version, runtime.GOOS, runtime.GOARCH), entry.CriticalMin
 
 	critical = criticalMin != "" && newer(currentVersion, criticalMin)
 	if !critical && !newer(currentVersion, tag) {
@@ -274,60 +275,6 @@ func fetchCriticalMin(timeout time.Duration) string {
 // during the day with a "403 Forbidden" instead of a clean upgrade.
 // The web route has separate, much higher anonymous limits and
 // returns the redirect regardless.
-// latestTagURL is the "latest release" pointer we resolve. A variable only so
-// tests can aim it at a stub — nothing in the program reassigns it.
-var latestTagURL = "https://github.com/" + repo + "/releases/latest"
-
-func fetchLatestTag(timeout time.Duration) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", latestTagURL, nil)
-	if err != nil {
-		return "", err
-	}
-	// Don't follow the redirect — the Location header IS the answer.
-	client := &http.Client{
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-		Timeout: timeout,
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	// 302 is what github currently returns; tolerate the other
-	// redirect codes in case they change.
-	switch resp.StatusCode {
-	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
-		http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
-	default:
-		return "", fmt.Errorf("github web: expected redirect, got %s", resp.Status)
-	}
-	loc := resp.Header.Get("Location")
-	if loc == "" {
-		return "", fmt.Errorf("github web: no Location header")
-	}
-	// Pull "v0.8.3" out of ".../releases/tag/v0.8.3".
-	idx := strings.LastIndex(loc, "/tag/")
-	if idx < 0 {
-		return "", fmt.Errorf("github web: unexpected redirect target %q", loc)
-	}
-	tag := loc[idx+len("/tag/"):]
-	// Strip any query string / fragment / trailing slash GitHub may
-	// add — assetURLFor pastes tag straight into a URL and we don't
-	// want "v0.8.3?utm=foo" turning into a 404.
-	for _, sep := range []string{"?", "#", "/"} {
-		if i := strings.Index(tag, sep); i >= 0 {
-			tag = tag[:i]
-		}
-	}
-	if tag == "" {
-		return "", fmt.Errorf("github web: empty tag in redirect target %q", loc)
-	}
-	return tag, nil
-}
 
 // assetURLFor builds the direct binary-download URL for the given
 // tag + platform. Pattern matches the release-workflow's archive

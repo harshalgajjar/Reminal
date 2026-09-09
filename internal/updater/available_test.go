@@ -52,73 +52,6 @@ func TestReleasesSinceRefusesDevBuilds(t *testing.T) {
 	}
 }
 
-// The fetch is triggered by anyone opening "What's new", and GitHub allows 60
-// unauthenticated calls an hour. Without a cache a viewer reopening the sheet
-// could exhaust the host's quota for everyone.
-func TestReleasesSinceServesFromCache(t *testing.T) {
-	relMu.Lock()
-	relFor, relVal, relRead, relErr = "9.9.9", []Release{{Version: "9.9.10"}, {Version: "9.9.11"}}, time.Now(), nil
-	relMu.Unlock()
-	t.Cleanup(func() {
-		relMu.Lock()
-		relFor, relVal, relRead, relErr = "", nil, time.Time{}, nil
-		relMu.Unlock()
-	})
-
-	// A cancelled context proves no network call happens: a cache miss would
-	// fail immediately, a hit ignores the context entirely.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	got, err := ReleasesSince(ctx, "9.9.9", 20)
-	if err != nil {
-		t.Fatalf("a cached answer still hit the network: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("cache returned %d releases, want 2", len(got))
-	}
-	// The limit must apply to the cached copy too.
-	if one, _ := ReleasesSince(ctx, "9.9.9", 1); len(one) != 1 {
-		t.Errorf("limit ignored on a cache hit: got %d", len(one))
-	}
-	// And the caller must not be handed the cache's own slice to mutate.
-	got[0].Version = "mutated"
-	again, _ := ReleasesSince(ctx, "9.9.9", 20)
-	if again[0].Version == "mutated" {
-		t.Error("the cache handed out its own backing array — one caller can corrupt every later read")
-	}
-
-	// A different version must not be served the previous one's answer.
-	if _, err := ReleasesSince(ctx, "9.9.8", 20); err == nil {
-		t.Error("a different version was served from another version's cache")
-	}
-}
-
-// A failure is remembered briefly so a broken network cannot become a request
-// loop, but not so long that a transient outage sticks.
-func TestReleasesSinceCachesFailuresBriefly(t *testing.T) {
-	relMu.Lock()
-	relFor, relErr, relErrAt, relRead = "9.9.9", errors.New("boom"), time.Now(), time.Time{}
-	relMu.Unlock()
-	t.Cleanup(func() {
-		relMu.Lock()
-		relFor, relErr, relErrAt = "", nil, time.Time{}
-		relMu.Unlock()
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := ReleasesSince(ctx, "9.9.9", 20); err == nil || err.Error() != "boom" {
-		t.Errorf("a cached failure was not reused: %v", err)
-	}
-	// Past the window it must try again (and fail on the dead context, proving
-	// it reached the network rather than the memo).
-	relMu.Lock()
-	relErrAt = time.Now().Add(-releaseErrTTL - time.Second)
-	relMu.Unlock()
-	if _, err := ReleasesSince(ctx, "9.9.9", 20); err == nil || err.Error() == "boom" {
-		t.Errorf("a stale failure was still being served: %v", err)
-	}
-}
-
 // The notes panel opens on the version you are running, so the filter behind
 // it has to keep that release. The upgrade offer must go on refusing it — a
 // host on the latest being told to upgrade to what it already has is the
@@ -138,31 +71,139 @@ func TestReleaseFilterKeepsTheRunningVersion(t *testing.T) {
 	}
 }
 
-// stubLatestTag points the release-pointer lookup at a local server that
-// redirects to tag, the way github's /releases/latest does.
-func stubLatestTag(t *testing.T, tag string) {
+// stubFeed points the release feed at a local server returning these tags (as
+// GitHub's list endpoint would), counting how often it is hit, and clears the
+// memo so the test starts from nothing.
+func stubFeed(t *testing.T, tags ...string) *int {
 	t.Helper()
+	hits := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Location", "https://example.invalid/releases/tag/"+tag)
-		w.WriteHeader(http.StatusFound)
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		out := "["
+		for i, tag := range tags {
+			if i > 0 {
+				out += ","
+			}
+			out += `{"tag_name":"` + tag + `","body":"notes for ` + tag + `","published_at":"2026-09-08T00:00:00Z"}`
+		}
+		_, _ = w.Write([]byte(out + "]"))
 	}))
 	t.Cleanup(srv.Close)
-	old := latestTagURL
-	latestTagURL = srv.URL
-	t.Cleanup(func() { latestTagURL = old })
+	old := releasesURL
+	releasesURL = srv.URL
+	t.Cleanup(func() { releasesURL = old })
 	t.Setenv("REMINAL_WEB", "") // no criticality beacon to reach in a test
+	resetFeed()
+	t.Cleanup(resetFeed)
+	return &hits
+}
+
+func resetFeed() {
+	feedMu.Lock()
+	feedVal, feedRead, feedErr, feedErrAt = nil, time.Time{}, nil, time.Time{}
+	feedMu.Unlock()
+	availMu.Lock()
+	availRead = time.Time{}
+	availMu.Unlock()
+}
+
+// The bug this design exists to prevent: the panel said "up to date" beside a
+// "What's new · 2" that listed a newer version, because the offer and the
+// notes were read from two different places with two different ages. They now
+// come from one feed, so the offer IS the top of the notes.
+func TestOfferAndNotesAreOneAnswer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFeed(t, "v3.6.4", "v3.6.3", "v3.6.2")
+
+	rels, err := ReleasesSince(context.Background(), "3.6.3", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rels) != 2 || rels[0].Version != "3.6.4" || !rels[1].Current {
+		t.Fatalf("notes for a 3.6.3 host: %+v", rels)
+	}
+	if got := Available("3.6.3"); got != "3.6.4" {
+		t.Fatalf("the notes list 3.6.4 but the offer says %q — the two disagree again", got)
+	}
+	rels, _ = ReleasesSince(context.Background(), "3.6.4", 20)
+	if len(rels) != 1 || !rels[0].Current {
+		t.Fatalf("notes for a current host: %+v", rels)
+	}
+	if got := Available("3.6.4"); got != "" {
+		t.Fatalf("a current host was offered %q", got)
+	}
+}
+
+// One fetch serves every consumer for feedTTL. Opening the Host panel asks; a
+// viewer opening it in a loop — or a PIN guest sending the message by hand —
+// must not become a stream of requests at GitHub.
+func TestFeedIsMemoized(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	hits := stubFeed(t, "v3.6.4")
+	for i := 0; i < 5; i++ {
+		if _, err := ReleasesSince(context.Background(), "3.6.0", 20); err != nil {
+			t.Fatal(err)
+		}
+		RefreshAvailable("3.6.0")
+		_ = Available("3.6.0")
+	}
+	if *hits != 1 {
+		t.Fatalf("five panel opens plus the daily check reached the network %d times; want 1", *hits)
+	}
+	got, _ := ReleasesSince(context.Background(), "3.6.0", 20)
+	got[0].Version = "mutated"
+	again, _ := ReleasesSince(context.Background(), "3.6.0", 20)
+	if again[0].Version == "mutated" {
+		t.Error("the memo handed out its own backing array — one caller can corrupt every later read")
+	}
+}
+
+// A failure is remembered briefly so a broken network cannot become a request
+// loop, and the previous good answer stays in place — an open panel must not
+// lose an update it already knew about because of a momentary problem.
+func TestFeedFailureKeepsThePreviousAnswer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFeed(t, "v3.6.4")
+	if _, err := ReleasesSince(context.Background(), "3.6.0", 20); err != nil {
+		t.Fatal(err)
+	}
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer bad.Close()
+	releasesURL = bad.URL
+	feedMu.Lock()
+	feedRead = time.Time{} // force a refetch
+	feedMu.Unlock()
+
+	first, err := ReleasesSince(context.Background(), "3.6.0", 20)
+	if err == nil {
+		t.Fatalf("a failed fetch reported success: %+v", first)
+	}
+	if got := Available("3.6.0"); got != "3.6.4" {
+		t.Fatalf("a network blip erased the offer: %q", got)
+	}
+	// Within feedErrTTL the failure is served from memory: a cancelled context
+	// proves no request is made, because the remembered error is returned
+	// verbatim rather than a context error.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, again := ReleasesSince(ctx, "3.6.0", 20); again == nil || errors.Is(again, context.Canceled) {
+		t.Fatalf("expected the remembered failure, got %v", again)
+	}
 }
 
 // A machine whose sessions all run in the background has nobody to prompt, so
 // the interactive check never runs there — but the Host panel reads the cache
-// that check writes. Without this the upgrade could not be offered at all on
+// that a check writes. Without this the upgrade could not be offered at all on
 // exactly the always-on hosts it is meant for.
 func TestRefreshAvailablePopulatesAnEmptyCache(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	if _, ok := readCache(); ok {
 		t.Fatal("expected no cache to start from")
 	}
-	stubLatestTag(t, "v3.6.2")
+	stubFeed(t, "v3.6.2")
 
 	RefreshAvailable("3.6.0")
 
@@ -172,39 +213,5 @@ func TestRefreshAvailablePopulatesAnEmptyCache(t *testing.T) {
 	}
 	if got := Available("3.6.0"); got != "3.6.2" {
 		t.Fatalf("Available reported %q, so the panel would show nothing", got)
-	}
-}
-
-// Opening the Host panel asks the host to check for real. A viewer opening
-// and closing it in a loop — or a PIN guest sending the message by hand —
-// must not be able to turn that into a stream of requests at GitHub.
-func TestCheckNowIsThrottled(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	hits := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
-		w.Header().Set("Location", "https://example.invalid/releases/tag/v3.6.3")
-		w.WriteHeader(http.StatusFound)
-	}))
-	defer srv.Close()
-	old := latestTagURL
-	latestTagURL = srv.URL
-	defer func() { latestTagURL = old }()
-	t.Setenv("REMINAL_WEB", "")
-	checkNowMu.Lock()
-	checkNowLast = time.Time{}
-	checkNowMu.Unlock()
-
-	for i := 0; i < 5; i++ {
-		got, err := CheckNow("3.6.0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got != "3.6.3" {
-			t.Fatalf("call %d: CheckNow reported %q, want 3.6.3", i, got)
-		}
-	}
-	if hits != 1 {
-		t.Fatalf("five panel opens reached the network %d times; want 1", hits)
 	}
 }

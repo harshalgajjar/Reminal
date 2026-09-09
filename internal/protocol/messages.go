@@ -222,7 +222,9 @@ const (
 	// machine on 3.5.4 has no 3.5.6 file — so the host fetches them, which is
 	// also why this is a separate request rather than a field on host_info:
 	// it costs a network round trip and should only happen when someone opens
-	// the panel and asks.
+	// the panel. The Host panel sends it on open: the reply is also how the
+	// panel learns whether a newer version exists, because the offer and the
+	// notes come from one release feed on the host and must not disagree.
 	TypeChangelog MessageType = "changelog"
 
 	// TypeUpgrade is bidirectional. Viewer→agent: an empty-Data request to
@@ -236,16 +238,6 @@ const (
 	// on the host and could run `reminal upgrade && reminal restart --all`
 	// itself. Same argument as TypeNewSession.
 	TypeUpgrade MessageType = "upgrade"
-
-	// TypeCheckUpdate is bidirectional. Viewer→agent: an empty-Data request
-	// to find out, now, whether a newer release exists. Agent→viewer: Data =
-	// encrypted JSON {"update":"3.6.3","error":"…"} — update is "" when the
-	// host is current. Sent when the Host panel is opened, so the panel can
-	// show an upgrade or "up to date" without a button to press first. The
-	// daily background check still runs; this is the on-demand look that a
-	// person opening the panel expects. Read-only and throttled on the host,
-	// so it needs no owner proof.
-	TypeCheckUpdate MessageType = "check_update"
 
 	// ---- WebRTC signaling (peer-to-peer frame transport) ----
 	// Window frames are high-volume; when a viewer and agent can open a

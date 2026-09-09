@@ -107,53 +107,6 @@ func StartAvailableRefresh(currentVersion string) {
 	}()
 }
 
-// checkNowThrottle is the least time between two on-demand checks. Opening the
-// Host panel asks; a viewer who opens and closes it in a loop — or a PIN guest
-// sending the message by hand — must not be able to turn that into a stream
-// of requests at GitHub. Within the window the cached answer is returned.
-const checkNowThrottle = 30 * time.Second
-
-var (
-	checkNowMu   sync.Mutex
-	checkNowLast time.Time
-)
-
-// CheckNow finds out whether a newer release exists, reaching the network
-// rather than trusting the daily cache, and returns the version to offer ("" if
-// current). It rewrites the cache so host_info agrees from then on, and leaves
-// the previous answer in place if the fetch fails — an open panel must not lose
-// an update it already knew about because of a momentary network problem.
-func CheckNow(currentVersion string) (string, error) {
-	if !shouldCheck(currentVersion) {
-		return "", nil
-	}
-	checkNowMu.Lock()
-	recent := !checkNowLast.IsZero() && time.Since(checkNowLast) < checkNowThrottle
-	if !recent {
-		checkNowLast = time.Now()
-	}
-	checkNowMu.Unlock()
-	if recent {
-		return Available(currentVersion), nil
-	}
-	tag, err := fetchLatestTag(httpTimeoutInteractive)
-	if err != nil {
-		return Available(currentVersion), err
-	}
-	writeCache(cacheEntry{
-		CheckedAt:   time.Now(),
-		LatestTag:   tag,
-		AssetURL:    assetURLFor(tag, runtime.GOOS, runtime.GOARCH),
-		CriticalMin: fetchCriticalMin(httpTimeoutBackground),
-	})
-	// The memo would otherwise keep reporting the pre-check answer for up to
-	// availableTTL after the cache changed underneath it.
-	availMu.Lock()
-	availRead = time.Time{}
-	availMu.Unlock()
-	return Available(currentVersion), nil
-}
-
 // UpgradeBlockedReason explains why this build must not be upgraded in place,
 // or "" when it may be. Available() already hides the offer for these, but the
 // handler behind the button must not trust the UI: the request is a message on
@@ -172,33 +125,93 @@ func UpgradeBlockedReason(currentVersion string) string {
 	return ""
 }
 
-// releasesURL is the list endpoint. The single-release endpoint would need one
-// request per version, and someone several versions behind is exactly who this
-// is for.
-const releasesURL = "https://api.github.com/repos/harshalgajjar/Reminal/releases?per_page=30"
+// releasesURL is the one place this package learns what has been released.
+// The list endpoint, not the "latest" redirect: someone several versions
+// behind needs the middle ones too, and — the point — everything that asks
+// "what is newest" reads the same answer. A variable only so tests can aim it
+// at a stub; nothing in the program reassigns it.
+var releasesURL = "https://api.github.com/repos/harshalgajjar/Reminal/releases?per_page=30"
 
-// releaseNotesTTL caches the fetched list. The list changes when a release is
-// published — rarely — and the fetch is triggered by anyone who opens the Host
-// panel's "What's new". Uncached, every viewer on every session cost one
-// GitHub call, and the unauthenticated limit is 60 an hour per IP: a viewer
-// reopening the sheet could exhaust the host's quota and leave the owner
-// unable to read anything. The cache makes that a non-issue rather than
-// something to police.
-const releaseNotesTTL = 10 * time.Minute
-
-var (
-	relMu    sync.Mutex
-	relFor   string
-	relVal   []Release
-	relRead  time.Time
-	relErrAt time.Time // failures are cached briefly too, so a broken network
-	relErr   error     // cannot be turned into a request loop either
+// One feed, one memo, every consumer.
+//
+// There used to be two ways to learn what was newest: the upgrade offer read
+// the "latest release" redirect, the notes read the release list, and each
+// had its own cache with its own age. They disagreed — the panel said "up to
+// date" beside a "What's new · 2" that plainly listed a newer version. Now the
+// offer in host_info, the notes, and the daily check all derive from this one
+// list, so they cannot disagree: the offer IS the top of the notes.
+//
+// feedTTL bounds the request rate. Opening the Host panel asks; a viewer
+// opening it in a loop, or a PIN guest sending the message by hand, gets the
+// memo. Sixty seconds keeps even a panel opened continuously under the
+// unauthenticated limit of sixty an hour. Failures are remembered for
+// feedErrTTL so a dead network cannot become a request loop either, and the
+// previous good answer stays in place — an open panel must not lose an update
+// it already knew about because of a momentary network problem.
+const (
+	feedTTL    = 60 * time.Second
+	feedErrTTL = 30 * time.Second
 )
 
-// releaseErrTTL is how long a failure is remembered. Short enough that a
-// transient outage clears on the next try, long enough that a viewer holding
-// the button down cannot hammer the API.
-const releaseErrTTL = 30 * time.Second
+var (
+	feedMu    sync.Mutex
+	feedVal   []Release // newest first, stable releases only
+	feedRead  time.Time
+	feedErr   error
+	feedErrAt time.Time
+)
+
+// releaseFeed returns every published stable release, newest first, from the
+// memo when fresh and from the network otherwise. A successful fetch also
+// records the newest as the machine's cached "latest", which is what Available
+// and the daily check read, so a fresh fetch anywhere updates the offer
+// everywhere.
+func releaseFeed(ctx context.Context) ([]Release, error) {
+	feedMu.Lock()
+	if !feedRead.IsZero() && time.Since(feedRead) < feedTTL {
+		out := append([]Release(nil), feedVal...)
+		feedMu.Unlock()
+		return out, nil
+	}
+	if feedErr != nil && time.Since(feedErrAt) < feedErrTTL {
+		err := feedErr
+		feedMu.Unlock()
+		return nil, err
+	}
+	feedMu.Unlock()
+
+	fresh, err := fetchReleases(ctx)
+
+	feedMu.Lock()
+	defer feedMu.Unlock()
+	if err != nil {
+		feedErr, feedErrAt = err, time.Now()
+		return nil, err
+	}
+	feedVal, feedRead, feedErr = fresh, time.Now(), nil
+	if len(fresh) > 0 {
+		recordLatest("v" + fresh[0].Version)
+	}
+	return append([]Release(nil), feedVal...), nil
+}
+
+// recordLatest is the single writer of the on-disk "latest release" cache.
+// Available reads it for host_info; the startup prompt reads it to decide
+// whether to ask. The criticality beacon rides along, because a check that
+// reached the network is the moment to ask about it.
+func recordLatest(tag string) {
+	writeCache(cacheEntry{
+		CheckedAt:   time.Now(),
+		LatestTag:   tag,
+		AssetURL:    assetURLFor(tag, runtime.GOOS, runtime.GOARCH),
+		CriticalMin: fetchCriticalMin(httpTimeoutBackground),
+	})
+	// Otherwise the memo keeps reporting the previous answer for up to
+	// availableTTL after the cache changed underneath it.
+	availMu.Lock()
+	availRead = time.Time{}
+	availMu.Unlock()
+}
 
 // ReleasesSince returns the release currentVersion is itself running plus
 // every published release newer than it, newest first, with the notes the
@@ -221,34 +234,18 @@ func ReleasesSince(ctx context.Context, currentVersion string, limit int) ([]Rel
 	if currentVersion == "" || currentVersion == "dev" || currentVersion == "0.0.0" {
 		return nil, fmt.Errorf("this is a development build, so there is nothing to compare against")
 	}
-
-	relMu.Lock()
-	if relFor == currentVersion {
-		if !relRead.IsZero() && time.Since(relRead) < releaseNotesTTL {
-			out := append([]Release(nil), relVal...)
-			relMu.Unlock()
-			return capReleases(out, limit), nil
-		}
-		if relErr != nil && time.Since(relErrAt) < releaseErrTTL {
-			err := relErr
-			relMu.Unlock()
-			return nil, err
-		}
-	}
-	relMu.Unlock()
-
-	fresh, err := fetchReleases(ctx, currentVersion)
-
-	relMu.Lock()
-	relFor = currentVersion
+	all, err := releaseFeed(ctx)
 	if err != nil {
-		relErr, relErrAt = err, time.Now()
-		relMu.Unlock()
 		return nil, err
 	}
-	relVal, relRead, relErr = fresh, time.Now(), nil
-	out := append([]Release(nil), relVal...)
-	relMu.Unlock()
+	var out []Release
+	for _, r := range all {
+		if !atOrNewer(currentVersion, "v"+r.Version) {
+			continue
+		}
+		r.Current = sameVersion(currentVersion, "v"+r.Version)
+		out = append(out, r)
+	}
 	return capReleases(out, limit), nil
 }
 
@@ -259,7 +256,8 @@ func capReleases(rs []Release, limit int) []Release {
 	return rs
 }
 
-func fetchReleases(ctx context.Context, currentVersion string) ([]Release, error) {
+// fetchReleases reads the list endpoint: every stable release, newest first.
+func fetchReleases(ctx context.Context) ([]Release, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releasesURL, nil)
 	if err != nil {
 		return nil, err
@@ -275,7 +273,7 @@ func fetchReleases(ctx context.Context, currentVersion string) ([]Release, error
 		// Rate limiting is the common one (60/hour unauthenticated), and it is
 		// worth saying so rather than "failed".
 		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-			return nil, fmt.Errorf("GitHub rate-limited this machine; notes will be readable again shortly")
+			return nil, fmt.Errorf("GitHub rate-limited this machine; try again shortly")
 		}
 		return nil, fmt.Errorf("release list: HTTP %d", resp.StatusCode)
 	}
@@ -300,24 +298,19 @@ func fetchReleases(ctx context.Context, currentVersion string) ([]Release, error
 		if r.Draft || r.Prerelease {
 			continue // release candidates are not what an upgrade lands on
 		}
-		if !atOrNewer(currentVersion, r.TagName) {
-			continue
-		}
 		out = append(out, Release{
 			Version:   strings.TrimPrefix(r.TagName, "v"),
 			Published: r.PublishedAt,
 			Notes:     strings.TrimSpace(r.Body),
-			Current:   sameVersion(currentVersion, r.TagName),
 		})
 	}
 	// The API returns newest-first already, but it is not documented to, and
-	// the panel's "next / skipped / you are here" ordering depends on it.
+	// "newest" is exactly what everything reads off the front of this list.
 	sortReleases(out)
 	return out, nil
 }
 
-// sortReleases puts the newest first — the order the panel reads as
-// "next", then the skipped middle. Separate so it is testable without a
+// sortReleases puts the newest first. Separate so it is testable without a
 // network round trip.
 func sortReleases(rs []Release) {
 	sort.Slice(rs, func(i, j int) bool { return newer(rs[j].Version, "v"+rs[i].Version) })

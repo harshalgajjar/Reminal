@@ -1944,32 +1944,37 @@
     let upgradeState = null;
     let changelog = null;      // {current, releases[], error} once fetched
     let changelogPending = false;
-    // The panel asks the host for a fresh answer every time it is opened, and
-    // shows "checking…" until one arrives. There is no button for this: the
-    // question is asked by opening the panel, and the answer is either an
-    // upgrade to press or "up to date".
-    let updateChecking = false;
-    let updateCheckTimer = null;
-    const UPDATE_CHECK_WAIT_MS = 8000; // a host too old to answer never will
+    let changelogTimer = null;
+    const CHANGELOG_WAIT_MS = 8000; // a host too old to answer never will
+    let updateCheckWanted = false;  // panel opened before host_info arrived; ask on arrival
 
-    let updateCheckWanted = false; // opened before host_info arrived; ask on arrival
-
+    // ONE question, ONE answer. Opening the panel fetches the release notes,
+    // and that reply is also what says whether a newer version exists: the
+    // newest release in it that is not the one running. There is no separate
+    // "is there an update" request and no button — a second path with its own
+    // cache is how the panel came to say "up to date" beside a "What's new · 2"
+    // that plainly listed a newer version.
     function requestUpdateCheck() {
       if (!lastHostInfo || !lastHostInfo.version) { updateCheckWanted = true; return; }
       if (typeof sendWin !== 'function') return;
       updateCheckWanted = false;
-      updateChecking = true;
-      clearTimeout(updateCheckTimer);
-      updateCheckTimer = setTimeout(() => { updateChecking = false; renderHost(); }, UPDATE_CHECK_WAIT_MS);
-      sendWin('check_update', {});
+      if (changelogPending) return;
+      changelogPending = true;
+      clearTimeout(changelogTimer);
+      changelogTimer = setTimeout(() => { changelogPending = false; renderHost(); paintChangelog(); }, CHANGELOG_WAIT_MS);
+      sendWin('changelog', {});
       renderHost();
     }
 
-    function onCheckUpdate(payload) {
-      clearTimeout(updateCheckTimer);
-      updateChecking = false;
-      if (lastHostInfo && payload) lastHostInfo.update = payload.update || undefined;
-      renderHost();
+    // The version to offer, from the same reply the notes are drawn from. The
+    // host's cached hint (host_info.update) is only used while the reply has
+    // not arrived — it is the daily answer, and can be a release behind.
+    function hostUpdate(i) {
+      if (changelog && changelog.releases) {
+        const newer = changelog.releases.filter(r => !r.current);
+        return newer.length ? newer[0].version : '';
+      }
+      return i.update || '';
     }
 
     // The notes link is offered whenever the host can answer it, including when
@@ -1977,9 +1982,10 @@
     // anyone already current.
     function whatsNewHTML(i) {
       if (!i.version) return '';
-      const pending = changelog && changelog.releases ? changelog.releases.length : 0;
-      return '<button class="host-whatsnew">' + (changelogPending ? 'Loading notes\u2026'
-           : 'What\u2019s new' + (pending > 1 ? ' \u00b7 ' + pending : '')) + '</button>';
+      // The count is releases you do not have yet, so it agrees with the
+      // status beside it by construction: a count means "update available".
+      const behind = changelog && changelog.releases ? changelog.releases.filter(r => !r.current).length : 0;
+      return '<button class="host-whatsnew">What\u2019s new' + (behind > 0 ? ' \u00b7 ' + behind : '') + '</button>';
     }
 
     // Version, the control that changes it, and the notes for it — one block,
@@ -1998,10 +2004,15 @@
       // at a glance, in words rather than a repeated number.
       let h = '<div class="host-ver">reminal <code>v' + escHTML(i.version) + '</code>';
       const u = upgradeState;
+      // "up to date" is only ever said on the strength of a reply: the daily
+      // hint alone can be a release behind, and asserting it as fact is the
+      // wrong answer this row used to give.
+      const answered = changelog && changelog.releases && !changelog.error;
       if (u && u.stage === 'done' && !u.error) h += '<span class="new">\u00b7 updated</span>';
-      else if (i.update)                       h += '<span class="new">\u00b7 update available</span>';
-      else if (updateChecking)                 h += '<span>\u00b7 checking\u2026</span>';
-      else                                     h += '<span>\u00b7 up to date</span>';
+      else if (hostUpdate(i))                  h += '<span class="new">\u00b7 update available</span>';
+      else if (changelogPending)               h += '<span>\u00b7 checking\u2026</span>';
+      else if (answered)                       h += '<span>\u00b7 up to date</span>';
+      else if (changelog && changelog.error)   h += '<span>\u00b7 could not check</span>';
       return h + whatsNewHTML(i) + '</div>';
     }
 
@@ -2020,7 +2031,8 @@
       // host for a fresh answer (requestUpdateCheck), so "nothing to offer"
       // means the host is current — the row above says so — not that nobody
       // has looked.
-      if (!i.update && !u) return '';
+      const update = hostUpdate(i);
+      if (!update && !u) return '';
       // Owners only. This is the cosmetic half of the rule — the host verifies
       // a signed owner proof on the request and refuses without one — but a
       // button that cannot work should not be shown.
@@ -2044,7 +2056,7 @@
                          sub = escHTML(u.error) + ' \u2014 nothing was replaced, every session is untouched.'; }
       else if (done)   { label = '\u2713 Up to date'; sub = u.detail ? escHTML(u.detail) : ''; }
       else if (busy)   { label = 'Upgrading\u2026'; sub = escHTML(u.detail || ''); }
-      else             { label = 'Upgrade to v' + escHTML(i.update);
+      else             { label = 'Upgrade to v' + escHTML(update);
                          sub = hostRestartClause() + ' Shells are kept.'; }
       let h = '<button class="host-upgrade' + (done ? ' done' : failed ? ' fail' : '') + '"'
             + (busy || done ? ' disabled' : '') + '>'
@@ -2113,13 +2125,8 @@
       // rendered the not-yet-fetched empty list as "You're on the latest" —
       // an answer, and the wrong one — for as long as the round trip took,
       // then silently corrected itself.
-      const needFetch = !changelog && !changelogPending;
-      if (needFetch) changelogPending = true;
+      if (!changelog) requestUpdateCheck();
       paintChangelog();
-      if (needFetch) {
-        renderHost();
-        sendWin('changelog', {});
-      }
     }
     function closeChangelog() {
       const back = document.getElementById('clback'), sheet = document.getElementById('clsheet');
@@ -2252,6 +2259,7 @@
     }
 
     function onChangelog(payload) {
+      clearTimeout(changelogTimer);
       changelogPending = false;
       changelog = payload || {};
       renderHost();
@@ -6052,14 +6060,6 @@
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             onUpgrade(JSON.parse(new TextDecoder().decode(bytes)));
-          } catch (_) {}
-          break;
-        }
-        case 'check_update': {
-          if (!cryptoKey) break;
-          try {
-            const bytes = await decrypt(cryptoKey, msg.data);
-            onCheckUpdate(JSON.parse(new TextDecoder().decode(bytes)));
           } catch (_) {}
           break;
         }
