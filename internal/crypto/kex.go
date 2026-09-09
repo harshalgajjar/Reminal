@@ -41,8 +41,14 @@ package crypto
 //     with each side per PIN guess. Each guess is one online
 //     attempt — a wrong guess produces a different wrap key, the
 //     unwrap fails, the viewer disconnects. The relay observes
-//     many failed handshakes; this is loud and the 5-strike PIN
-//     lockout at the auth layer above us still bounds it.
+//     many failed handshakes; this is loud, and the agent's kex
+//     token bucket bounds the rate: kexBurst=8 back-to-back, then
+//     one guess per kexRefill=10s, so ~6/min and ~115 days of
+//     continuous conspicuous spam to walk the 10^6 space
+//     (client/agent.go). NOT the relay's old 5-strike lockout —
+//     that was removed precisely because a relay that could check
+//     the PIN could also unblind both keys and MITM this exchange
+//     (see relay/auth.go).
 //
 // The exchange ID (ex_id) the viewer picks per handshake is the
 // HKDF salt for the wrap key and is also echoed back in
