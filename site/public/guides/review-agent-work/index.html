@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>How to keep a MacBook awake with the lid closed — every method compared (2026)</title>
-<meta name="description" content="caffeinate, pmset disablesleep, Amphetamine, dummy HDMI plugs and software virtual displays — what each one actually solves when you close a MacBook's lid, and the half of the problem most guides miss.">
-<link rel="canonical" href="https://reminal.app/guides/macbook-lid-closed/">
+<title>How to review what an AI agent did — and approve it from anywhere (2026)</title>
+<meta name="description" content="The diff, the transcript and the live session are three different review layers. What each one tells you, why approval fatigue is really a scoping problem, and how to answer a permission prompt when you are not at your desk.">
+<link rel="canonical" href="https://reminal.app/guides/review-agent-work/">
 <link rel="icon" href="/assets/icon.png" type="image/png">
 <meta property="og:site_name" content="reminal">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://reminal.app/guides/macbook-lid-closed/">
-<meta property="og:title" content="Keep a MacBook awake with the lid closed — every method compared">
-<meta property="og:description" content="Most guides stop at 'prevent sleep'. An awake Mac with no display still can't render its GUI. Here's the full picture: caffeinate, pmset, Amphetamine, dummy plugs, and doing it in software.">
+<meta property="og:url" content="https://reminal.app/guides/review-agent-work/">
+<meta property="og:title" content="How to review what an AI agent did — and approve from anywhere">
+<meta property="og:description" content="The bottleneck is not model capability. It is telling what the agent did, and answering it the moment it stops to ask.">
 <meta property="og:image" content="https://reminal.app/poster.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@harshalgajjar">
@@ -24,9 +24,9 @@
   "@graph": [
     {
       "@type": "TechArticle",
-      "@id": "https://reminal.app/guides/macbook-lid-closed/#article",
-      "headline": "How to keep a MacBook awake with the lid closed — every method compared",
-      "url": "https://reminal.app/guides/macbook-lid-closed/",
+      "@id": "https://reminal.app/guides/review-agent-work/#article",
+      "headline": "How to review what an AI agent did - and approve it from anywhere",
+      "url": "https://reminal.app/guides/review-agent-work/",
       "isPartOf": {
         "@id": "https://reminal.app/#website"
       },
@@ -41,46 +41,46 @@
       },
       "image": "https://reminal.app/poster.png",
       "inLanguage": "en",
-      "datePublished": "2026-08-17",
-      "dateModified": "2026-08-27"
+      "datePublished": "2026-09-03",
+      "dateModified": "2026-09-03"
     },
     {
       "@type": "FAQPage",
       "mainEntity": [
         {
           "@type": "Question",
-          "name": "How do I stop my MacBook sleeping when I close the lid?",
+          "name": "How do I review what an AI agent actually did?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "macOS only allows a closed lid without sleep when power, an external display and a keyboard/mouse are attached (clamshell mode). Without a display you can force it with `sudo pmset -a disablesleep 1` (undo with 0), with a keep-awake utility, with a dummy HDMI plug that fakes a monitor, or with software like reminal that disables clamshell sleep and creates a virtual display so GUI apps keep rendering."
+            "text": "Three layers, and most people only use the first. The diff tells you what changed. The transcript tells you why and what it tried. Watching it live tells you what it is about to do, which is the only one that lets you stop a bad decision before it lands."
           }
         },
         {
           "@type": "Question",
-          "name": "Why do screen capture and screen sharing show a black screen when the lid is closed?",
+          "name": "How do I approve an agent's permission prompt remotely?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "With the lid shut and no monitor attached, macOS tears down the display coordinate space entirely. Even if the machine is awake, GUI apps have no screen to draw on, so capture APIs return black and remote-desktop tools show nothing. Fixing sleep is only half the problem; the machine also needs a display — real, dummy-plug, or virtual."
+            "text": "You need a channel that carries the prompt to you and a keystroke back. Claude Code's remote control does this for its own session; a tmux session over SSH does it for any terminal; browser-based streaming does it without installing anything on the device you are holding."
           }
         },
         {
           "@type": "Question",
-          "name": "Does caffeinate stop a MacBook sleeping when the lid closes?",
+          "name": "What is approval fatigue and how do I avoid it?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "No. caffeinate prevents idle sleep while a command runs, but closing the lid still forces sleep unless clamshell conditions are met. For lid-closed operation you need pmset disablesleep, a dummy plug, or a tool that handles clamshell sleep directly."
+            "text": "Approving everything without reading it, because the prompts arrive faster than you can judge them. The fix is not a faster approval button. It is scoping tasks so there are fewer decisions, and making the ones that remain reviewable in context rather than as a yes/no in isolation."
           }
         },
         {
           "@type": "Question",
-          "name": "Is it safe to run a fanless MacBook Air with the lid closed?",
+          "name": "Should I read the whole transcript?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Mostly, with a caveat: fanless Airs shed heat through the keyboard deck, and a closed lid reduces that. Light and bursty workloads are fine; sustained heavy loads will thermal-throttle sooner than with the lid open. MacBook Pros with fans are less affected."
+            "text": "Usually not. Read the diff first, then search the transcript for the parts that explain anything surprising in it. A transcript read end to end costs more attention than the run saved."
           }
         }
       ],
-      "@id": "https://reminal.app/guides/macbook-lid-closed/#faq",
+      "@id": "https://reminal.app/guides/review-agent-work/#faq",
       "isPartOf": {
         "@id": "https://reminal.app/#website"
       }
@@ -166,94 +166,77 @@ footer a:hover{color:var(--fg)}
 </div></nav>
 <div class="wrap">
 
-<h1>How to keep a MacBook awake with the lid closed — every method, honestly compared</h1>
-<p class="meta">Updated August 2026 · no affiliate links, and we make one of the tools below (disclosed)</p>
+<h1>How to review what an AI agent did — and approve it from anywhere</h1>
 
-<p class="lede">Close a MacBook's lid and macOS puts it to sleep unless power, an external
-display <em>and</em> a keyboard are attached. Every guide covers that part. Almost none
-cover the second half: an awake Mac with no display <strong>still can't render its GUI</strong> —
-screen capture goes black, remote desktop shows nothing, windows drift into a phantom
-layout. Here's what each fix actually solves.</p>
+<p class="lede">The bottleneck in agent work has moved. It is not whether the
+model can do the task; it is whether you can tell what it did, and whether you
+can answer it at the moment it stops to ask.</p>
 <figure class="shot">
-  <video src="/assets/lid.mp4" poster="/assets/lid.jpg" muted loop playsinline autoplay preload="metadata" aria-label="A closed MacBook with its windows streaming live into a browser"></video>
-  <figcaption>The machine keeps running with the lid down, and its windows stay live in any browser.</figcaption>
+  <video src="/assets/video.mp4" poster="/assets/video.jpg" muted loop playsinline autoplay preload="metadata" aria-label="A live application window streaming into a browser and responding to input"></video>
+  <figcaption>Not a screenshot feed. The window streams live with real input, so you can watch what the agent is doing and click in it yourself.</figcaption>
 </figure>
 
 
-<h2>The two problems hiding in one lid</h2>
-<p><strong>Sleep.</strong> Lid closes → machine sleeps. Builds stop, downloads pause,
-SSH drops, coding agents die mid-task.</p>
-<p><strong>The display.</strong> Beat sleep, and with no monitor attached macOS still
-tears down the display coordinate space. The machine hums along headless — but GUI
-apps have nothing to draw on. <em>Awake isn't the same as usable.</em> If you only need
-SSH or background jobs, solving sleep is enough. If you need to see or control anything
-graphical, you need both halves.</p>
+<h2>The three layers of review</h2>
+<p><strong>The diff.</strong> What changed. Cheap, precise, and the place to
+start every time. It tells you nothing about what the agent tried and abandoned,
+or why it made a choice.</p>
+<p><strong>The transcript.</strong> What it was thinking, what it ran, what came
+back. Worth searching rather than reading — go to it when the diff contains
+something you did not expect.</p>
+<p><strong>The live session.</strong> What it is doing right now. The only layer
+that lets you intervene before a bad decision lands rather than after. Also the
+only one most setups do not have when the person is away from the desk.</p>
 
-<h2>Method 1: <code>caffeinate</code> (built in, free)</h2>
-<pre><code>caffeinate -i long_running_command</code></pre>
-<p>Prevents <em>idle</em> sleep while a command runs. <strong>Does not survive a lid
-close</strong> — clamshell sleep overrides it. Good for "don't sleep during this build
-with the lid open," and that's all.</p>
+<h2>Approval fatigue is a scoping problem</h2>
+<p>If you are approving prompts faster than you can judge them, a faster
+approval button makes it worse. Two things actually help: scope tasks so there
+are fewer decision points, and make each decision reviewable in context — you
+can judge "may I run this migration?" when you can see the migration, and not
+otherwise.</p>
 
-<h2>Method 2: <code>pmset disablesleep</code> (built in, free, root)</h2>
-<pre><code>sudo pmset -a disablesleep 1   # lid-close no longer sleeps
-sudo pmset -a disablesleep 0   # put things back</code></pre>
-<p>The real override: the Mac stays awake with the lid shut, no hardware needed.
-Two catches: it needs root and is easy to forget to undo (battery drain in a bag),
-and it solves <strong>only the sleep half</strong> — headless GUI stays unreachable.</p>
+<h2>Reviewing from somewhere else</h2>
+<p><strong>Vendor remotes.</strong> Claude Code's <code>/rc</code> and Codex in
+the ChatGPT app both put one agent's conversation on your phone. Official and
+simple; limited to that vendor, and to the chat rather than the machine.</p>
+<p><strong>SSH and tmux.</strong> Any terminal, from anywhere, if you have a
+terminal app on the phone and the session was started detachable. Free and
+robust; a phone keyboard remains a poor fit for a TUI, and you see the terminal
+only.</p>
+<p><strong>Streaming the machine.</strong> What we build (reminal — disclosed).
+The session stays on hardware you own and any browser attaches to it, so you can
+read the terminal, see the window the agent is driving, and answer the prompt
+from whatever device is nearby. Needs the host to be running.</p>
+<pre><code>curl -fsSL https://reminal.app/install.sh | sh
+reminal</code></pre>
 
-<h2>Method 3: keep-awake utilities (Amphetamine, KeepingYouAwake)</h2>
-<p>Friendly menu-bar wrappers around the same idea — sessions, timers, triggers.
-Note that <a href="https://apps.apple.com/us/app/amphetamine/id937984704">Amphetamine</a>
-by itself deliberately does not allow closed-lid-without-display operation; its
-companion "Enhancer" adds that. Same limitation as pmset: sleep only, no display.</p>
-
-<h2>Method 4: the dummy HDMI plug (~$8, hardware)</h2>
-<p>A little adapter that impersonates a monitor at the EDID level. macOS believes a
-display is attached, so clamshell mode engages (given power + keyboard) <em>and</em>
-the GUI has a screen to render to. <strong>It genuinely solves both halves</strong> —
-which is why homelab people buy them in multi-packs. Costs: it occupies a port, it has
-to travel with the machine, and windows can land on a "screen" you can't see until you
-remote in.</p>
-
-<h2>Method 5: both halves in software (reminal — ours, disclosed)</h2>
-<p><a href="/">reminal</a>'s closed-lid mode replaces the plug: it disables clamshell
-sleep and, the moment the Mac goes headless, creates a virtual display so GUI apps
-keep rendering — then streams every window and terminal, with input, into any browser
-(your phone included). Toggle off and everything reverts. Free and open source
-(AGPL); the virtual-display code is readable in
-<a href="https://github.com/harshalgajjar/Reminal">the repo</a>
-(<code>vdisplay_darwin.go</code>) if you want to check the claims.</p>
-<p class="note">Honest caveats: the closed-lid feature is macOS-only; and the virtual
-display rides the same private CGVirtualDisplay machinery DeskPad and BetterDisplay
-use — stable for years, but an OS update could change it (failure mode is "no display
-today", never a crash).</p>
-
-<h2>Side by side</h2>
-<div class="tablewrap"><table>
-<thead><tr><th></th><th>Survives lid close</th><th>GUI keeps rendering</th><th>Reachable remotely</th><th>Needs</th></tr></thead>
+<h2>What to check before you approve</h2>
+<table>
+<thead><tr><th>Prompt</th><th>What to look at</th></tr></thead>
 <tbody>
-<tr><td>caffeinate</td><td class="n">No</td><td class="n">No</td><td class="n">—</td><td>nothing</td></tr>
-<tr><td>pmset disablesleep</td><td class="y">Yes</td><td class="n">No</td><td class="p">SSH only</td><td>root</td></tr>
-<tr><td>Amphetamine + Enhancer</td><td class="y">Yes</td><td class="n">No</td><td class="p">SSH only</td><td>two apps</td></tr>
-<tr><td>Dummy HDMI plug</td><td class="y">Yes</td><td class="y">Yes</td><td class="p">bring your own remote tool</td><td>$8 + a port</td></tr>
-<tr><td>reminal closed-lid</td><td class="y">Yes</td><td class="y">Yes (virtual display)</td><td class="y">built in — any browser, E2E-encrypted</td><td>one install, macOS</td></tr>
+<tr><td>"May I run this command?"</td><td>the command itself, and what directory it runs in</td></tr>
+<tr><td>"May I run this migration?"</td><td>the migration file, and whether it is reversible</td></tr>
+<tr><td>"May I push?"</td><td>the diff and the branch, not the commit message</td></tr>
+<tr><td>"May I install X?"</td><td>whether it is a real package and who publishes it</td></tr>
+<tr><td>Anything at all, repeatedly</td><td>whether the task was scoped too broadly to begin with</td></tr>
 </tbody>
-</table></div>
+</table>
 
-<h2>The fanless-Air caveat</h2>
-<p>MacBook Airs have no fan; they shed heat through the keyboard deck, and a closed
-lid reduces that. Bursty or light work is fine. Sustained heavy loads (long compiles,
-training runs) will thermal-throttle sooner than lid-open — consider standing the
-machine on its side, or a Pro with fans for sustained closed-lid duty.</p>
+<h2>Common questions</h2>
+<h3>How do I review what an AI agent actually did?</h3>
+<p>Three layers, and most people only use the first. The diff tells you what changed. The transcript tells you why and what it tried. Watching it live tells you what it is about to do, which is the only one that lets you stop a bad decision before it lands.</p>
 
-<div class="cta">
-<p><strong>The software route</strong> — free, open source, one line; then close the lid
-and watch every window from your phone:</p>
-<pre><code>curl -fsSL https://reminal.app/install.sh | sh</code></pre>
+<h3>How do I approve an agent's permission prompt remotely?</h3>
+<p>You need a channel that carries the prompt to you and a keystroke back. Claude Code's remote control does this for its own session; a tmux session over SSH does it for any terminal; browser-based streaming does it without installing anything on the device you are holding.</p>
+
+<h3>What is approval fatigue and how do I avoid it?</h3>
+<p>Approving everything without reading it, because the prompts arrive faster than you can judge them. The fix is not a faster approval button. It is scoping tasks so there are fewer decisions, and making the ones that remain reviewable in context rather than as a yes/no in isolation.</p>
+
+<h3>Should I read the whole transcript?</h3>
+<p>Usually not. Read the diff first, then search the transcript for the parts that explain anything surprising in it. A transcript read end to end costs more attention than the run saved.</p>
+
 </div>
 
-</div>
 <footer>
 <div class="f-wrap">
   <div class="f-grid">

@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>How to keep a MacBook awake with the lid closed — every method compared (2026)</title>
-<meta name="description" content="caffeinate, pmset disablesleep, Amphetamine, dummy HDMI plugs and software virtual displays — what each one actually solves when you close a MacBook's lid, and the half of the problem most guides miss.">
-<link rel="canonical" href="https://reminal.app/guides/macbook-lid-closed/">
+<title>Getting AI agents on different machines to work together (2026)</title>
+<meta name="description" content="Claude Code on one box, Codex on another, and no shared anything. Why subagents do not solve it, what shared files and orchestration frameworks cost, and why the terminal turns out to be the one surface they already share.">
+<link rel="canonical" href="https://reminal.app/guides/agents-different-machines/">
 <link rel="icon" href="/assets/icon.png" type="image/png">
 <meta property="og:site_name" content="reminal">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://reminal.app/guides/macbook-lid-closed/">
-<meta property="og:title" content="Keep a MacBook awake with the lid closed — every method compared">
-<meta property="og:description" content="Most guides stop at 'prevent sleep'. An awake Mac with no display still can't render its GUI. Here's the full picture: caffeinate, pmset, Amphetamine, dummy plugs, and doing it in software.">
+<meta property="og:url" content="https://reminal.app/guides/agents-different-machines/">
+<meta property="og:title" content="Getting agents on different machines to work together">
+<meta property="og:description" content="Every vendor's answer to multi-agent work is subagents inside their own product. That does nothing across vendors or across machines. The terminal is the surface they already share.">
 <meta property="og:image" content="https://reminal.app/poster.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@harshalgajjar">
@@ -24,9 +24,9 @@
   "@graph": [
     {
       "@type": "TechArticle",
-      "@id": "https://reminal.app/guides/macbook-lid-closed/#article",
-      "headline": "How to keep a MacBook awake with the lid closed — every method compared",
-      "url": "https://reminal.app/guides/macbook-lid-closed/",
+      "@id": "https://reminal.app/guides/agents-different-machines/#article",
+      "headline": "Getting agents on different machines to work together",
+      "url": "https://reminal.app/guides/agents-different-machines/",
       "isPartOf": {
         "@id": "https://reminal.app/#website"
       },
@@ -41,46 +41,46 @@
       },
       "image": "https://reminal.app/poster.png",
       "inLanguage": "en",
-      "datePublished": "2026-08-17",
-      "dateModified": "2026-08-27"
+      "datePublished": "2026-09-03",
+      "dateModified": "2026-09-03"
     },
     {
       "@type": "FAQPage",
       "mainEntity": [
         {
           "@type": "Question",
-          "name": "How do I stop my MacBook sleeping when I close the lid?",
+          "name": "Can Claude Code and Codex talk to each other?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "macOS only allows a closed lid without sleep when power, an external display and a keyboard/mouse are attached (clamshell mode). Without a display you can force it with `sudo pmset -a disablesleep 1` (undo with 0), with a keep-awake utility, with a dummy HDMI plug that fakes a monitor, or with software like reminal that disables clamshell sleep and creates a virtual display so GUI apps keep rendering."
+            "text": "Not directly — there is no shared protocol between vendors, and each vendor's answer to multi-agent work is subagents inside its own product. What they do have in common is that both run in a terminal, so a shared view of terminals is enough for one to read and drive the other."
           }
         },
         {
           "@type": "Question",
-          "name": "Why do screen capture and screen sharing show a black screen when the lid is closed?",
+          "name": "What is MCP and does it let agents communicate?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "With the lid shut and no monitor attached, macOS tears down the display coordinate space entirely. Even if the machine is awake, GUI apps have no screen to draw on, so capture APIs return black and remote-desktop tools show nothing. Fixing sleep is only half the problem; the machine also needs a display — real, dummy-plug, or virtual."
+            "text": "The Model Context Protocol is a standard way for an agent to call external tools. It connects an agent to tools, not agents to each other. Agent-to-agent communication happens when the tool an agent calls happens to expose another agent's session."
           }
         },
         {
           "@type": "Question",
-          "name": "Does caffeinate stop a MacBook sleeping when the lid closes?",
+          "name": "Do both agents need the same software installed?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "No. caffeinate prevents idle sleep while a command runs, but closing the lid still forces sleep unless clamshell conditions are met. For lid-closed operation you need pmset disablesleep, a dummy plug, or a tool that handles clamshell sleep directly."
+            "text": "No, if the channel is the terminal. The agent being read does not need to know anything about it — a PTY is just a PTY. Only the side doing the reading needs the tooling."
           }
         },
         {
           "@type": "Question",
-          "name": "Is it safe to run a fanless MacBook Air with the lid closed?",
+          "name": "Can agents on different machines work together?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Mostly, with a caveat: fanless Airs shed heat through the keyboard deck, and a closed lid reduces that. Light and bursty workloads are fine; sustained heavy loads will thermal-throttle sooner than with the lid open. MacBook Pros with fans are less affected."
+            "text": "Yes, provided something gives them a shared view across machines. That is the harder half: coordinating two agents on one box is a process problem, coordinating across boxes is a networking and identity problem."
           }
         }
       ],
-      "@id": "https://reminal.app/guides/macbook-lid-closed/#faq",
+      "@id": "https://reminal.app/guides/agents-different-machines/#faq",
       "isPartOf": {
         "@id": "https://reminal.app/#website"
       }
@@ -166,94 +166,81 @@ footer a:hover{color:var(--fg)}
 </div></nav>
 <div class="wrap">
 
-<h1>How to keep a MacBook awake with the lid closed — every method, honestly compared</h1>
-<p class="meta">Updated August 2026 · no affiliate links, and we make one of the tools below (disclosed)</p>
+<h1>Getting agents on different machines to work together</h1>
 
-<p class="lede">Close a MacBook's lid and macOS puts it to sleep unless power, an external
-display <em>and</em> a keyboard are attached. Every guide covers that part. Almost none
-cover the second half: an awake Mac with no display <strong>still can't render its GUI</strong> —
-screen capture goes black, remote desktop shows nothing, windows drift into a phantom
-layout. Here's what each fix actually solves.</p>
+<p class="lede">Most people running more than one coding agent end up with the
+same shape: Claude Code on the laptop, Codex on a build box, maybe something
+scripted on a third machine. None of them can see each other, and every vendor's
+answer is subagents inside their own product — which does nothing when the tools
+come from different vendors with complementary skills.</p>
 <figure class="shot">
-  <video src="/assets/lid.mp4" poster="/assets/lid.jpg" muted loop playsinline autoplay preload="metadata" aria-label="A closed MacBook with its windows streaming live into a browser"></video>
-  <figcaption>The machine keeps running with the lid down, and its windows stay live in any browser.</figcaption>
+  <video src="/assets/own.mp4" poster="/assets/own.jpg" muted loop playsinline autoplay preload="metadata" aria-label="A fleet view listing several machines and their live sessions"></video>
+  <figcaption>Every machine you own in one view: what is running, which sessions are live, who is watching.</figcaption>
 </figure>
 
 
-<h2>The two problems hiding in one lid</h2>
-<p><strong>Sleep.</strong> Lid closes → machine sleeps. Builds stop, downloads pause,
-SSH drops, coding agents die mid-task.</p>
-<p><strong>The display.</strong> Beat sleep, and with no monitor attached macOS still
-tears down the display coordinate space. The machine hums along headless — but GUI
-apps have nothing to draw on. <em>Awake isn't the same as usable.</em> If you only need
-SSH or background jobs, solving sleep is enough. If you need to see or control anything
-graphical, you need both halves.</p>
+<h2>Why the vendor answer does not cover this</h2>
+<p>Subagents are real and useful, and they are all in-process. Claude's
+subagents are Claude. Codex's are Codex. The moment your work spans an image
+model and a coding agent, or two machines, that mechanism has nothing to say.</p>
+<p>There is also no cross-vendor protocol coming that would fix it, because
+agreeing on one is a commercial question rather than a technical one.</p>
 
-<h2>Method 1: <code>caffeinate</code> (built in, free)</h2>
-<pre><code>caffeinate -i long_running_command</code></pre>
-<p>Prevents <em>idle</em> sleep while a command runs. <strong>Does not survive a lid
-close</strong> — clamshell sleep overrides it. Good for "don't sleep during this build
-with the lid open," and that's all.</p>
+<h2>What people do today</h2>
+<p><strong>Shared files.</strong> Agents write to a directory both can read. It
+works, it is asynchronous, and it loses everything about what the other agent is
+actually doing right now.</p>
+<p><strong>Orchestration frameworks.</strong> A supervisor process drives several
+agents through an API. Powerful, and it requires every participant to be a
+first-class citizen of that framework — which usually means one vendor.</p>
+<p><strong>Message queues and webhooks.</strong> Fine for events, poor for the
+thing you usually want, which is "what is that session doing and can I nudge
+it".</p>
 
-<h2>Method 2: <code>pmset disablesleep</code> (built in, free, root)</h2>
-<pre><code>sudo pmset -a disablesleep 1   # lid-close no longer sleeps
-sudo pmset -a disablesleep 0   # put things back</code></pre>
-<p>The real override: the Mac stays awake with the lid shut, no hardware needed.
-Two catches: it needs root and is easy to forget to undo (battery drain in a bag),
-and it solves <strong>only the sleep half</strong> — headless GUI stays unreachable.</p>
-
-<h2>Method 3: keep-awake utilities (Amphetamine, KeepingYouAwake)</h2>
-<p>Friendly menu-bar wrappers around the same idea — sessions, timers, triggers.
-Note that <a href="https://apps.apple.com/us/app/amphetamine/id937984704">Amphetamine</a>
-by itself deliberately does not allow closed-lid-without-display operation; its
-companion "Enhancer" adds that. Same limitation as pmset: sleep only, no display.</p>
-
-<h2>Method 4: the dummy HDMI plug (~$8, hardware)</h2>
-<p>A little adapter that impersonates a monitor at the EDID level. macOS believes a
-display is attached, so clamshell mode engages (given power + keyboard) <em>and</em>
-the GUI has a screen to render to. <strong>It genuinely solves both halves</strong> —
-which is why homelab people buy them in multi-packs. Costs: it occupies a port, it has
-to travel with the machine, and windows can land on a "screen" you can't see until you
-remote in.</p>
-
-<h2>Method 5: both halves in software (reminal — ours, disclosed)</h2>
-<p><a href="/">reminal</a>'s closed-lid mode replaces the plug: it disables clamshell
-sleep and, the moment the Mac goes headless, creates a virtual display so GUI apps
-keep rendering — then streams every window and terminal, with input, into any browser
-(your phone included). Toggle off and everything reverts. Free and open source
-(AGPL); the virtual-display code is readable in
-<a href="https://github.com/harshalgajjar/Reminal">the repo</a>
-(<code>vdisplay_darwin.go</code>) if you want to check the claims.</p>
-<p class="note">Honest caveats: the closed-lid feature is macOS-only; and the virtual
-display rides the same private CGVirtualDisplay machinery DeskPad and BetterDisplay
-use — stable for years, but an OS update could change it (failure mode is "no display
-today", never a crash).</p>
+<h2>The terminal as the shared surface</h2>
+<p>Every one of these agents already works in a terminal. That is the one
+interface they share, and it needs no agreement from anyone.</p>
+<p>If a tool can list live sessions across the machines you own, search their
+scrollback, read a transcript and send keys into one, then an agent using that
+tool can read and drive another agent — without the other side integrating
+anything at all. A Codex session has no idea it is being read; it is just a PTY.</p>
+<p>This is what we build (reminal — disclosed). <code>reminal integrate</code>
+registers an MCP server with whichever agent CLIs you have installed, and they
+get four tools: <code>list_sessions</code>, <code>search_sessions</code>,
+<code>read_transcript</code> and <code>send_keys</code>.</p>
+<pre><code>reminal integrate</code></pre>
+<p><strong>The honest caveat:</strong> sending keys into another machine's live
+shell is powerful and blunt. It reaches only machines you have enrolled
+yourself, and everything it does is visible in the viewer, but per-session
+opt-in and an audit trail are not there yet.</p>
 
 <h2>Side by side</h2>
-<div class="tablewrap"><table>
-<thead><tr><th></th><th>Survives lid close</th><th>GUI keeps rendering</th><th>Reachable remotely</th><th>Needs</th></tr></thead>
+<table>
+<thead><tr><th>&nbsp;</th><th>Shared files</th><th>Orchestration framework</th><th>Terminal as bus</th></tr></thead>
 <tbody>
-<tr><td>caffeinate</td><td class="n">No</td><td class="n">No</td><td class="n">—</td><td>nothing</td></tr>
-<tr><td>pmset disablesleep</td><td class="y">Yes</td><td class="n">No</td><td class="p">SSH only</td><td>root</td></tr>
-<tr><td>Amphetamine + Enhancer</td><td class="y">Yes</td><td class="n">No</td><td class="p">SSH only</td><td>two apps</td></tr>
-<tr><td>Dummy HDMI plug</td><td class="y">Yes</td><td class="y">Yes</td><td class="p">bring your own remote tool</td><td>$8 + a port</td></tr>
-<tr><td>reminal closed-lid</td><td class="y">Yes</td><td class="y">Yes (virtual display)</td><td class="y">built in — any browser, E2E-encrypted</td><td>one install, macOS</td></tr>
+<tr><td>Works across vendors</td><td>yes</td><td>rarely</td><td>yes</td></tr>
+<tr><td>Works across machines</td><td>with sync</td><td>sometimes</td><td>yes</td></tr>
+<tr><td>Far side needs integration</td><td>yes</td><td>yes</td><td>no</td></tr>
+<tr><td>Sees live state, not just output</td><td>no</td><td>sometimes</td><td>yes</td></tr>
+<tr><td>Can intervene mid-run</td><td>no</td><td>sometimes</td><td>yes</td></tr>
 </tbody>
-</table></div>
+</table>
 
-<h2>The fanless-Air caveat</h2>
-<p>MacBook Airs have no fan; they shed heat through the keyboard deck, and a closed
-lid reduces that. Bursty or light work is fine. Sustained heavy loads (long compiles,
-training runs) will thermal-throttle sooner than lid-open — consider standing the
-machine on its side, or a Pro with fans for sustained closed-lid duty.</p>
+<h2>Common questions</h2>
+<h3>Can Claude Code and Codex talk to each other?</h3>
+<p>Not directly — there is no shared protocol between vendors, and each vendor's answer to multi-agent work is subagents inside its own product. What they do have in common is that both run in a terminal, so a shared view of terminals is enough for one to read and drive the other.</p>
 
-<div class="cta">
-<p><strong>The software route</strong> — free, open source, one line; then close the lid
-and watch every window from your phone:</p>
-<pre><code>curl -fsSL https://reminal.app/install.sh | sh</code></pre>
+<h3>What is MCP and does it let agents communicate?</h3>
+<p>The Model Context Protocol is a standard way for an agent to call external tools. It connects an agent to tools, not agents to each other. Agent-to-agent communication happens when the tool an agent calls happens to expose another agent's session.</p>
+
+<h3>Do both agents need the same software installed?</h3>
+<p>No, if the channel is the terminal. The agent being read does not need to know anything about it — a PTY is just a PTY. Only the side doing the reading needs the tooling.</p>
+
+<h3>Can agents on different machines work together?</h3>
+<p>Yes, provided something gives them a shared view across machines. That is the harder half: coordinating two agents on one box is a process problem, coordinating across boxes is a networking and identity problem.</p>
+
 </div>
 
-</div>
 <footer>
 <div class="f-wrap">
   <div class="f-grid">

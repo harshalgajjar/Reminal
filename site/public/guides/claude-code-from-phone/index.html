@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>How to keep a MacBook awake with the lid closed — every method compared (2026)</title>
-<meta name="description" content="caffeinate, pmset disablesleep, Amphetamine, dummy HDMI plugs and software virtual displays — what each one actually solves when you close a MacBook's lid, and the half of the problem most guides miss.">
-<link rel="canonical" href="https://reminal.app/guides/macbook-lid-closed/">
+<title>How to check on Claude Code from your phone — every method compared (2026)</title>
+<meta name="description" content="Claude's /rc, Codex in the ChatGPT app, tmux over Tailscale with Termux or Blink, and browser-based streaming — what each actually gives you when an agent is still running and you have walked away.">
+<link rel="canonical" href="https://reminal.app/guides/claude-code-from-phone/">
 <link rel="icon" href="/assets/icon.png" type="image/png">
 <meta property="og:site_name" content="reminal">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://reminal.app/guides/macbook-lid-closed/">
-<meta property="og:title" content="Keep a MacBook awake with the lid closed — every method compared">
-<meta property="og:description" content="Most guides stop at 'prevent sleep'. An awake Mac with no display still can't render its GUI. Here's the full picture: caffeinate, pmset, Amphetamine, dummy plugs, and doing it in software.">
+<meta property="og:url" content="https://reminal.app/guides/claude-code-from-phone/">
+<meta property="og:title" content="Check on Claude Code from your phone — every method compared">
+<meta property="og:description" content="A long agent run only helps if you can see it and answer it. The honest comparison: /rc, the ChatGPT app, tmux over Tailscale, and streaming the machine itself.">
 <meta property="og:image" content="https://reminal.app/poster.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@harshalgajjar">
@@ -24,9 +24,9 @@
   "@graph": [
     {
       "@type": "TechArticle",
-      "@id": "https://reminal.app/guides/macbook-lid-closed/#article",
-      "headline": "How to keep a MacBook awake with the lid closed — every method compared",
-      "url": "https://reminal.app/guides/macbook-lid-closed/",
+      "@id": "https://reminal.app/guides/claude-code-from-phone/#article",
+      "headline": "How to check on Claude Code from your phone - every method, honest",
+      "url": "https://reminal.app/guides/claude-code-from-phone/",
       "isPartOf": {
         "@id": "https://reminal.app/#website"
       },
@@ -41,46 +41,46 @@
       },
       "image": "https://reminal.app/poster.png",
       "inLanguage": "en",
-      "datePublished": "2026-08-17",
-      "dateModified": "2026-08-27"
+      "datePublished": "2026-09-03",
+      "dateModified": "2026-09-03"
     },
     {
       "@type": "FAQPage",
       "mainEntity": [
         {
           "@type": "Question",
-          "name": "How do I stop my MacBook sleeping when I close the lid?",
+          "name": "Can I use Claude Code from my phone?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "macOS only allows a closed lid without sleep when power, an external display and a keyboard/mouse are attached (clamshell mode). Without a display you can force it with `sudo pmset -a disablesleep 1` (undo with 0), with a keep-awake utility, with a dummy HDMI plug that fakes a monitor, or with software like reminal that disables clamshell sleep and creates a virtual display so GUI apps keep rendering."
+            "text": "Yes, several ways. Claude Code has built-in remote control: run /rc in an active session and scan the QR with the Claude app. That gives you the conversation for that one session. If you want the terminal itself, or the other windows on the machine, you need either an SSH client such as Termux or Blink over a private network like Tailscale, or a tool that streams the machine into a browser."
           }
         },
         {
           "@type": "Question",
-          "name": "Why do screen capture and screen sharing show a black screen when the lid is closed?",
+          "name": "How do I answer an agent's permission prompt when I am away from my desk?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "With the lid shut and no monitor attached, macOS tears down the display coordinate space entirely. Even if the machine is awake, GUI apps have no screen to draw on, so capture APIs return black and remote-desktop tools show nothing. Fixing sleep is only half the problem; the machine also needs a display — real, dummy-plug, or virtual."
+            "text": "You need something that both shows you the prompt and lets you send a keystroke back. Claude's remote control does this for its own session. A tmux session over SSH does it for any terminal, provided you have a terminal app on the phone. Browser-based streaming does it without installing anything on the phone."
           }
         },
         {
           "@type": "Question",
-          "name": "Does caffeinate stop a MacBook sleeping when the lid closes?",
+          "name": "Does the machine need to stay running for this to work?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "No. caffeinate prevents idle sleep while a command runs, but closing the lid still forces sleep unless clamshell conditions are met. For lid-closed operation you need pmset disablesleep, a dummy plug, or a tool that handles clamshell sleep directly."
+            "text": "Yes. Any approach that reaches back to your own hardware needs that hardware to still be running. On a desktop or a Mac mini this is not a problem. On a laptop, check your sleep settings before relying on it overnight."
           }
         },
         {
           "@type": "Question",
-          "name": "Is it safe to run a fanless MacBook Air with the lid closed?",
+          "name": "Is there a way to do this without installing an app on my phone?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Mostly, with a caveat: fanless Airs shed heat through the keyboard deck, and a closed lid reduces that. Light and bursty workloads are fine; sustained heavy loads will thermal-throttle sooner than with the lid open. MacBook Pros with fans are less affected."
+            "text": "Browser-based tools are the only category that avoids it. SSH needs a terminal client, and the vendor remotes need their own app. If you want to use a borrowed device or a work laptop, a browser is the only thing you can assume is already there."
           }
         }
       ],
-      "@id": "https://reminal.app/guides/macbook-lid-closed/#faq",
+      "@id": "https://reminal.app/guides/claude-code-from-phone/#faq",
       "isPartOf": {
         "@id": "https://reminal.app/#website"
       }
@@ -166,94 +166,99 @@ footer a:hover{color:var(--fg)}
 </div></nav>
 <div class="wrap">
 
-<h1>How to keep a MacBook awake with the lid closed — every method, honestly compared</h1>
-<p class="meta">Updated August 2026 · no affiliate links, and we make one of the tools below (disclosed)</p>
+<h1>How to check on Claude Code from your phone — every method, honest</h1>
 
-<p class="lede">Close a MacBook's lid and macOS puts it to sleep unless power, an external
-display <em>and</em> a keyboard are attached. Every guide covers that part. Almost none
-cover the second half: an awake Mac with no display <strong>still can't render its GUI</strong> —
-screen capture goes black, remote desktop shows nothing, windows drift into a phantom
-layout. Here's what each fix actually solves.</p>
+<p class="lede">Agents run long enough now that whoever started the job is usually
+not sitting there for most of it. The moment you walk away you lose the thread:
+the agent is still working, but you cannot see what it is doing, answer it when
+it stops to ask permission, or take over when it goes the wrong way.</p>
 <figure class="shot">
-  <video src="/assets/lid.mp4" poster="/assets/lid.jpg" muted loop playsinline autoplay preload="metadata" aria-label="A closed MacBook with its windows streaming live into a browser"></video>
-  <figcaption>The machine keeps running with the lid down, and its windows stay live in any browser.</figcaption>
+  <video src="/assets/setup.mp4" poster="/assets/setup.jpg" muted loop playsinline autoplay preload="metadata" aria-label="A QR code in a terminal, then a phone showing the same live shell"></video>
+  <figcaption>Run reminal on the machine, scan the QR it prints, and the phone is a real terminal on that machine.</figcaption>
 </figure>
 
 
-<h2>The two problems hiding in one lid</h2>
-<p><strong>Sleep.</strong> Lid closes → machine sleeps. Builds stop, downloads pause,
-SSH drops, coding agents die mid-task.</p>
-<p><strong>The display.</strong> Beat sleep, and with no monitor attached macOS still
-tears down the display coordinate space. The machine hums along headless — but GUI
-apps have nothing to draw on. <em>Awake isn't the same as usable.</em> If you only need
-SSH or background jobs, solving sleep is enough. If you need to see or control anything
-graphical, you need both halves.</p>
+<p>There are four honest answers, and they solve different amounts of the
+problem. This covers all of them, including where ours is the wrong choice.</p>
 
-<h2>Method 1: <code>caffeinate</code> (built in, free)</h2>
-<pre><code>caffeinate -i long_running_command</code></pre>
-<p>Prevents <em>idle</em> sleep while a command runs. <strong>Does not survive a lid
-close</strong> — clamshell sleep overrides it. Good for "don't sleep during this build
-with the lid open," and that's all.</p>
+<h2>Method 1: Claude Code remote control (built in, free)</h2>
+<p>From an active session run <code>/rc</code> (or <code>claude
+remote-control</code>) and scan the QR with the Claude app. You get that
+session's conversation on your phone, with the same files and MCP servers.</p>
+<p><strong>Good:</strong> zero setup, official, no third party.
+<strong>Limits:</strong> one agent's chat, not the terminal it runs in and not
+the other windows on the machine — the dev server it just broke, the browser it
+is driving, the tests in the next pane.</p>
 
-<h2>Method 2: <code>pmset disablesleep</code> (built in, free, root)</h2>
-<pre><code>sudo pmset -a disablesleep 1   # lid-close no longer sleeps
-sudo pmset -a disablesleep 0   # put things back</code></pre>
-<p>The real override: the Mac stays awake with the lid shut, no hardware needed.
-Two catches: it needs root and is easy to forget to undo (battery drain in a bag),
-and it solves <strong>only the sleep half</strong> — headless GUI stays unreachable.</p>
+<h2>Method 2: Codex in the ChatGPT app</h2>
+<p>The equivalent for Codex: pairing lives in the ChatGPT app, signed in.</p>
+<p><strong>Good:</strong> official, no setup. <strong>Limits:</strong> the same
+shape as above, and it covers only Codex. Run agents from two vendors and you
+now have two apps and two mental models.</p>
 
-<h2>Method 3: keep-awake utilities (Amphetamine, KeepingYouAwake)</h2>
-<p>Friendly menu-bar wrappers around the same idea — sessions, timers, triggers.
-Note that <a href="https://apps.apple.com/us/app/amphetamine/id937984704">Amphetamine</a>
-by itself deliberately does not allow closed-lid-without-display operation; its
-companion "Enhancer" adds that. Same limitation as pmset: sleep only, no display.</p>
+<h2>Method 3: SSH over Tailscale, with tmux</h2>
+<p>The stack most people land on: an always-on box, Tailscale to reach it from
+anywhere, and every agent started inside <code>tmux</code> so the session
+survives your client dropping. Add Termux on Android or Blink on iOS and you
+have a real terminal in your pocket.</p>
+<p><strong>Good:</strong> free, robust, vendor-neutral, and the session genuinely
+survives a network blip. <strong>Limits:</strong> two. A phone keyboard is a poor
+fit for a TUI — arrow keys, Ctrl-C and Esc are all awkward, and the layout
+reflows when you rotate. And it is terminal only: if the agent opened a browser
+or a simulator, you cannot see it.</p>
 
-<h2>Method 4: the dummy HDMI plug (~$8, hardware)</h2>
-<p>A little adapter that impersonates a monitor at the EDID level. macOS believes a
-display is attached, so clamshell mode engages (given power + keyboard) <em>and</em>
-the GUI has a screen to render to. <strong>It genuinely solves both halves</strong> —
-which is why homelab people buy them in multi-packs. Costs: it occupies a port, it has
-to travel with the machine, and windows can land on a "screen" you can't see until you
-remote in.</p>
-
-<h2>Method 5: both halves in software (reminal — ours, disclosed)</h2>
-<p><a href="/">reminal</a>'s closed-lid mode replaces the plug: it disables clamshell
-sleep and, the moment the Mac goes headless, creates a virtual display so GUI apps
-keep rendering — then streams every window and terminal, with input, into any browser
-(your phone included). Toggle off and everything reverts. Free and open source
-(AGPL); the virtual-display code is readable in
-<a href="https://github.com/harshalgajjar/Reminal">the repo</a>
-(<code>vdisplay_darwin.go</code>) if you want to check the claims.</p>
-<p class="note">Honest caveats: the closed-lid feature is macOS-only; and the virtual
-display rides the same private CGVirtualDisplay machinery DeskPad and BetterDisplay
-use — stable for years, but an OS update could change it (failure mode is "no display
-today", never a crash).</p>
+<h2>Method 4: stream the machine into a browser (reminal — ours, disclosed)</h2>
+<p>Disclosure: we build reminal, so weigh this accordingly.</p>
+<p>The session stays on a machine you already own and any browser attaches to
+it. You get the terminal with true colour and scrollback search, and the actual
+GUI windows with real input, so you can watch the browser an agent is driving
+and click in it yourself. Nothing to install on the device you are holding,
+which means a borrowed laptop or a work phone works.</p>
+<p>It also ships an MCP server, so agents can read and drive each other's
+sessions across machines — useful when the tools come from different vendors.</p>
+<p><strong>Limits, honestly:</strong> it needs the host machine to be running,
+it is a younger project than the alternatives, and if all you want is one
+agent's chat then <code>/rc</code> is simpler and you should use that.</p>
+<pre><code>curl -fsSL https://reminal.app/install.sh | sh
+reminal</code></pre>
 
 <h2>Side by side</h2>
-<div class="tablewrap"><table>
-<thead><tr><th></th><th>Survives lid close</th><th>GUI keeps rendering</th><th>Reachable remotely</th><th>Needs</th></tr></thead>
+<table>
+<thead><tr><th>&nbsp;</th><th>/rc</th><th>ChatGPT app</th><th>SSH + tmux</th><th>reminal</th></tr></thead>
 <tbody>
-<tr><td>caffeinate</td><td class="n">No</td><td class="n">No</td><td class="n">—</td><td>nothing</td></tr>
-<tr><td>pmset disablesleep</td><td class="y">Yes</td><td class="n">No</td><td class="p">SSH only</td><td>root</td></tr>
-<tr><td>Amphetamine + Enhancer</td><td class="y">Yes</td><td class="n">No</td><td class="p">SSH only</td><td>two apps</td></tr>
-<tr><td>Dummy HDMI plug</td><td class="y">Yes</td><td class="y">Yes</td><td class="p">bring your own remote tool</td><td>$8 + a port</td></tr>
-<tr><td>reminal closed-lid</td><td class="y">Yes</td><td class="y">Yes (virtual display)</td><td class="y">built in — any browser, E2E-encrypted</td><td>one install, macOS</td></tr>
+<tr><td>The agent's conversation</td><td>yes</td><td>yes</td><td>yes</td><td>yes</td></tr>
+<tr><td>The terminal itself</td><td>no</td><td>no</td><td>yes</td><td>yes</td></tr>
+<tr><td>Other windows on the machine</td><td>no</td><td>no</td><td>no</td><td>yes</td></tr>
+<tr><td>Any agent, or none</td><td>no</td><td>no</td><td>yes</td><td>yes</td></tr>
+<tr><td>Nothing to install on the phone</td><td>app</td><td>app</td><td>terminal app</td><td>browser</td></tr>
+<tr><td>Agents can reach each other</td><td>no</td><td>no</td><td>no</td><td>yes</td></tr>
 </tbody>
-</table></div>
+</table>
 
-<h2>The fanless-Air caveat</h2>
-<p>MacBook Airs have no fan; they shed heat through the keyboard deck, and a closed
-lid reduces that. Bursty or light work is fine. Sustained heavy loads (long compiles,
-training runs) will thermal-throttle sooner than lid-open — consider standing the
-machine on its side, or a Pro with fans for sustained closed-lid duty.</p>
+<h2>Which one to pick</h2>
+<p>One agent, and you only want its chat: use <code>/rc</code>. It is built in
+and it is enough.</p>
+<p>Already comfortable with tmux and you live in terminals: SSH over Tailscale
+is free and hard to beat.</p>
+<p>Agents from more than one vendor, or you need the windows and not just the
+shell, or you want to answer from a device you did not set up: that is where
+streaming the machine earns its place.</p>
 
-<div class="cta">
-<p><strong>The software route</strong> — free, open source, one line; then close the lid
-and watch every window from your phone:</p>
-<pre><code>curl -fsSL https://reminal.app/install.sh | sh</code></pre>
+<h2>Common questions</h2>
+<h3>Can I use Claude Code from my phone?</h3>
+<p>Yes, several ways. Claude Code has built-in remote control: run /rc in an active session and scan the QR with the Claude app. That gives you the conversation for that one session. If you want the terminal itself, or the other windows on the machine, you need either an SSH client such as Termux or Blink over a private network like Tailscale, or a tool that streams the machine into a browser.</p>
+
+<h3>How do I answer an agent's permission prompt when I am away from my desk?</h3>
+<p>You need something that both shows you the prompt and lets you send a keystroke back. Claude's remote control does this for its own session. A tmux session over SSH does it for any terminal, provided you have a terminal app on the phone. Browser-based streaming does it without installing anything on the phone.</p>
+
+<h3>Does the machine need to stay running for this to work?</h3>
+<p>Yes. Any approach that reaches back to your own hardware needs that hardware to still be running. On a desktop or a Mac mini this is not a problem. On a laptop, check your sleep settings before relying on it overnight.</p>
+
+<h3>Is there a way to do this without installing an app on my phone?</h3>
+<p>Browser-based tools are the only category that avoids it. SSH needs a terminal client, and the vendor remotes need their own app. If you want to use a borrowed device or a work laptop, a browser is the only thing you can assume is already there.</p>
+
 </div>
 
-</div>
 <footer>
 <div class="f-wrap">
   <div class="f-grid">

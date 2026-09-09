@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>How to keep a MacBook awake with the lid closed — every method compared (2026)</title>
-<meta name="description" content="caffeinate, pmset disablesleep, Amphetamine, dummy HDMI plugs and software virtual displays — what each one actually solves when you close a MacBook's lid, and the half of the problem most guides miss.">
-<link rel="canonical" href="https://reminal.app/guides/macbook-lid-closed/">
+<title>Running AI agents overnight — keeping them alive and knowing what happened (2026)</title>
+<meta name="description" content="The two failure modes of a long agent run: the process dying while you are away, and coming back with no idea what happened. tmux, sleep settings, usage limits, notifications and remote access — what each one fixes.">
+<link rel="canonical" href="https://reminal.app/guides/run-agents-overnight/">
 <link rel="icon" href="/assets/icon.png" type="image/png">
 <meta property="og:site_name" content="reminal">
 <meta property="og:type" content="article">
-<meta property="og:url" content="https://reminal.app/guides/macbook-lid-closed/">
-<meta property="og:title" content="Keep a MacBook awake with the lid closed — every method compared">
-<meta property="og:description" content="Most guides stop at 'prevent sleep'. An awake Mac with no display still can't render its GUI. Here's the full picture: caffeinate, pmset, Amphetamine, dummy plugs, and doing it in software.">
+<meta property="og:url" content="https://reminal.app/guides/run-agents-overnight/">
+<meta property="og:title" content="Running AI agents overnight — the honest checklist">
+<meta property="og:description" content="Surviving the night and being useful are different problems. Detachable sessions, machine sleep, usage limits, and being able to answer a permission prompt at 3am.">
 <meta property="og:image" content="https://reminal.app/poster.png">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@harshalgajjar">
@@ -24,9 +24,9 @@
   "@graph": [
     {
       "@type": "TechArticle",
-      "@id": "https://reminal.app/guides/macbook-lid-closed/#article",
-      "headline": "How to keep a MacBook awake with the lid closed — every method compared",
-      "url": "https://reminal.app/guides/macbook-lid-closed/",
+      "@id": "https://reminal.app/guides/run-agents-overnight/#article",
+      "headline": "Running AI agents overnight - how to keep them alive and know what happened",
+      "url": "https://reminal.app/guides/run-agents-overnight/",
       "isPartOf": {
         "@id": "https://reminal.app/#website"
       },
@@ -41,46 +41,46 @@
       },
       "image": "https://reminal.app/poster.png",
       "inLanguage": "en",
-      "datePublished": "2026-08-17",
-      "dateModified": "2026-08-27"
+      "datePublished": "2026-09-03",
+      "dateModified": "2026-09-03"
     },
     {
       "@type": "FAQPage",
       "mainEntity": [
         {
           "@type": "Question",
-          "name": "How do I stop my MacBook sleeping when I close the lid?",
+          "name": "Will my agent keep running if I close my laptop?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "macOS only allows a closed lid without sleep when power, an external display and a keyboard/mouse are attached (clamshell mode). Without a display you can force it with `sudo pmset -a disablesleep 1` (undo with 0), with a keep-awake utility, with a dummy HDMI plug that fakes a monitor, or with software like reminal that disables clamshell sleep and creates a virtual display so GUI apps keep rendering."
+            "text": "Not by default. A laptop suspends when you shut it, and the agent process stops with it. The reliable options are to run agents on a machine that stays on, or to change the sleep behaviour on the laptop before you rely on it."
           }
         },
         {
           "@type": "Question",
-          "name": "Why do screen capture and screen sharing show a black screen when the lid is closed?",
+          "name": "How do I stop an SSH disconnect from killing a long agent run?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "With the lid shut and no monitor attached, macOS tears down the display coordinate space entirely. Even if the machine is awake, GUI apps have no screen to draw on, so capture APIs return black and remote-desktop tools show nothing. Fixing sleep is only half the problem; the machine also needs a display — real, dummy-plug, or virtual."
+            "text": "Start the agent inside a detachable session — tmux, screen or shpool. Your SSH client dropping then sends SIGHUP to the client, not to the agent, and you reattach later with the session intact. This is the single highest-value habit for long runs."
           }
         },
         {
           "@type": "Question",
-          "name": "Does caffeinate stop a MacBook sleeping when the lid closes?",
+          "name": "Should I run agents on a cloud box or my own machine?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "No. caffeinate prevents idle sleep while a command runs, but closing the lid still forces sleep unless clamshell conditions are met. For lid-closed operation you need pmset disablesleep, a dummy plug, or a tool that handles clamshell sleep directly."
+            "text": "A rented box is simpler to keep online and easy to resize. Your own machine costs nothing per month, keeps your credentials and code on hardware you control, and avoids maintaining a second environment in sync. The honest trade is uptime and convenience against rent and data location."
           }
         },
         {
           "@type": "Question",
-          "name": "Is it safe to run a fanless MacBook Air with the lid closed?",
+          "name": "How do I know when an overnight run finished or got stuck?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Mostly, with a caveat: fanless Airs shed heat through the keyboard deck, and a closed lid reduces that. Light and bursty workloads are fine; sustained heavy loads will thermal-throttle sooner than with the lid open. MacBook Pros with fans are less affected."
+            "text": "You need either notifications or a way to look. Hooks that fire on completion cover the first. For the second you need the session reachable from wherever you are, which is what remote access is for."
           }
         }
       ],
-      "@id": "https://reminal.app/guides/macbook-lid-closed/#faq",
+      "@id": "https://reminal.app/guides/run-agents-overnight/#faq",
       "isPartOf": {
         "@id": "https://reminal.app/#website"
       }
@@ -166,94 +166,82 @@ footer a:hover{color:var(--fg)}
 </div></nav>
 <div class="wrap">
 
-<h1>How to keep a MacBook awake with the lid closed — every method, honestly compared</h1>
-<p class="meta">Updated August 2026 · no affiliate links, and we make one of the tools below (disclosed)</p>
+<h1>Running AI agents overnight — how to keep them alive and know what happened</h1>
 
-<p class="lede">Close a MacBook's lid and macOS puts it to sleep unless power, an external
-display <em>and</em> a keyboard are attached. Every guide covers that part. Almost none
-cover the second half: an awake Mac with no display <strong>still can't render its GUI</strong> —
-screen capture goes black, remote desktop shows nothing, windows drift into a phantom
-layout. Here's what each fix actually solves.</p>
+<p class="lede">A long agent run has two failure modes that have nothing to do
+with the model: the process dies while you are not looking, and you come back
+with no idea what happened in between. They need different fixes.</p>
 <figure class="shot">
-  <video src="/assets/lid.mp4" poster="/assets/lid.jpg" muted loop playsinline autoplay preload="metadata" aria-label="A closed MacBook with its windows streaming live into a browser"></video>
-  <figcaption>The machine keeps running with the lid down, and its windows stay live in any browser.</figcaption>
+  <video src="/assets/hero.mp4" poster="/assets/hero.jpg" muted loop playsinline autoplay preload="metadata" aria-label="Windows from a desktop machine streaming live into a browser"></video>
+  <figcaption>The session stays on the machine you own. Any browser attaches to it, with the windows live and controllable.</figcaption>
 </figure>
 
 
-<h2>The two problems hiding in one lid</h2>
-<p><strong>Sleep.</strong> Lid closes → machine sleeps. Builds stop, downloads pause,
-SSH drops, coding agents die mid-task.</p>
-<p><strong>The display.</strong> Beat sleep, and with no monitor attached macOS still
-tears down the display coordinate space. The machine hums along headless — but GUI
-apps have nothing to draw on. <em>Awake isn't the same as usable.</em> If you only need
-SSH or background jobs, solving sleep is enough. If you need to see or control anything
-graphical, you need both halves.</p>
+<h2>Problem 1: the run does not survive</h2>
+<p>Three things kill overnight runs, in rough order of frequency.</p>
+<p><strong>Your SSH client drops.</strong> The shell gets SIGHUP and anything
+not in a detachable session dies with it. Fix: start every agent inside
+<code>tmux</code> (or <code>screen</code>, or <code>shpool</code> if you want
+something lighter). This is the highest-value habit on the page and it is free.</p>
+<p><strong>The machine suspends.</strong> A laptop shut or idle will sleep, and
+the agent stops with it. If the work matters, run it on something that stays on
+— a desktop, a Mac mini, a spare box — or change the machine's sleep behaviour
+deliberately rather than hoping.</p>
+<p><strong>Usage limits.</strong> Worth saying because it is common and nothing
+technical prevents it: a long unattended run can simply exhaust its quota and
+stop. Scope the task and check your plan's limits before leaving it.</p>
 
-<h2>Method 1: <code>caffeinate</code> (built in, free)</h2>
-<pre><code>caffeinate -i long_running_command</code></pre>
-<p>Prevents <em>idle</em> sleep while a command runs. <strong>Does not survive a lid
-close</strong> — clamshell sleep overrides it. Good for "don't sleep during this build
-with the lid open," and that's all.</p>
+<h2>Problem 2: you cannot see what happened</h2>
+<p>Surviving is not the same as useful. If the agent stopped four hours in to
+ask "may I run this migration?", a session that stayed alive did not help you.</p>
+<p>Two shapes of answer. <strong>Notifications</strong> tell you something
+happened — hooks on completion, a webhook, a push. <strong>Reachability</strong>
+lets you look and respond. You generally want both, and most setups have only
+the first.</p>
 
-<h2>Method 2: <code>pmset disablesleep</code> (built in, free, root)</h2>
-<pre><code>sudo pmset -a disablesleep 1   # lid-close no longer sleeps
-sudo pmset -a disablesleep 0   # put things back</code></pre>
-<p>The real override: the Mac stays awake with the lid shut, no hardware needed.
-Two catches: it needs root and is easy to forget to undo (battery drain in a bag),
-and it solves <strong>only the sleep half</strong> — headless GUI stays unreachable.</p>
+<h2>The options, honestly</h2>
+<p><strong>Rented box + tmux + Tailscale.</strong> The common stack, and it
+works. You pay monthly, you keep a second environment in sync, and your
+credentials live on someone else's hardware. Reaching it from a phone still
+means a terminal app.</p>
+<p><strong>Vendor remotes.</strong> Claude Code's <code>/rc</code> and Codex in
+the ChatGPT app both give you one agent's conversation from a phone. Simple,
+official, limited to that vendor and to the chat rather than the machine.</p>
+<p><strong>Keep it on your own machine and make it reachable.</strong> This is
+what we build (reminal — disclosed). The session stays where it is and any
+browser attaches to it, so you watch the terminal and the windows, and answer
+from wherever you are. No rent, no second environment. It needs the host to be
+running, which is the honest cost.</p>
+<pre><code>curl -fsSL https://reminal.app/install.sh | sh
+reminal</code></pre>
 
-<h2>Method 3: keep-awake utilities (Amphetamine, KeepingYouAwake)</h2>
-<p>Friendly menu-bar wrappers around the same idea — sessions, timers, triggers.
-Note that <a href="https://apps.apple.com/us/app/amphetamine/id937984704">Amphetamine</a>
-by itself deliberately does not allow closed-lid-without-display operation; its
-companion "Enhancer" adds that. Same limitation as pmset: sleep only, no display.</p>
-
-<h2>Method 4: the dummy HDMI plug (~$8, hardware)</h2>
-<p>A little adapter that impersonates a monitor at the EDID level. macOS believes a
-display is attached, so clamshell mode engages (given power + keyboard) <em>and</em>
-the GUI has a screen to render to. <strong>It genuinely solves both halves</strong> —
-which is why homelab people buy them in multi-packs. Costs: it occupies a port, it has
-to travel with the machine, and windows can land on a "screen" you can't see until you
-remote in.</p>
-
-<h2>Method 5: both halves in software (reminal — ours, disclosed)</h2>
-<p><a href="/">reminal</a>'s closed-lid mode replaces the plug: it disables clamshell
-sleep and, the moment the Mac goes headless, creates a virtual display so GUI apps
-keep rendering — then streams every window and terminal, with input, into any browser
-(your phone included). Toggle off and everything reverts. Free and open source
-(AGPL); the virtual-display code is readable in
-<a href="https://github.com/harshalgajjar/Reminal">the repo</a>
-(<code>vdisplay_darwin.go</code>) if you want to check the claims.</p>
-<p class="note">Honest caveats: the closed-lid feature is macOS-only; and the virtual
-display rides the same private CGVirtualDisplay machinery DeskPad and BetterDisplay
-use — stable for years, but an OS update could change it (failure mode is "no display
-today", never a crash).</p>
-
-<h2>Side by side</h2>
-<div class="tablewrap"><table>
-<thead><tr><th></th><th>Survives lid close</th><th>GUI keeps rendering</th><th>Reachable remotely</th><th>Needs</th></tr></thead>
+<h2>A checklist for tonight</h2>
+<table>
+<thead><tr><th>Before you walk away</th><th>Why</th></tr></thead>
 <tbody>
-<tr><td>caffeinate</td><td class="n">No</td><td class="n">No</td><td class="n">—</td><td>nothing</td></tr>
-<tr><td>pmset disablesleep</td><td class="y">Yes</td><td class="n">No</td><td class="p">SSH only</td><td>root</td></tr>
-<tr><td>Amphetamine + Enhancer</td><td class="y">Yes</td><td class="n">No</td><td class="p">SSH only</td><td>two apps</td></tr>
-<tr><td>Dummy HDMI plug</td><td class="y">Yes</td><td class="y">Yes</td><td class="p">bring your own remote tool</td><td>$8 + a port</td></tr>
-<tr><td>reminal closed-lid</td><td class="y">Yes</td><td class="y">Yes (virtual display)</td><td class="y">built in — any browser, E2E-encrypted</td><td>one install, macOS</td></tr>
+<tr><td>Agent started inside tmux or equivalent</td><td>survives your client dropping</td></tr>
+<tr><td>Host machine will not suspend</td><td>survives the night</td></tr>
+<tr><td>Task scoped to fit your usage limits</td><td>survives the quota</td></tr>
+<tr><td>Some way to be told it finished</td><td>you find out without checking</td></tr>
+<tr><td>Some way to look and answer</td><td>a permission prompt does not cost you the night</td></tr>
 </tbody>
-</table></div>
+</table>
 
-<h2>The fanless-Air caveat</h2>
-<p>MacBook Airs have no fan; they shed heat through the keyboard deck, and a closed
-lid reduces that. Bursty or light work is fine. Sustained heavy loads (long compiles,
-training runs) will thermal-throttle sooner than lid-open — consider standing the
-machine on its side, or a Pro with fans for sustained closed-lid duty.</p>
+<h2>Common questions</h2>
+<h3>Will my agent keep running if I close my laptop?</h3>
+<p>Not by default. A laptop suspends when you shut it, and the agent process stops with it. The reliable options are to run agents on a machine that stays on, or to change the sleep behaviour on the laptop before you rely on it.</p>
 
-<div class="cta">
-<p><strong>The software route</strong> — free, open source, one line; then close the lid
-and watch every window from your phone:</p>
-<pre><code>curl -fsSL https://reminal.app/install.sh | sh</code></pre>
+<h3>How do I stop an SSH disconnect from killing a long agent run?</h3>
+<p>Start the agent inside a detachable session — tmux, screen or shpool. Your SSH client dropping then sends SIGHUP to the client, not to the agent, and you reattach later with the session intact. This is the single highest-value habit for long runs.</p>
+
+<h3>Should I run agents on a cloud box or my own machine?</h3>
+<p>A rented box is simpler to keep online and easy to resize. Your own machine costs nothing per month, keeps your credentials and code on hardware you control, and avoids maintaining a second environment in sync. The honest trade is uptime and convenience against rent and data location.</p>
+
+<h3>How do I know when an overnight run finished or got stuck?</h3>
+<p>You need either notifications or a way to look. Hooks that fire on completion cover the first. For the second you need the session reachable from wherever you are, which is what remote access is for.</p>
+
 </div>
 
-</div>
 <footer>
 <div class="f-wrap">
   <div class="f-grid">

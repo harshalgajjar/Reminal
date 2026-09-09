@@ -51,6 +51,10 @@ const PAGES = new Set([
   "/privacy",
   "/terms",
   "/guides/macbook-lid-closed",
+  "/guides/claude-code-from-phone",
+  "/guides/run-agents-overnight",
+  "/guides/agents-different-machines",
+  "/guides/review-agent-work",
 ]);
 
 // A join URL typed on the marketing host. Path must stay `/` so /agents/?s=
