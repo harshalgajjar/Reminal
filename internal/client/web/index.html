@@ -8235,6 +8235,11 @@
     let hostPollTimer = null;
     document.getElementById('host').addEventListener('toggle', (e) => {
       if (hostPollTimer) { clearInterval(hostPollTimer); hostPollTimer = null; }
+      // A finished upgrade shows its green "done" while the panel stays open —
+      // that is the moment it is read. Closing the panel is the end of that
+      // moment: the next open looks like a fresh page load, checks again, and
+      // settles on "up to date" with nothing left over from the upgrade.
+      if (!e.target.open && upgradeState && upgradeState.stage === 'done' && !upgradeState.error) upgradeState = null;
       if (e.target.open) {
         // Start the wait clock the first time we open with no data yet.
         if (!lastHostInfo && !hostWaitSince) hostWaitSince = Date.now();
