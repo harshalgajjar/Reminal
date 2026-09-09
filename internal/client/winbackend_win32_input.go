@@ -14,7 +14,6 @@ package client
 
 import (
 	"fmt"
-	"strings"
 	"time"
 	"unicode/utf16"
 	"unsafe"
@@ -272,26 +271,36 @@ var w32KeyCodes = map[string]uint16{
 
 func (c win32Windows) key(w winInfo, name string) error {
 	_ = c.focus(w)
-	name = strings.ToLower(name)
-	// "ctrl-x" chords (the keybar's ^C/^D/… in window-keyboard mode), same
-	// form the darwin/linux backends handle.
-	if ch, ok := strings.CutPrefix(name, "ctrl-"); ok && len(ch) == 1 && ch[0] >= 'a' && ch[0] <= 'z' {
-		vk := uint16(0x41 + ch[0] - 'a') // VK_A..VK_Z
-		return w32SendInputs([]w32Input{
-			w32KeyInput(w32VKControl, 0, 0),
-			w32KeyInput(vk, 0, 0),
-			w32KeyInput(vk, 0, w32KeyEventFKeyUp),
-			w32KeyInput(w32VKControl, 0, w32KeyEventFKeyUp),
-		})
+	mods, base := splitKeyChord(name)
+	var vk uint16
+	switch {
+	case len(base) == 1 && base[0] >= 'a' && base[0] <= 'z':
+		vk = uint16(0x41 + base[0] - 'a') // VK_A..VK_Z
+	case len(base) == 1 && base[0] >= '0' && base[0] <= '9':
+		vk = uint16(0x30 + base[0] - '0') // VK_0..VK_9
+	default:
+		v, ok := w32KeyCodes[base]
+		if !ok {
+			return fmt.Errorf("unknown key %q", name)
+		}
+		vk = v
 	}
-	vk, ok := w32KeyCodes[name]
-	if !ok {
-		return fmt.Errorf("unknown key %q", name)
+	modVK := map[string]uint16{"cmd": w32VKLWin, "ctrl": w32VKControl, "alt": w32VKMenu, "shift": w32VKShift}
+	// Press modifiers, tap the key, release modifiers in reverse — so cmd+c,
+	// ctrl+shift+t and friends land as real chords.
+	var seq []w32Input
+	for _, m := range mods {
+		if v := modVK[m]; v != 0 {
+			seq = append(seq, w32KeyInput(v, 0, 0))
+		}
 	}
-	return w32SendInputs([]w32Input{
-		w32KeyInput(vk, 0, 0),
-		w32KeyInput(vk, 0, w32KeyEventFKeyUp),
-	})
+	seq = append(seq, w32KeyInput(vk, 0, 0), w32KeyInput(vk, 0, w32KeyEventFKeyUp))
+	for i := len(mods) - 1; i >= 0; i-- {
+		if v := modVK[mods[i]]; v != 0 {
+			seq = append(seq, w32KeyInput(v, 0, w32KeyEventFKeyUp))
+		}
+	}
+	return w32SendInputs(seq)
 }
 
 func (win32Windows) releaseInput() error {

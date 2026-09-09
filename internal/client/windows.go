@@ -868,6 +868,36 @@ type windowInput struct {
 	Phase   string       `json:"phase"`  // live-drag phase: begin, move, end
 }
 
+// splitKeyChord parses a viewer key name into modifiers and a base key. It
+// accepts "cmd+shift+c" / "ctrl+alt+left", the legacy "ctrl-c" hyphen form, and
+// a bare "return" / "c" (no modifiers). Modifier names are normalized to
+// cmd/ctrl/alt/shift so each backend maps them to its own native modifier —
+// parsed ONCE here rather than in three backends. The base is the final token.
+func splitKeyChord(name string) (mods []string, base string) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if ch, ok := strings.CutPrefix(name, "ctrl-"); ok && len(ch) == 1 {
+		return []string{"ctrl"}, ch
+	}
+	parts := strings.Split(name, "+")
+	if len(parts) == 1 {
+		return nil, name
+	}
+	base = parts[len(parts)-1]
+	for _, p := range parts[:len(parts)-1] {
+		switch p {
+		case "cmd", "command", "meta", "super", "win":
+			mods = append(mods, "cmd")
+		case "ctrl", "control":
+			mods = append(mods, "ctrl")
+		case "alt", "option":
+			mods = append(mods, "alt")
+		case "shift":
+			mods = append(mods, "shift")
+		}
+	}
+	return mods, base
+}
+
 // clickRun turns a stream of clicks into native single/double/triple clicks for
 // viewers too old to report a count themselves. Extracted so both injection
 // paths have it: the daemon — the path macOS actually takes — had no fallback,

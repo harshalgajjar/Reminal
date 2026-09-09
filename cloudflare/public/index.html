@@ -10537,6 +10537,21 @@
     wkey.addEventListener('keydown', (e) => {
       if (!focusedPaneId) return;
       const sp = WIN_SPECIAL_KEYS[e.key];
+      // A shortcut (cmd/ctrl/alt held) is forwarded to the focused remote window
+      // as a chord — cmd+C, ctrl+shift+T, cmd+left — and the browser's own copy /
+      // paste / zoom is suppressed so the keystroke lands on the remote, not here.
+      // (Shift alone is not a shortcut: Shift+a is just an uppercase character.)
+      const shortcut = e.metaKey || e.ctrlKey || e.altKey;
+      if (shortcut && (sp || e.key.length === 1)) {
+        e.preventDefault();
+        const mods = [];
+        if (e.metaKey) mods.push('cmd');
+        if (e.ctrlKey) mods.push('ctrl');
+        if (e.altKey) mods.push('alt');
+        if (e.shiftKey) mods.push('shift');
+        sendWin('window_input', { id: focusedPaneId, kind: 'key', special: mods.join('+') + '+' + (sp || e.key.toLowerCase()) });
+        return;
+      }
       if (sp) { e.preventDefault(); sendWin('window_input', { id: focusedPaneId, kind: 'key', special: sp }); return; }
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();

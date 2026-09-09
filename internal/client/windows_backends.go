@@ -545,23 +545,38 @@ var darwinKeyCodes = map[string]int{
 	"home": 115, "end": 119, "pageup": 116, "pagedown": 121,
 }
 
+// darwinModifiers renders our neutral modifier names as an AppleScript
+// "using {...}" clause, or "" for none.
+func darwinModifiers(mods []string) string {
+	names := map[string]string{"cmd": "command down", "ctrl": "control down", "alt": "option down", "shift": "shift down"}
+	var parts []string
+	for _, m := range mods {
+		if v := names[m]; v != "" {
+			parts = append(parts, v)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " using {" + strings.Join(parts, ", ") + "}"
+}
+
 func (darwinWindows) key(w winInfo, name string) error {
-	name = strings.ToLower(name)
-	// "ctrl-x" chords (the keybar's ^C/^D/… in window-keyboard mode):
-	// keystroke with the control modifier is layout-aware and needs no
-	// key-code table.
-	if ch, ok := strings.CutPrefix(name, "ctrl-"); ok && len(ch) == 1 && ch[0] >= 'a' && ch[0] <= 'z' {
-		script := fmt.Sprintf(`tell application "System Events" to keystroke "%s" using {control down}`, ch)
+	mods, base := splitKeyChord(name)
+	using := darwinModifiers(mods)
+	// A printable single char goes through layout-aware `keystroke`; a named
+	// key (return, left, …) through `key code`. Modifiers ride either — so
+	// cmd+c, ctrl+shift+t and cmd+left all inject the same way.
+	if len(base) == 1 && base[0] > ' ' {
+		script := fmt.Sprintf(`tell application "System Events" to keystroke %s%s`, asStr(base), using)
 		_, err := run("osascript", "-e", script)
 		return err
 	}
-	code, ok := darwinKeyCodes[name]
+	code, ok := darwinKeyCodes[base]
 	if !ok {
 		return fmt.Errorf("unknown key %q", name)
 	}
-	// System Events "key code" for named keys — proven reliable, same path as
-	// keystroke. (CGEvent works too, but there's no reason to mix mechanisms.)
-	script := fmt.Sprintf(`tell application "System Events" to key code %d`, code)
+	script := fmt.Sprintf(`tell application "System Events" to key code %d%s`, code, using)
 	_, err := run("osascript", "-e", script)
 	return err
 }
@@ -1126,16 +1141,21 @@ func (linuxWindows) key(w winInfo, name string) error {
 	if !have("xdotool") {
 		return fmt.Errorf("install xdotool for input control")
 	}
-	name = strings.ToLower(name)
-	if ch, ok := strings.CutPrefix(name, "ctrl-"); ok && len(ch) == 1 && ch[0] >= 'a' && ch[0] <= 'z' {
-		_, err := run("xdotool", "key", "ctrl+"+ch)
-		return err
-	}
-	sym, ok := linuxKeySyms[name]
-	if !ok {
+	mods, base := splitKeyChord(name)
+	sym := base
+	if s, ok := linuxKeySyms[base]; ok {
+		sym = s
+	} else if !(len(base) == 1 && base[0] > ' ') {
 		return fmt.Errorf("unknown key %q", name)
 	}
-	_, err := run("xdotool", "key", sym)
+	names := map[string]string{"cmd": "super", "ctrl": "ctrl", "alt": "alt", "shift": "shift"}
+	prefix := ""
+	for _, m := range mods {
+		if v := names[m]; v != "" {
+			prefix += v + "+"
+		}
+	}
+	_, err := run("xdotool", "key", prefix+sym) // e.g. ctrl+c, super+l, ctrl+shift+t
 	return err
 }
 
