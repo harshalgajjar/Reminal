@@ -29,5 +29,11 @@ chosen so nobody reaches for a table or an image and has it silently break on
 a phone. Wrapped bullet continuations are indented and get folded back into
 their bullet.
 
-Write for someone deciding whether to upgrade now. Say what they get or what
-stops hurting — not which function was touched.
+Write for someone deciding whether to upgrade now — and assume they are not
+an engineer. Say what they can now do, or what stops hurting, in everyday
+words. No internals: no "cache", "feed", "protocol", "handler", no function
+names. A fix names the symptom they felt and says it is gone, not how.
+
+The notes should make a reader want to press Upgrade. Read them back as that
+person: if a bullet would not make you curious to try it, rewrite it. Short
+bullets, one idea each, a warm and confident tone.
