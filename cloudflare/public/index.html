@@ -861,8 +861,10 @@
        something. */
     /* Sits below the load line now, so it needs a normal gap above rather than
        the negative margin that used to tuck it under the meters. */
+    /* nowrap keeps the state on one line; overflow:hidden guarantees the row can
+       never widen the panel into a horizontal scroll if it does not fit. */
     .host-ver { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: #8b949e;
-                margin: 8px 0 0; white-space: nowrap; }
+                margin: 8px 0 0; white-space: nowrap; min-width: 0; overflow: hidden; }
     .host-ver .host-whatsnew { margin: 0 0 0 auto; width: auto; flex: 0 0 auto; }
     .host-ver code { background: #010409; border: 1px solid #21262d; border-radius: 4px;
                      padding: 1px 5px; color: #c9d1d9; font-size: 10px; }
@@ -2009,7 +2011,10 @@
       // wrong answer this row used to give.
       const answered = changelog && changelog.releases && !changelog.error;
       if (u && u.stage === 'done' && !u.error) h += '<span class="new">\u00b7 updated</span>';
-      else if (hostUpdate(i))                  h += '<span class="new">\u00b7 update available</span>';
+      // No "update available" text: the button below says so, and on a phone
+      // the words plus the notes pill overflowed the row into a horizontal
+      // scroll. An offer is a button, not a label.
+      else if (hostUpdate(i))                  { /* the upgrade button is the statement */ }
       else if (changelogPending)               h += '<span>\u00b7 checking\u2026</span>';
       else if (answered)                       h += '<span>\u00b7 up to date</span>';
       else if (changelog && changelog.error)   h += '<span>\u00b7 could not check</span>';
