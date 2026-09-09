@@ -222,8 +222,9 @@ func w32Cloaked(hwnd uintptr) bool {
 	return hr == 0 && v != 0
 }
 
-// w32ProcessName returns the executable base name (without .exe) for a pid.
-func w32ProcessName(pid uint32) string {
+// w32ProcessPath returns the full executable path for a pid ("" on failure,
+// e.g. a protected system process we can't open).
+func w32ProcessPath(pid uint32) string {
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {
 		return ""
@@ -234,12 +235,24 @@ func w32ProcessName(pid uint32) string {
 	if err := windows.QueryFullProcessImageName(h, 0, &buf[0], &n); err != nil {
 		return ""
 	}
-	name := filepath.Base(windows.UTF16ToString(buf[:n]))
+	return windows.UTF16ToString(buf[:n])
+}
+
+// w32ExeName is the display name for an executable path: its base name without
+// the .exe suffix ("" for "").
+func w32ExeName(path string) string {
+	if path == "" {
+		return ""
+	}
+	name := filepath.Base(path)
 	if strings.EqualFold(filepath.Ext(name), ".exe") {
 		name = name[:len(name)-4]
 	}
 	return name
 }
+
+// w32ProcessName returns the executable base name (without .exe) for a pid.
+func w32ProcessName(pid uint32) string { return w32ExeName(w32ProcessPath(pid)) }
 
 func (win32Windows) list() ([]winInfo, error) {
 	var wins []winInfo
@@ -272,14 +285,18 @@ func (win32Windows) list() ([]winInfo, error) {
 		}
 		var pid uint32
 		_, _, _ = w32ProcGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-		app := w32ProcessName(pid)
+		exe := w32ProcessPath(pid)
+		app := w32ExeName(exe)
 		if app == "" {
 			app = "?"
 		}
 		wins = append(wins, winInfo{
 			ID:  "hwnd:" + strconv.FormatUint(uint64(hwnd), 10),
 			App: app, Title: title,
-			X: int(rect.Left), Y: int(rect.Top), W: w, H: h,
+			// AppPath is the owning exe; win32AddWindowIcons resolves its icon
+			// so the Windows menu shows the same icon as the app launcher.
+			AppPath: exe,
+			X:       int(rect.Left), Y: int(rect.Top), W: w, H: h,
 			PID: int(pid),
 			// CropL/CropT stay 0: the DWM frame bounds already exclude the
 			// invisible border, and capture() crops to that same rect itself.
@@ -301,7 +318,32 @@ func (win32Windows) list() ([]winInfo, error) {
 			X: int(m.Left), Y: int(m.Top), W: w, H: h,
 		})
 	}
+	win32AddWindowIcons(wins)
 	return wins, nil
+}
+
+// win32AddWindowIcons fills each open window's Icon with its application's icon,
+// resolved from the owning executable through the same extractor the app
+// launcher uses (win32Icons, winbackend_win32_icons.go) — so a window in the
+// Windows menu shows the same icon as its entry in the Apps menu. Cheap on
+// repeat calls: win32Icons caches per path, and identical exes resolve once.
+// Desktop pseudo-windows have no AppPath and are left iconless.
+func win32AddWindowIcons(wins []winInfo) {
+	paths := make([]string, 0, len(wins))
+	for i := range wins {
+		if wins[i].AppPath != "" {
+			paths = append(paths, wins[i].AppPath)
+		}
+	}
+	if len(paths) == 0 {
+		return
+	}
+	icons := win32Icons(paths)
+	for i := range wins {
+		if wins[i].AppPath != "" {
+			wins[i].Icon = icons[wins[i].AppPath]
+		}
+	}
 }
 
 func (win32Windows) exists(id string) bool {
