@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -58,6 +59,15 @@ func (a *Agent) handleChangelog(conn *websocket.Conn) {
 // in them come back.
 //
 // Guarded by upgrading so two viewers cannot race the same install.
+// daemonServiceManaged reports whether an OS service manager automatically
+// restarts the background daemon when it exits: launchd's KeepAlive on macOS and
+// systemd's Restart=always on Linux both do. Windows' HKCU Run key has no
+// keepalive (it fires only at logon), and the other platforms have no service
+// integration at all — there the daemon must NOT exit expecting a restart.
+func daemonServiceManaged() bool {
+	return runtime.GOOS == "darwin" || runtime.GOOS == "linux"
+}
+
 func (a *Agent) handleUpgrade(conn *websocket.Conn, data string) {
 	if a.box == nil {
 		return
@@ -214,6 +224,26 @@ func (a *Agent) handleUpgrade(conn *websocket.Conn, data string) {
 	step(upgradeStage{Stage: "restart", Pct: 97, Version: a.version,
 		Detail: "Restarting this session — reconnecting shortly"})
 	time.Sleep(upgradeFlushPause) // let the frame flush before we exec
+	if a.machine && a.daemonHost {
+		if daemonServiceManaged() {
+			// launchd (KeepAlive) / systemd (Restart=always) restarts the daemon
+			// onto the new binary the instant it exits — immediate and
+			// single-instance. It has no PTY to hand across and no session to
+			// resume, so exiting is the whole restart.
+			os.Exit(0)
+		}
+		// No service manager (Windows' Run key fires only at logon): do NOT exit
+		// or respawn here. watchBinaryAndExit is already polling the binary and
+		// owns the single "hand off to a fresh copy and exit" ritual; doing it
+		// here too would race that goroutine and start two daemons. The daemon
+		// stays online on the current binary until its next tick
+		// (≤ binaryWatchInterval), so the machine never drops offline meanwhile.
+		return
+	}
+	// A session, OR a machine channel served in-process by a session/tunnel host
+	// (a.machine && !a.daemonHost, when no daemon is installed): os.Exit here
+	// would hard-kill the user's live process with nothing to restart it, so
+	// hot-restart it in place instead — it re-execs onto the new binary.
 	if _, err := sendControlTo(os.Getpid(), "restart"); err != nil {
 		// Our own restart failed but the others already went. Say so plainly
 		// rather than pretending the upgrade completed.

@@ -92,8 +92,23 @@ type Agent struct {
 	version     string // running binary's version, shown in banner + exit summary
 	box         *crypto.Box
 	sessionKey  []byte // 32-byte AES key wrapped per-viewer via EKE; see crypto/kex.go
-	buf         *scrollback
-	term        *pty.Session
+	// machine is set for the machine-mode agent (AgentOptions.Machine). It has
+	// no PTY: everything terminal-shaped is refused at the reader, and the
+	// handlers that touch the shell check a.term for nil.
+	machine bool
+	// daemonHost is true only when the machine-mode agent runs inside the
+	// standalone, service-managed daemon (RunDaemon) — the one process whose
+	// exit gets restarted for us. A machine channel served in-process by a
+	// session or tunnel host (no daemon installed) has this false, so upgrade
+	// must NOT os.Exit it out from under the user's live shell.
+	daemonHost bool
+	// spawn creates a detached session on this host for TypeNewSession. A
+	// field so tests can watch it; nil means Spawn.
+	spawn func(name, cwd string) (*SpawnedSession, error)
+	// dirLimits rate-limits the machine channel's actions (machine mode only).
+	dirLimits *dirLimits
+	buf       *scrollback
+	term      *pty.Session
 
 	// screen is a headless terminal emulator fed the same plaintext output
 	// that goes to viewers. On a fresh attach we serialize its current state
@@ -376,6 +391,15 @@ type Agent struct {
 // AgentOptions configures startup behaviour. Zero-value runs the
 // classic foreground agent (the default for plain `reminal`).
 type AgentOptions struct {
+	// Machine runs the agent as THIS MACHINE's owner channel rather than as a
+	// session: no shell, no PIN, reachable only by enrolled owner devices. It
+	// is what the daemon runs so a machine's windows, apps, stats, sessions
+	// and upgrades are reachable with no session open. See machineagent.go.
+	Machine bool
+	// DaemonHost marks a Machine agent as running inside the standalone,
+	// service-managed daemon (vs served in-process by a session/tunnel host).
+	// Only meaningful with Machine; see Agent.daemonHost.
+	DaemonHost bool
 	// Headless skips every host-terminal interaction (raw mode, host
 	// indicator, host stdin pump). Set by `reminal new` for detached
 	// background sessions.
@@ -486,6 +510,9 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 	if err != nil {
 		return nil, err
 	}
+	if opts.Machine {
+		return newMachineAgent(version, opts.DaemonHost)
+	}
 	pin, err := session.NewPIN(6)
 	if err != nil {
 		return nil, err
@@ -532,15 +559,22 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 }
 
 func (a *Agent) Run() error {
-	// Correctness self-heal (idempotent, NOT version-gated): a foreground host
-	// running from reminal.app must have the always-on capture daemon — it performs
-	// all window/desktop capture + input under the one sh.reminal grant. If a prior
-	// upgrade/migration (or a manual app move) left it missing, install it now.
-	// No-op when already present, not bundled, or headless (those are spawned by the
-	// daemon, which by definition already exists).
-	if !a.headless {
-		EnsureDaemonInstalled()
-	}
+	// Correctness self-heal (idempotent): any real session should leave the
+	// always-on background daemon installed — the machine's presence + stats
+	// layer, and on macOS the one sh.reminal grant that performs all
+	// window/desktop capture + input. Doing it off a real session rather than the
+	// add-owner flow is what keeps a machine reachable from boot. Headless
+	// sessions count: a user's `reminal new` on a fresh machine must still get
+	// the daemon, and a session the daemon itself spawned makes this a cheap
+	// no-op (the service is already installed, or the daemon is alive). Also a
+	// no-op on a build that must not register a service — a macOS non-bundle or
+	// an un-stamped "dev" binary.
+	//
+	// Async and panic-guarded: InstallDaemonService can take a couple of seconds
+	// (launchd's bootstrap retry loop), and a `reminal new` parent is blocked on
+	// the handshake fd until Run() proceeds — the credential output must not wait
+	// on a service install. Nothing below depends on the daemon existing yet.
+	a.goGuarded("ensure daemon", func() { EnsureDaemonInstalled(a.version) })
 	// Banner goes to the host terminal only in foreground mode. Headless
 	// agents have no terminal — credentials are delivered to the parent
 	// `reminal new` process via the handshake fd and from there printed
@@ -584,7 +618,7 @@ func (a *Agent) Run() error {
 			a.name = prev.Name
 		}
 	}
-	_ = session.WriteActive(a.activeRecord(0))
+	a.recordActive(0)
 	defer func() {
 		if !a.restarting.Load() {
 			_ = session.ClearActive(a.sessionID)
@@ -660,7 +694,7 @@ func (a *Agent) Run() error {
 	// first flush.
 	a.refreshCwd()
 	if !a.paused.Load() {
-		_ = session.WriteActive(a.activeRecord(int(a.curViewers.Load())))
+		a.recordActive(int(a.curViewers.Load()))
 	}
 
 	pty.HandleSignals()
@@ -773,7 +807,7 @@ func (a *Agent) Run() error {
 	// every session across the machines they own (`reminal machines`). No-op
 	// unless the machine has owners enrolled; the relay elects one host per
 	// machine across all its sessions, so running it on every agent is safe.
-	go runDirectoryHost(shellExit, false)
+	go runDirectoryHost(shellExit, false, a.version)
 
 	// Trap SIGINT/SIGTERM so the process exits via the normal return path
 	// (defers fire: ClearActive, exit summary, keepawake stop). Default Go
@@ -803,6 +837,13 @@ func (a *Agent) Run() error {
 		}
 	}()
 
+	return a.serveRelay(shellExit)
+}
+
+// serveRelay keeps this agent connected to the relay until shellExit closes,
+// reconnecting with backoff. Shared by a session (shellExit = the shell ended)
+// and the machine channel (shellExit = the daemon is stopping).
+func (a *Agent) serveRelay(shellExit <-chan struct{}) error {
 	backoff := initialBackoff
 	for {
 		select {
@@ -1163,7 +1204,7 @@ func (a *Agent) setName(name string) {
 	a.name = strings.TrimSpace(name)
 	a.metaMu.Unlock()
 	if !a.paused.Load() {
-		_ = session.WriteActive(a.activeRecord(int(a.curViewers.Load())))
+		a.recordActive(int(a.curViewers.Load()))
 	}
 }
 
@@ -1174,7 +1215,7 @@ func (a *Agent) updateActiveViewers(viewers int) {
 	if a.paused.Load() {
 		return
 	}
-	_ = session.WriteActive(a.activeRecord(viewers))
+	a.recordActive(viewers)
 }
 
 // markActivity stamps the last-PTY-output time and flags the record dirty so
@@ -1314,7 +1355,7 @@ func (a *Agent) metaFlushLoop(stop <-chan struct{}) {
 			// record is exactly when the cwd may have changed — refresh
 			// it before persisting.
 			a.refreshCwd()
-			_ = session.WriteActive(a.activeRecord(int(a.curViewers.Load())))
+			a.recordActive(int(a.curViewers.Load()))
 		}
 	}
 	for {
@@ -2509,6 +2550,16 @@ func guardPanic(what string, fn func() error) (err error) {
 	return fn()
 }
 
+// goGuarded runs fn on its own goroutine with panic recovery. runReader's
+// guardPanic wraps the reader goroutine, but a panic in a CHILD goroutine
+// escapes it (recover only fires in the same goroutine) — so a fault while
+// handling untrusted, relay-forwarded input, or in a background self-heal, would
+// otherwise crash the whole process (for the never-exiting daemon, until a
+// reboot). Contain and log it instead, like the reader does.
+func (a *Agent) goGuarded(what string, fn func()) {
+	go func() { _ = guardPanic(what, func() error { fn(); return nil }) }()
+}
+
 func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 	// A panic in a viewer-message handler (the read-loop dispatch below processes
 	// untrusted input) must NOT crash the agent — that would kill the shell session
@@ -2666,7 +2717,21 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			continue
 		}
 
+		if !a.servesOnThisChannel(msg.Type) {
+			continue // wrong channel for this message — see servesOnThisChannel
+		}
 		switch msg.Type {
+		case protocol.TypeDirQuery:
+			// Own goroutine + panic guard: LocalDirectory can sample CPU (a
+			// ~200ms `top`), which must not stall the reader carrying window
+			// acks/keystrokes; writeMsg is mutex-guarded so the reply is safe.
+			a.goGuarded("dir query", func() { a.handleDirQuery(conn, msg.Data) })
+		case protocol.TypeDirRename:
+			a.goGuarded("dir rename", func() { a.handleDirRename(conn, msg.Data) })
+		case protocol.TypeDirRevokeSelf:
+			a.goGuarded("dir revoke-self", func() { a.handleDirRevokeSelf(conn, msg.Data) })
+		case protocol.TypeDirKill:
+			a.goGuarded("dir kill", func() { a.handleDirKill(conn, msg.Data) })
 		case protocol.TypeData:
 			data, err := a.box.Decrypt(msg.Data)
 			if err != nil {
@@ -2787,7 +2852,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.handleWebRTCICE(msg.Data)
 		case protocol.TypeConnected:
 			if msg.Count > 0 {
-				agentNotify("  [%s] Viewer connected (%d active)\n",
+				a.notify("  [%s] Viewer connected (%d active)\n",
 					time.Now().Format("15:04:05"), msg.Count)
 			} else {
 				agentNotify("  [%s] Remote viewer connected\n",
@@ -2831,7 +2896,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 				agentNotify("  [%s] Viewer disconnected (%d still active)\n",
 					time.Now().Format("15:04:05"), msg.Count)
 			} else {
-				agentNotify("  [%s] Last viewer disconnected\n",
+				a.notify("  [%s] Last viewer disconnected\n",
 					time.Now().Format("15:04:05"))
 				// Reset the viewer-min so a fresh viewer joining
 				// later can grow the PTY back to its size, instead
@@ -3045,7 +3110,10 @@ func (a *Agent) handleKexInit(conn *websocket.Conn, exIDHex, dataB64 string) {
 // session key is wrapped and sent ONLY after the device signature verifies and
 // the device is confirmed in owners.json.
 func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
-	if !a.allowKex(time.Now()) {
+	// The machine channel is answered for every enrolled device at once — a
+	// phone, a laptop and a CLI all opening their Machines lists in the same
+	// second — so it takes the directory's burst, not a session's.
+	if !a.allowOwnerHandshake() {
 		return
 	}
 	exID, err := crypto.ParseExID(msg.ExID)
@@ -3110,6 +3178,11 @@ func (a *Agent) handleOwnerInit(conn *websocket.Conn, msg protocol.Message) {
 }
 
 func (a *Agent) writeMsg(conn *websocket.Conn, msg protocol.Message) error {
+	// No live connection (an async reply after a drop, or a test with no
+	// socket): there is nowhere to write to. Same rule as sendWindowMsg.
+	if conn == nil {
+		return errors.New("no connection")
+	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err

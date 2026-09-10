@@ -332,6 +332,32 @@ type DirSession struct {
 	TranscriptOK        bool   `json:"transcript_ok,omitempty"`
 }
 
+// MachineStats is what a machine says about itself as a machine — not about
+// any one session on it. One definition: a session's host_info embeds it, and
+// the machine channel's directory reply carries it, so the Host panel and the
+// machine cards read the same numbers from the same sampler.
+type MachineStats struct {
+	OS       string  `json:"os"`   // friendly: "macOS", "Linux", "Windows"
+	Arch     string  `json:"arch"` // arm64, amd64, …
+	CPUModel string  `json:"cpu_model,omitempty"`
+	CPUs     int     `json:"cpus"`
+	MemTotal uint64  `json:"mem_total,omitempty"` // bytes
+	MemUsed  uint64  `json:"mem_used,omitempty"`  // bytes
+	Uptime   int64   `json:"uptime,omitempty"`    // seconds since boot
+	Load1    float64 `json:"load1,omitempty"`
+	Load5    float64 `json:"load5,omitempty"`
+	Load15   float64 `json:"load15,omitempty"`
+	// CPUPercent is real CPU utilization (0..100), the "% busy" Activity
+	// Monitor / top show — NOT load/cores. A pointer so a viewer can tell
+	// "unknown/unsupported" (nil: a platform without a sampler, or the very
+	// first Linux sample that has no delta yet) from a genuine 0%.
+	CPUPercent *float64 `json:"cpu_pct,omitempty"`
+	// Version is the reminal this machine runs; Update is the newest release
+	// its last check saw, empty when current or never checked.
+	Version string `json:"version,omitempty"`
+	Update  string `json:"update,omitempty"`
+}
+
 // DirResponse is the encrypted payload of a TypeDirResp: the machine's hostname
 // (so owners can auto-name it) and its live sessions.
 type DirResponse struct {
@@ -348,7 +374,12 @@ type DirResponse struct {
 	//
 	// BatteryPct is a pointer because 0% is a real and alarming reading that
 	// must not collapse into "not reported" the way an omitempty int would.
-	BatteryPct *int `json:"battery_pct,omitempty"`
+	// Stats is the machine's own vitals, from the same sampler the Host panel
+	// reads. Sent by a machine channel served by a daemon new enough to be an
+	// Agent; absent from older hosts, which the cards must treat as "unknown",
+	// not as zero.
+	Stats      *MachineStats `json:"stats,omitempty"`
+	BatteryPct *int          `json:"battery_pct,omitempty"`
 	// BatteryState is "charging", "discharging" or "charged" (on mains and
 	// full). Three states rather than a bool: "on AC at 100%" and "on AC
 	// climbing through 80%" read differently to a human.

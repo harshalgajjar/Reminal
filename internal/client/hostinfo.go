@@ -52,21 +52,33 @@ func (a *Agent) handleNewSession(conn *websocket.Conn, data string) {
 	if a.box == nil {
 		return
 	}
+	if !a.allowDir(dirActSpawn) {
+		return
+	}
+	// The request must decrypt under the session key: a message the relay
+	// could have forged (empty, or sealed under some other key) must not fork
+	// a shell on this machine.
 	var req struct {
-		Name string `json:"name"`
-		Cwd  string `json:"cwd"`
+		Name  string `json:"name"`
+		Cwd   string `json:"cwd"`
+		ReqID string `json:"req_id"`
 	}
-	if data != "" {
-		if pt, err := a.box.Decrypt(data); err == nil {
-			_ = json.Unmarshal(pt, &req)
-		}
+	if data == "" {
+		return
 	}
+	pt, err := a.box.Decrypt(data)
+	if err != nil {
+		return
+	}
+	_ = json.Unmarshal(pt, &req)
 	var payload struct {
+		ReqID string `json:"req_id,omitempty"`
 		ID    string `json:"id,omitempty"`
 		PIN   string `json:"pin,omitempty"`
 		Error string `json:"error,omitempty"`
 	}
-	if sp, err := Spawn(req.Name, req.Cwd); err != nil {
+	payload.ReqID = req.ReqID
+	if sp, err := a.spawnSession(req.Name, req.Cwd); err != nil {
 		payload.Error = err.Error()
 	} else {
 		payload.ID, payload.PIN = sp.ID, sp.PIN
@@ -87,22 +99,11 @@ func (a *Agent) handleNewSession(conn *websocket.Conn, data string) {
 // basic stats. All the size/time fields are best-effort: a platform that can't
 // read one leaves it zero and the viewer just omits it.
 type HostInfo struct {
-	Hostname string  `json:"hostname"`
-	OS       string  `json:"os"`   // friendly: "macOS", "Linux", "Windows"
-	Arch     string  `json:"arch"` // arm64, amd64, …
-	CPUModel string  `json:"cpu_model,omitempty"`
-	CPUs     int     `json:"cpus"`
-	MemTotal uint64  `json:"mem_total,omitempty"` // bytes
-	MemUsed  uint64  `json:"mem_used,omitempty"`  // bytes
-	Uptime   int64   `json:"uptime,omitempty"`    // seconds since boot
-	Load1    float64 `json:"load1,omitempty"`
-	Load5    float64 `json:"load5,omitempty"`
-	Load15   float64 `json:"load15,omitempty"`
-	// CPUPercent is real CPU utilization (0..100), the "% busy" Activity
-	// Monitor / top show — NOT load/cores. A pointer so the viewer can tell
-	// "unknown/unsupported" (nil, e.g. a platform without a sampler, or the
-	// very first Linux sample that has no delta yet) from a genuine 0%.
-	CPUPercent *float64 `json:"cpu_pct,omitempty"`
+	Hostname string `json:"hostname"`
+	// The machine's vitals — see protocol.MachineStats. Embedded so the wire
+	// shape is unchanged (fields stay flat) and there is exactly one list of
+	// them shared with the directory reply.
+	protocol.MachineStats
 	// DragPhases says this host accepts a drag as begin/move/end events while
 	// the pointer is still down, instead of one whole path after it lifts.
 	// Advertised rather than assumed: a viewer that sent phased events to a
@@ -117,20 +118,11 @@ type HostInfo struct {
 	// PIN is this session's join PIN. Sent so an owner-connected viewer can
 	// share the session; omitted from directory listings on purpose.
 	PIN string `json:"pin,omitempty"`
-	// Version is the reminal this host is running. Absent from an older host,
-	// which is exactly what the panel needs to know to hide the upgrade
-	// button rather than offer one the host cannot act on.
-	Version string `json:"version,omitempty"`
 	// Sessions is how many shells on this machine an upgrade would restart.
 	// The panel promises a number before you press the button, and guessing
 	// one would be worse than omitting it — an old host sends nothing and the
 	// wording falls back to "every session".
 	Sessions int `json:"sessions,omitempty"`
-	// Update is the newest version the host's last update check saw, empty
-	// when it is current or has never checked. Read from the on-disk cache,
-	// so it costs nothing on a host-info poll — the check that fills it
-	// already runs on its own schedule.
-	Update string `json:"update,omitempty"`
 }
 
 // gatherHostInfo collects the cross-platform basics, then lets the per-OS hook
@@ -138,9 +130,11 @@ type HostInfo struct {
 // simply left zero.
 func gatherHostInfo() HostInfo {
 	h := HostInfo{
-		OS:   friendlyOS(runtime.GOOS),
-		Arch: runtime.GOARCH,
-		CPUs: runtime.NumCPU(),
+		MachineStats: protocol.MachineStats{
+			OS:   friendlyOS(runtime.GOOS),
+			Arch: runtime.GOARCH,
+			CPUs: runtime.NumCPU(),
+		},
 		// Only the macOS daemon injects drags phase by phase so far; the other
 		// backends still replay a path, and telling a viewer otherwise would
 		// turn every drag there into a stutter of clicks.
@@ -188,6 +182,15 @@ func cachedCPUPercent() (float64, bool) {
 	// doesn't blank the meter.
 	return cpuCachePct, cpuCacheOK
 }
+
+// PrimeCPUSample takes a throwaway CPU reading so the NEXT one has an interval
+// to measure against. On Linux cpuPercent needs two /proc/stat samples — the
+// first only establishes a baseline and reports "unknown" — so a one-shot
+// process that wants a CPU figure (e.g. `reminal machines` reading the LOCAL
+// line via LocalDirectory) must prime, wait briefly, then read. The long-lived
+// daemon already holds a prior sample, so it never needs this; and it is a cheap
+// no-op on macOS/Windows, whose samplers report a value on the first call.
+func PrimeCPUSample() { _, _ = cachedCPUPercent() }
 
 func friendlyOS(goos string) string {
 	switch goos {

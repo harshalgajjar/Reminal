@@ -29,7 +29,7 @@ import (
 // answers from the same on-disk session registry, so it doesn't matter which. A
 // no-op while the machine is unowned (runDirectoryHost re-checks periodically),
 // so it's harmless to leave running after every owner is revoked.
-func RunDaemon() error {
+func RunDaemon(version string) error {
 	stop := make(chan struct{})
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -62,7 +62,7 @@ func RunDaemon() error {
 	// overwrite each other. Served on every platform: the badge is macOS-only
 	// today, but mirroring notes to a phone is not.
 	go ServeNotes(stop)
-	runDirectoryHost(stop, true)
+	runDirectoryHost(stop, true, version)
 	return nil
 }
 

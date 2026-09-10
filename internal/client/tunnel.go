@@ -161,7 +161,7 @@ func (t *Tunnel) Run() error {
 	// that's running ONLY a port forward (no shell session) is still visible and
 	// reachable in `reminal machines`. No-op unless the machine has owners; the
 	// relay elects a single host across all of the machine's sessions.
-	go runDirectoryHost(stop, false)
+	go runDirectoryHost(stop, false, t.version)
 
 	backoff := initialBackoff
 	for {

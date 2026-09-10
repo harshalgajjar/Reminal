@@ -48,7 +48,7 @@ func TestDirectoryRevokeSelfEndToEnd(t *testing.T) {
 
 	stop := make(chan struct{})
 	defer close(stop)
-	go runDirectoryHost(stop, true)
+	go runDirectoryHost(stop, true, "test")
 
 	deadline := time.Now().Add(6 * time.Second)
 	for {
@@ -128,22 +128,19 @@ func TestDirectoryNewSessionRequiresOwnerKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	spawned := 0
-	dh := &dirHost{
-		box:        box,
-		spawnLimit: newTokenBucket(8, 8),
+	a := &Agent{box: box, machine: true, dirLimits: newDirLimits(),
 		spawn: func(string, string) (*SpawnedSession, error) {
 			spawned++
 			return &SpawnedSession{ID: "X", PIN: "1"}, nil
-		},
-	}
+		}}
 	// No data → no spawn.
-	dh.handleNewSession(protocol.Message{Type: protocol.TypeNewSession})
+	a.handleNewSession(nil, "")
 	// Junk that isn't valid ciphertext → no spawn.
-	dh.handleNewSession(protocol.Message{Type: protocol.TypeNewSession, Data: base64.StdEncoding.EncodeToString([]byte("not encrypted"))})
+	a.handleNewSession(nil, base64.StdEncoding.EncodeToString([]byte("not encrypted")))
 	// Validly encrypted, but under a DIFFERENT key (a non-owner) → no spawn.
 	otherBox, _ := crypto.NewBox(mustSessionKey(t))
 	badEnc, _ := otherBox.Encrypt([]byte(`{"name":"x"}`))
-	dh.handleNewSession(protocol.Message{Type: protocol.TypeNewSession, Data: badEnc})
+	a.handleNewSession(nil, badEnc)
 
 	if spawned != 0 {
 		t.Fatalf("spawned %d times for unauthenticated requests — must be 0", spawned)
@@ -162,20 +159,17 @@ func TestDirectoryNewSessionPassesCwd(t *testing.T) {
 		t.Fatal(err)
 	}
 	var gotName, gotCwd string
-	dh := &dirHost{
-		box:        box,
-		spawnLimit: newTokenBucket(8, 8),
+	a := &Agent{box: box, machine: true, dirLimits: newDirLimits(),
 		spawn: func(name, cwd string) (*SpawnedSession, error) {
 			gotName, gotCwd = name, cwd
 			return &SpawnedSession{ID: "X", PIN: "1"}, nil
-		},
-	}
+		}}
 	pt, _ := json.Marshal(map[string]string{"name": "dup", "cwd": "/tmp", "req_id": "r1"})
 	enc, err := box.Encrypt(pt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dh.handleNewSession(protocol.Message{Type: protocol.TypeNewSession, Data: enc})
+	a.handleNewSession(nil, enc)
 	if gotName != "dup" || gotCwd != "/tmp" {
 		t.Fatalf("spawn(%q, %q), want dup /tmp", gotName, gotCwd)
 	}
@@ -273,7 +267,7 @@ func TestDirectoryEndToEnd(t *testing.T) {
 
 	stop := make(chan struct{})
 	defer close(stop)
-	go runDirectoryHost(stop, true)
+	go runDirectoryHost(stop, true, "test")
 
 	// Poll until the host has won the channel and answers.
 	deadline := time.Now().Add(6 * time.Second)
@@ -337,7 +331,7 @@ func TestDirectoryConcurrentQueries(t *testing.T) {
 
 	stop := make(chan struct{})
 	defer close(stop)
-	go runDirectoryHost(stop, true)
+	go runDirectoryHost(stop, true, "test")
 
 	// Wait for the host to come up.
 	deadline := time.Now().Add(6 * time.Second)
@@ -395,7 +389,7 @@ func TestDirectoryRejectsNonOwner(t *testing.T) {
 
 	stop := make(chan struct{})
 	defer close(stop)
-	go runDirectoryHost(stop, true)
+	go runDirectoryHost(stop, true, "test")
 
 	// While enrolled, the query must eventually succeed (host is up).
 	deadline := time.Now().Add(6 * time.Second)

@@ -20,5 +20,5 @@ func runDaemon(args []string) error {
 			return client.UninstallDaemonService()
 		}
 	}
-	return client.RunDaemon()
+	return client.RunDaemon(version)
 }
