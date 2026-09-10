@@ -1080,16 +1080,18 @@
     .machine-stats .st-cpu.hot { color: #f0883e; }
     .machine-stats .st-cpu.busy { color: #d29922; }
     .machine-stats { cursor: pointer; }
-    /* Tap-to-open detail bubble — touch has no hover, so the full metrics open
-       on a tap. Mirrors .batt-detail: anchored right, above the session list. */
-    .stats-detail { display: none; position: absolute; top: calc(100% - 2px); right: 6px; z-index: 30;
+    /* Touch has no hover, so the full metrics open on a tap. The bubble renders
+       at document.body (a "portal", positioned in JS) rather than inside the
+       badge: the machines panel is overflow-y:auto / overflow-x:hidden and would
+       otherwise clip an in-panel popover. position:fixed on a body child is
+       viewport-relative, so no ancestor overflow reaches it. */
+    .stats-portal { display: none; position: fixed; z-index: 1000;
                     background: rgba(28,28,34,.98); border: 1px solid rgba(255,255,255,.14);
-                    border-radius: 8px; padding: 6px 9px; font-size: 11.5px; font-style: normal;
+                    border-radius: 8px; padding: 6px 9px; font-size: 11.5px;
                     color: #c9d1d9; box-shadow: 0 10px 26px rgba(0,0,0,.55);
-                    width: max-content; max-width: min(240px, 66vw);
-                    white-space: normal; line-height: 1.5; text-align: left; }
-    .stats-detail > div { white-space: nowrap; }
-    .machine-stats.open .stats-detail { display: block; }
+                    width: max-content; max-width: min(280px, 80vw);
+                    line-height: 1.5; text-align: left; }
+    .stats-portal > div { white-space: nowrap; }
     @media (max-width: 400px) { .machine-stats { display: none; } }
     /* Extremely narrow: the row has no width to spend on words, so the badge
        becomes the gauge alone — a glyph you tap to get the full reading. The
@@ -4544,8 +4546,9 @@
       if (battCloserWired) return;
       battCloserWired = true;
       document.addEventListener('click', (e) => {
-        if (e.target && e.target.closest && e.target.closest('.machine-batt, .machine-stats')) return;
-        document.querySelectorAll('.machine-batt.open, .machine-stats.open').forEach(o => o.classList.remove('open'));
+        if (e.target && e.target.closest && e.target.closest('.machine-batt, .machine-stats, .stats-portal')) return;
+        document.querySelectorAll('.machine-batt.open').forEach(o => o.classList.remove('open'));
+        closeStatsPortal();
       });
     }
 
@@ -4565,22 +4568,27 @@
       const head = box.querySelector('.machine-title');
       if (!head) return;
       let el = head.querySelector('.machine-stats');
-      if (!st || (typeof st.cpu_pct !== 'number' && !st.mem_total)) { if (el) el.remove(); return; }
+      if (!st || (typeof st.cpu_pct !== 'number' && !st.mem_total)) {
+        if (el) { if (statsPortalAnchor === el) closeStatsPortal(); el.remove(); }
+        return;
+      }
       if (!el) {
         el = document.createElement('span');
         el.className = 'machine-stats';
-        el.innerHTML = '<span class="st-label"></span><span class="stats-detail"></span>';
+        el.innerHTML = '<span class="st-label"></span>';
         head.insertBefore(el, head.querySelector('.machine-count'));
         el.setAttribute('role', 'button');
         el.setAttribute('tabindex', '0');
         // Touch has no hover, so the full metrics open on a tap \u2014 like the
         // battery badge. stopPropagation so opening it doesn't also toggle the
-        // machine's session list underneath.
+        // machine's session list underneath. The bubble is a body-level portal
+        // (openStatsPortal) so the panel's overflow can't clip it.
         const toggle = (ev) => {
           ev.stopPropagation();
           const wasOpen = el.classList.contains('open');
-          document.querySelectorAll('.machine-batt.open, .machine-stats.open').forEach(o => o.classList.remove('open'));
-          if (!wasOpen) el.classList.add('open');
+          document.querySelectorAll('.machine-batt.open').forEach(o => o.classList.remove('open'));
+          closeStatsPortal();
+          if (!wasOpen) { el.classList.add('open'); openStatsPortal(el); }
         };
         el.addEventListener('click', toggle);
         el.addEventListener('keydown', (ev) => {
@@ -4589,7 +4597,7 @@
         wireBattCloser();
       }
       // The row shows one number (CPU%, or memory if there's no CPU reading);
-      // the full set lives in the tap-open bubble and the hover title, built
+      // the full set lives in the tap-open portal and the hover title, built
       // from ONE list so they can't drift \u2014 and so a new metric (e.g. gpu_pct,
       // once the daemon reports it) shows up in both automatically.
       let cpu = '';
@@ -4611,10 +4619,53 @@
       }
       if (st.cpus) rows.push(st.cpus + ' core' + (st.cpus === 1 ? '' : 's') + (st.cpu_model ? ' \u00b7 ' + st.cpu_model : ''));
       if (st.uptime) rows.push('Up ' + fmtUptime(st.uptime));
-      el.querySelector('.stats-detail').innerHTML = rows.map(r => '<div>' + escHTML(r) + '</div>').join('');
+      el._statsRows = rows;
       el.title = rows.join(' \u00b7 ');
+      if (statsPortalAnchor === el) openStatsPortal(el); // keep an open bubble live as the poll repaints
       syncMachineTight(box);
     }
+    // ── stats detail portal ───────────────────────────────────────────────
+    // A single body-level bubble showing a machine's full vitals on tap. It
+    // lives at document.body, not inside the badge, so the machines panel's
+    // overflow (overflow-y:auto / overflow-x:hidden) can't clip it; the position
+    // is fixed and computed from the badge's rect, re-tracked as the panel
+    // scrolls or the window resizes.
+    let statsPortal = null, statsPortalAnchor = null, statsPortalWired = false;
+    function openStatsPortal(anchor) {
+      if (!statsPortal) {
+        statsPortal = document.createElement('div');
+        statsPortal.className = 'stats-portal';
+        document.body.appendChild(statsPortal);
+      }
+      if (!statsPortalWired) {
+        statsPortalWired = true;
+        // capture=true so the PANEL's own scroll fires this, not just the window's.
+        addEventListener('scroll', positionStatsPortal, true);
+        addEventListener('resize', positionStatsPortal);
+      }
+      const rows = (anchor && anchor._statsRows) || [];
+      statsPortal.innerHTML = rows.map(r => '<div>' + escHTML(r) + '</div>').join('');
+      statsPortalAnchor = anchor;
+      statsPortal.style.display = 'block';
+      positionStatsPortal();
+    }
+    function closeStatsPortal() {
+      if (statsPortal) statsPortal.style.display = 'none';
+      if (statsPortalAnchor) statsPortalAnchor.classList.remove('open');
+      statsPortalAnchor = null;
+    }
+    function positionStatsPortal() {
+      if (!statsPortal || !statsPortalAnchor || statsPortal.style.display === 'none') return;
+      // Anchor gone (list re-rendered) or hidden (panel closed) → close it.
+      if (!document.contains(statsPortalAnchor)) { closeStatsPortal(); return; }
+      const r = statsPortalAnchor.getBoundingClientRect();
+      if ((r.width === 0 && r.height === 0) || r.bottom < 0 || r.top > innerHeight) { closeStatsPortal(); return; }
+      const w = statsPortal.offsetWidth;
+      const left = Math.max(6, Math.min(r.right - w, innerWidth - w - 6)); // right-align to the badge, clamp to viewport
+      statsPortal.style.left = left + 'px';
+      statsPortal.style.top = (r.bottom + 4) + 'px';
+    }
+
     function paintBattery(box, b, stale) {
       if (!box) return;
       const head = box.querySelector('.machine-title');
@@ -8304,6 +8355,8 @@
       let machinesPollTimer = null;
       rec.addEventListener('toggle', () => {
         if (machinesPollTimer) { clearInterval(machinesPollTimer); machinesPollTimer = null; }
+        if (!rec.open) closeStatsPortal(); // panel closed — drop any open stats bubble
+
         if (rec.open) {
           renderMachines();
           machinesPollTimer = setInterval(() => {
