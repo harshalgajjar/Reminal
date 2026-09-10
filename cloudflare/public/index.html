@@ -5,7 +5,7 @@
   <meta http-equiv="Cache-Control" content="no-store">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>reminal</title>
-  <!-- reminal-web 3.5.3 2026-09-02 -->
+  <!-- reminal-web 3.6.9 2026-09-09 -->
   <meta name="theme-color" content="#0d1117">
   <!-- iOS "Add to Home Screen": fullscreen, black status bar, no Safari chrome. -->
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -2673,8 +2673,8 @@
     window.addEventListener('resize', positionSnipdock);
 
     function pasteSnippet(text) {
-      Promise.resolve(sendInput(text)).catch(() => {});
-      term.focus();
+      const toWindow = typeToTarget(text);
+      (toWindow ? wkey : term).focus();
     }
 
     // askName is the optional second half of add/edit: a display label for a
@@ -6141,7 +6141,9 @@
             // the user having to add quotes themselves.
             const needsQuotes = /[\s"'`$\\!*?(){}[\]<>|&;]/.test(path);
             const quoted = needsQuotes ? `'${path.replace(/'/g, `'\\''`)}'` : path;
-            await sendInput(quoted);
+            // Land the path in whatever the bar is driving — the focused
+            // window if its keyboard is up, otherwise the shell.
+            typeToTarget(quoted);
             // Best-effort: also stash in the phone's clipboard so the
             // user can paste it elsewhere (e.g. into the next message
             // in a different app).
@@ -6637,6 +6639,23 @@
       'ctrl-z': { special: 'ctrl-z' },
     };
     const winKbdActive = () => document.body.classList.contains('wkbd-open') && !!focusedPaneId;
+    // Route free text (a paste, a snippet, an uploaded path) to whatever the
+    // command bar is currently driving: the focused remote window when its
+    // keyboard is up, otherwise the terminal. Every command-bar action that
+    // injects input goes through here so none of them silently land in the
+    // terminal (and steal its focus) while you're typing into a window.
+    // Returns true if it went to the window. Callers that own the soft
+    // keyboard should refocus wkey/term after — this only sends.
+    function typeToTarget(text) {
+      if (winKbdActive()) {
+        for (let i = 0; i < text.length; i += WIN_TYPE_CHUNK) {
+          sendWin('window_input', { id: focusedPaneId, kind: 'key', text: text.slice(i, i + WIN_TYPE_CHUNK) });
+        }
+        return true;
+      }
+      Promise.resolve(sendInput(text)).catch(() => {});
+      return false;
+    }
     document.querySelectorAll('#keybar button').forEach(btn => {
       if (!btn.dataset.key) return; // skip non-key buttons (Upload, etc.)
       const seq = keyMap[btn.dataset.key];
@@ -7205,15 +7224,27 @@
         term.write('\r\n\x1b[2m[reminal] copy failed: ' + e + '\x1b[0m\r\n');
       }
     });
-    document.getElementById('paste-btn').addEventListener('click', async () => {
+    // Paste routes to the focused window when the window keyboard is up,
+    // otherwise to the terminal — and refocuses whichever input owns the
+    // soft keyboard. The old handler always sendInput()'d into the terminal
+    // and then term.focus()'d, so pasting while typing into a window yanked
+    // focus off the window, collapsed the keyboard, and the paste never
+    // reached the window. mousedown/touchend mirror the keybar buttons so
+    // the tap itself never blurs the hidden window-key input.
+    const pasteBtn = document.getElementById('paste-btn');
+    const doPaste = async () => {
+      let toWindow = winKbdActive();
       try {
         const text = await navigator.clipboard.readText();
-        if (text) await sendInput(text);
+        if (text) toWindow = typeToTarget(text);
       } catch (e) {
         term.write('\r\n\x1b[2m[reminal] paste failed: ' + e + '\x1b[0m\r\n');
       }
-      term.focus();
-    });
+      (toWindow ? wkey : term).focus();
+    };
+    pasteBtn.addEventListener('mousedown', (e) => { if (winKbdActive()) e.preventDefault(); });
+    pasteBtn.addEventListener('touchend', (e) => { if (!winKbdActive()) return; e.preventDefault(); doPaste(); });
+    pasteBtn.addEventListener('click', doPaste);
 
     document.getElementById('find-btn').addEventListener('click', openFind);
     document.getElementById('find-prev').addEventListener('click', () => findNext(true));
