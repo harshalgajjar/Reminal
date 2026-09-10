@@ -44,6 +44,11 @@ func runMachines(args []string) error {
 	return listMachines()
 }
 
+// cpuPrimeDelay is how long `reminal machines` waits between the throwaway and
+// real CPU sample for the local line on Linux — long enough for a meaningful
+// /proc/stat delta, short enough not to be felt.
+const cpuPrimeDelay = 150 * time.Millisecond
+
 type machineResult struct {
 	m    client.OwnedMachine
 	resp protocol.DirResponse
@@ -87,7 +92,18 @@ func listMachines() error {
 	// Local machine first (from the registry), then the remote ones.
 	var results []machineResult
 	if localKey != nil {
-		results = append(results, machineResult{m: localOM, resp: client.LocalDirectory()})
+		local := client.LocalDirectory()
+		// On Linux a one-shot process gets no CPU% on its first reading — that
+		// sample only primes the /proc/stat baseline. The daemon-served remote
+		// machines DO show CPU, so prime and re-read once to keep the local line
+		// consistent with them. A no-op on macOS/Windows, whose first sample
+		// already carries a value (so CPUPercent is non-nil and we skip the wait).
+		if local.Stats != nil && local.Stats.CPUPercent == nil {
+			client.PrimeCPUSample()
+			time.Sleep(cpuPrimeDelay)
+			local = client.LocalDirectory()
+		}
+		results = append(results, machineResult{m: localOM, resp: local})
 	}
 	results = append(results, remoteResults...)
 
@@ -152,7 +168,7 @@ func printMachine(r machineResult, isLocal bool) {
 	// Battery before the session count, matching the Machines panel: the two
 	// surfaces show the same two facts and should not disagree about which
 	// comes first.
-	fmt.Printf("  %s %s%s%s%s%s\n", cGreen("●"), cBold(name), battPart, count, idPart, localTag)
+	fmt.Printf("  %s %s%s%s%s%s%s\n", cGreen("●"), cBold(name), battPart, statsLabel(r.resp.Stats), count, idPart, localTag)
 	if len(r.resp.Sessions) == 0 {
 		fmt.Println("      " + cDim("no sessions running"))
 		return
@@ -335,4 +351,32 @@ func sameDay(a, b time.Time) bool {
 	ay, am, ad := a.Date()
 	by, bm, bd := b.Date()
 	return ay == by && am == bm && ad == bd
+}
+
+// statsLabel renders a machine's vitals for the header line: CPU busy and
+// memory in use, the two numbers that say whether there is room for one more
+// agent. Empty for a machine that did not report any (an older daemon).
+func statsLabel(st *protocol.MachineStats) string {
+	if st == nil {
+		return ""
+	}
+	var parts []string
+	if st.CPUPercent != nil {
+		parts = append(parts, fmt.Sprintf("%d%% cpu", int(*st.CPUPercent+0.5)))
+	}
+	if st.MemTotal > 0 {
+		parts = append(parts, fmt.Sprintf("%s/%s", fmtGB(st.MemUsed), fmtGB(st.MemTotal)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  " + cDim(strings.Join(parts, " · "))
+}
+
+func fmtGB(b uint64) string {
+	gb := float64(b) / (1 << 30)
+	if gb >= 10 {
+		return fmt.Sprintf("%.0f GB", gb)
+	}
+	return fmt.Sprintf("%.1f GB", gb)
 }

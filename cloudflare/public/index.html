@@ -1071,6 +1071,15 @@
                    white-space: normal; line-height: 1.45; text-align: left; }
     .machine-batt.open .batt-detail { display: block; }
     .machine-batt { cursor: pointer; }
+    /* The machine's vitals — CPU busy and memory in use — beside the battery.
+       Same voice as the battery pill: a number you can read at a glance that
+       says whether there is room on this machine for one more agent. */
+    .machine-stats { font-size: 11px; color: #8b949e; font-family: monospace; white-space: nowrap;
+                     flex: 0 1 auto; min-width: 0; overflow: hidden; }
+    .machine-stats::before { content: "\00b7"; opacity: 0.55; margin-right: 5px; }
+    .machine-stats .st-cpu.hot { color: #f0883e; }
+    .machine-stats .st-cpu.busy { color: #d29922; }
+    @media (max-width: 400px) { .machine-stats { display: none; } }
     /* Extremely narrow: the row has no width to spend on words, so the badge
        becomes the gauge alone — a glyph you tap to get the full reading. The
        padding is there to make a 10px-tall gauge a finger-sized target. */
@@ -4533,6 +4542,37 @@
     // The estimate is always labelled with what it counts down TO. While
     // charging the OS reports time until full, and calling that "left" would
     // read as time until dead — the exact opposite of the truth.
+    // paintStats shows a machine's vitals from its directory reply. Live only:
+    // a remembered CPU figure from an hour ago says nothing, so an offline
+    // machine shows no vitals rather than stale ones (the battery is the
+    // exception, and says when it was read).
+    function paintStats(box, st) {
+      if (!box) return;
+      const head = box.querySelector('.machine-title');
+      if (!head) return;
+      let el = head.querySelector('.machine-stats');
+      if (!st || (typeof st.cpu_pct !== 'number' && !st.mem_total)) { if (el) el.remove(); return; }
+      if (!el) {
+        el = document.createElement('span');
+        el.className = 'machine-stats';
+        head.insertBefore(el, head.querySelector('.machine-count'));
+      }
+      // The dropdown row already carries a name, a battery and a count in
+      // little width: one number here, the rest in the tooltip. The homepage
+      // cards have the room to show it all.
+      let cpu = '';
+      if (typeof st.cpu_pct === 'number') {
+        const pct = Math.max(0, Math.min(100, Math.round(st.cpu_pct)));
+        const cls = pct >= 85 ? ' hot' : pct >= 50 ? ' busy' : '';
+        cpu = '<span class="st-cpu' + cls + '">' + pct + '%</span>';
+      }
+      el.innerHTML = cpu || escHTML(fmtBytes(st.mem_used || 0));
+      el.title = (typeof st.cpu_pct === 'number' ? 'CPU ' + Math.round(st.cpu_pct) + '% busy' : '')
+        + (st.mem_total ? ' \u00b7 memory ' + fmtBytes(st.mem_used || 0) + ' of ' + fmtBytes(st.mem_total) : '')
+        + (st.load1 !== undefined ? ' \u00b7 load ' + Number(st.load1).toFixed(2) : '')
+        + (st.uptime ? ' \u00b7 up ' + fmtUptime(st.uptime) : '');
+      syncMachineTight(box);
+    }
     function paintBattery(box, b, stale) {
       if (!box) return;
       const head = box.querySelector('.machine-title');
@@ -4691,6 +4731,7 @@
         if (kept) paintBattery(box, kept, true);
         else paintBattery(box, null, false); // clear a badge that just expired
       }
+      paintStats(box, resp.stats || null);
       const list = (resp.sessions || []);
       renderMachineSessions(box, list, b64);
       // Remember this snapshot so the NEXT time the panel opens it paints these
