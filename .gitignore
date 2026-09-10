@@ -26,3 +26,6 @@
 # stray local builds in repo root
 /reminal
 /reminal.exe
+
+# signed release bundle staged by scripts/build-app.sh
+/dist-signed/
