@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/user"
-	"runtime"
 	"strings"
 	"time"
 
@@ -156,21 +155,12 @@ func enableBackgroundHost() {
 	fmt.Println("  " + cDim("Background host enabled — this machine stays reachable to you even when idle."))
 }
 
-// disableBackgroundHostIfLastOwner tears the login service down once the machine
-// has no owners left. On macOS the daemon is a PERMANENT local service — it
-// performs all screen capture + input injection so one grant covers every session
-// — so we keep it even with zero owners. Elsewhere the presence is only needed
-// while someone owns the machine, so the old teardown stands.
-func disableBackgroundHostIfLastOwner() {
-	if runtime.GOOS == "darwin" {
-		return
-	}
-	owners, err := client.ListOwners()
-	if err != nil || len(owners) > 0 {
-		return
-	}
-	_ = client.UninstallDaemonService()
-}
+// The background daemon is a PERMANENT local service on every platform now: it is
+// the machine's presence + stats layer (it answers `reminal machines` and samples
+// the vitals the cards read), and on macOS it also performs the one-grant screen
+// capture + input injection. Removing the last owner no longer tears it down —
+// the machine should keep reporting its usage even with no owners — so there is
+// nothing to do when the last owner is revoked.
 
 // parseAddOwnerArgs pulls the owner id, label, and -y out of `add owner`
 // arguments. It picks the rmnl_ token as the id even if extra words came along
@@ -270,9 +260,14 @@ func runOwners(args []string) error {
 				name = o.ID
 			}
 			fmt.Printf("  %s Revoked %s  %s\n", cGreen("✓"), cBold(name), cDim("("+o.ID+")"))
-			// If that was the last owner, the machine no longer needs a standing
-			// presence — remove the login service.
-			disableBackgroundHostIfLastOwner()
+			// The background daemon stays installed — it is the machine's permanent
+			// presence + stats layer, not an ownership-gated feature (see above).
+			// But bounce it so it re-keys the machine channel NOW: a revoked device
+			// that already completed the owner handshake holds a working channel key
+			// until the agent is rebuilt, and the daemon's periodic owner-set recheck
+			// would otherwise leave that access open for up to a minute. Best-effort;
+			// that recheck is the backstop if the bounce doesn't take.
+			_ = client.RestartDaemonService()
 		}
 		return nil
 

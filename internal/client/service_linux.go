@@ -76,10 +76,11 @@ func serviceInstalled(u *user.User) bool {
 	return err == nil
 }
 
-// runningFromBundle is false on Linux: there's no reminal.app, and the daemon here
-// is the ownership-driven directory host (installed by the Machines flow), not the
-// always-on capture daemon EnsureDaemonInstalled manages on macOS.
-func runningFromBundle() bool { return false }
+// autoInstallDaemon gates EnsureDaemonInstalled on Linux: install the always-on
+// presence + stats daemon for any real release, independent of ownership, so a
+// machine reports its vitals from boot. Only an un-stamped "dev" build is held
+// back, so development never leaves a stray systemd --user unit behind.
+func autoInstallDaemon(version string) bool { return isReleaseBuild(version) }
 
 // restartService bounces the unit so it re-execs the binary at ExecStart's path.
 // No-op when the service isn't installed.

@@ -103,6 +103,12 @@ func serviceInstalled(u *user.User) bool {
 // using the terminal's own grants.
 func runningFromBundle() bool { return bundlePath() != "" }
 
+// autoInstallDaemon gates EnsureDaemonInstalled on macOS: install whenever we run
+// from the reminal.app bundle (a real install), which is also the only build that
+// can perform the sh.reminal-identity capture the daemon exists for. version is
+// unused here — the bundle, not the stamp, is what marks a real install.
+func autoInstallDaemon(version string) bool { return runningFromBundle() }
+
 // restartService bounces the agent so it re-execs the binary at the plist's
 // path. No-op when the service isn't installed.
 func restartService(u *user.User) error {

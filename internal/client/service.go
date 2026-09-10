@@ -140,19 +140,40 @@ func RestartDaemonService() error {
 	return restartService(u)
 }
 
-// EnsureDaemonInstalled is an idempotent CORRECTNESS check (deliberately NOT
-// version-gated): whenever reminal is running from the macOS reminal.app bundle,
-// the always-on daemon must exist to perform screen capture + input injection for
-// every session under the one granted sh.reminal identity. If its login service is
-// missing, install it. A no-op — cheap stat of the plist — when already present or
-// when not running from a bundle (bare/dev builds, and Linux, use their existing
-// paths). Safe to call on every startup and after an upgrade/migration, so a
-// bundle-without-daemon self-heals regardless of which version introduced the gap.
-func EnsureDaemonInstalled() {
-	if !runningFromBundle() || DaemonServiceInstalled() {
+// EnsureDaemonInstalled makes the always-on background daemon exist on this
+// machine, independent of whether any owner is enrolled: the daemon is the
+// machine's presence + stats layer — it answers `reminal machines`, samples the
+// CPU/memory vitals the cards read, and (on macOS) performs the one-grant screen
+// capture + input injection for every session. Installing it here, not in the
+// add-owner flow, is what lets a machine report its usage stats from the moment
+// it boots — before, and whether or not, anyone owns it.
+//
+// Idempotent (a cheap stat of the login service) and a no-op on a build that
+// must not register a service: a macOS bare/dev binary (not running from the
+// reminal.app bundle) or an un-stamped "dev" build on Linux/Windows. Real
+// releases carry a stamped version; those install. Safe to call on every startup
+// and after an upgrade/migration, so a machine-without-daemon self-heals
+// regardless of which version introduced the gap.
+//
+// It never reinstalls over a LIVE daemon: InstallDaemonService does a
+// bootout+bootstrap (macOS) / enable --now that would tear down the running
+// daemon serving capture + notes for EVERY session. The service-file check
+// handles the normal case, but a transiently-missing file (a stat hiccup, or an
+// upgrade mid-reinstall) must not trick a concurrent session — now that every
+// session self-heals, including ones the daemon itself spawned — into that. A
+// live pid short-circuits regardless of the file.
+func EnsureDaemonInstalled(version string) {
+	if DaemonServiceInstalled() || daemonAlive() || !autoInstallDaemon(version) {
 		return
 	}
 	_ = InstallDaemonService()
+}
+
+// isReleaseBuild reports whether this is a stamped release (not an un-stamped
+// local `go build`/`go run`, whose version defaults to "dev"). The Linux and
+// Windows daemon gates key on it so development never registers a login service.
+func isReleaseBuild(version string) bool {
+	return version != "" && version != "dev"
 }
 
 // DaemonServiceInstalled reports whether the background-host login service is

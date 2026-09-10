@@ -23,6 +23,7 @@ func restartService(u *user.User) error { return nil }
 
 func serviceInstalled(u *user.User) bool { return false }
 
-// runningFromBundle is always false off macOS — the reminal.app daemon model is
-// darwin-only, so EnsureDaemonInstalled never auto-installs here.
-func runningFromBundle() bool { return false }
+// autoInstallDaemon is always false here: this platform has no login-service
+// integration (installService returns an error), so nothing to auto-install. The
+// reminal.app bundle model is darwin-only, so there is no runningFromBundle here.
+func autoInstallDaemon(version string) bool { return false }

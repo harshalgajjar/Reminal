@@ -839,7 +839,7 @@ func selfHealBundle() {
 	if !healed {
 		return
 	}
-	client.EnsureDaemonInstalled()
+	client.EnsureDaemonInstalled(version)
 	if err := execReplace(newBin); err != nil {
 		fmt.Fprintln(os.Stderr, "reminal: installed the app bundle — please re-run your command.")
 		os.Exit(0)

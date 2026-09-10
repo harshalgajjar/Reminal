@@ -139,9 +139,11 @@ func serviceInstalled(u *user.User) bool {
 	return err == nil
 }
 
-// runningFromBundle is false on Windows: there's no reminal.app, so
-// EnsureDaemonInstalled's bundle-implies-daemon rule never applies here.
-func runningFromBundle() bool { return false }
+// autoInstallDaemon gates EnsureDaemonInstalled on Windows: install the always-on
+// presence + stats daemon for any real release, independent of ownership, so a
+// machine reports its vitals from boot. Only an un-stamped "dev" build is held
+// back, so development never writes a stray Run-key entry.
+func autoInstallDaemon(version string) bool { return isReleaseBuild(version) }
 
 // restartService kills the pid-file daemon (best-effort) and spawns a fresh one
 // so it re-execs a newly-installed binary. The Run key has no keep-alive, so

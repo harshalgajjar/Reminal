@@ -77,7 +77,9 @@ func EnsurePermissions() error {
 	}
 	// The flow polls the daemon (sh.reminal identity) for grant status, so it has to
 	// be running. Idempotent — installs it if a prior upgrade/migration left it out.
-	EnsureDaemonInstalled()
+	// version is unused on macOS: the bundle (checked just above) is the real-install
+	// signal, so any value passes the darwin gate.
+	EnsureDaemonInstalled("")
 	// Give a freshly-(re)installed daemon a moment to bind its socket, so the
 	// already-granted pre-checks below can see existing grants and skip them rather
 	// than re-prompting. Reachable → returns "ok"/"no"; unreachable → "".
