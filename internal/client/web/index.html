@@ -1106,6 +1106,9 @@
        The two "after the name" rules are mutually exclusive by construction:
        whichever element actually follows the name is the one that matches. */
     .machine-batt + .machine-count:not(:empty)::before { content: "\00b7"; opacity: 0.55; margin-right: 5px; }
+    /* Stats sit between the battery and the count, which breaks the batt+count
+       adjacency above — so give the count its own bullet when stats precede it. */
+    .machine-stats + .machine-count:not(:empty)::before { content: "\00b7"; opacity: 0.55; margin-right: 5px; }
     .machine-title.tight > .machine-name + .machine-batt::before { content: "\00b7"; opacity: 0.55; }
     .machine-title.tight > .machine-name + .machine-count:not(:empty)::before { content: "\00b7"; opacity: 0.55; margin-right: 5px; }
     .machine-batt.low { color: #f85149; }
