@@ -1649,6 +1649,9 @@ func runList(args []string) error {
 		// word is the intuitive signal; the left dot mirrors it as a scannable rail.
 		var state string
 		stateColor := cDim
+		// Activity axis — one mutually-exclusive state per session. Watchers are a
+		// SEPARATE axis (presence) and render as their own dim marker below, so a
+		// working-and-watched session shows both instead of one masking the other.
 		switch {
 		case a.IsPort():
 			state, stateColor = fmt.Sprintf("→ :%d", a.Port), cCurrent
@@ -1656,12 +1659,17 @@ func runList(args []string) error {
 			state, stateColor = "needs you", cAmber
 		case a.Attn == "working":
 			state, stateColor = "working", cCyan
-		case a.Viewers > 0:
-			state, stateColor = fmt.Sprintf("%d watching", a.Viewers), cCurrent
 		case a.Attn == "done":
 			state, stateColor = "done", cDone
 		default:
 			state = "idle " + humanShort(a.IdleFor(now))
+		}
+		// Presence marker: dim, orthogonal to activity. Wide terminals only —
+		// on a phone the activity state is what matters; watchers can wait.
+		presence, presenceLen := "", 0
+		if !narrow && !a.IsPort() && a.Viewers > 0 {
+			txt := fmt.Sprintf("· %d watching", a.Viewers)
+			presence, presenceLen = "  "+cDim(txt), 2+len(txt)
 		}
 
 		// Tail: just the project folder name (not the full path, not the sniffed
@@ -1676,23 +1684,33 @@ func runList(args []string) error {
 		reserved := 2 + nameW + 2 + 8 + 2 + 12 + 1
 		tail := ""
 		if !narrow {
-			if budget := width - reserved; budget >= 6 && proj != "" {
+			if budget := width - reserved - presenceLen; budget >= 6 && proj != "" {
 				tail = "  " + cDim(truncate(proj, budget))
 			}
 		}
 
-		fmt.Printf("%s%s  %s  %s%s\n",
-			attnMarker(a.Attn, light), name, cBold(a.ID), padCol(state, 12, stateColor), tail)
+		fmt.Printf("%s%s  %s  %s%s%s\n",
+			attnMarker(a.Attn, light), name, cBold(a.ID), padCol(state, 12, stateColor), presence, tail)
 		if verbose {
 			fmt.Printf("  %s  %s\n",
 				strings.Repeat(" ", nameW), cDim(a.OpenURL+"  ·  PIN "+a.PIN))
 		}
 	}
 	fmt.Println()
-	fmt.Println("  \x1b[2mAccepts id, name, unique prefix, or substring:\x1b[0m")
-	fmt.Println("  reminal attach [id|name]       drive a session (no arg → interactive picker)")
-	fmt.Println("  reminal kill   <id|name>       fully terminate a session (destroys the shell)")
-	fmt.Println("  reminal prune                  kill idle, unwatched sessions in one go")
+	if narrow {
+		// Phone width: the wide two-column help wraps into an unreadable mess.
+		// Drop the "reminal " prefix (implied) and shorten the hints so each
+		// command + gloss fits one line.
+		fmt.Println("  " + sgr("2", "by id, name, or prefix:"))
+		fmt.Printf("  %-12s %s\n", "attach <id>", sgr("2", "drive it"))
+		fmt.Printf("  %-12s %s\n", "kill <id>", sgr("2", "end it"))
+		fmt.Printf("  %-12s %s\n", "prune", sgr("2", "clear idle"))
+	} else {
+		fmt.Println("  " + sgr("2", "Accepts id, name, unique prefix, or substring:"))
+		fmt.Println("  reminal attach [id|name]       drive a session (no arg → interactive picker)")
+		fmt.Println("  reminal kill   <id|name>       fully terminate a session (destroys the shell)")
+		fmt.Println("  reminal prune                  kill idle, unwatched sessions in one go")
+	}
 	return nil
 }
 
