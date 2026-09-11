@@ -77,6 +77,12 @@ type Active struct {
 	// records written before this field existed — LastActive() falls back to
 	// StartedAt in that case.
 	LastActivity time.Time `json:"last_activity,omitempty"`
+	// Attn is the detected attention state of the session's foreground agent:
+	// "working", "input" (blocked awaiting the user), or "done". Empty when no
+	// agent TUI is active (a bare shell) or the serving build predates this
+	// field. Heuristic — see internal/client/attention_probe.go. Surfaced by
+	// `reminal list` so you can tell which session needs you without attaching.
+	Attn string `json:"attn,omitempty"`
 }
 
 // LastActive returns the best available "last used" timestamp: LastActivity

@@ -288,6 +288,10 @@ func (s *Session) Fd() uintptr { return 0 }
 // Pid returns the shell's process id, used for the live-cwd column.
 func (s *Session) Pid() int { return s.pid }
 
+// ForegroundPgrp has no analog on Windows (no tty process groups); attention
+// detection falls back to the alt-screen signal there. Returns 0.
+func (s *Session) ForegroundPgrp() int { return 0 }
+
 func (s *Session) CopyFrom(r io.Reader, done chan<- struct{}) {
 	defer close(done)
 	_, _ = io.Copy(s, r)

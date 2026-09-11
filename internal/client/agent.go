@@ -192,6 +192,11 @@ type Agent struct {
 	metaMu       sync.Mutex
 	title        string
 	lastActivity time.Time
+	// attnState is the detected attention state of the foreground agent —
+	// "working", "input" (awaiting the user), "done", or "" (no agent / bare
+	// shell). Written by the attention detector goroutine, read by activeRecord
+	// so `reminal list` shows which session needs you without attaching.
+	attnState string
 	// metaDirty is set by pumpPTY when title or lastActivity changed since
 	// the last on-disk flush; the meta-flush loop clears it when it writes.
 	// Keeps idle sessions from churning the active record.
@@ -1111,6 +1116,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	last := a.lastActivity
 	name := a.name
 	cwd := a.cwd
+	attn := a.attnState
 	a.metaMu.Unlock()
 	if last.IsZero() {
 		last = a.startedAt
@@ -1128,6 +1134,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		Cwd:          cwd,
 		Title:        title,
 		LastActivity: last,
+		Attn:         attn,
 	}
 }
 
@@ -1957,6 +1964,11 @@ func (a *Agent) initScreen() {
 	// stdin→PTY path — so drain and discard them. Runs until the emulator is
 	// closed / the process exits.
 	go func() { _, _ = io.Copy(io.Discard, scr) }()
+
+	// Attention detector: classifies working/awaiting-input/done for `reminal
+	// list`. Always runs; REMINAL_ATTENTION_PROBE adds a raw-sample log. See
+	// attention_probe.go.
+	a.startAttention()
 }
 
 // record is the single path that commits a chunk of plaintext output to both
