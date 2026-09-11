@@ -28,7 +28,7 @@ type senderHarness struct {
 	agentConn *websocket.Conn
 }
 
-func startSenderHarness(t *testing.T) *senderHarness {
+func startSenderHarness(t *testing.T, local bool) *senderHarness {
 	t.Helper()
 	h := &senderHarness{
 		a:        &Agent{buf: newScrollback(scrollbackBytes)},
@@ -67,7 +67,7 @@ func startSenderHarness(t *testing.T) *senderHarness {
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	h.done = make(chan error, 1)
-	go func() { h.done <- h.a.runSender(conn, h.cursorCh, stop) }()
+	go func() { h.done <- h.a.runSender(conn, h.cursorCh, stop, local) }()
 	h.agentConn = conn
 	return h
 }
@@ -107,7 +107,7 @@ func (h *senderHarness) expectSilence(t *testing.T) {
 // output must not cross the relay while no viewer is attached — every message
 // the DO receives is a billable request, and it would forward them to no one.
 func TestSenderParksWithoutViewers(t *testing.T) {
-	h := startSenderHarness(t)
+	h := startSenderHarness(t, false)
 
 	// A resume cursor arrives but the viewer count is (still) zero — the
 	// stale-cursor-after-disconnect case. The gate must stay shut.
@@ -151,7 +151,7 @@ func TestSenderParksWithoutViewers(t *testing.T) {
 // TypeResume must both reopen the gate and deliver the cursor — in that order,
 // or the replay request is dropped while the gate is still shut.
 func TestResumeAloneReopensTheGate(t *testing.T) {
-	h := startSenderHarness(t)
+	h := startSenderHarness(t, false)
 	go func() { _ = h.a.runReader(h.agentConn, h.cursorCh) }()
 
 	relay := <-h.srvConn
@@ -173,4 +173,22 @@ func TestResumeAloneReopensTheGate(t *testing.T) {
 	// And live output keeps flowing on the reopened gate.
 	h.a.buf.Append("live-again")
 	h.expect(t, "live-again")
+}
+
+// TestLocalSenderStreamsWithoutViewers pins the local-attach exception: a
+// same-machine attach (local=true) is its own audience with no billable relay
+// hop, so its sender streams even though the relay viewer count is zero — the
+// exact condition that parks the relay path in TestSenderParksWithoutViewers.
+func TestLocalSenderStreamsWithoutViewers(t *testing.T) {
+	h := startSenderHarness(t, true)
+
+	// Viewer count is zero (no relay viewers). A resume from the local attach
+	// opens the stream anyway, and buffered output flows.
+	h.a.buf.Append("offline-hello")
+	h.cursorCh <- 0
+	h.expect(t, "offline-hello")
+
+	// Live output keeps flowing with the count still at zero.
+	h.a.buf.Append("still-here")
+	h.expect(t, "still-here")
 }

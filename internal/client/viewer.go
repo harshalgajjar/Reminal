@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -294,6 +296,54 @@ type fatalErr struct{ err error }
 func (e *fatalErr) Error() string { return e.err.Error() }
 func (e *fatalErr) Unwrap() error { return e.err }
 
+// localAttachDialTimeout bounds the connect to a same-machine socket — it is a
+// local socket, so this is generous; a slow/absent one falls back to the relay.
+const localAttachDialTimeout = 2 * time.Second
+
+// localAttachSocket returns a same-machine session's attach socket path if that
+// session is in THIS machine's registry and its socket is present — i.e. a local
+// attach is possible without the relay. See attach.go.
+func localAttachSocket(sessionID string) (string, bool) {
+	if _, err := session.ReadActiveByID(sessionID); err != nil {
+		return "", false // not a session on this machine
+	}
+	p, err := attachSockPath(sessionID)
+	if err != nil {
+		return "", false
+	}
+	if fi, err := os.Stat(p); err != nil || fi.Mode()&os.ModeSocket == 0 {
+		return "", false
+	}
+	return p, true
+}
+
+// dial opens the connection to the session, preferring a same-machine local
+// socket over the relay. When the session is running on THIS machine and its
+// attach socket is up, it dials that (no relay — works offline and skips the
+// cloud round-trip); otherwise, or if the local dial fails, it falls back to the
+// relay exactly as before. The local flag tells the caller to skip the
+// relay-only auth step; the end-to-end PIN/owner handshake runs either way.
+func (v *Viewer) dial() (conn *websocket.Conn, local bool, resp *http.Response, err error) {
+	if sock, ok := localAttachSocket(v.sessionID); ok {
+		d := websocket.Dialer{
+			HandshakeTimeout: localAttachDialTimeout,
+			NetDial: func(_, _ string) (net.Conn, error) {
+				return net.DialTimeout("unix", sock, localAttachDialTimeout)
+			},
+		}
+		// The host in this URL is a placeholder — NetDial ignores it and dials
+		// the socket; the path must match the agent's attach handler.
+		if c, _, derr := d.Dial("ws://local/attach", nil); derr == nil {
+			return c, true, nil, nil
+		}
+		// Socket present but unreachable (session just exited, or stale) — fall
+		// through to the relay.
+	}
+	wsURL := config.SessionWS(v.sessionID, string(protocol.RoleViewer))
+	conn, resp, err = websocket.DefaultDialer.Dial(wsURL, nil)
+	return conn, false, resp, err
+}
+
 func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, intCh <-chan os.Signal, escapeCh <-chan struct{}) (err error) {
 	// The viewer processes messages from the agent it connected to; a compromised
 	// or buggy agent must not be able to crash the viewer with a crafted message.
@@ -304,22 +354,28 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 			err = fmt.Errorf("recovered from panic in viewer connection handler: %v", r)
 		}
 	}()
-	wsURL := config.SessionWS(v.sessionID, string(protocol.RoleViewer))
 	dialStart := time.Now()
-	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, local, resp, err := v.dial()
 	if err != nil {
 		if resp != nil && resp.StatusCode == 429 {
 			return &rateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 		}
 		return fmt.Errorf("dial: %w", err)
 	}
-	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted peer — bound frame size
 	dialTime := time.Since(dialStart)
 	defer conn.Close()
 
-	if err := v.authenticate(conn); err != nil {
-		// Auth failures are fatal — wrong PIN, locked out, mismatched session.
-		return &fatalErr{err: err}
+	// The relay auth (viewer proves the session is live, gets AuthOK) only
+	// exists on the relay path. A local attach connects straight to the agent's
+	// socket, so there is no relay to answer it — skip it. The PIN/owner
+	// handshake below (negotiateSessionKey) is the real end-to-end gate and runs
+	// identically either way, so a local attach still needs the correct PIN.
+	if !local {
+		if err := v.authenticate(conn); err != nil {
+			// Auth failures are fatal — wrong PIN, locked out, mismatched session.
+			return &fatalErr{err: err}
+		}
 	}
 
 	negotiate := v.negotiateSessionKey

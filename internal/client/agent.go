@@ -809,6 +809,11 @@ func (a *Agent) Run() error {
 	// machine across all its sessions, so running it on every agent is safe.
 	go runDirectoryHost(shellExit, false, a.version)
 
+	// Serve this session on a local socket too, so a same-machine viewer can
+	// attach with no relay — when the machine is offline, or just more directly.
+	// See attach.go / serveConn.
+	go a.serveAttach(shellExit)
+
 	// Trap SIGINT/SIGTERM so the process exits via the normal return path
 	// (defers fire: ClearActive, exit summary, keepawake stop). Default Go
 	// behavior is to die immediately on these signals, skipping defers and
@@ -2585,10 +2590,22 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 		}
 		return fmt.Errorf("dial relay: %w", err)
 	}
-	defer conn.Close()
-	conn.SetReadLimit(maxRelayMessageBytes) // untrusted relay — bound frame size
-	// Track the live conn so `reminal stop` (SIGUSR1) can close it
-	// immediately rather than waiting for the next read deadline.
+	// Relay-only setup — none of this applies to a local (same-machine) attach,
+	// which has no relay to register with and is its own audience (see serveConn
+	// and serveAttach):
+	//   - authenticate: prove control to the RELAY with our token.
+	//   - currentConn: the live relay conn `reminal stop` closes on pause.
+	//   - signalRegistered: release the spawn handshake once the relay has us —
+	//     doing it here (not at Run start) closes the race where the web "new
+	//     session" button connected before the child had registered. Fires once.
+	//   - viewerCount reset: a count carried across a reconnect can be stale,
+	//     most damagingly stale-high — streaming to a relay with nobody attached,
+	//     each chunk a billable Durable Object request. Start at zero and let a
+	//     surviving viewer re-prove itself with TypeResume.
+	if err := a.authenticate(conn); err != nil {
+		_ = conn.Close()
+		return err
+	}
 	a.currentConnMu.Lock()
 	a.currentConn = conn
 	a.currentConnMu.Unlock()
@@ -2597,50 +2614,50 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 		a.currentConn = nil
 		a.currentConnMu.Unlock()
 	}()
-
-	if err := a.authenticate(conn); err != nil {
-		return err
-	}
-
-	// Registered and joinable now. For a spawned headless agent this is the
-	// moment to release the parent's handshake — doing it here (not at Run
-	// start) closes the race where the web "new session" button connected
-	// before the child had registered and got "session not found". Fires
-	// once; later reconnects are no-ops.
 	a.signalRegistered()
-
-	// The relay only pushes viewer-count updates when a viewer connects or
-	// disconnects, so a count carried across an agent reconnect can be stale in
-	// either direction — most damagingly stale-high: the last viewer left while
-	// we were offline, its TypeClosed died with the old socket, and runSender
-	// would trust the ghost count and stream every PTY chunk to a relay with
-	// nobody attached (each one a billable Durable Object request). Start every
-	// connection at zero and let viewers prove they're there: any viewer that
-	// survived our blip re-sends TypeResume the moment the relay announces
-	// agent_online, which reopens the sender gate (see runReader).
 	a.viewerSizeMu.Lock()
 	a.viewerCount = 0
 	a.viewerSizeMu.Unlock()
+
+	return a.serveConn(conn, shellExit, false)
+}
+
+// serveConn runs the session protocol — the reader, sender, and ping pumps —
+// over one already-open connection until the shell exits, the host escapes, or
+// the connection drops. Shared by the relay path (runConnection) and the local
+// attach listener (serveAttach). local=true marks a same-machine attach: its
+// sender streams regardless of the relay's viewer count, since a local viewer
+// is its own audience with no billable relay hop to gate on.
+func (a *Agent) serveConn(conn *websocket.Conn, shellExit <-chan struct{}, local bool) (err error) {
+	// The read-loop dispatch processes untrusted viewer input; a handler panic
+	// must not crash the agent (it would kill the host shell and every viewer).
+	// Recover it into an error — the relay loop reconnects; a local attach just
+	// drops that one connection.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic in connection handler: %v", r)
+		}
+	}()
+	defer conn.Close()
+	conn.SetReadLimit(maxRelayMessageBytes) // untrusted peer — bound frame size
 
 	cursorCh := make(chan uint64, 4)
 	stop := make(chan struct{})
 	var stopOnce sync.Once
 	closeStop := func() { stopOnce.Do(func() { close(stop) }) }
 
-	// Both pumps run under the same recover as runConnection itself — a defer in
-	// runConnection cannot catch a panic in the goroutines it spawns, so each
-	// needs its own. This is not theoretical: a snapshot built over a scrollback
-	// the shell had just erased panicked inside runSender and took the entire
-	// session down (host shell included) on every Windows session. Converted to
-	// an error, the same fault costs one reconnect.
+	// Each pump needs its own recover — a defer here cannot catch a panic in a
+	// goroutine it spawns. Not theoretical: a snapshot built over a scrollback
+	// the shell had just erased once panicked inside runSender and took the whole
+	// session (host shell included) down; converted to an error it costs one
+	// reconnect instead.
 	readerDone := make(chan error, 1)
 	go func() {
 		readerDone <- guardPanic("agent read loop", func() error { return a.runReader(conn, cursorCh) })
 	}()
-
 	senderDone := make(chan error, 1)
 	go func() {
-		senderDone <- guardPanic("agent send loop", func() error { return a.runSender(conn, cursorCh, stop) })
+		senderDone <- guardPanic("agent send loop", func() error { return a.runSender(conn, cursorCh, stop, local) })
 	}()
 
 	pingStop := make(chan struct{})
@@ -2656,10 +2673,8 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 		return nil
 	case <-a.hostEscape:
 		// Host pressed Ctrl-]; close the live conn so the reader goroutine
-		// returns immediately rather than blocking on its next read until
-		// readDeadline fires (which would otherwise freeze pumpHostStdin
-		// has already exited, and the user's local terminal would feel
-		// dead for up to 60s).
+		// returns immediately rather than blocking on its next read until the
+		// read deadline fires.
 		_ = conn.Close()
 		return nil
 	case err := <-readerDone:
@@ -2951,7 +2966,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 // from that point. It keeps streaming new chunks as they're appended — but only
 // while at least one viewer is attached; with none it parks until the next
 // resume rather than pushing chunks the relay would forward to nobody.
-func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-chan struct{}) error {
+func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-chan struct{}, local bool) error {
 	notify := a.buf.Notify()
 	var cursor uint64
 	sending := false
@@ -2973,7 +2988,11 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 		// requests an hour this way. Park until the next TypeResume; scrollback
 		// keeps accumulating, and a returning viewer catches up from its cursor
 		// (or the snapshot below) exactly as on any reattach.
-		if a.currentViewerCount() == 0 {
+		// A local (same-machine) attach is its own audience — there's no relay
+		// hop to gate on and no billable Durable Object request, so it streams
+		// whether or not any RELAY viewer is watching. Only the relay path parks
+		// on a zero viewer count.
+		if !local && a.currentViewerCount() == 0 {
 			sending = false
 			continue
 		}
