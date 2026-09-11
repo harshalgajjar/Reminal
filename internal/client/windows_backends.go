@@ -417,6 +417,45 @@ end tell`, w.PID, w.X, w.Y, w.W, w.H, asStr(w.Title), asStr(w.Title))
 	return err
 }
 
+// close presses the window's red close button via Accessibility, so the app
+// closes it exactly as if the user clicked it — including any "save changes?"
+// sheet the app puts up. Uses the SAME best-window matching as focus (score on
+// title + geometry, target the process by PID) so multi-window apps close the
+// right one. Not a kill: no process is signalled, and a window with no close
+// button (or an app that ignores it) simply stays open.
+func (darwinWindows) close(w winInfo) error {
+	if isDisplayID(w.ID) {
+		return nil // a whole desktop has no window to close
+	}
+	script := fmt.Sprintf(`tell application "System Events" to tell (first process whose unix id is %d)
+	try
+		set bestWin to missing value
+		set bestScore to 1.0E+12
+		repeat with win in windows
+			try
+				set p to position of win
+				set sz to size of win
+				set dx to ((item 1 of p) - %d)
+				set dy to ((item 2 of p) - %d)
+				set dw to ((item 1 of sz) - %d)
+				set dh to ((item 2 of sz) - %d)
+				set sc to (dx * dx + dy * dy) + (dw * dw + dh * dh)
+				if %s is not "" and (name of win) contains %s then set sc to sc - 100000000
+				if sc < bestScore then
+					set bestScore to sc
+					set bestWin to win
+				end if
+			end try
+		end repeat
+		if bestWin is not missing value then
+			perform action "AXPress" of (first button of bestWin whose subrole is "AXCloseButton")
+		end if
+	end try
+end tell`, w.PID, w.X, w.Y, w.W, w.H, asStr(w.Title), asStr(w.Title))
+	_, err := run("osascript", "-e", script)
+	return err
+}
+
 // jxaEvents runs a JXA snippet with CoreGraphics/Foundation imported. Input
 // injection uses Quartz CGEvents (real HID-level events), which — unlike System
 // Events' "click at" / "keystroke" — post reliably as long as the process has
@@ -898,6 +937,18 @@ func (linuxWindows) focus(w winInfo) error {
 		return nil // a desktop has no window to raise; clicks land wherever aimed
 	}
 	_, err := run("wmctrl", "-i", "-a", w.ID)
+	return err
+}
+
+// close asks the window manager to close the window with -c, which sends the
+// ICCCM/EWMH _NET_CLOSE_WINDOW message — the same graceful close as the title
+// bar's ✕, so the app can still prompt to save. Not a kill (-c, not wmctrl's
+// process-killing paths); the same hex id we already hold targets it.
+func (linuxWindows) close(w winInfo) error {
+	if isDisplayID(w.ID) {
+		return nil // a whole desktop has no window to close
+	}
+	_, err := run("wmctrl", "-i", "-c", w.ID)
 	return err
 }
 

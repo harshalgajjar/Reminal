@@ -2856,6 +2856,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 		case protocol.TypeAppOpen:
 			d := msg.Data
 			a.enqueueWinOp(func() { a.handleAppOpen(d) })
+		case protocol.TypeWindowClose:
+			d := msg.Data
+			a.enqueueWinOp(func() { a.handleWindowClose(d) })
 		case protocol.TypeWebRTCHello:
 			// A viewer wants a peer-to-peer frame channel; reply with an offer.
 			// Off the read loop: minting Cloudflare TURN creds is a network call

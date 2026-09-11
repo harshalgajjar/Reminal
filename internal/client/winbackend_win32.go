@@ -46,6 +46,7 @@ var (
 	w32ProcIsIconic                      = w32User32.NewProc("IsIconic")
 	w32ProcShowWindow                    = w32User32.NewProc("ShowWindow")
 	w32ProcSetForegroundWindow           = w32User32.NewProc("SetForegroundWindow")
+	w32ProcPostMessageW                  = w32User32.NewProc("PostMessageW")
 	w32ProcGetForegroundWindow           = w32User32.NewProc("GetForegroundWindow")
 	w32ProcBringWindowToTop              = w32User32.NewProc("BringWindowToTop")
 	w32ProcAttachThreadInput             = w32User32.NewProc("AttachThreadInput")
@@ -76,6 +77,7 @@ const (
 
 	w32WSExToolWindow = 0x00000080 // WS_EX_TOOLWINDOW — palettes/tooltips, not user-facing windows
 	w32SWRestore      = 9          // ShowWindow: un-minimize
+	w32WMClose        = 0x0010     // WM_CLOSE — request the window close itself (app may prompt to save)
 
 	// Virtual-screen metrics (GetSystemMetrics) — the bounding box of every
 	// monitor, which is also the space MOUSEEVENTF_VIRTUALDESK normalizes over.
@@ -413,6 +415,26 @@ func (win32Windows) focus(w winInfo) error {
 	}
 	if attached {
 		_, _, _ = w32ProcAttachThreadInput.Call(tid, cur, 0)
+	}
+	return nil
+}
+
+// close posts WM_CLOSE to the window, the exact message the title-bar ✕ sends:
+// the app receives it on its own thread and may still put up a "save changes?"
+// dialog or ignore it. PostMessage (not SendMessage) so a modal that blocks
+// inside its WM_CLOSE handler can't hang the agent's window-op worker. Not a
+// TerminateProcess — no process is killed.
+func (win32Windows) close(w winInfo) error {
+	if isDisplayID(w.ID) {
+		return nil // a whole desktop has no window to close
+	}
+	hwnd, err := w32ParseHWND(w.ID)
+	if err != nil {
+		return err
+	}
+	r, _, e := w32ProcPostMessageW.Call(hwnd, w32WMClose, 0, 0)
+	if r == 0 {
+		return fmt.Errorf("PostMessage WM_CLOSE failed: %v", e)
 	}
 	return nil
 }

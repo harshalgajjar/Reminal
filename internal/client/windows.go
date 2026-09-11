@@ -133,6 +133,12 @@ type windowBackend interface {
 	// openApp launches (or foregrounds) the app with the given id — a .app path
 	// on macOS, a .desktop file path on Linux — bringing up its window.
 	openApp(id string) error
+	// close asks the OS to close this window — a real close request the app can
+	// answer with its own "save changes?" prompt, NOT a kill: AXCloseButton on
+	// macOS, _NET_CLOSE_WINDOW (wmctrl -c) on Linux, WM_CLOSE on Windows. Distinct
+	// from stopping the mirror stream; best-effort, so a window that's already
+	// gone or refuses is not an error worth surfacing.
+	close(w winInfo) error
 }
 
 // appInfo describes one launchable installed application. ID is an opaque,
@@ -321,6 +327,38 @@ func (a *Agent) handleAppOpen(encData string) {
 		return
 	}
 	_ = b.openApp(ev.ID)
+}
+
+// handleWindowClose closes a window on the HOST OS in response to a viewer's
+// window_close request. It's a real close (the app can still prompt to save),
+// not a kill, and never a stream teardown — the pane's own stop already handles
+// that. Best-effort: a window that closed underneath us just no-ops, and the
+// stream's geometry poll turns the vanished window into a closed pane anyway.
+func (a *Agent) handleWindowClose(encData string) {
+	plaintext, err := a.box.Decrypt(encData)
+	if err != nil {
+		return
+	}
+	var ev struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(plaintext, &ev) != nil || ev.ID == "" {
+		return
+	}
+	// A whole-desktop pseudo-window has no OS window to close.
+	if isDisplayID(ev.ID) {
+		return
+	}
+	b := a.windows()
+	if b.unsupported() != "" {
+		return
+	}
+	// Re-enumerate so we close the window the id refers to now, not stale bounds.
+	w, err := findWindow(b, ev.ID)
+	if err != nil {
+		return
+	}
+	_ = b.close(w)
 }
 
 // handleWindowCtl starts or stops streaming a window in response to a
@@ -2752,6 +2790,7 @@ func (s stubWindows) typeText(winInfo, string) error                         { r
 func (s stubWindows) key(winInfo, string) error                              { return nil }
 func (s stubWindows) listApps() ([]appInfo, error)                           { return nil, nil }
 func (s stubWindows) openApp(string) error                                   { return nil }
+func (s stubWindows) close(winInfo) error                                    { return nil }
 
 // tmpImage writes captured bytes to a temp file path with the given extension
 // so tools that only emit to a file (screencapture) can be read back.

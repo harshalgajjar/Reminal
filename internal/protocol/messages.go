@@ -196,6 +196,13 @@ const (
 	// TypeAppOpen is viewer→agent. Data = encrypted JSON {"id":"<app id>"} —
 	// launch (or foreground) that app so its window shows up in the window list.
 	TypeAppOpen MessageType = "app_open"
+	// TypeWindowClose is viewer→agent. Data = encrypted JSON {"id":"<window id>"}
+	// — close that window ON THE HOST OS (not just stop mirroring it): a real
+	// close request to the window (AXCloseButton on macOS, _NET_CLOSE_WINDOW via
+	// wmctrl on Linux, WM_CLOSE on Windows), so the app gets its normal
+	// "save changes?" chance rather than being killed. Best-effort; a stale id
+	// no-ops. Distinct from window_ctl{stop}, which only ends the local stream.
+	TypeWindowClose MessageType = "window_close"
 
 	// TypeHostInfo is bidirectional. Viewer→agent: an empty-Data request ("tell
 	// me about the machine you're on"). Agent→viewer: the reply, Data =

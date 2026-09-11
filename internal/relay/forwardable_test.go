@@ -26,7 +26,7 @@ func TestForwardableTypesCoverAgentViewerFeatures(t *testing.T) {
 		protocol.TypeDirRevokeSelf, protocol.TypeDirKill, protocol.TypeNewSession,
 		// window mirroring + app control
 		protocol.TypeWindowList, protocol.TypeWindowCtl, protocol.TypeWindowFrame,
-		protocol.TypeWindowInput, protocol.TypeWindowAck,
+		protocol.TypeWindowInput, protocol.TypeWindowAck, protocol.TypeWindowClose,
 		protocol.TypeAppList, protocol.TypeAppOpen, protocol.TypeHostInfo,
 		// WebRTC signalling
 		protocol.TypeWebRTCHello, protocol.TypeWebRTCOffer,

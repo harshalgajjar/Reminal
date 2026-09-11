@@ -1304,6 +1304,27 @@
     .wkbd-open .wpane-kbd { background: #1f6feb; border-color: #388bfd; color: #fff; }
     .wpane-btn:hover { background: #30363d; color: #e6edf3; }
     .wpane-close:hover { background: #da3633; border-color: #da3633; color: #fff; }
+    /* Swipe-up-from-✕ menu: the one deliberate way to close the window ON THE
+       HOST OS (vs the plain ✕ tap, which only hides the pane here). Raised while
+       the finger is dragging up from ✕; item picks on release. Matches the
+       recents/snippets dock look; above panes (z ≤ 48). Danger-tinted because it
+       closes the real window — unsaved work is the app's to guard. */
+    .wclose-menu {
+      position: fixed; z-index: 100000;
+      min-width: 180px; padding: 6px;
+      background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+      user-select: none; -webkit-user-select: none;
+    }
+    .wclose-item {
+      padding: 10px 12px; border-radius: 8px; cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      color: #f0b8b8; font-size: 13px; font-weight: 600; white-space: nowrap;
+    }
+    .wclose-item .sub { display: block; margin-top: 2px; color: #8b949e; font-size: 11px; font-weight: 400; }
+    /* The item under the finger mid-drag: unmissable, and red to say "this is destructive". */
+    .wclose-item.active { background: #da3633; color: #fff; }
+    .wclose-item.active .sub { color: #ffd7d5; }
     /* The soft-keyboard button only helps on touch (no physical keyboard); hide
        it where there's a real pointer with hover (desktop). */
     .wpane-kbd { display: none; }
@@ -9174,6 +9195,107 @@
 
     // Opens (or re-focuses) a floating pane for window w. Named openWinView so
     // the dropdown row handler stays unchanged.
+    // ── close-on-host gesture (pane ✕ button) ───────────────────────────────
+    // The ✕ has two jobs, told apart by the gesture — the same idea as the
+    // recents/snippets docks (tap the handle vs. drag up from it):
+    //   • TAP ✕            → hide the pane here (stop the local mirror). Unchanged.
+    //   • DRAG UP from ✕   → raise a small menu; release on "Close on the machine"
+    //                        to close the REAL window on the host OS.
+    // Kept behind a deliberate drag + explicit release so a stray tap can never
+    // close a host window (and lose unsaved work). One item today, room for more.
+    let winCloseMenu = null;   // { el, items:[{el, action, rect}] } while dragging
+    let winCloseDragEnd = 0;   // timeStamp of the last drag release — swallows the trailing click
+
+    function openWinCloseMenu(btn) {
+      closeWinCloseMenu();
+      const menu = document.createElement('div');
+      menu.className = 'wclose-menu';
+      const item = document.createElement('div');
+      item.className = 'wclose-item';
+      // Distinguish the destructive host-close from the pane's plain hide.
+      item.innerHTML = 'Close on the machine<span class="sub">closes the real window, not just this view</span>';
+      menu.appendChild(item);
+      document.body.appendChild(menu);
+      // Anchor above the ✕, right edges aligned, clamped to the viewport; drop
+      // below only if there's no room above (a pane docked to the top edge).
+      const r = btn.getBoundingClientRect();
+      const mw = menu.offsetWidth, mh = menu.offsetHeight;
+      const left = Math.max(6, Math.min(r.right - mw, window.innerWidth - mw - 6));
+      let top = r.top - mh - 8;
+      if (top < 6) top = r.bottom + 8;
+      menu.style.left = left + 'px';
+      menu.style.top = top + 'px';
+      // Measure AFTER positioning so hit-testing rects are final.
+      winCloseMenu = { el: menu, items: [{ el: item, action: 'os-close', rect: item.getBoundingClientRect() }] };
+    }
+
+    function closeWinCloseMenu() {
+      if (winCloseMenu) { winCloseMenu.el.remove(); winCloseMenu = null; }
+    }
+
+    function winCloseItemAt(x, y) {
+      if (!winCloseMenu) return null;
+      for (const it of winCloseMenu.items) {
+        const b = it.rect;
+        if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) return it;
+      }
+      return null;
+    }
+
+    // Highlight whatever item the finger is over as it moves.
+    function winCloseHover(x, y) {
+      if (!winCloseMenu) return;
+      const hit = winCloseItemAt(x, y);
+      for (const it of winCloseMenu.items) it.el.classList.toggle('active', it === hit);
+    }
+
+    // closeOnHost sends the OS-level close and, deliberately, does NOT tear the
+    // pane down: if the app raises a "save changes?" sheet it appears in the
+    // pane so the user can answer it, and the pane closes on its own once the
+    // host reports the window gone (payload.closed → closePane).
+    function closeOnHost(id) {
+      sendWin('window_close', { id });
+    }
+
+    function wireCloseButton(btn, id) {
+      let g = null;
+      btn.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+        g = { startY: e.clientY, tried: false, pid: e.pointerId };
+        try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+      });
+      btn.addEventListener('pointermove', (e) => {
+        if (!g) return;
+        e.stopPropagation();
+        if (!g.tried && g.startY - e.clientY > 8) { g.tried = true; openWinCloseMenu(btn); }
+        if (g.tried) winCloseHover(e.clientX, e.clientY);
+      });
+      const finish = (e) => {
+        if (!g) return;
+        e.stopPropagation();
+        try { btn.releasePointerCapture(g.pid); } catch (_) {}
+        const dragged = g.tried;
+        g = null;
+        if (!dragged) return; // a plain tap — the click handler below hides the pane
+        winCloseDragEnd = e.timeStamp;
+        const hit = winCloseItemAt(e.clientX, e.clientY);
+        closeWinCloseMenu();
+        if (hit && hit.action === 'os-close') closeOnHost(id);
+      };
+      btn.addEventListener('pointerup', finish);
+      btn.addEventListener('pointercancel', (e) => {
+        if (g) { e.stopPropagation(); try { btn.releasePointerCapture(g.pid); } catch (_) {} g = null; }
+        closeWinCloseMenu();
+      });
+      // Tap = hide the pane locally (the ✕'s original job). Suppressed for a beat
+      // after a drag so the release that picked a menu item doesn't also hide it.
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (e.timeStamp - winCloseDragEnd < 400) return;
+        closePane(id);
+      });
+    }
+
     function openWinView(w, geom) {
       if (panes.has(w.id)) { focusPane(w.id); return; }
       const el = document.createElement('div');
@@ -9255,7 +9377,7 @@
       for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
         el.addEventListener(type, (e) => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
       }
-      closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePane(w.id); });
+      wireCloseButton(closeBtn, w.id);
       popBtn.addEventListener('click', (e) => { e.stopPropagation(); popOutPane(pane); });
       kbdBtn.addEventListener('click', (e) => {
         e.stopPropagation();
