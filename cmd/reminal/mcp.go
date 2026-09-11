@@ -579,7 +579,10 @@ func mcpToolList() []map[string]any {
 			"name": "add_note",
 			"description": "Attach a note to a window, shown as a small floating badge on that window. " +
 				"Reusing an existing note_id updates that note in place — use that to move a note from " +
-				"'working' to 'done' rather than adding a second one.",
+				"'working' to 'done' rather than adding a second one. " +
+				"When the note refers to something on the screen, be precise about where it is — the page " +
+				"or slide number, the tab or file name, the section or heading — so the user can go straight " +
+				"to it instead of hunting for what you mean.",
 			"inputSchema": obj(map[string]any{
 				"window_id": map[string]any{"type": "integer", "description": "From list_windows."},
 				"title":     str("Short headline, a few words. Shown in bold."),
