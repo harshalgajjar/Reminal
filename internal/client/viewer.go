@@ -63,6 +63,13 @@ type Viewer struct {
 	downloadsMu      sync.Mutex
 	pendingDownloads map[string]*pendingDownload
 
+	// everLocal is set once this viewer has connected over the same-machine
+	// attach socket (no relay). It tells the reconnect loop that this is a local
+	// session: if it then vanishes from the local registry (killed / agent gone)
+	// while the relay is unreachable, there's nothing left to reconnect to, so
+	// the loop should exit cleanly instead of spinning on "are you offline".
+	everLocal bool
+
 	writeMu   sync.Mutex
 	helloOnce sync.Once // first-connect "Connected …" line; suppressed on reconnect
 	// connectTime is set inside helloOnce; zero value means we never
@@ -244,6 +251,19 @@ func (v *Viewer) Run() error {
 			return fatal.err
 		}
 
+		// A same-machine session we were attached to has vanished from the local
+		// registry — it was killed, or its agent died. There is nothing left to
+		// reconnect to locally, and retrying only the relay would spin forever on
+		// "are you offline" when there's no network. Exit cleanly instead. (A
+		// hot-restart keeps the registry entry, so this doesn't fire on restart;
+		// only a real kill/exit clears it.)
+		if v.everLocal {
+			if _, e := session.ReadActiveByID(v.sessionID); e != nil {
+				v.notify(fmt.Sprintf("Session %s ended.", v.sessionID))
+				return nil
+			}
+		}
+
 		if time.Since(start) > stableThresh {
 			backoff = initialBackoff
 		}
@@ -361,6 +381,9 @@ func (v *Viewer) runConnection(stdinCh <-chan []byte, winCh <-chan os.Signal, in
 			return &rateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 		}
 		return fmt.Errorf("dial: %w", err)
+	}
+	if local {
+		v.everLocal = true // remember this is a same-machine session (see runViewer)
 	}
 	conn.SetReadLimit(maxRelayMessageBytes) // untrusted peer — bound frame size
 	dialTime := time.Since(dialStart)

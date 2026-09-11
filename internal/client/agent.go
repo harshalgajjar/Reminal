@@ -751,10 +751,11 @@ func (a *Agent) Run() error {
 	}
 
 	// Note: the headless startup handshake (writing the spawned session's
-	// credentials to the inherited fd 3) is deliberately NOT done here.
-	// It fires from runConnection after the first successful relay
-	// registration — see signalRegistered — so the parent only reports the
-	// session ready once a viewer can actually join it.
+	// credentials to the inherited fd 3) is deliberately NOT done here. It fires
+	// from signalRegistered once the session is joinable — the local attach
+	// socket binding (serveAttach) or the first relay registration, whichever is
+	// first — so `reminal new` reports the session ready as soon as a viewer
+	// could actually join it, offline (local) or on.
 
 	sessionStart := time.Now()
 	// Deferred so it runs on every clean exit path — shell exit, agent
@@ -1063,10 +1064,12 @@ func (a *Agent) broadcastSize(cols, rows uint16) {
 	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeResize, Data: enc})
 }
 
-// signalRegistered releases the parent handshake the first time the agent
-// has registered with the relay (and is therefore joinable). Called on every
-// successful connection; the sync.Once makes all but the first a no-op, so
-// reconnects don't re-signal. No-op for non-spawned agents (handshakeFD 0).
+// signalRegistered releases the parent (`reminal new`) handshake the first time
+// the session becomes joinable — whichever comes first: the local attach socket
+// binding (serveAttach, so `reminal new` returns even with no network) or the
+// first successful relay registration (runConnection). The sync.Once makes all
+// later calls no-ops, so reconnects and the second path don't re-signal. No-op
+// for non-spawned agents (handshakeFD 0).
 func (a *Agent) signalRegistered() {
 	if a.handshakeFD == 0 && a.handshakeAddr == "" {
 		return

@@ -64,6 +64,16 @@ func (a *Agent) serveAttach(shellExit <-chan struct{}) {
 		return
 	}
 	_ = os.Chmod(path, 0o600)
+	// The session is now joinable on THIS machine with no relay — the active
+	// record is already written (Run persists it before starting us) and the
+	// socket is bound. That's enough to release a `reminal new` parent: a
+	// same-machine viewer can attach right now, online or off. Without this the
+	// spawn handshake only fired after relay registration, so `reminal new` hung
+	// until it timed out whenever the machine was offline — even though the
+	// session was up and locally attachable. signalRegistered is a sync.Once, so
+	// the relay path signalling later (when it connects) is a no-op, and this is
+	// a no-op for a non-spawned agent (no handshake fd).
+	a.signalRegistered()
 	go func() {
 		<-shellExit
 		_ = ln.Close() // unblocks Serve so this returns at shell exit
