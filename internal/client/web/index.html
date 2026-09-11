@@ -1789,6 +1789,19 @@
           upgradeState = null;
         }
       }
+      // A host upgrade done OUTSIDE this viewer — a CLI `reminal upgrade`, the
+      // always-on daemon restarting itself, or another device — moves the
+      // running version with no upgradeState here to clear the cached offer. The
+      // reconnect refreshes host_info (so the version above is current), but the
+      // cached notes were computed against the OLD version and would keep
+      // offering the very version we now run. If the version we just heard no
+      // longer matches what the notes were built from, drop them so the panel
+      // re-fetches a fresh, correct offer instead of one that never goes away.
+      if (changelog && changelog.current && info.version &&
+          String(changelog.current).replace(/^v/, '') !== String(info.version).replace(/^v/, '')) {
+        changelog = null;
+        if (document.getElementById('host') && document.getElementById('host').open) requestUpdateCheck();
+      }
       if (info.hostname) rememberHost(sessionId, info.hostname);
       // Owner (PIN-free) connects never typed the PIN. The agent includes it
       // on host_info so Share can show it and mint a real Join link.
