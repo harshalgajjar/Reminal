@@ -3631,6 +3631,16 @@
     let backoffMs = 1000;
     let lastPingAt = 0;
     const MAX_BACKOFF_MS = 30000;
+    // Dial watchdog: a mobile radio handoff (5G↔Wi-Fi) can leave a WebSocket
+    // black-holed in CONNECTING — no onopen, no onclose, no onerror — so the
+    // "Reconnecting…" overlay would sit forever with nothing to rescue it (the
+    // `online` event doesn't fire when the network stays nominally up). If we
+    // don't reach auth_ok within this window, force the socket closed so the
+    // normal onclose → scheduleReconnect path retries. Cleared the moment we
+    // authenticate; a legitimately-slow-but-progressing connect is rare within
+    // 12s, and a needless retry is cheaper than a hang.
+    let dialTimer = null;
+    const DIAL_TIMEOUT_MS = 12000;
     let connectedAt = 0;
     // helloShown gates the one-time "Connected · AES-256-GCM end-to-end" line
     // written into the terminal; bytesSent/Received feed the summary line on
@@ -5809,6 +5819,13 @@
       }
     }
 
+    function cancelDial() {
+      if (dialTimer !== null) {
+        clearTimeout(dialTimer);
+        dialTimer = null;
+      }
+    }
+
     // Streams must be re-armed after the NEXT successful (re)connect: the
     // visibility-resume path can fire while the socket is still down (its
     // start commands drop silently in sendWin), and the agent idle-stops any
@@ -5880,6 +5897,7 @@
 
     function openSocket() {
       cancelReconnect();
+      cancelDial();
       if (ws) {
         // Detach handlers BEFORE closing so any messages already in-flight
         // on the old socket don't fire our onmessage as they arrive —
@@ -5935,6 +5953,25 @@
 
       const dialStart = Date.now();
       ws = new WebSocket(relayURL(sessionId));
+      const dialingWs = ws;
+      cancelDial();
+      dialTimer = setTimeout(() => {
+        dialTimer = null;
+        // Only a stalled pre-auth dial: once authed, the relay is talking to us
+        // and agent_online/agent_offline drive the UI (including the legitimate
+        // "agent offline — waiting…" hold, which must NOT be torn down here).
+        if (ws !== dialingWs || authed || manualClose || fatal) return;
+        dbg('dial watchdog: no auth within ' + DIAL_TIMEOUT_MS + 'ms → forcing reconnect');
+        try {
+          dialingWs.onopen = null;
+          dialingWs.onmessage = null;
+          dialingWs.onclose = null;
+          dialingWs.onerror = null;
+          dialingWs.close();
+        } catch (_) {}
+        ws = null;
+        scheduleReconnect();
+      }, DIAL_TIMEOUT_MS);
 
       ws.onopen = () => {
         // Stash for the one-time "Connected · handshake Xms" line below.
@@ -5979,6 +6016,7 @@
 
       ws.onclose = (e) => {
         dbg('ws CLOSE' + (e && e.code ? ' code=' + e.code : ''));
+        cancelDial();
         authed = false;
         agentLive = false;
         ws = null;
@@ -6019,6 +6057,8 @@
       switch (msg.type) {
         case 'auth_ok':
           authed = true;
+          // The relay is talking to us now; the dial watchdog has done its job.
+          cancelDial();
           // Auth succeeded — remember the PIN for this tab so a refresh
           // doesn't bounce the user back to the login form.
           saveCred(sessionId, pinValue);
@@ -6353,6 +6393,7 @@
     function userDisconnect() {
       manualClose = true;
       cancelReconnect();
+      cancelDial();
       clearCred();
       // Stop the heartbeat — we null out ws.onclose below to bypass
       // the auto-reconnect path, so its own clear-interval won't fire.
