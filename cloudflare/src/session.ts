@@ -18,6 +18,12 @@ const TUNNEL_REQ_TIMEOUT_MS = 30 * 1000;
 // the agent's backend read limit (tunnelChunkBytes).
 const MAX_WS_FRAME_BYTES = 700 * 1024;
 
+// Ceiling on concurrently proxied visitor WebSockets per tunnel, enforced before
+// we accept the upgrade — so a public tunnel can't be driven into unbounded
+// accept/close churn (and tunnel_ws_open amplification) that the agent-side cap
+// would only catch after the fact. Matches the agent's maxWSStreams.
+const MAX_VISITOR_SOCKETS = 512;
+
 // Cookie name scoped per-session so multiple port-forwards can each
 // have their own auth state in a single browser.
 const AUTH_COOKIE_PREFIX = "reminal_auth_";
@@ -539,6 +545,12 @@ export class SessionRoom {
     const tunnel = this.getSocket("tunnel");
     if (!tunnel || tunnel.readyState !== WebSocket.OPEN) {
       return new Response("reminal: tunnel offline\n", { status: 503 });
+    }
+
+    // Refuse before accepting, so abuse can't force unbounded accept/close churn
+    // or tunnel_ws_open amplification through the DO.
+    if (this.getSockets("visitor").length >= MAX_VISITOR_SOCKETS) {
+      return new Response("reminal: too many connections\n", { status: 503 });
     }
 
     const streamId = crypto.randomUUID();

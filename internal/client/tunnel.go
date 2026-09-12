@@ -130,6 +130,13 @@ type wsFrame struct {
 // than stalling the shared tunnel control socket (head-of-line blocking).
 const wsStreamSendBuffer = 256
 
+// maxWSStreams caps concurrently proxied visitor WebSockets per tunnel. A public
+// tunnel is internet-facing, so without a ceiling one client could open sockets
+// until the agent runs out of fds/goroutines. 512 is far above any legitimate
+// use (a handful of apps × their viewers); past it new opens are refused with an
+// immediate close rather than allocating a backend dial + two pumps.
+const maxWSStreams = 512
+
 // NewTunnel constructs a port-forward agent. Session ID + PIN are
 // freshly generated — every `reminal expose` invocation gets a new
 // pair, even for the same port, so old URLs become invalid the moment
@@ -591,6 +598,14 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 		done:   make(chan struct{}),
 	}
 	t.wsMu.Lock()
+	// Refuse new streams past the ceiling (unless this id is replacing an existing
+	// one, which is net-zero). Guards a public tunnel against fd/goroutine
+	// exhaustion from a client that opens sockets without bound.
+	if _, replacing := t.wsStreams[req.StreamID]; !replacing && len(t.wsStreams) >= maxWSStreams {
+		t.wsMu.Unlock()
+		t.sendWSClose(conn, req.StreamID)
+		return
+	}
 	// A stream id collision (shouldn't happen — relay uses UUIDs) would orphan the
 	// prior socket; close its resources directly (not via closeWSStream, which
 	// would re-lock and, keyed by id, hit the entry we're about to overwrite).
