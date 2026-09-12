@@ -627,6 +627,7 @@ func (a *Agent) Run() error {
 	defer func() {
 		if !a.restarting.Load() {
 			_ = session.ClearActive(a.sessionID)
+			_ = session.ClearHookState(a.sessionID)
 		}
 	}()
 	// During a Windows hot restart, Run winds down the moment the successor
@@ -1845,6 +1846,7 @@ func (a *Agent) pause() {
 		return // already paused
 	}
 	_ = session.ClearActive(a.sessionID)
+	_ = session.ClearHookState(a.sessionID)
 	a.currentConnMu.Lock()
 	if a.currentConn != nil {
 		_ = a.currentConn.Close()

@@ -216,6 +216,14 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "hook":
+			// Hidden. The callback an integrated agent's lifecycle hook fires to
+			// report its attention state (see `reminal integrate`).
+			if err := runHook(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "settings":
 			if err := runSettings(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)

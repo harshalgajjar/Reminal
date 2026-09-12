@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/reminal/reminal/internal/session"
 )
 
 // attention_probe.go detects a session's "attention state" — is the foreground
@@ -59,7 +61,8 @@ type attentionProbeSample struct {
 	Alt       bool   `json:"alt"`        // alt-screen (full-screen TUI) active
 	IdleMs    int64  `json:"idle_ms"`    // ms since last PTY output
 	SettledMs int64  `json:"settled_ms"` // ms the visible tail has been unchanged
-	State     string `json:"state"`      // classified attention state
+	State     string `json:"state"`      // final attention state (hook or screen)
+	Source    string `json:"source"`     // "hook" (agent-reported) or "screen" (inferred)
 	Tail      string `json:"tail"`       // bottom rows of the rendered screen
 }
 
@@ -121,12 +124,19 @@ func (a *Agent) runAttention(logPath string) {
 			}
 		}
 
+		// Prefer the agent's own hook-reported state when it's fresh (an
+		// integrated harness reporting via `reminal hook`); otherwise fall back to
+		// the screen inference. The hook is precise; the screen is universal.
 		state := classifyAttn(agentActive, tail, settledMs)
+		source := "screen"
+		if hs := session.ReadHookState(a.sessionID); hs != nil {
+			state, source = hs.State, "hook"
+		}
 		a.setAttnState(state)
 
 		if enc != nil {
 			_ = enc.Encode(attentionProbeSample{
-				TS: now.UnixMilli(), FG: fg, Alt: alt,
+				TS: now.UnixMilli(), FG: fg, Alt: alt, Source: source,
 				IdleMs: idleMs, SettledMs: settledMs, State: state, Tail: tail,
 			})
 		}
