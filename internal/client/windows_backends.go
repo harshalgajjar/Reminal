@@ -5,6 +5,7 @@ package client
 
 import (
 	"fmt"
+	"image"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -679,14 +680,21 @@ func asStr(s string) string {
 type linuxWindows struct{}
 
 func (linuxWindows) unsupported() string {
-	// Headless first. With no display of either kind — a cloud VM, a plain SSH
-	// box — the old code fell through to "install wmctrl", sending people after
+	// Headless first. With no display of any kind — a cloud VM, a plain SSH box
+	// — the old code fell through to "install wmctrl", sending people after
 	// packages that cannot help because there is no desktop to mirror at all.
-	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" {
+	if os.Getenv("DISPLAY") == "" && os.Getenv("WAYLAND_DISPLAY") == "" && !isWaylandSession() {
 		return "no desktop session on this host — window mirroring needs a graphical login; the terminal works as normal"
 	}
-	if os.Getenv("WAYLAND_DISPLAY") != "" && os.Getenv("DISPLAY") == "" {
-		return "Wayland isn't supported yet — X11 (or Xwayland) required for window mirroring"
+	// Wayland: capture goes through a compositor screenshot tool (see
+	// waylandcapture.go). Only the full-desktop view is supported so far. If no
+	// tool is installed, say exactly that — the old code let the X11 path run and
+	// stream a BLACK frame here, because Xwayland's root has no desktop content.
+	if isWaylandSession() {
+		if waylandShotTool() == "" {
+			return "Wayland desktop view needs a screenshot tool — install one of: " + waylandShotDeps + ", or log in to an Xorg session"
+		}
+		return ""
 	}
 	if !have("wmctrl") {
 		return "install wmctrl (and xdotool + imagemagick + x11-utils) to mirror windows on Linux"
@@ -694,16 +702,31 @@ func (linuxWindows) unsupported() string {
 	return ""
 }
 
-// permissionHint has no analogue on X11 — there's no per-app screen-capture
-// permission, so if the tools are present, capture works.
-func (linuxWindows) permissionHint() string { return "" }
+// permissionHint surfaces a one-line caveat to the viewer. On X11 there's no
+// per-app screen-capture permission, so it's silent. On Wayland it sets
+// expectations: the desktop view works via a screenshot tool, but per-window
+// mirroring and input injection have no portable Wayland path yet, and the
+// compositor may prompt once to allow screen sharing.
+func (linuxWindows) permissionHint() string {
+	if isWaylandSession() {
+		return "Wayland: the full-desktop view works, but per-window mirroring and click/keyboard control aren't supported here yet — and the host may prompt once to allow screen sharing."
+	}
+	return ""
+}
 
 func (linuxWindows) list() ([]winInfo, error) {
 	// -l list, -G geometry, -x include WM_CLASS. Columns:
 	//   id desktop wm_class x y w h host title...
 	out, err := run("wmctrl", "-lGx")
 	if err != nil {
-		return nil, err
+		// A pure Wayland session (no Xwayland) has no wmctrl window list, but the
+		// desktop is still capturable via the screenshot path — carry on with no
+		// X windows and let the display:0 entry below make "View full desktop"
+		// available. On X11, a wmctrl failure is still a hard error.
+		if !isWaylandSession() {
+			return nil, err
+		}
+		out = ""
 	}
 	var wins []winInfo
 	for _, line := range strings.Split(out, "\n") {
@@ -755,7 +778,14 @@ func (linuxWindows) list() ([]winInfo, error) {
 	// One entry, not one per monitor: X11 composites every output into a single
 	// root framebuffer, and `import -window root` captures precisely that. Its
 	// origin is the root's own, so click mapping needs no special case.
-	if x, y, sw, sh, ok := xrootGeom(); ok && sw >= 40 && sh >= 40 {
+	x, y, sw, sh, ok := xrootGeom()
+	if !ok && isWaylandSession() {
+		// No Xwayland root to measure — size the desktop from one screenshot.
+		if w, h, wok := waylandScreenSize(); wok {
+			x, y, sw, sh, ok = 0, 0, w, h, true
+		}
+	}
+	if ok && sw >= 40 && sh >= 40 {
 		wins = append(wins, winInfo{
 			ID:    "display:0",
 			App:   "Desktop",
@@ -890,6 +920,16 @@ func xpropExtents(id, atom string) (left, right, top, bottom int, ok bool) {
 }
 
 func (linuxWindows) capture(w winInfo) ([]byte, error) {
+	// Wayland: X11 root/window grabs come back black (see waylandcapture.go).
+	// Capture via a compositor screenshot tool instead — the whole screen for
+	// the desktop, or the window's screen rectangle for a specific window.
+	if isWaylandSession() {
+		if isDisplayID(w.ID) {
+			return waylandCapture(nil)
+		}
+		r := image.Rect(w.X, w.Y, w.X+w.W, w.Y+w.H)
+		return waylandCapture(&r)
+	}
 	if !have("import") {
 		return nil, fmt.Errorf("install imagemagick (provides `import`) to capture windows")
 	}
@@ -920,6 +960,10 @@ func (linuxWindows) capture(w winInfo) ([]byte, error) {
 }
 
 func (linuxWindows) captureRegion(x, y, w, h int) ([]byte, error) {
+	if isWaylandSession() {
+		r := image.Rect(x, y, x+w, y+h)
+		return waylandCapture(&r)
+	}
 	if !have("import") {
 		return nil, fmt.Errorf("install imagemagick (provides `import`) to capture windows")
 	}
