@@ -102,6 +102,15 @@ type winHelper struct {
 
 	codec string // "jpeg" (default) or "h264" — selects the stdout framing
 
+	// stopFn and keyFn override the default process/stdin teardown and keyframe
+	// request for helpers that are not the macOS reminal-capture process — the
+	// ffmpeg-backed Windows/Linux helper drives its own capture goroutine and
+	// encoder subprocess, and its stdin carries raw pixels, so a literal "key\n"
+	// written there would corrupt the stream. When set they are used instead of
+	// touching cmd/stdin/conn. Nil for the macOS and daemon paths.
+	stopFn func()
+	keyFn  func()
+
 	mu           sync.Mutex
 	latest       []byte     // jpeg: newest frame not yet consumed; nil once taken
 	queue        []winFrame // h264: pending frames in decode order
@@ -381,6 +390,10 @@ func (h *winHelper) rekey() {
 // command channel — stdin when spawned directly, the daemon conn otherwise;
 // the daemon forwards conn bytes to the helper's stdin). Best effort.
 func (h *winHelper) requestKey() {
+	if h.keyFn != nil {
+		h.keyFn()
+		return
+	}
 	if h.conn != nil {
 		_, _ = h.conn.Write([]byte("key\n"))
 		return
@@ -403,6 +416,10 @@ func (h *winHelper) alive() bool {
 // stop kills the helper process and waits for it to reap. Closing stdin first
 // gives it the graceful EOF exit; the Kill is the backstop.
 func (h *winHelper) stop() {
+	if h.stopFn != nil {
+		h.stopFn() // ffmpeg-backed helper: stop its capture goroutine + encoder
+		return
+	}
 	if h.conn != nil {
 		_ = h.conn.Close() // daemon detects the closed conn and stops its helper
 		return

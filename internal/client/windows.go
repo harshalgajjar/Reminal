@@ -1944,15 +1944,23 @@ func (a *Agent) releaseWindowInput() {
 	_ = a.windows().releaseInput()
 }
 
-// startCaptureHelper returns the frame source for a window. On macOS it dials the
-// daemon's mirror service — so ALL capture runs in the one granted sh.reminal
-// process and a single reminal.app grant covers every session (terminal or "+");
-// elsewhere it spawns the capture helper directly.
-func startCaptureHelper(id string, maxWidth, quality, fps int, codec string) (*winHelper, error) {
+// startCaptureHelper returns the frame source for this stream's window. On macOS
+// it dials the daemon's mirror service — so ALL capture runs in the one granted
+// sh.reminal process and a single reminal.app grant covers every session
+// (terminal or "+"). On Windows and Linux, an h264 stream captures in Go and
+// encodes through ffmpeg (startFFmpegHelper); a jpeg stream has no helper there
+// (startWinHelper is macOS-only), so it returns an error and the stream serves
+// screenshots from the backend directly — the behaviour those platforms have
+// always had.
+func (s *winStream) startCaptureHelper(fps int, codec string) (*winHelper, error) {
+	maxWidth, quality := s.profile.MaxWidth, s.profile.Quality
 	if runtime.GOOS == "darwin" {
-		return startMirrorCapture(id, maxWidth, quality, fps, codec)
+		return startMirrorCapture(s.w.ID, maxWidth, quality, fps, codec)
 	}
-	return startWinHelper(id, maxWidth, quality, fps, codec)
+	if codec == "h264" {
+		return startFFmpegHelper(s.b, s.w, maxWidth, quality, fps)
+	}
+	return startWinHelper(s.w.ID, maxWidth, quality, fps, codec)
 }
 
 // ensureHelper keeps the native capture helper alive: reaps one that died and
@@ -1995,7 +2003,7 @@ func (s *winStream) ensureHelper() {
 	if time.Now().Before(s.helperRetryAt) {
 		return
 	}
-	h, err := startCaptureHelper(s.w.ID, s.profile.MaxWidth, s.profile.Quality, s.captureFPS(), s.codec)
+	h, err := s.startCaptureHelper(s.captureFPS(), s.codec)
 	if err == nil {
 		s.helper = h
 		s.helperErr = ""
@@ -2028,7 +2036,7 @@ func (s *winStream) ensureHelper() {
 		// unavailable). Fall back to JPEG immediately — the viewer is waiting
 		// for frames — and re-test h264 once the suspension lapses.
 		s.suspendH264()
-		if h, jerr := startCaptureHelper(s.w.ID, s.profile.MaxWidth, s.profile.Quality, winHelperFPS, ""); jerr == nil {
+		if h, jerr := s.startCaptureHelper(winHelperFPS, ""); jerr == nil {
 			s.helper = h
 			s.helperErr = ""
 			s.helperStarted = time.Now()
@@ -2185,7 +2193,7 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		if resized && s.helper != nil {
 			s.helper.stop()
 			s.helper = nil
-			if h, err := startCaptureHelper(s.w.ID, s.profile.MaxWidth, s.profile.Quality, s.captureFPS(), s.codec); err == nil {
+			if h, err := s.startCaptureHelper(s.captureFPS(), s.codec); err == nil {
 				s.helper = h
 			} else {
 				s.helperRetryAt = time.Now().Add(helperRetryCooldown)
