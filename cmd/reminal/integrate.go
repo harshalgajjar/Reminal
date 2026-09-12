@@ -19,6 +19,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -367,17 +368,22 @@ func runIntegrate(args []string) error {
 
 	var failures int
 	for _, p := range plan {
-		var err error
+		var mcpErr error
 		if p.target.cliAdd != nil {
-			err = applyViaCLI(p, exe, remove)
+			mcpErr = applyViaCLI(p, exe, remove)
 		} else {
-			err = applyViaFile(p.target, home, exe, remove)
+			mcpErr = applyViaFile(p.target, home, exe, remove)
 		}
-		// The MCP server and the attention hooks are separate installs; do both.
-		if err == nil && p.target.hooks != nil {
-			err = applyHooks(p.target.hooks, home, exe, remove)
+		// The MCP server and the attention hooks are separate installs; do both
+		// INDEPENDENTLY. A failure of one must not skip the other: a re-run hits
+		// "MCP already exists" (see applyViaCLI), and gating hooks on MCP success
+		// used to mean the hooks silently never installed on any machine whose
+		// MCP server was registered by an earlier version.
+		var hookErr error
+		if p.target.hooks != nil {
+			hookErr = applyHooks(p.target.hooks, home, exe, remove)
 		}
-		if err != nil {
+		if err := errors.Join(mcpErr, hookErr); err != nil {
 			failures++
 			fmt.Printf("  ✗ %-18s %v\n", p.target.Name, err)
 			continue
@@ -411,9 +417,15 @@ func applyViaCLI(p planStep, exe string, remove bool) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
-		// Removing something that was never registered is not a failure.
-		if remove && (strings.Contains(strings.ToLower(msg), "not found") ||
-			strings.Contains(strings.ToLower(msg), "no such")) {
+		low := strings.ToLower(msg)
+		// integrate must be idempotent: re-running it (e.g. to pick up newly
+		// added attention hooks) must not error on state that's already how we
+		// want it. Removing something never registered, or adding something
+		// already registered, is a success, not a failure.
+		if remove && (strings.Contains(low, "not found") || strings.Contains(low, "no such")) {
+			return nil
+		}
+		if !remove && strings.Contains(low, "already exists") {
 			return nil
 		}
 		if msg == "" {
