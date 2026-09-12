@@ -29,6 +29,7 @@ release flow — one at a time, never a side effect of feature work.
 - `go vet ./...`, `go test ./...`, and `go test -race ./...` must pass.
 - Cross-compile every release target: `for p in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do GOOS=${p%/*} GOARCH=${p#*/} go build ./...; done`
 - Releases are gated: `release.yml`'s `test` job (same suite) must pass before the build/publish job runs. Tag `vX.Y.Z` triggers it; `changelog/<version>.md` is required and reads for non-technical users.
+- **Changelog format is stricter than GitHub markdown** (the in-app "What's new" panel renders it): NO `**bold**`/`*italic*`/`[links]` (they show literal `**`/`[]` — only `` `code` `` works), and every non-bullet line is an UPPERCASED subheading, so use short labels (`Improved`/`Fixed`/`Added`) + plain bullets, never prose sentences or an intro paragraph. See `changelog/README.md`.
 
 ## Project-specific gotchas
 - **Two viewer copies must stay byte-identical:** `cloudflare/public/index.html` and `internal/client/web/index.html`. Edit one, copy to the other (a test enforces it).
