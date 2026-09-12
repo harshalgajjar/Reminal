@@ -26,12 +26,21 @@ import (
 	"github.com/reminal/reminal/internal/session"
 )
 
-// maxTunnelBody bounds a single proxied response. Cloudflare DOs cap
-// each WS message at 1 MiB; with base64 expansion (4/3x) + headers JSON
-// + envelope, ~700 KB of raw bytes is the safe ceiling. Larger
-// responses get truncated for now — streaming-through-tunnel is a v2
-// feature.
-const maxTunnelBody = 700 * 1024
+// tunnelChunkBytes bounds ONE tunnel_resp message's raw body. Cloudflare DOs
+// cap each WS message at 1 MiB; with base64 expansion (4/3x) + headers JSON +
+// envelope, ~700 KB of raw bytes is the safe ceiling. A proxied response larger
+// than this is streamed as several tunnel_resp chunks (each carrying `more`),
+// which the relay reassembles into a streamed Response — so large images/GIFs/
+// downloads are no longer truncated at the old single-message limit.
+const tunnelChunkBytes = 700 * 1024
+
+// maxTunnelResponse caps a whole streamed response. It's an abuse guard AND a
+// memory guard: a slow visitor lets chunks queue in the relay's Durable Object
+// (which has ~128 MB), so the ceiling stays well under that. 64 MB is ~90x the
+// old single-message limit — ample for any normal page, image, GIF, or asset.
+// Past it the stream is closed cleanly (a truncated body, as before, just at a
+// far higher ceiling).
+const maxTunnelResponse = 64 * 1024 * 1024
 
 // TunnelOptions configures a port-forward agent.
 type TunnelOptions struct {
@@ -379,12 +388,6 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxTunnelBody))
-	if err != nil {
-		t.sendError(conn, req.ReqID, fmt.Sprintf("read response: %v", err))
-		return
-	}
-
 	headers := map[string]string{}
 	for k, v := range resp.Header {
 		if isHopHeader(k) || len(v) == 0 {
@@ -393,13 +396,61 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 		headers[k] = v[0]
 	}
 
-	out, _ := json.Marshal(map[string]any{
-		"req_id":  req.ReqID,
-		"status":  resp.StatusCode,
-		"headers": headers,
-		"body":    base64.StdEncoding.EncodeToString(respBody),
-	})
-	_ = t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelResp, Data: string(out)})
+	// Stream the body as one or more tunnel_resp chunks. The FIRST chunk carries
+	// status + headers; every chunk carries `more` (true = another follows). The
+	// relay hands the visitor a streamed Response and enqueues each chunk as it
+	// arrives, so a large body is no longer capped at one 1-MiB WS message. A
+	// single-chunk body (the common case) is one message with more=false, which
+	// an older relay still treats as a whole response.
+	buf := make([]byte, tunnelChunkBytes)
+	var total int64
+	firstSent := false
+	send := func(chunk []byte, more bool) error {
+		payload := map[string]any{
+			"req_id": req.ReqID,
+			"body":   base64.StdEncoding.EncodeToString(chunk),
+			"more":   more,
+		}
+		if !firstSent {
+			payload["status"] = resp.StatusCode
+			payload["headers"] = headers
+			firstSent = true
+		}
+		out, _ := json.Marshal(payload)
+		return t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelResp, Data: string(out)})
+	}
+	for {
+		n, rerr := io.ReadFull(resp.Body, buf)
+		total += int64(n)
+		capped := total >= maxTunnelResponse
+		switch {
+		case rerr == nil:
+			// Filled the buffer — more data may follow (or an exact-boundary EOF
+			// next read). Stop early if we've hit the abuse cap.
+			if err := send(buf[:n], !capped); err != nil || capped {
+				return
+			}
+		case rerr == io.ErrUnexpectedEOF:
+			// Final, partial chunk.
+			_ = send(buf[:n], false)
+			return
+		case rerr == io.EOF:
+			// EOF exactly on a chunk boundary (or an empty body): nothing more to
+			// send, so close the stream. firstSent stays false only for a
+			// zero-length body — send an empty final chunk so status+headers go out.
+			_ = send(nil, false)
+			return
+		default:
+			// Mid-stream read error. If we've already sent the head we can only
+			// end the stream; otherwise surface a clean error to the visitor.
+			if firstSent {
+				_ = send(nil, false)
+			} else {
+				t.sendError(conn, req.ReqID, fmt.Sprintf("read response: %v", rerr))
+			}
+			return
+		}
+	}
 }
 
 func (t *Tunnel) sendError(conn *websocket.Conn, reqID, msg string) {

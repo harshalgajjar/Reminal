@@ -22,9 +22,14 @@ export class SessionRoom {
   // pendingTunnelReqs lives in DO instance memory; a request keeps the
   // DO awake until it resolves or times out, so the map never has to
   // survive hibernation.
+  // A tunnel response is one or more `tunnel_resp` chunks. The head chunk
+  // carries status + headers and resolves the request (with a whole-buffer body
+  // for a single chunk, or a ReadableStream for a multi-chunk one); later chunks
+  // enqueue into that stream's controller until one arrives with more=false.
   private pendingTunnelReqs: Map<string, {
-    resolve: (resp: { status: number; headers: Record<string, string>; body: Uint8Array }) => void;
+    resolve: (resp: { status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | Uint8Array }) => void;
     timeout: ReturnType<typeof setTimeout>;
+    controller?: ReadableStreamDefaultController<Uint8Array>; // set once a multi-chunk (streamed) response begins
   }> = new Map();
 
   constructor(state: DurableObjectState) {
@@ -194,15 +199,22 @@ export class SessionRoom {
         }));
       }
     } else if (attachment.role === "tunnel") {
-      // Fail any in-flight tunnel requests so visitors get a clear 503
-      // rather than hanging until the per-request timeout.
+      // Fail any in-flight tunnel requests so visitors get a clear signal
+      // rather than hanging until the per-request timeout. A request already
+      // streaming (controller set) can't change its status any more — its
+      // Response headers are on the wire — so end its body with an error;
+      // one still awaiting its head resolves to a 502.
       for (const [, entry] of this.pendingTunnelReqs) {
         clearTimeout(entry.timeout);
-        entry.resolve({
-          status: 502,
-          headers: { "Content-Type": "text/plain" },
-          body: new TextEncoder().encode("reminal: tunnel disconnected\n"),
-        });
+        if (entry.controller) {
+          try { entry.controller.error(new Error("reminal: tunnel disconnected")); } catch { /* already closed */ }
+        } else {
+          entry.resolve({
+            status: 502,
+            headers: { "Content-Type": "text/plain" },
+            body: new TextEncoder().encode("reminal: tunnel disconnected\n"),
+          });
+        }
       }
       this.pendingTunnelReqs.clear();
       await this.state.storage.setAlarm(Date.now() + ORPHAN_TTL_MS);
@@ -380,15 +392,62 @@ export class SessionRoom {
     if (!reqID) return;
     const entry = this.pendingTunnelReqs.get(reqID);
     if (!entry) return;
-    clearTimeout(entry.timeout);
-    this.pendingTunnelReqs.delete(reqID);
 
-    const body = typeof resp.body === "string" ? base64ToBytes(resp.body) : new Uint8Array();
-    entry.resolve({
-      status: typeof resp.status === "number" ? resp.status : 502,
-      headers: resp.headers ?? {},
-      body,
+    const chunk = typeof resp.body === "string" ? base64ToBytes(resp.body) : new Uint8Array();
+    const more = resp.more === true;
+
+    // Idle watchdog: a stalled stream mustn't pin the DO. Re-armed per chunk.
+    const armStall = () => {
+      entry.timeout = setTimeout(() => {
+        try { entry.controller?.error(new Error("reminal: tunnel stream stalled")); } catch { /* already closed */ }
+        this.pendingTunnelReqs.delete(reqID);
+      }, TUNNEL_REQ_TIMEOUT_MS);
+    };
+
+    // Continuation chunk of an already-streaming response.
+    if (entry.controller) {
+      clearTimeout(entry.timeout);
+      if (chunk.length) {
+        try { entry.controller.enqueue(chunk); } catch { /* visitor cancelled the read */ }
+      }
+      if (more) {
+        armStall();
+      } else {
+        try { entry.controller.close(); } catch { /* already closed/cancelled */ }
+        this.pendingTunnelReqs.delete(reqID);
+      }
+      return;
+    }
+
+    // Head chunk — carries status + headers.
+    clearTimeout(entry.timeout);
+    const status = typeof resp.status === "number" ? resp.status : 502;
+    const headers: Record<string, string> = resp.headers ?? {};
+
+    if (!more) {
+      // Single-chunk response (small body, or an older single-message agent).
+      this.pendingTunnelReqs.delete(reqID);
+      entry.resolve({ status, headers, body: chunk });
+      return;
+    }
+
+    // Multi-chunk: open a stream, hand the Response back now, keep enqueuing as
+    // later chunks arrive. Keep the entry in the map (with its controller) until
+    // a chunk with more=false closes it.
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        if (chunk.length) controller.enqueue(chunk);
+        entry.controller = controller;
+      },
+      cancel: () => {
+        // Visitor aborted the download; stop tracking it. The agent stops when
+        // its next WS write is dropped.
+        clearTimeout(entry.timeout);
+        this.pendingTunnelReqs.delete(reqID);
+      },
     });
+    armStall();
+    entry.resolve({ status, headers, body: stream });
   }
 
   // ---- tunnel: HTTP proxy ----
@@ -453,7 +512,7 @@ export class SessionRoom {
       headers[k] = v;
     });
 
-    const promise = new Promise<{ status: number; headers: Record<string, string>; body: Uint8Array }>((resolve) => {
+    const promise = new Promise<{ status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | Uint8Array }>((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingTunnelReqs.delete(reqID);
         resolve({
