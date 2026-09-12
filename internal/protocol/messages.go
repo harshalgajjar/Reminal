@@ -327,6 +327,11 @@ type DirSession struct {
 	Headless bool   `json:"headless,omitempty"`
 	Viewers  int    `json:"viewers,omitempty"`
 	IdleSecs int64  `json:"idle_secs,omitempty"` // seconds since last PTY activity
+	// Attn is the detected attention state of the session's foreground agent:
+	// "working", "input" (awaiting the user), or "done". Empty for a bare shell
+	// or a host too old to report it. Lets the fleet view show which session
+	// needs you. See internal/client/attention_probe.go (writer side).
+	Attn string `json:"attn,omitempty"`
 	// SearchHits is filled when the directory query carried a regex: snippets
 	// from this session's live scrollback. Omitted on a plain listing, and by
 	// hosts that do not search yet (they still return the session list).
