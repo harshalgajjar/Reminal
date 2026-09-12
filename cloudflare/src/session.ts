@@ -47,7 +47,11 @@ export class SessionRoom {
     // request string must byte-match what clients send: the browser sends
     // JSON.stringify({type:'ping'}) and the Go client marshals
     // protocol.Message{Type:"ping"} (all other fields omitempty) — both are
-    // exactly {"type":"ping"}.
+    // exactly {"type":"ping"}. NOTE: this is DO-wide, so a proxied visitor
+    // WebSocket whose app sends a text frame byte-equal to {"type":"ping"} has
+    // it answered here and never forwarded to the backend. That exact shape is
+    // vanishingly rare in real app protocols; living with it keeps every agent/
+    // viewer ping off the billable wake path.
     this.state.setWebSocketAutoResponse(
       new WebSocketRequestResponsePair(
         JSON.stringify({ type: "ping" }),

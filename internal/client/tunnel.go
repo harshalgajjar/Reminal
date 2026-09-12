@@ -104,15 +104,20 @@ type Tunnel struct {
 	wsStreams map[string]*wsStream
 }
 
-// wsStream is one proxied visitor WebSocket: the dialed backend connection and
-// the channel that feeds visitor→backend frames to its writer goroutine. done
-// is closed exactly once (via closeWSStream) to stop both pumps and unblock any
-// pending send — sendCh is never closed, so a late frame can't panic.
+// wsStream is one proxied visitor WebSocket. It's registered synchronously the
+// moment tunnel_ws_open arrives — before the backend is dialed — so visitor
+// frames that race in ahead of the dial buffer into sendCh instead of being
+// dropped. The backend conn is filled in once the dial completes (guarded by mu,
+// since closeWSStream may fire first). done is closed exactly once (via
+// closeWSStream) to stop both pumps and unblock any pending send — sendCh is
+// never closed, so a late frame can't panic.
 type wsStream struct {
-	conn      *websocket.Conn
 	sendCh    chan wsFrame
 	done      chan struct{}
 	closeOnce sync.Once
+
+	mu   sync.Mutex
+	conn *websocket.Conn // nil until the backend dial resolves
 }
 
 type wsFrame struct {
@@ -368,7 +373,10 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		case protocol.TypeTunnelReq:
 			go t.handleTunnelReq(conn, m.Data)
 		case protocol.TypeTunnelWSOpen:
-			go t.handleTunnelWSOpen(conn, m.Data)
+			// Runs inline: it only parses + registers the stream (no network), so
+			// a tunnel_ws_data racing in right behind it always finds the stream
+			// and buffers into it. The backend dial happens on its own goroutine.
+			t.handleTunnelWSOpen(conn, m.Data)
 		case protocol.TypeTunnelWSData:
 			// Fast, non-blocking (buffered channel push) — must not stall the
 			// shared read loop, so it never blocks on a slow backend.
@@ -558,10 +566,11 @@ func (t *Tunnel) backendScheme() string {
 
 // ---- port-forward WebSocket proxying ----
 
-// handleTunnelWSOpen dials the local backend WebSocket for a visitor connection
-// the relay just accepted, then starts the two pumps that shuttle frames both
-// ways over the shared tunnel control socket. A dial failure is reported back so
-// the relay can close the visitor side cleanly.
+// handleTunnelWSOpen registers a proxied visitor WebSocket synchronously — no
+// network — so a tunnel_ws_data frame racing in right behind it always finds the
+// stream and buffers into it, then kicks the backend dial off on its own
+// goroutine. Running the register inline (not the dial) is what closes the
+// first-frame-drop race for auth-first protocols (GraphQL-ws, STOMP, MQTT/WS).
 func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -576,9 +585,44 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 	if err := json.Unmarshal([]byte(payload), &req); err != nil || req.StreamID == "" {
 		return
 	}
-	ref, perr := url.Parse(req.URL)
+
+	st := &wsStream{
+		sendCh: make(chan wsFrame, wsStreamSendBuffer),
+		done:   make(chan struct{}),
+	}
+	t.wsMu.Lock()
+	// A stream id collision (shouldn't happen — relay uses UUIDs) would orphan the
+	// prior socket; close its resources directly (not via closeWSStream, which
+	// would re-lock and, keyed by id, hit the entry we're about to overwrite).
+	if prev := t.wsStreams[req.StreamID]; prev != nil {
+		prev.closeOnce.Do(func() {
+			close(prev.done)
+			prev.mu.Lock()
+			if prev.conn != nil {
+				_ = prev.conn.Close()
+			}
+			prev.mu.Unlock()
+		})
+	}
+	t.wsStreams[req.StreamID] = st
+	t.wsMu.Unlock()
+
+	go t.dialTunnelWSBackend(conn, st, req.StreamID, req.URL, req.Headers)
+}
+
+// dialTunnelWSBackend dials the local backend for an already-registered stream
+// and, on success, starts the two pumps that shuttle frames both ways over the
+// shared tunnel control socket. Any failure (or a teardown that happened while
+// dialing) reports/echoes a close so the relay drops the visitor side.
+func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamID, rawURL string, reqHeaders map[string]string) {
+	defer func() {
+		if r := recover(); r != nil {
+			recoverLog("dialTunnelWSBackend", r)
+		}
+	}()
+	ref, perr := url.Parse(rawURL)
 	if perr != nil {
-		t.sendWSClose(conn, req.StreamID)
+		t.closeWSStream(conn, streamID, st, true)
 		return
 	}
 	scheme := "ws"
@@ -598,7 +642,7 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 	// negotiate them properly instead of us hand-rolling the header.
 	hdr := http.Header{}
 	var subprotocols []string
-	for k, v := range req.Headers {
+	for k, v := range reqHeaders {
 		if isHopHeader(k) || isWSReservedHeader(k) {
 			continue
 		}
@@ -622,7 +666,7 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 		_ = resp.Body.Close()
 	}
 	if err != nil {
-		t.sendWSClose(conn, req.StreamID)
+		t.closeWSStream(conn, streamID, st, true)
 		return
 	}
 	// Bound a single backend frame so it can't exceed the relay's per-message
@@ -632,25 +676,35 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 	// other proxied stream on it, stays up. Matches the HTTP path's chunk ceiling.
 	backend.SetReadLimit(tunnelChunkBytes)
 
-	st := &wsStream{
-		conn:   backend,
-		sendCh: make(chan wsFrame, wsStreamSendBuffer),
-		done:   make(chan struct{}),
+	// Publish the backend, unless the stream was torn down while we were dialing
+	// (visitor hung up, or the control socket that delivered the open has since
+	// been replaced by a reconnect). In either case the dialed socket is orphaned.
+	t.connMu.Lock()
+	stale := t.conn != conn
+	t.connMu.Unlock()
+	st.mu.Lock()
+	closed := false
+	select {
+	case <-st.done:
+		closed = true
+	default:
 	}
-	t.wsMu.Lock()
-	// A stream id collision (shouldn't happen — relay uses UUIDs) would orphan the
-	// prior socket; close its resources directly (not via closeWSStream, which
-	// would re-lock and, keyed by id, hit the entry we're about to overwrite).
-	if prev := t.wsStreams[req.StreamID]; prev != nil {
-		prev.closeOnce.Do(func() {
-			close(prev.done)
-			_ = prev.conn.Close()
-		})
+	if closed {
+		st.mu.Unlock()
+		_ = backend.Close()
+		return
 	}
-	t.wsStreams[req.StreamID] = st
-	t.wsMu.Unlock()
+	if stale {
+		st.mu.Unlock()
+		_ = backend.Close()
+		t.closeWSStream(nil, streamID, st, false)
+		return
+	}
+	st.conn = backend
+	st.mu.Unlock()
 
-	// Writer: visitor→backend frames drained from sendCh.
+	// Writer: visitor→backend frames drained from sendCh (including any buffered
+	// while the dial was in flight, in order).
 	go func() {
 		for {
 			select {
@@ -663,7 +717,7 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 					mt = websocket.BinaryMessage
 				}
 				if err := backend.WriteMessage(mt, f.data); err != nil {
-					t.closeWSStream(conn, req.StreamID, st, true)
+					t.closeWSStream(conn, streamID, st, true)
 					return
 				}
 			}
@@ -675,10 +729,15 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 		for {
 			mt, data, rerr := backend.ReadMessage()
 			if rerr != nil {
-				t.closeWSStream(conn, req.StreamID, st, true)
+				t.closeWSStream(conn, streamID, st, true)
 				return
 			}
-			t.sendWSData(conn, req.StreamID, data, mt == websocket.BinaryMessage)
+			if err := t.sendWSData(conn, streamID, data, mt == websocket.BinaryMessage); err != nil {
+				// The shared control socket is gone — stop pumping this backend
+				// rather than looping on a dead socket. No notify: it's already down.
+				t.closeWSStream(conn, streamID, st, false)
+				return
+			}
 		}
 	}()
 }
@@ -709,7 +768,10 @@ func (t *Tunnel) handleTunnelWSData(conn *websocket.Conn, payload string) {
 	case st.sendCh <- wsFrame{data: raw, binary: m.Binary}:
 	case <-st.done:
 	default:
-		t.closeWSStream(conn, m.StreamID, st, true)
+		// Backend is too far behind. Tear the stream down off the read loop: the
+		// teardown notifies the relay (a control-socket write under wsWriteWait),
+		// which must never block the shared loop that pumps every other stream.
+		go t.closeWSStream(conn, m.StreamID, st, true)
 	}
 }
 
@@ -746,7 +808,11 @@ func (t *Tunnel) closeWSStream(conn *websocket.Conn, streamID string, st *wsStre
 	t.wsMu.Unlock()
 	st.closeOnce.Do(func() {
 		close(st.done)
-		_ = st.conn.Close()
+		st.mu.Lock()
+		if st.conn != nil { // nil if torn down before the backend dial resolved
+			_ = st.conn.Close()
+		}
+		st.mu.Unlock()
 		if notify && conn != nil {
 			t.sendWSClose(conn, streamID)
 		}
@@ -765,13 +831,13 @@ func (t *Tunnel) closeAllWSStreams() {
 	}
 }
 
-func (t *Tunnel) sendWSData(conn *websocket.Conn, streamID string, data []byte, binary bool) {
+func (t *Tunnel) sendWSData(conn *websocket.Conn, streamID string, data []byte, binary bool) error {
 	payload, _ := json.Marshal(map[string]any{
 		"stream_id": streamID,
 		"data":      base64.StdEncoding.EncodeToString(data),
 		"binary":    binary,
 	})
-	_ = t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelWSData, Data: string(payload)})
+	return t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelWSData, Data: string(payload)})
 }
 
 func (t *Tunnel) sendWSClose(conn *websocket.Conn, streamID string) {
