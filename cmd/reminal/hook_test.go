@@ -60,9 +60,10 @@ func TestQuoteExeFor(t *testing.T) {
 		{`/usr/local/bin/reminal`, "darwin", `/usr/local/bin/reminal`},
 		{`/Applications/reminal.app/Contents/MacOS/reminal`, "darwin", `/Applications/reminal.app/Contents/MacOS/reminal`}, // no space
 		{`/Users/a b/reminal`, "darwin", `'/Users/a b/reminal'`},
-		{`C:\Users\harshal\reminal.exe`, "windows", `C:\Users\harshal\reminal.exe`},
-		{`C:\Program Files\reminal\reminal.exe`, "windows", `"C:\Program Files\reminal\reminal.exe"`},
-		{`C:\Users\John Doe\reminal.exe`, "windows", `"C:\Users\John Doe\reminal.exe"`},
+		// Windows: run via bash → forward slashes (no backslash-eating), single-quote for spaces.
+		{`C:\Users\harsh\AppData\Local\Programs\reminal\reminal.exe`, "windows", `C:/Users/harsh/AppData/Local/Programs/reminal/reminal.exe`},
+		{`C:\Program Files\reminal\reminal.exe`, "windows", `'C:/Program Files/reminal/reminal.exe'`},
+		{`C:\Users\John Doe\reminal.exe`, "windows", `'C:/Users/John Doe/reminal.exe'`},
 	}
 	for _, c := range cases {
 		if got := quoteExeFor(c.exe, c.goos); got != c.want {

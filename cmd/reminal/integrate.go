@@ -104,13 +104,19 @@ func hookCommand(exe, state string) string {
 func quoteExe(exe string) string { return quoteExeFor(exe, runtime.GOOS) }
 
 func quoteExeFor(exe, goos string) string {
-	if !strings.ContainsAny(exe, " \t") {
-		return exe
-	}
 	if goos == "windows" {
-		return `"` + exe + `"` // a Windows path can't contain a literal " anyway
+		// Claude Code runs Windows hooks through bash (the hook error shows
+		// /usr/bin/bash), where an unquoted native path's backslashes are eaten as
+		// escape sequences — C:\Users\harsh -> C:Usersharsh, "command not found".
+		// Forward slashes are accepted by the Windows loader and mean nothing
+		// special to bash, so the path survives with no escaping. Spaces still need
+		// a quote, and the shell is bash, so single-quote (not cmd's double).
+		exe = strings.ReplaceAll(exe, `\`, `/`)
 	}
-	return "'" + strings.ReplaceAll(exe, "'", `'\''`) + "'"
+	if strings.ContainsAny(exe, " \t") {
+		return "'" + strings.ReplaceAll(exe, "'", `'\''`) + "'"
+	}
+	return exe
 }
 
 // applyHooks merges reminal's attention hooks into an agent's JSON config —
