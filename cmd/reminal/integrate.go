@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -90,14 +91,26 @@ type hookSpec struct {
 	shape  hookShape
 }
 
-// hookCommand is the shell command an agent runs on an event. The reminal path is
-// quoted so an app-bundle path with spaces still works when run via a shell.
+// hookCommand is the shell command an agent runs on an event. The reminal path
+// is quoted so a path with spaces (an app bundle, a username with a space,
+// Program Files) still works when the harness runs it through a shell. Quoting
+// is OS-specific: cmd.exe treats only double quotes as quoting — a single-quoted
+// path is passed through literally and the command fails — so on Windows we
+// double-quote, and on POSIX shells we single-quote (with escaping).
 func hookCommand(exe, state string) string {
-	q := exe
-	if strings.ContainsAny(exe, " \t") {
-		q = "'" + strings.ReplaceAll(exe, "'", `'\''`) + "'"
+	return quoteExe(exe) + " hook " + state
+}
+
+func quoteExe(exe string) string { return quoteExeFor(exe, runtime.GOOS) }
+
+func quoteExeFor(exe, goos string) string {
+	if !strings.ContainsAny(exe, " \t") {
+		return exe
 	}
-	return q + " hook " + state
+	if goos == "windows" {
+		return `"` + exe + `"` // a Windows path can't contain a literal " anyway
+	}
+	return "'" + strings.ReplaceAll(exe, "'", `'\''`) + "'"
 }
 
 // applyHooks merges reminal's attention hooks into an agent's JSON config —

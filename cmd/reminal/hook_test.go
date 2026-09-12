@@ -54,3 +54,19 @@ func TestClassifyNotify(t *testing.T) {
 		})
 	}
 }
+
+func TestQuoteExeFor(t *testing.T) {
+	cases := []struct{ exe, goos, want string }{
+		{`/usr/local/bin/reminal`, "darwin", `/usr/local/bin/reminal`},
+		{`/Applications/reminal.app/Contents/MacOS/reminal`, "darwin", `/Applications/reminal.app/Contents/MacOS/reminal`}, // no space
+		{`/Users/a b/reminal`, "darwin", `'/Users/a b/reminal'`},
+		{`C:\Users\harshal\reminal.exe`, "windows", `C:\Users\harshal\reminal.exe`},
+		{`C:\Program Files\reminal\reminal.exe`, "windows", `"C:\Program Files\reminal\reminal.exe"`},
+		{`C:\Users\John Doe\reminal.exe`, "windows", `"C:\Users\John Doe\reminal.exe"`},
+	}
+	for _, c := range cases {
+		if got := quoteExeFor(c.exe, c.goos); got != c.want {
+			t.Errorf("quoteExeFor(%q, %q) = %q, want %q", c.exe, c.goos, got, c.want)
+		}
+	}
+}
