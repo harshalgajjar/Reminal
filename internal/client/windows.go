@@ -126,7 +126,18 @@ type windowBackend interface {
 	// but likely can't be captured (e.g. macOS Screen Recording permission is
 	// off), or "" when capture should work. Surfaced to the viewer so a blank
 	// pane comes with an explanation and a fix instead of a silent freeze.
+	//
+	// NOTE: some backends (Linux/Wayland) return a hint even though capture WORKS
+	// — it's an informational caveat (desktop view works, per-window control does
+	// not). captureBlocked distinguishes the two so the viewer doesn't refuse to
+	// open a perfectly capturable desktop just because a hint is present.
 	permissionHint() string
+	// captureBlocked reports whether a non-empty permissionHint means capture
+	// would actually fail (macOS Screen Recording off → black frames), as opposed
+	// to an informational caveat that capture still works around. The viewer uses
+	// this to decide whether the hint blocks opening the full desktop or is just
+	// shown as a heads-up.
+	captureBlocked() bool
 	// listApps enumerates launchable installed applications, so the viewer can
 	// offer an app launcher (open an app, then mirror its window).
 	listApps() ([]appInfo, error)
@@ -264,11 +275,14 @@ func (a *Agent) enqueueWinOpImportant(op func()) {
 func (a *Agent) handleWindowList(conn *websocket.Conn) {
 	b := a.windows()
 	var payload struct {
-		Windows     []winInfo               `json:"windows"`
-		Unsupported string                  `json:"unsupported,omitempty"`
-		Error       string                  `json:"error,omitempty"`
-		Hint        string                  `json:"hint,omitempty"`
-		Notes       map[string][]windowNote `json:"notes,omitempty"`
+		Windows     []winInfo `json:"windows"`
+		Unsupported string    `json:"unsupported,omitempty"`
+		Error       string    `json:"error,omitempty"`
+		Hint        string    `json:"hint,omitempty"`
+		// CaptureBlocked is sent unconditionally (no omitempty) so the viewer can
+		// tell a fresh agent's explicit "false" from an old agent that omits it.
+		CaptureBlocked bool                    `json:"capture_blocked"`
+		Notes          map[string][]windowNote `json:"notes,omitempty"`
 	}
 	// Notes ride with the list rather than being pushed on connect. Pushing at
 	// connect raced the viewer's key exchange — it had no cryptoKey yet and
@@ -285,6 +299,7 @@ func (a *Agent) handleWindowList(conn *websocket.Conn) {
 	} else {
 		payload.Windows = wins
 		payload.Hint = b.permissionHint() // e.g. Screen Recording is off
+		payload.CaptureBlocked = b.captureBlocked()
 	}
 	a.sendWindowMsg(conn, protocol.TypeWindowList, payload)
 }
@@ -2804,6 +2819,7 @@ func (s stubWindows) unsupported() string {
 	return "window mirroring isn't supported on " + s.os + " yet"
 }
 func (stubWindows) permissionHint() string                                   { return "" }
+func (stubWindows) captureBlocked() bool                                     { return false }
 func (s stubWindows) list() ([]winInfo, error)                               { return nil, nil }
 func (s stubWindows) capture(winInfo) ([]byte, error)                        { return nil, nil }
 func (s stubWindows) captureRegion(int, int, int, int) ([]byte, error)       { return nil, nil }

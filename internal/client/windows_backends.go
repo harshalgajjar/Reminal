@@ -54,6 +54,10 @@ func (darwinWindows) permissionHint() string {
 	return ""
 }
 
+// captureBlocked: on macOS a hint means Screen Recording is off → capture is
+// black, so it genuinely blocks the full-desktop view.
+func (darwinWindows) captureBlocked() bool { return mirrorCheck() == "no" }
+
 // jxaListScript enumerates on-screen windows via CoreGraphics
 // (CGWindowListCopyWindowInfo) through JavaScript-for-Automation's ObjC
 // bridge. This is ~50-100× faster than driving System Events (a fast syscall
@@ -713,6 +717,10 @@ func (linuxWindows) permissionHint() string {
 	}
 	return ""
 }
+
+// captureBlocked: the Linux/Wayland hint is informational — the full-desktop
+// view works via the screenshot path — so it never blocks opening the desktop.
+func (linuxWindows) captureBlocked() bool { return false }
 
 func (linuxWindows) list() ([]winInfo, error) {
 	// -l list, -G geometry, -x include WM_CLASS. Columns:

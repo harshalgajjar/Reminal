@@ -1881,9 +1881,12 @@
     // old (or a platform without desktop capture) lists none — say so briefly.
     async function openDesktopPanes() {
       const wins = await nextWindowList();
-      // Screen Recording not granted → the desktop would just stream black. Surface
-      // the same "run reminal permissions" hint here rather than open dead panes.
-      if (winHint) {
+      // Only a hint that means capture would FAIL (macOS Screen Recording off →
+      // black frames) blocks opening — surface it instead of dead panes. An
+      // informational caveat (e.g. Wayland: the desktop view works but per-window
+      // control doesn't) must NOT stop the desktop — it stays visible in the
+      // Windows panel as a heads-up.
+      if (winCaptureBlocked) {
         hostDesktopHint = winHint;
         renderHost();
         return;
@@ -8785,6 +8788,7 @@
     // as the terminal, peer-to-peer when a DataChannel forms.
     let winList = [];            // last window list from the agent
     let winHint = '';            // capability warning (e.g. Screen Recording off)
+    let winCaptureBlocked = false; // true only when the hint means capture would fail (macOS SR off), vs an informational Wayland caveat
     const winDetails = document.getElementById('windows');
     const winListRoot = document.getElementById('windows-list');
     const appsDetails = document.getElementById('apps');
@@ -8982,6 +8986,9 @@
       }
       winList = payload.windows || [];
       winHint = payload.hint || ''; // e.g. macOS Screen Recording is off
+      // Fresh agents send capture_blocked explicitly; an old agent that omits it
+      // falls back to the previous behaviour (treat any hint as blocking).
+      winCaptureBlocked = ('capture_blocked' in payload) ? !!payload.capture_blocked : !!winHint;
       renderWindows();
       // First list after (re)connecting: reopen the panes this session had up.
       // Only when nothing is open, so a mid-session refresh never clobbers the
