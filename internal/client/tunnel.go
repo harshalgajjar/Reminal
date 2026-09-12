@@ -625,6 +625,12 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 		t.sendWSClose(conn, req.StreamID)
 		return
 	}
+	// Bound a single backend frame so it can't exceed the relay's per-message
+	// cap once base64-wrapped in a tunnel_ws_data envelope (the DO limits each WS
+	// message to ~1 MiB). An over-limit frame trips gorilla's read limit, which
+	// closes just this backend socket — the shared control socket, and every
+	// other proxied stream on it, stays up. Matches the HTTP path's chunk ceiling.
+	backend.SetReadLimit(tunnelChunkBytes)
 
 	st := &wsStream{
 		conn:   backend,
@@ -633,9 +639,13 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 	}
 	t.wsMu.Lock()
 	// A stream id collision (shouldn't happen — relay uses UUIDs) would orphan the
-	// prior socket; close it first to be safe.
+	// prior socket; close its resources directly (not via closeWSStream, which
+	// would re-lock and, keyed by id, hit the entry we're about to overwrite).
 	if prev := t.wsStreams[req.StreamID]; prev != nil {
-		go t.closeWSStream(conn, req.StreamID, false)
+		prev.closeOnce.Do(func() {
+			close(prev.done)
+			_ = prev.conn.Close()
+		})
 	}
 	t.wsStreams[req.StreamID] = st
 	t.wsMu.Unlock()
@@ -653,7 +663,7 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 					mt = websocket.BinaryMessage
 				}
 				if err := backend.WriteMessage(mt, f.data); err != nil {
-					t.closeWSStream(conn, req.StreamID, true)
+					t.closeWSStream(conn, req.StreamID, st, true)
 					return
 				}
 			}
@@ -665,7 +675,7 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 		for {
 			mt, data, rerr := backend.ReadMessage()
 			if rerr != nil {
-				t.closeWSStream(conn, req.StreamID, true)
+				t.closeWSStream(conn, req.StreamID, st, true)
 				return
 			}
 			t.sendWSData(conn, req.StreamID, data, mt == websocket.BinaryMessage)
@@ -699,7 +709,7 @@ func (t *Tunnel) handleTunnelWSData(conn *websocket.Conn, payload string) {
 	case st.sendCh <- wsFrame{data: raw, binary: m.Binary}:
 	case <-st.done:
 	default:
-		t.closeWSStream(conn, m.StreamID, true)
+		t.closeWSStream(conn, m.StreamID, st, true)
 	}
 }
 
@@ -712,23 +722,28 @@ func (t *Tunnel) handleTunnelWSClose(payload string) {
 	if err := json.Unmarshal([]byte(payload), &m); err != nil || m.StreamID == "" {
 		return
 	}
-	t.closeWSStream(nil, m.StreamID, false)
+	t.wsMu.Lock()
+	st := t.wsStreams[m.StreamID]
+	t.wsMu.Unlock()
+	// Visitor side initiated the close, so don't echo one back (notify=false).
+	t.closeWSStream(nil, m.StreamID, st, false)
 }
 
 // closeWSStream stops both pumps, closes the backend socket, and (when notify is
 // set, i.e. the backend side ended) tells the relay to close the visitor socket.
-// Idempotent via closeOnce, so the reader, writer, and control paths can all
-// call it safely.
-func (t *Tunnel) closeWSStream(conn *websocket.Conn, streamID string, notify bool) {
-	t.wsMu.Lock()
-	st := t.wsStreams[streamID]
-	if st != nil {
-		delete(t.wsStreams, streamID)
-	}
-	t.wsMu.Unlock()
+// The caller passes the exact *wsStream it owns so a stream-id reuse can never
+// tear down a newer stream; the map entry is removed only if it still points at
+// this stream. Idempotent via closeOnce, so the reader, writer, and control
+// paths can all call it safely.
+func (t *Tunnel) closeWSStream(conn *websocket.Conn, streamID string, st *wsStream, notify bool) {
 	if st == nil {
 		return
 	}
+	t.wsMu.Lock()
+	if t.wsStreams[streamID] == st {
+		delete(t.wsStreams, streamID)
+	}
+	t.wsMu.Unlock()
 	st.closeOnce.Do(func() {
 		close(st.done)
 		_ = st.conn.Close()
@@ -740,13 +755,13 @@ func (t *Tunnel) closeWSStream(conn *websocket.Conn, streamID string, notify boo
 
 func (t *Tunnel) closeAllWSStreams() {
 	t.wsMu.Lock()
-	ids := make([]string, 0, len(t.wsStreams))
-	for id := range t.wsStreams {
-		ids = append(ids, id)
+	streams := make(map[string]*wsStream, len(t.wsStreams))
+	for id, st := range t.wsStreams {
+		streams[id] = st
 	}
 	t.wsMu.Unlock()
-	for _, id := range ids {
-		t.closeWSStream(nil, id, false)
+	for id, st := range streams {
+		t.closeWSStream(nil, id, st, false)
 	}
 }
 

@@ -12,6 +12,12 @@ const ORPHAN_TTL_MS = 10 * 60 * 1000;
 // mid-request.
 const TUNNEL_REQ_TIMEOUT_MS = 30 * 1000;
 
+// Largest single proxied-WebSocket frame we relay. Base64-wrapped in a
+// tunnel_ws_data envelope this stays under the DO's ~1 MiB per-message cap, so
+// one big frame can't blow the limit and drop the whole control socket. Matches
+// the agent's backend read limit (tunnelChunkBytes).
+const MAX_WS_FRAME_BYTES = 700 * 1024;
+
 // Cookie name scoped per-session so multiple port-forwards can each
 // have their own auth state in a single browser.
 const AUTH_COOKIE_PREFIX = "reminal_auth_";
@@ -123,18 +129,16 @@ export class SessionRoom {
         try { ws.close(1011, "reminal: tunnel offline"); } catch { /* already closing */ }
         return;
       }
-      let dataB64: string;
-      let binary: boolean;
-      if (typeof message === "string") {
-        dataB64 = bytesToBase64(new TextEncoder().encode(message));
-        binary = false;
-      } else {
-        dataB64 = bytesToBase64(new Uint8Array(message));
-        binary = true;
+      const binary = typeof message !== "string";
+      const raw = binary ? new Uint8Array(message as ArrayBuffer) : new TextEncoder().encode(message as string);
+      if (raw.byteLength > MAX_WS_FRAME_BYTES) {
+        // Too big to relay within the DO message cap — close just this stream.
+        try { ws.close(1009, "reminal: message too big"); } catch { /* already closing */ }
+        return;
       }
       tunnel.send(JSON.stringify({
         type: "tunnel_ws_data",
-        data: JSON.stringify({ stream_id: attachment.streamId, data: dataB64, binary }),
+        data: JSON.stringify({ stream_id: attachment.streamId, data: bytesToBase64(raw), binary }),
       }));
       return;
     }
@@ -544,10 +548,16 @@ export class SessionRoom {
       if (k.toLowerCase() === "cookie") return; // don't leak the reminal auth cookie to the app
       headers[k] = v;
     });
-    tunnel.send(JSON.stringify({
-      type: "tunnel_ws_open",
-      data: JSON.stringify({ stream_id: streamId, url: rest + (url.search ?? ""), headers }),
-    }));
+    try {
+      tunnel.send(JSON.stringify({
+        type: "tunnel_ws_open",
+        data: JSON.stringify({ stream_id: streamId, url: rest + (url.search ?? ""), headers }),
+      }));
+    } catch {
+      // Tunnel socket died between the readyState check and here — close the
+      // freshly-accepted visitor side so the browser sees a clean failure.
+      try { server.close(1011, "reminal: tunnel offline"); } catch { /* already closing */ }
+    }
 
     // Echo the client's first requested subprotocol so a client that asked for
     // one still completes its handshake. (Negotiating against the backend's
