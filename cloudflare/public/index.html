@@ -1144,6 +1144,11 @@
     @media (prefers-reduced-motion: reduce) { .machine-batt.charging .batt-meter i { animation: none; } }
     .machine-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
     .machine-dot.online { background: #3fb950; box-shadow: 0 0 0 2px rgba(63,185,80,0.18); }
+    /* Online, but coloured by what the machine's sessions need: something
+       awaiting you wins (amber), else something working (blue), else the plain
+       green above (idle / all done). Same palette as the per-session chips. */
+    .machine-dot.attn-input   { background: #e3b341; box-shadow: 0 0 0 2px rgba(227,179,65,0.22); }
+    .machine-dot.attn-working { background: #4fc4d6; box-shadow: 0 0 0 2px rgba(79,196,214,0.20); }
     .machine-dot.offline { background: #6e7681; }
     .machine-dot.checking { background: #d29922; animation: mdotpulse 1s ease-in-out infinite; }
     @keyframes mdotpulse { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
@@ -1216,6 +1221,19 @@
     .machine-session .ms-state.attn-input   { color: #e3b341; background: rgba(227,179,65,0.14); }
     .machine-session .ms-state.attn-working { color: #4fc4d6; background: rgba(79,196,214,0.12); }
     .machine-session .ms-state.attn-done    { color: #57ab6a; background: rgba(87,171,106,0.12); }
+    /* Attention chip in the session switchers (Recents dropdown + mobile dock),
+       same palette/word as the Machines panel's .ms-state. It sits in a flex row
+       beside the name; the name ellipsizes (min-width:0) so a long one truncates
+       with "…" rather than shoving the chip off the row. */
+    .name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .name-row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .attn-chip {
+      flex: none; font-size: 10px; font-weight: 600; letter-spacing: 0.01em;
+      white-space: nowrap; padding: 1px 7px; border-radius: 999px;
+    }
+    .attn-chip.attn-input   { color: #e3b341; background: rgba(227,179,65,0.14); }
+    .attn-chip.attn-working { color: #4fc4d6; background: rgba(79,196,214,0.12); }
+    .attn-chip.attn-done    { color: #57ab6a; background: rgba(87,171,106,0.12); }
     .machine-session:hover { background: #161b22; }
     .machine-session.is-current { background: rgba(56,139,253,0.10); }
     .machine-session.is-current .ms-label { color: #79c0ff; font-weight: 500; }
@@ -2555,6 +2573,7 @@
                   id: s.id, owned: true, label: sessionLabelWeb(s), machine: machineLabel(rec, b64),
                   last: hist.get(s.id)?.lastSeen || 0,
                   act: now - (s.idle_secs || 0) * 1000,
+                  attn: s.attn || '',
                 });
               }
             }
@@ -2586,15 +2605,20 @@
         const isCurrent = !!sessionId && e.id === sessionId;
         item.className = 'sessdock-item' + (isCurrent ? ' is-current' : '');
         item._entry = e; // the release handler wants the entry, not a DOM round-trip
+        const nameRow = document.createElement('div');
+        nameRow.className = 'name-row';
         const name = document.createElement('div');
         name.className = 'name' + (e.label ? '' : ' placeholder');
         name.textContent = e.label || '(unnamed session)';
+        nameRow.appendChild(name);
+        const chip = attnChipEl(e.attn);
+        if (chip) nameRow.appendChild(chip);
         const meta = document.createElement('div');
         meta.className = 'meta';
         // Formatted at render time — the pool snapshot can be minutes old.
         meta.textContent = e.id + ' · '
           + (isCurrent ? 'current' : e.machine || fmtAgo(e.last));
-        item.appendChild(name);
+        item.appendChild(nameRow);
         item.appendChild(meta);
         sessdockEl.appendChild(item);
       }
@@ -2955,6 +2979,10 @@
       // Killed sessions stay out too: the kill flow forgets them from history,
       // but another tab's stale copy or a racing render must not revive one.
       const list = loadHistory().filter(e => !ownedSessionIds.has(e.id) && !killedSessionIds.has(e.id));
+      // Live attention per id, from the sessdock pool (refreshed just above).
+      // Recents rows are non-owned sessions, so this usually only lights up once
+      // a machine we own is also in history; the dock is where it shows richest.
+      const attnById = new Map(sessdockPool.filter(p => p.attn).map(p => [p.id, p.attn]));
       if (list.length === 0) {
         // Only show the recents hint when there are no Machines cards above it,
         // otherwise it reads as a redundant second empty-state.
@@ -2983,13 +3011,18 @@
         const label = document.createElement('a');
         label.href = sessionHref(e.id);
         label.className = 'label';
+        const nameRow = document.createElement('div');
+        nameRow.className = 'name-row';
         const nameEl = document.createElement('div');
         nameEl.className = 'name' + (e.name ? '' : ' placeholder');
         nameEl.textContent = e.name || '(unnamed session)';
+        nameRow.appendChild(nameEl);
+        const chip = attnChipEl(attnById.get(e.id));
+        if (chip) nameRow.appendChild(chip);
         const metaEl = document.createElement('div');
         metaEl.className = 'meta';
         metaEl.textContent = (e.host ? e.host + ' · ' : '') + e.id + ' · ' + fmtAgo(e.lastSeen);
-        label.appendChild(nameEl);
+        label.appendChild(nameRow);
         label.appendChild(metaEl);
         const renameBtn = document.createElement('button');
         renameBtn.className = 'row-btn';
@@ -4880,6 +4913,12 @@
       paintStats(box, resp.stats || null);
       const list = (resp.sessions || []);
       renderMachineSessions(box, list, b64);
+      // Colour the (online) machine dot by what its sessions need — anything
+      // awaiting you wins, else anything working, else stay green (idle / all
+      // done, which also just means "online"). Offline/checking set above.
+      const agg = machineAttn(list);
+      if (agg === 'input') { dot.className = 'machine-dot attn-input'; dot.title = 'needs you'; }
+      else if (agg === 'working') { dot.className = 'machine-dot attn-working'; dot.title = 'working'; }
       // Remember this snapshot so the NEXT time the panel opens it paints these
       // sessions instantly from cache while the fresh query runs in the background.
       await withOwnedMachines(m => { if (!m[b64]) return false; m[b64].sessions = list; if (resp.hostname) m[b64].host = resp.hostname; if (batt) m[b64].batt = batt; });
@@ -4997,6 +5036,31 @@
 
     // Attention state → the word shown in the session's state chip.
     const ATTN_LABELS = { input: 'needs you', working: 'working', done: 'done' };
+
+    // attnChipEl builds the little state pill shown beside a session name in the
+    // Recents dropdown and the mobile dock, or null for an idle/unknown state.
+    // Same words + palette as the Machines panel's .ms-state, so the three
+    // surfaces can't drift.
+    function attnChipEl(attn) {
+      if (!attn || !ATTN_LABELS[attn]) return null;
+      const c = document.createElement('span');
+      c.className = 'attn-chip attn-' + attn;
+      c.textContent = ATTN_LABELS[attn];
+      return c;
+    }
+
+    // machineAttn rolls a machine's sessions up to one dot state: 'input' if any
+    // session needs you, else 'working' if any is working, else '' (idle / all
+    // done → the plain online-green dot). Port forwards don't count.
+    function machineAttn(list) {
+      let working = false;
+      for (const s of (list || [])) {
+        if (s.kind === 'port') continue;
+        if (s.attn === 'input') return 'input';
+        if (s.attn === 'working') working = true;
+      }
+      return working ? 'working' : '';
+    }
     function sessionLabelWeb(s) {
       if (s.kind === 'port') return 'port :' + (s.port || '?');
       return s.name || s.title || s.cwd || (s.headless ? 'background shell' : 'shell');
