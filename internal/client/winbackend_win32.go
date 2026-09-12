@@ -129,6 +129,7 @@ func w32SetDPIAware() {
 
 func (win32Windows) unsupported() string    { return "" } // Win32 is always present
 func (win32Windows) permissionHint() string { return "" } // no TCC-style capture permission on Windows
+func (win32Windows) captureBlocked() bool   { return false }
 
 // ---- enumeration ------------------------------------------------------------
 
