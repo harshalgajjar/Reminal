@@ -2688,8 +2688,12 @@
       sessdockHandle.setPointerCapture(e.pointerId);
       sessdockGesture = { startY: e.clientY, tried: false };
       // Refresh in the dead travel before the 8px threshold — by the time the
-      // dock opens, the pool is usually current.
+      // dock opens, the pool is usually current. Also re-query the fleet
+      // directory so the attention chips reflect the current state, not the last
+      // time the Machines panel happened to be open; it lands via surgical chip
+      // updates while the dock stays open (never a mid-drag rebuild).
       refreshSessdockPool();
+      refreshFleetAttn();
     });
     sessdockHandle.addEventListener('pointermove', (e) => {
       const g = sessdockGesture;
@@ -5098,11 +5102,64 @@
         if (!nameRow) return;
         const old = nameRow.querySelector('.attn-chip');
         if (old) old.remove();
-        const chip = attnChipEl(attnOf(id, item._entry.attn));
+        // Freshest source wins: a live push (liveAttn), else the latest polled
+        // directory value from the pool, else the entry's build-time snapshot.
+        const pooled = sessdockPool.find(p => p.id === id);
+        const polled = pooled ? pooled.attn : item._entry.attn;
+        if (pooled) item._entry.attn = pooled.attn || ''; // keep the entry in sync
+        const chip = attnChipEl(attnOf(id, polled));
         if (chip) nameRow.appendChild(chip);
         return;
       }
     }
+
+    // refreshFleetAttn re-queries every owned machine's directory into the local
+    // cache — the same data the Machines panel polls, but decoupled from it — so
+    // the swipe-up dock and Recents show current per-session attention WITHOUT the
+    // panel being open (or the session being connected). Single-flight. Repaints
+    // Recents and, for an OPEN dock, patches each row's chip surgically (never a
+    // rebuild — that would drop the drag highlight; see updateSessdockChip).
+    let fleetAttnBusy = false;
+    async function refreshFleetAttn() {
+      if (fleetAttnBusy) return;
+      fleetAttnBusy = true;
+      try {
+        const store = await loadOwnedMachines();
+        const keys = Object.keys(store).filter(b64 => !store[b64].pendingRevoke);
+        await Promise.all(keys.map(async (b64) => {
+          let resp;
+          try { resp = await queryDirectory(base64ToU8(b64URLToStd(b64))); } catch (_) { return; }
+          if (!resp || typeof resp !== 'object' || !Array.isArray(resp.sessions)) return;
+          const list = resp.sessions;
+          await withOwnedMachines(m => {
+            if (!m[b64]) return false;
+            m[b64].sessions = list;
+            if (resp.hostname) m[b64].host = resp.hostname;
+          });
+        }));
+        await refreshSessdockPool();
+        renderRecents();
+        if (sessdockEl && sessdockEl.classList.contains('open')) {
+          for (const item of [...sessdockEl.children]) {
+            if (item._entry) updateSessdockChip(item._entry.id);
+          }
+        }
+      } finally {
+        fleetAttnBusy = false;
+      }
+    }
+
+    // Keep the fleet's attention fresh for the dock/Recents without the Machines
+    // panel: a light background poll while the tab is visible and connected (the
+    // panel, when open, already polls — don't double up), plus an immediate
+    // refresh the moment a swipe-up gesture starts (see the pointerdown handler).
+    const FLEET_ATTN_POLL_MS = 10000;
+    setInterval(() => {
+      if (document.hidden || !sessionId) return;
+      const md = document.getElementById('machines');
+      if (md && md.open) return; // the panel's own poll covers this
+      refreshFleetAttn();
+    }, FLEET_ATTN_POLL_MS);
 
     // machineAttn rolls a machine's sessions up to one dot state: 'input' if any
     // session needs you, else 'working' if any is working, else '' (idle / all
