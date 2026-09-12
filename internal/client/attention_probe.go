@@ -136,10 +136,20 @@ func (a *Agent) runAttention(logPath string) {
 		// Prefer the agent's own hook-reported state when it's fresh (an
 		// integrated harness reporting via `reminal hook`); otherwise fall back to
 		// the screen inference. The hook is precise; the screen is universal.
-		state := classifyAttn(agentActive, tail, settledMs)
+		screenState := classifyAttn(agentActive, tail, settledMs)
+		state := screenState
 		source := "screen"
 		if hs := session.ReadHookState(a.sessionID); hs != nil {
 			state, source = hs.State, "hook"
+		}
+		// A prompt visible on screen wins over a "done" hook. Claude Code fires
+		// Stop (→ done) when it yields for an AskUserQuestion or ends a turn on a
+		// question — there's no distinct "I'm asking you" event — so the hook
+		// alone reads "done" while you're actually being asked to choose. The
+		// settled on-screen prompt (numbered options / y-n / "press enter") is
+		// the ground truth that you need to act, so let it correct the hook.
+		if state == "done" && screenState == "input" {
+			state, source = "input", "hook+screen"
 		}
 		a.setAttnState(state)
 
@@ -206,6 +216,10 @@ var attnPromptCues = []string{
 	"do you want", "would you like", "allow this", "approve",
 	"proceed?", "continue?", "confirm", "press enter", "press any key",
 	"waiting for your", "1. yes", "1) yes", "❯ 1.", "> 1.",
+	// Claude Code's interactive choosers (AskUserQuestion, permission prompts)
+	// carry these footer hints under a numbered/❯ option list. NOT "esc to
+	// interrupt" — that's the WORKING spinner's footer, not a prompt.
+	"enter to select", "esc to cancel",
 }
 
 func attnLooksLikePrompt(tail string) bool {

@@ -17,6 +17,9 @@ func TestClassifyAttn(t *testing.T) {
 		{"active + settled no prompt is done", true, "> \n? for shortcuts", 4000, "done"},
 		{"active + settled yes/no is input", true, "Apply edit to main.go? (yes/no)", 2000, "input"},
 		{"working overrides prompt text while churning", true, "Do you want to proceed?", 300, "working"},
+		// Claude Code's AskUserQuestion chooser — a settled option list is a
+		// prompt even though Claude fired Stop (→ done) to yield for it.
+		{"AskUserQuestion chooser is input", true, "❯ 1. Build the detector\n  2. Verify only\nEnter to select · ↑/↓ to navigate · Esc to cancel", 3000, "input"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
