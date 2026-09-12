@@ -172,10 +172,19 @@ try {
 } catch {}
 $end
 "@
+    # GetFolderPath("MyDocuments") returns "" on some configurations (a redirected
+    # or not-yet-created Documents folder, the SYSTEM profile), which made the
+    # Join-Path below throw "Cannot bind argument to parameter 'Path' because it
+    # is an empty string" and — since it sat OUTSIDE the best-effort try — abort
+    # the whole install with $ErrorActionPreference=Stop, even though reminal.exe
+    # and PATH were already in place. Fall back to %USERPROFILE%\Documents, and
+    # build $prof INSIDE the try so a bad path can never fail the install.
     $docs = [Environment]::GetFolderPath("MyDocuments")
+    if (-not $docs) { $docs = Join-Path $env:USERPROFILE "Documents" }
     foreach ($profDir in @("WindowsPowerShell", "PowerShell")) {
-        $prof = Join-Path (Join-Path $docs $profDir) "profile.ps1"
         try {
+            if (-not $docs) { continue }
+            $prof = Join-Path (Join-Path $docs $profDir) "profile.ps1"
             New-Item -ItemType Directory -Force -Path (Split-Path $prof) | Out-Null
             $existing = if (Test-Path $prof) { Get-Content $prof -Raw } else { "" }
             # Strip any previously-managed block so re-running rewrites exactly one.
@@ -210,7 +219,9 @@ if ($userPath) {
 }
 # profile blocks
 $docs = [Environment]::GetFolderPath("MyDocuments")
+if (-not $docs) { $docs = Join-Path $env:USERPROFILE "Documents" }
 foreach ($profDir in @("WindowsPowerShell", "PowerShell")) {
+    if (-not $docs) { continue }
     $prof = Join-Path (Join-Path $docs $profDir) "profile.ps1"
     if (Test-Path $prof) {
         $existing = Get-Content $prof -Raw
