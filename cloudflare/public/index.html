@@ -8831,6 +8831,15 @@
           ip.liveUntil = performance.now() + 1500;
           dropQueuedFrames(ip);
         }
+        // Peer-to-peer input: when the reliable input channel is up, send the
+        // event straight to the agent over DTLS instead of through the billed
+        // relay. That removes a full Durable-Object round-trip from every click
+        // and keystroke — the change that makes a remote window feel local.
+        // DTLS already protects it, so no app-layer encryption (matching frames
+        // and acks on the other channels). Any failure falls through to WS.
+        if (rtcInput && rtcInput.readyState === 'open') {
+          try { rtcInput.send(JSON.stringify(obj)); return; } catch (_) {}
+        }
       }
       if (!ws || ws.readyState !== WebSocket.OPEN || !cryptoKey) return;
       const frame = { type };
@@ -9663,6 +9672,14 @@
     // the stream, and the pane said the host was asleep. Kept separate so a
     // congested picture can never mute the conversation about it.
     let rtcCtl = null;
+    // The "input" channel: mouse/keyboard/scroll events, viewer→agent. Reliable
+    // and ordered (unlike frames/ctl), because a dropped or reordered input
+    // event leaves the remote in a wrong state — a stuck modifier, a click that
+    // lands before the focus it followed. It exists so input skips the billed WS
+    // relay: an event used to make a full round-trip through the Cloudflare
+    // Durable Object, and that hop was the single biggest reason typing and
+    // clicking felt remote. Falls back to WS whenever it isn't open.
+    let rtcInput = null;
     let rtcRetryAt = 0;  // don't (re)attempt P2P before this time (ms epoch)
     let rtcHelloAt = 0;  // when the current webrtc_hello was sent (to time out silence)
     let rtcRelayed = false; // is the P2P path going through a TURN relay (vs direct)?
@@ -9691,8 +9708,9 @@
     function teardownWebRTC() {
       try { if (rtcDc) rtcDc.close(); } catch (_) {}
       try { if (rtcCtl) rtcCtl.close(); } catch (_) {}
+      try { if (rtcInput) rtcInput.close(); } catch (_) {}
       try { if (rtcPc) rtcPc.close(); } catch (_) {}
-      rtcPc = null; rtcDc = null; rtcCtl = null; rtcPeerId = null; rtcPendingIce = []; rtcRelayed = false;
+      rtcPc = null; rtcDc = null; rtcCtl = null; rtcInput = null; rtcPeerId = null; rtcPendingIce = []; rtcRelayed = false;
     }
     function rtcCtlOpen() { return !!(rtcCtl && rtcCtl.readyState === 'open'); }
     // Inspect the live ICE candidate pair to tell a direct P2P path from a TURN
@@ -9797,6 +9815,15 @@
           };
           ch.onopen = () => { if (DEBUG) dbg('rtc ctl channel open'); };
           ch.onclose = () => { if (rtcCtl === ch) rtcCtl = null; };
+          return;
+        }
+        // The input channel carries events the other way (viewer→agent) and the
+        // agent never sends on it, so there's no onmessage — sendWin just writes
+        // window_input events here instead of the relay while it's open.
+        if (ch.label === 'input') {
+          rtcInput = ch;
+          ch.onopen = () => { if (DEBUG) dbg('rtc input channel open'); };
+          ch.onclose = () => { if (rtcInput === ch) rtcInput = null; };
           return;
         }
         rtcDc = ch;

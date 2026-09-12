@@ -507,12 +507,22 @@ func (a *Agent) updateMenuState(plaintext []byte) {
 	a.winMu.Unlock()
 }
 
-// handleWindowInput injects a mouse/keyboard event into the target window.
+// handleWindowInput injects a mouse/keyboard event that arrived over the billed
+// WS relay (encrypted). The peer-to-peer input channel bypasses this and calls
+// applyInputPayload directly with the already-plaintext bytes (see onRTCInput).
 func (a *Agent) handleWindowInput(encData string) {
 	plaintext, err := a.box.Decrypt(encData)
 	if err != nil {
 		return
 	}
+	a.applyInputPayload(plaintext)
+}
+
+// applyInputPayload injects one decrypted window_input event into its target
+// window. Shared by the WS relay path (handleWindowInput) and the peer-to-peer
+// input channel (onRTCInput) so both roads inject identically — the only
+// difference is that P2P skips the relay hop and the decrypt.
+func (a *Agent) applyInputPayload(plaintext []byte) {
 	if runtime.GOOS == "darwin" {
 		// Inject in the daemon (sh.reminal) so one grant covers Accessibility +
 		// Automation for every session, terminal or "+". Runs on the serialized
@@ -1099,8 +1109,15 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 			count = winMaxClickCount
 		}
 		right := ev.Button == "right"
-		_ = b.focus(w)
-		st.front.note(ev.ID)
+		// Raise only when this isn't already the front window. A click used to
+		// pay the raise (≈410ms on macOS — see frontWindowTracker) every single
+		// time, so clicking around inside one window stuttered even though the
+		// window never left the front. Scroll already gates on needsRaise; clicks
+		// and drags now do too, which is the difference between a window that
+		// responds to a click at local speed and one that pauses before each.
+		if st.front.needsRaise(ev.ID) {
+			_ = b.focus(w)
+		}
 		_ = b.clickN(w, ev.X, ev.Y, count, right)
 		if noteMenu != nil {
 			noteMenu(w, right)
@@ -1111,8 +1128,9 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 		case ev.Phase == "":
 			// The viewer buffered the gesture and sent it after the pointer
 			// lifted; replayed at scripted speed.
-			_ = b.focus(w)
-			st.front.note(ev.ID)
+			if st.front.needsRaise(ev.ID) {
+				_ = b.focus(w)
+			}
 			_ = b.drag(w, clampPath(ev.Path, winMaxPathPoints))
 		case !phased:
 			// This backend never advertised drag_phases, so a phased event
@@ -1120,8 +1138,9 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 			// once per chunk — a burst of clicks, not a drag.
 			return
 		case ev.Phase == "begin":
-			_ = b.focus(w)
-			st.front.note(ev.ID)
+			if st.front.needsRaise(ev.ID) {
+				_ = b.focus(w)
+			}
 			_ = pd.dragPhase(w, "down", ev.X, ev.Y)
 			st.dragWatch(pd, w, ev.X, ev.Y)
 		case ev.Phase == "move":
