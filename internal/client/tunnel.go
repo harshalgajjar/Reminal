@@ -48,6 +48,19 @@ const maxTunnelResponse = 64 * 1024 * 1024
 // local backend speaks plain HTTP or HTTPS (see backendScheme).
 const schemeProbeTimeout = 3 * time.Second
 
+// streamFlushInterval flushes buffered response bytes to the visitor even when
+// tunnelChunkBytes hasn't accumulated, so a trickling response (Server-Sent
+// Events, long-poll, live logs, progressive output) reaches the browser
+// promptly instead of being held until the buffer fills. A big fast download
+// still batches into full tunnelChunkBytes chunks — the timer only matters when
+// the body is slow.
+const streamFlushInterval = 2 * time.Second
+
+// streamReadBytes is one Read from the local response body. Small enough that a
+// trickle is noticed quickly, large enough that a fast body fills a chunk in a
+// handful of reads.
+const streamReadBytes = 64 * 1024
+
 // TunnelOptions configures a port-forward agent.
 type TunnelOptions struct {
 	Port int
@@ -487,7 +500,12 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 	// arrives, so a large body is no longer capped at one 1-MiB WS message. A
 	// single-chunk body (the common case) is one message with more=false, which
 	// an older relay still treats as a whole response.
-	buf := make([]byte, tunnelChunkBytes)
+	//
+	// We flush a chunk when tunnelChunkBytes has accumulated (keeps big downloads
+	// batched) OR streamFlushInterval elapses with bytes waiting (so a trickling
+	// body — SSE, long-poll, live logs — reaches the visitor promptly) OR the body
+	// ends. A background reader lets the flush timer fire even while a slow body
+	// has us blocked on Read.
 	var total int64
 	firstSent := false
 	send := func(chunk []byte, more bool) error {
@@ -504,36 +522,104 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 		out, _ := json.Marshal(payload)
 		return t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelResp, Data: string(out)})
 	}
-	for {
-		n, rerr := io.ReadFull(resp.Body, buf)
-		total += int64(n)
+	// emit sends one chunk and tracks the abuse cap. Returns stop=true once the
+	// stream should end — either because this was the final chunk or the cap was
+	// reached (in which case the chunk goes out with more=false, truncating).
+	emit := func(chunk []byte, final bool) (stop bool, err error) {
+		total += int64(len(chunk))
 		capped := total >= maxTunnelResponse
-		switch {
-		case rerr == nil:
-			// Filled the buffer — more data may follow (or an exact-boundary EOF
-			// next read). Stop early if we've hit the abuse cap.
-			if err := send(buf[:n], !capped); err != nil || capped {
+		if e := send(chunk, !final && !capped); e != nil {
+			return true, e
+		}
+		return final || capped, nil
+	}
+
+	type bodyRead struct {
+		data []byte
+		err  error
+	}
+	reads := make(chan bodyRead, 4)
+	readerDone := make(chan struct{})
+	defer close(readerDone)
+	go func() {
+		for {
+			b := make([]byte, streamReadBytes)
+			n, rerr := resp.Body.Read(b)
+			br := bodyRead{err: rerr}
+			if n > 0 {
+				br.data = b[:n]
+			}
+			select {
+			case reads <- br:
+			case <-readerDone:
 				return
 			}
-		case rerr == io.ErrUnexpectedEOF:
-			// Final, partial chunk.
-			_ = send(buf[:n], false)
-			return
-		case rerr == io.EOF:
-			// EOF exactly on a chunk boundary (or an empty body): nothing more to
-			// send, so close the stream. firstSent stays false only for a
-			// zero-length body — send an empty final chunk so status+headers go out.
-			_ = send(nil, false)
-			return
-		default:
-			// Mid-stream read error. If we've already sent the head we can only
-			// end the stream; otherwise surface a clean error to the visitor.
-			if firstSent {
-				_ = send(nil, false)
-			} else {
-				t.sendError(conn, req.ReqID, fmt.Sprintf("read response: %v", rerr))
+			if rerr != nil {
+				return
 			}
-			return
+		}
+	}()
+
+	pending := make([]byte, 0, tunnelChunkBytes+streamReadBytes)
+	flush := time.NewTimer(streamFlushInterval)
+	flush.Stop()
+	defer flush.Stop()
+	timerArmed := false
+	armFlush := func() {
+		if !timerArmed {
+			flush.Reset(streamFlushInterval)
+			timerArmed = true
+		}
+	}
+	disarmFlush := func() {
+		if timerArmed {
+			if !flush.Stop() {
+				<-flush.C
+			}
+			timerArmed = false
+		}
+	}
+
+	for {
+		select {
+		case br := <-reads:
+			if len(br.data) > 0 {
+				pending = append(pending, br.data...)
+				armFlush()
+				for len(pending) >= tunnelChunkBytes {
+					stop, err := emit(pending[:tunnelChunkBytes], false)
+					// Keep the remainder, moved to the front of the same backing array.
+					pending = append(pending[:0], pending[tunnelChunkBytes:]...)
+					if err != nil || stop {
+						return
+					}
+				}
+				if len(pending) == 0 {
+					disarmFlush()
+				}
+			}
+			if br.err != nil {
+				// End of body (io.EOF) or a read error. Either way flush whatever's
+				// left as the final chunk — unless nothing has gone out yet and this
+				// is a real error, where a clean 502 is better than a bogus 200.
+				if br.err == io.EOF {
+					_, _ = emit(pending, true)
+				} else if firstSent {
+					_, _ = emit(pending, true)
+				} else {
+					t.sendError(conn, req.ReqID, fmt.Sprintf("read response: %v", br.err))
+				}
+				return
+			}
+		case <-flush.C:
+			timerArmed = false
+			if len(pending) > 0 {
+				stop, err := emit(pending, false)
+				pending = pending[:0]
+				if err != nil || stop {
+					return
+				}
+			}
 		}
 	}
 }
