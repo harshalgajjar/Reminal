@@ -221,7 +221,8 @@ func agentTargets() []agentTarget {
 				file: ".claude/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
 					{"UserPromptSubmit", "working"}, // a turn begins
-					{"Notification", "notify"},      // permission OR idle — split by payload
+					{"PermissionRequest", "input"},  // blocked on your approval — the precise event
+					{"Notification", "notify"},      // idle (or, on older builds, permission) — split by payload
 					{"Stop", "done"},                // turn finished
 				},
 			},
