@@ -19,13 +19,42 @@ import (
 // handleHostInfo replies to a viewer's TypeHostInfo request with the machine's
 // current stats, E2E-encrypted (same envelope as the window/app messages).
 func (a *Agent) handleHostInfo(conn *websocket.Conn) {
-	if a.box == nil {
+	if msg, ok := a.hostInfoMsg(); ok {
+		_ = a.writeMsg(conn, msg)
+	}
+}
+
+// pushHostInfo sends an UNSOLICITED host_info to the connected viewer, used to
+// surface a state change (right now, an attention transition) the instant it
+// happens instead of waiting for the viewer's next poll. No-op when nobody's
+// watching. Runs on its own goroutine at the call site — gatherHostInfo samples
+// the machine, which we don't want on the detector's tick.
+func (a *Agent) pushHostInfo() {
+	a.currentConnMu.Lock()
+	conn := a.currentConn
+	a.currentConnMu.Unlock()
+	if conn == nil {
 		return
+	}
+	if msg, ok := a.hostInfoMsg(); ok {
+		_ = a.writeMsg(conn, msg)
+	}
+}
+
+// hostInfoMsg builds the encrypted host_info message shared by the request
+// reply and the live push, so the two can't drift. ok is false when there's no
+// session key yet (nothing to encrypt under) or serialization fails.
+func (a *Agent) hostInfoMsg() (protocol.Message, bool) {
+	if a.box == nil {
+		return protocol.Message{}, false
 	}
 	info := gatherHostInfo()
 	info.Version = a.version
 	info.Update = updater.Available(a.version)
 	info.Sessions = countRestartableSessions()
+	a.metaMu.Lock()
+	info.Attn = a.attnState
+	a.metaMu.Unlock()
 	// Owners connect PIN-free, so the browser never typed the PIN. The share
 	// menu still needs it to mint a Join link / `reminal connect` line. This
 	// rides the session channel, encrypted — anyone who can read it already
@@ -34,13 +63,13 @@ func (a *Agent) handleHostInfo(conn *websocket.Conn) {
 	info.PIN = a.pin
 	raw, err := json.Marshal(info)
 	if err != nil {
-		return
+		return protocol.Message{}, false
 	}
 	enc, err := a.box.Encrypt(raw)
 	if err != nil {
-		return
+		return protocol.Message{}, false
 	}
-	_ = a.writeMsg(conn, protocol.Message{Type: protocol.TypeHostInfo, Data: enc})
+	return protocol.Message{Type: protocol.TypeHostInfo, Data: enc}, true
 }
 
 // handleNewSession spawns a fresh detached headless reminal on this host and
@@ -123,6 +152,12 @@ type HostInfo struct {
 	// one would be worse than omitting it — an old host sends nothing and the
 	// wording falls back to "every session".
 	Sessions int `json:"sessions,omitempty"`
+	// Attn is THIS session's current attention state (working / input / done),
+	// same values as protocol.DirSession.Attn. It rides host_info so a connected
+	// viewer learns the state of the session it's watching the instant it
+	// changes — the agent pushes a host_info on every transition — instead of
+	// waiting for the fleet directory's slower poll. Empty for a bare shell.
+	Attn string `json:"attn,omitempty"`
 }
 
 // gatherHostInfo collects the cross-platform basics, then lets the per-OS hook

@@ -170,6 +170,12 @@ func (a *Agent) setAttnState(state string) {
 		default: // a kick is already pending — coalesce
 		}
 	}
+	// Push the new state straight to the connected viewer so the pill for the
+	// session it's watching updates immediately, instead of trailing the fleet
+	// view's slower directory poll. On its own goroutine — gatherHostInfo
+	// samples the machine and must not stall the detector tick. No-op when
+	// there's no viewer.
+	go a.pushHostInfo()
 }
 
 // classifyAttn maps the raw signals to an attention state:

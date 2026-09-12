@@ -1861,6 +1861,13 @@
         const modal = document.getElementById('share-modal');
         if (modal && modal.style.display === 'flex') fillShare();
       }
+      // The connected session's own attention state rides host_info, and the
+      // agent pushes a fresh one on every change — so the pill for the session
+      // you're watching flips the instant the agent does, ahead of the fleet
+      // directory's slower poll. 'attn' present (even "") is authoritative for
+      // this session; absent means an older host that can't report it, so leave
+      // whatever the poll last knew.
+      if (sessionId && ('attn' in info)) setLiveAttn(sessionId, info.attn || '');
       renderHost();
     }
 
@@ -2611,7 +2618,7 @@
         name.className = 'name' + (e.label ? '' : ' placeholder');
         name.textContent = e.label || '(unnamed session)';
         nameRow.appendChild(name);
-        const chip = attnChipEl(e.attn);
+        const chip = attnChipEl(attnOf(e.id, e.attn));
         if (chip) nameRow.appendChild(chip);
         const meta = document.createElement('div');
         meta.className = 'meta';
@@ -3017,7 +3024,7 @@
         nameEl.className = 'name' + (e.name ? '' : ' placeholder');
         nameEl.textContent = e.name || '(unnamed session)';
         nameRow.appendChild(nameEl);
-        const chip = attnChipEl(attnById.get(e.id));
+        const chip = attnChipEl(attnOf(e.id, attnById.get(e.id)));
         if (chip) nameRow.appendChild(chip);
         const metaEl = document.createElement('div');
         metaEl.className = 'meta';
@@ -4979,10 +4986,12 @@
         row.appendChild(main);
         // Attention state word — a quiet chip, right-aligned before the actions,
         // so working/needs-you/done reads without hunting. Idle shows nothing.
-        if (s.attn && s.kind !== 'port' && ATTN_LABELS[s.attn]) {
+        // Reads through attnOf, so a live-pushed state beats the polled one.
+        const msAttn = s.kind !== 'port' ? attnOf(s.id, s.attn) : '';
+        if (msAttn && ATTN_LABELS[msAttn]) {
           const st = document.createElement('div');
-          st.className = 'ms-state attn-' + s.attn;
-          st.textContent = ATTN_LABELS[s.attn];
+          st.className = 'ms-state attn-' + msAttn;
+          st.textContent = ATTN_LABELS[msAttn];
           row.appendChild(st);
         }
         const actions = document.createElement('div');
@@ -5049,15 +5058,42 @@
       return c;
     }
 
+    // liveAttn holds attention states pushed live over host_info for sessions
+    // this viewer is connected to (keyed by id) — fresher than the fleet
+    // directory poll, so every per-session pill prefers it. attnOf is the one
+    // accessor: live value if we have one, else the polled directory value.
+    const liveAttn = new Map();
+    function attnOf(id, polled) {
+      const live = liveAttn.get(id);
+      return live !== undefined ? live : (polled || '');
+    }
+
+    // setLiveAttn records a live-pushed state and re-renders the switchers that
+    // show a per-session pill, so a flip lands immediately instead of at the
+    // next poll. Empty clears the entry (bare shell). No-op when unchanged.
+    function setLiveAttn(id, attn) {
+      const prev = liveAttn.get(id);
+      if (attn) liveAttn.set(id, attn); else liveAttn.delete(id);
+      if ((prev || '') === (attn || '')) return;
+      // Repaint the switchers (Recents dropdown + mobile dock) now — they're the
+      // cheap, always-reachable surfaces. The Machines panel, when open, refreshes
+      // on its own poll and reads the same live value through attnOf, so it lands
+      // there within a poll without a heavy full re-render here.
+      renderRecents();
+      if (sessdockEl && sessdockEl.classList.contains('open')) buildSessdockItems();
+    }
+
     // machineAttn rolls a machine's sessions up to one dot state: 'input' if any
     // session needs you, else 'working' if any is working, else '' (idle / all
-    // done → the plain online-green dot). Port forwards don't count.
+    // done → the plain online-green dot). Port forwards don't count. Reads
+    // through attnOf so a live push colours the dot too.
     function machineAttn(list) {
       let working = false;
       for (const s of (list || [])) {
         if (s.kind === 'port') continue;
-        if (s.attn === 'input') return 'input';
-        if (s.attn === 'working') working = true;
+        const a = attnOf(s.id, s.attn);
+        if (a === 'input') return 'input';
+        if (a === 'working') working = true;
       }
       return working ? 'working' : '';
     }
