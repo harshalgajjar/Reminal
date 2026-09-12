@@ -143,6 +143,35 @@ func classify(err error) string {
 	return "Unknown error"
 }
 
+// isRelayUnreachable reports whether a relay-dial error means the relay endpoint
+// can't be reached at all right now — offline, DNS failure, or nothing listening
+// — as opposed to a transient/in-flight error against a reachable relay (a reset,
+// timeout, or protocol hiccup mid-handshake). serveRelay uses it to decide the
+// `reminal new` handshake: unreachable → the session is only locally attachable,
+// so release the parent now; reachable-but-failed → keep retrying so the parent
+// is released on the eventual relay registration (so the printed URL is joinable
+// the moment `reminal new` returns).
+func isRelayUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		errors.Is(err, syscall.ENETUNREACH) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+	// Wrapped errors we can't type-match (some platforms/stdlib paths only
+	// surface these as strings).
+	raw := err.Error()
+	return strings.Contains(raw, "no such host") ||
+		strings.Contains(raw, "network is unreachable") ||
+		strings.Contains(raw, "no route to host")
+}
+
 func relayMessageHint(msg string) string {
 	switch {
 	case strings.Contains(msg, "session not found"):
