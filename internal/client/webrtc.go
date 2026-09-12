@@ -159,7 +159,16 @@ type rtcPeer struct {
 	// loop read as a dead viewer and answered by demoting the transport and
 	// then killing the stream ("screen may be locked or asleep" on a host that
 	// was never away). Nil for a v1 viewer, which still acks over dc.
-	ctl       *webrtc.DataChannel
+	ctl *webrtc.DataChannel
+	// in is the v2 input channel: viewer→agent mouse/keyboard/scroll events.
+	// Reliable and ordered (unlike ctl and frames) — a dropped keyup or click
+	// desyncs the remote input state, so this is the one channel that must not
+	// shed messages. It exists to take input OUT of the billed WS relay: input
+	// used to cross the Cloudflare Durable Object on every event, adding a full
+	// relay round-trip to every click and keystroke — the dominant reason a
+	// remote window felt remote rather than local. Nil for a v1 viewer, which
+	// keeps sending input over WS.
+	in        *webrtc.DataChannel
 	v2        bool        // viewer speaks the split-channel protocol
 	h264      bool        // viewer declared WebCodecs H.264 decode in its hello
 	open      atomic.Bool // true once the DataChannel is ready to carry frames
@@ -272,6 +281,26 @@ func (a *Agent) onRTCViewerMsg(peer *rtcPeer, data []byte, viaFrames bool) {
 		a.requestWindowKey(ack.ID)
 	}
 	a.deliverWindowAck(ack.ID, ack.Seq)
+}
+
+// onRTCInput handles one viewer→agent input message off the peer-to-peer input
+// channel. The payload is a plaintext windowInput JSON — DTLS on the
+// DataChannel already gives it the same confidentiality and integrity the WS
+// path gets from app-layer AES-GCM, so it needs no further decryption. It funnels
+// into exactly the same injection path as a relayed window_input, minus the
+// relay round-trip that made every click and keystroke feel remote.
+func (a *Agent) onRTCInput(data []byte) {
+	// Runs in pion's read goroutine on viewer-supplied bytes, outside every
+	// other recover — contain any panic so a crafted message can't crash the
+	// agent.
+	defer func() {
+		if r := recover(); r != nil {
+			recoverLog("input.OnMessage", r)
+		}
+	}()
+	// Copy: pion may reuse the message buffer once this returns, and the darwin
+	// path forwards the bytes to the daemon asynchronously.
+	a.applyInputPayload(append([]byte(nil), data...))
 }
 
 // signal payloads (the JSON inside each webrtc_* message's encrypted Data).
@@ -393,6 +422,19 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 		if cerr == nil {
 			peer.ctl = ctl
 			ctl.OnMessage(func(m webrtc.DataChannelMessage) { a.onRTCViewerMsg(peer, m.Data, false) })
+		}
+
+		// The input channel: reliable + ordered (the default), the opposite of
+		// frames/ctl. Input must never be dropped or reordered — losing a keyup
+		// leaves a modifier stuck down, and a click landing before its focus
+		// move lands in the wrong place — so this is the one channel that keeps
+		// SCTP's full-reliability contract. Each message is a plaintext
+		// windowInput JSON (DTLS already protects it, exactly like frames), fed
+		// straight into the same injection path the WS relay uses.
+		in, ierr := pc.CreateDataChannel("input", nil)
+		if ierr == nil {
+			peer.in = in
+			in.OnMessage(func(m webrtc.DataChannelMessage) { a.onRTCInput(m.Data) })
 		}
 	}
 

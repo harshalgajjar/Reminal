@@ -92,6 +92,29 @@ func waylandGrabPNG(tool string) ([]byte, error) {
 // output. A region is honored natively by grim; for the file-based tools we grab
 // the whole screen and crop it here.
 func waylandCapture(region *image.Rectangle) ([]byte, error) {
+	img, err := waylandGrabImage(region)
+	if err != nil {
+		return nil, err
+	}
+	return downscaleJPEG(img, winMaxWidth, 55)
+}
+
+// waylandCaptureRaw captures the same way as waylandCapture but returns
+// tightly-packed RGBA at exactly tw×th, for the ffmpeg H.264 helper (see
+// capture_ffmpeg.go). ffmpeg's rawvideo input needs one fixed frame size, so the
+// image is force-scaled to tw×th rather than fit-inside.
+func waylandCaptureRaw(region *image.Rectangle, tw, th int) ([]byte, error) {
+	img, err := waylandGrabImage(region)
+	if err != nil {
+		return nil, err
+	}
+	return scaleExactRGBA(img, tw, th), nil
+}
+
+// waylandGrabImage takes one compositor screenshot (whole screen, or a region)
+// and returns it decoded and cropped — the shared front half of waylandCapture
+// and waylandCaptureRaw.
+func waylandGrabImage(region *image.Rectangle) (image.Image, error) {
 	tool := waylandShotTool()
 	if tool == "" {
 		return nil, fmt.Errorf("no Wayland screenshot tool found — install one of: %s", waylandShotDeps)
@@ -129,7 +152,50 @@ func waylandCapture(region *image.Rectangle) ([]byte, error) {
 			}
 		}
 	}
-	return downscaleJPEG(img, winMaxWidth, 55)
+	return img, nil
+}
+
+// scaleExactRGBA box-averages src to EXACTLY dw×dh and returns tightly-packed
+// RGBA (dw*dh*4 bytes). Like downscaleJPEG's resampling but to a forced size and
+// without the JPEG round-trip — what ffmpeg's rawvideo input consumes.
+func scaleExactRGBA(src image.Image, dw, dh int) []byte {
+	b := src.Bounds()
+	sw, sh := b.Dx(), b.Dy()
+	dst := make([]byte, dw*dh*4)
+	if sw <= 0 || sh <= 0 {
+		return dst
+	}
+	for dy := 0; dy < dh; dy++ {
+		sy0, sy1 := b.Min.Y+dy*sh/dh, b.Min.Y+(dy+1)*sh/dh
+		if sy1 <= sy0 {
+			sy1 = sy0 + 1
+		}
+		for dx := 0; dx < dw; dx++ {
+			sx0, sx1 := b.Min.X+dx*sw/dw, b.Min.X+(dx+1)*sw/dw
+			if sx1 <= sx0 {
+				sx1 = sx0 + 1
+			}
+			var rr, gg, bb, n uint32
+			for y := sy0; y < sy1; y++ {
+				for x := sx0; x < sx1; x++ {
+					r, g, bl, _ := src.At(x, y).RGBA() // 16-bit per channel
+					rr += r >> 8
+					gg += g >> 8
+					bb += bl >> 8
+					n++
+				}
+			}
+			if n == 0 {
+				n = 1
+			}
+			o := (dy*dw + dx) * 4
+			dst[o] = byte(rr / n)
+			dst[o+1] = byte(gg / n)
+			dst[o+2] = byte(bb / n)
+			dst[o+3] = 0xFF
+		}
+	}
+	return dst
 }
 
 // downscaleJPEG box-averages src down to fit within maxW (only shrinking, like

@@ -976,6 +976,43 @@ func (linuxWindows) captureRegion(x, y, w, h int) ([]byte, error) {
 		"-resize", box, "-quality", "55", "jpg:-")
 }
 
+// captureRaw grabs one frame as tightly-packed RGBA at exactly tw×th, for the
+// ffmpeg H.264 helper (see capture_ffmpeg.go). It follows the same Wayland/X11
+// split as capture(): a compositor screenshot on Wayland (where an X11 grab is
+// black), else ImageMagick's raw RGBA output. Either way the resize is forced to
+// the exact size ffmpeg's fixed-size rawvideo input demands (the "!" flag / an
+// exact rescale) — a resized window renders scaled until the stream restarts the
+// helper, never a byte count that desyncs the encoder.
+func (linuxWindows) captureRaw(w winInfo, tw, th int) ([]byte, error) {
+	if isWaylandSession() {
+		if isDisplayID(w.ID) {
+			return waylandCaptureRaw(nil, tw, th)
+		}
+		r := image.Rect(w.X, w.Y, w.X+w.W, w.Y+w.H)
+		return waylandCaptureRaw(&r, tw, th)
+	}
+	if !have("import") {
+		return nil, fmt.Errorf("install imagemagick (provides `import`) to capture windows")
+	}
+	args := []string{"-window", w.ID}
+	if isDisplayID(w.ID) {
+		args = []string{"-window", "root"}
+	}
+	if w.CropL > 0 || w.CropT > 0 {
+		args = append(args, "-crop",
+			fmt.Sprintf("%dx%d+%d+%d", w.W, w.H, w.CropL, w.CropT), "+repage")
+	}
+	args = append(args, "-resize", fmt.Sprintf("%dx%d!", tw, th), "-depth", "8", "RGBA:-")
+	pix, err := runRaw("import", args...)
+	if err != nil {
+		return nil, err
+	}
+	if want := tw * th * 4; len(pix) != want {
+		return nil, fmt.Errorf("import returned %d bytes, want %d for %dx%d RGBA", len(pix), want, tw, th)
+	}
+	return pix, nil
+}
+
 func (linuxWindows) focus(w winInfo) error {
 	if isDisplayID(w.ID) {
 		return nil // a desktop has no window to raise; clicks land wherever aimed

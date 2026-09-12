@@ -300,6 +300,53 @@ func TestApplyWindowInputIsOneImplementation(t *testing.T) {
 	})
 }
 
+// A click used to pay the ~410ms macOS raise (focus walks every window of the
+// app over the Accessibility bridge) on EVERY event — even when the window it
+// targeted was already in front — so clicking around inside one window stuttered
+// though the window never left the front. Clicks now gate on the same
+// front-window tracker scroll uses: raise when the front window changes, never
+// while it stays put. This is half of what makes a remote window feel local.
+func TestClicksRaiseOnlyWhenTheFrontWindowChanges(t *testing.T) {
+	fresh := func() (*recordingBackend, *inputState) {
+		winLookupMu.Lock()
+		winLookupCache = map[string]winLookupEntry{}
+		winLookupMu.Unlock()
+		return &recordingBackend{wins: []winInfo{{ID: "w1", W: 800, H: 600}, {ID: "w2", W: 800, H: 600}}}, &inputState{}
+	}
+
+	t.Run("repeated clicks on one window raise it once", func(t *testing.T) {
+		b, st := fresh()
+		click := windowInput{ID: "w1", Kind: "click", X: 0.5, Y: 0.5, Count: 1}
+		for i := 0; i < 5; i++ {
+			applyWindowInput(b, st, click, nil)
+		}
+		if n := strings.Count(strings.Join(b.calls, " "), "focus"); n != 1 {
+			t.Fatalf("focus called %d times for five clicks on one window, want 1", n)
+		}
+		if n := strings.Count(strings.Join(b.calls, " "), "click("); n != 5 {
+			t.Fatalf("click injected %d times, want all 5 to land", n)
+		}
+	})
+
+	t.Run("a click after a scroll on the same window does not re-raise", func(t *testing.T) {
+		b, st := fresh()
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "scroll"}, nil)
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "click", Count: 1}, nil)
+		if n := strings.Count(strings.Join(b.calls, " "), "focus"); n != 1 {
+			t.Fatalf("focus called %d times across a scroll then a click on the same window, want 1", n)
+		}
+	})
+
+	t.Run("clicking a different window raises the new one", func(t *testing.T) {
+		b, st := fresh()
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "click", Count: 1}, nil)
+		applyWindowInput(b, st, windowInput{ID: "w2", Kind: "click", Count: 1}, nil)
+		if n := strings.Count(strings.Join(b.calls, " "), "focus"); n != 2 {
+			t.Fatalf("focus called %d times, want a raise for each of two different windows", n)
+		}
+	})
+}
+
 // draggingBackend records phased drag injection.
 type draggingBackend struct {
 	recordingBackend

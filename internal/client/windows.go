@@ -507,12 +507,22 @@ func (a *Agent) updateMenuState(plaintext []byte) {
 	a.winMu.Unlock()
 }
 
-// handleWindowInput injects a mouse/keyboard event into the target window.
+// handleWindowInput injects a mouse/keyboard event that arrived over the billed
+// WS relay (encrypted). The peer-to-peer input channel bypasses this and calls
+// applyInputPayload directly with the already-plaintext bytes (see onRTCInput).
 func (a *Agent) handleWindowInput(encData string) {
 	plaintext, err := a.box.Decrypt(encData)
 	if err != nil {
 		return
 	}
+	a.applyInputPayload(plaintext)
+}
+
+// applyInputPayload injects one decrypted window_input event into its target
+// window. Shared by the WS relay path (handleWindowInput) and the peer-to-peer
+// input channel (onRTCInput) so both roads inject identically — the only
+// difference is that P2P skips the relay hop and the decrypt.
+func (a *Agent) applyInputPayload(plaintext []byte) {
 	if runtime.GOOS == "darwin" {
 		// Inject in the daemon (sh.reminal) so one grant covers Accessibility +
 		// Automation for every session, terminal or "+". Runs on the serialized
@@ -1099,8 +1109,15 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 			count = winMaxClickCount
 		}
 		right := ev.Button == "right"
-		_ = b.focus(w)
-		st.front.note(ev.ID)
+		// Raise only when this isn't already the front window. A click used to
+		// pay the raise (≈410ms on macOS — see frontWindowTracker) every single
+		// time, so clicking around inside one window stuttered even though the
+		// window never left the front. Scroll already gates on needsRaise; clicks
+		// and drags now do too, which is the difference between a window that
+		// responds to a click at local speed and one that pauses before each.
+		if st.front.needsRaise(ev.ID) {
+			_ = b.focus(w)
+		}
 		_ = b.clickN(w, ev.X, ev.Y, count, right)
 		if noteMenu != nil {
 			noteMenu(w, right)
@@ -1111,8 +1128,9 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 		case ev.Phase == "":
 			// The viewer buffered the gesture and sent it after the pointer
 			// lifted; replayed at scripted speed.
-			_ = b.focus(w)
-			st.front.note(ev.ID)
+			if st.front.needsRaise(ev.ID) {
+				_ = b.focus(w)
+			}
 			_ = b.drag(w, clampPath(ev.Path, winMaxPathPoints))
 		case !phased:
 			// This backend never advertised drag_phases, so a phased event
@@ -1120,8 +1138,9 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 			// once per chunk — a burst of clicks, not a drag.
 			return
 		case ev.Phase == "begin":
-			_ = b.focus(w)
-			st.front.note(ev.ID)
+			if st.front.needsRaise(ev.ID) {
+				_ = b.focus(w)
+			}
 			_ = pd.dragPhase(w, "down", ev.X, ev.Y)
 			st.dragWatch(pd, w, ev.X, ev.Y)
 		case ev.Phase == "move":
@@ -1925,15 +1944,23 @@ func (a *Agent) releaseWindowInput() {
 	_ = a.windows().releaseInput()
 }
 
-// startCaptureHelper returns the frame source for a window. On macOS it dials the
-// daemon's mirror service — so ALL capture runs in the one granted sh.reminal
-// process and a single reminal.app grant covers every session (terminal or "+");
-// elsewhere it spawns the capture helper directly.
-func startCaptureHelper(id string, maxWidth, quality, fps int, codec string) (*winHelper, error) {
+// startCaptureHelper returns the frame source for this stream's window. On macOS
+// it dials the daemon's mirror service — so ALL capture runs in the one granted
+// sh.reminal process and a single reminal.app grant covers every session
+// (terminal or "+"). On Windows and Linux, an h264 stream captures in Go and
+// encodes through ffmpeg (startFFmpegHelper); a jpeg stream has no helper there
+// (startWinHelper is macOS-only), so it returns an error and the stream serves
+// screenshots from the backend directly — the behaviour those platforms have
+// always had.
+func (s *winStream) startCaptureHelper(fps int, codec string) (*winHelper, error) {
+	maxWidth, quality := s.profile.MaxWidth, s.profile.Quality
 	if runtime.GOOS == "darwin" {
-		return startMirrorCapture(id, maxWidth, quality, fps, codec)
+		return startMirrorCapture(s.w.ID, maxWidth, quality, fps, codec)
 	}
-	return startWinHelper(id, maxWidth, quality, fps, codec)
+	if codec == "h264" {
+		return startFFmpegHelper(s.b, s.w, maxWidth, quality, fps)
+	}
+	return startWinHelper(s.w.ID, maxWidth, quality, fps, codec)
 }
 
 // ensureHelper keeps the native capture helper alive: reaps one that died and
@@ -1976,7 +2003,7 @@ func (s *winStream) ensureHelper() {
 	if time.Now().Before(s.helperRetryAt) {
 		return
 	}
-	h, err := startCaptureHelper(s.w.ID, s.profile.MaxWidth, s.profile.Quality, s.captureFPS(), s.codec)
+	h, err := s.startCaptureHelper(s.captureFPS(), s.codec)
 	if err == nil {
 		s.helper = h
 		s.helperErr = ""
@@ -2009,7 +2036,7 @@ func (s *winStream) ensureHelper() {
 		// unavailable). Fall back to JPEG immediately — the viewer is waiting
 		// for frames — and re-test h264 once the suspension lapses.
 		s.suspendH264()
-		if h, jerr := startCaptureHelper(s.w.ID, s.profile.MaxWidth, s.profile.Quality, winHelperFPS, ""); jerr == nil {
+		if h, jerr := s.startCaptureHelper(winHelperFPS, ""); jerr == nil {
 			s.helper = h
 			s.helperErr = ""
 			s.helperStarted = time.Now()
@@ -2166,7 +2193,7 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		if resized && s.helper != nil {
 			s.helper.stop()
 			s.helper = nil
-			if h, err := startCaptureHelper(s.w.ID, s.profile.MaxWidth, s.profile.Quality, s.captureFPS(), s.codec); err == nil {
+			if h, err := s.startCaptureHelper(s.captureFPS(), s.codec); err == nil {
 				s.helper = h
 			} else {
 				s.helperRetryAt = time.Now().Add(helperRetryCooldown)

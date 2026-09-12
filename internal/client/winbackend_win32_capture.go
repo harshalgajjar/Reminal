@@ -146,6 +146,82 @@ func w32Downscale(src *image.RGBA, maxW int) *image.RGBA {
 	return dst
 }
 
+// w32ScaleExact box-averages src to EXACTLY dw×dh (not fit-inside). The ffmpeg
+// H.264 helper needs frames at one fixed size — its rawvideo input rejects a
+// changed byte count — and ffmpegTargetDims already chose dw×dh to match the
+// window's aspect, so this only resamples, it does not distort beyond that
+// rounding. Upscaling (a window smaller than the target) samples nearest.
+func w32ScaleExact(src *image.RGBA, dw, dh int) *image.RGBA {
+	sw, sh := src.Rect.Dx(), src.Rect.Dy()
+	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	if sw == 0 || sh == 0 {
+		return dst
+	}
+	for dy := 0; dy < dh; dy++ {
+		y0, y1 := dy*sh/dh, (dy+1)*sh/dh
+		if y1 <= y0 {
+			y1 = y0 + 1
+		}
+		for dx := 0; dx < dw; dx++ {
+			x0, x1 := dx*sw/dw, (dx+1)*sw/dw
+			if x1 <= x0 {
+				x1 = x0 + 1
+			}
+			var r, g, b, n uint32
+			for y := y0; y < y1; y++ {
+				row := src.Pix[y*src.Stride:]
+				for x := x0; x < x1; x++ {
+					r += uint32(row[x*4])
+					g += uint32(row[x*4+1])
+					b += uint32(row[x*4+2])
+					n++
+				}
+			}
+			o := dy*dst.Stride + dx*4
+			dst.Pix[o] = byte(r / n)
+			dst.Pix[o+1] = byte(g / n)
+			dst.Pix[o+2] = byte(b / n)
+			dst.Pix[o+3] = 0xFF
+		}
+	}
+	return dst
+}
+
+// w32CaptureRGBA grabs one frame as a full-resolution (cropped) RGBA image — the
+// shared step behind both the JPEG mirror (capture) and the raw H.264 feed
+// (captureRaw). PrintWindow first (captures occluded/DWM content), BitBlt of the
+// screen rect as the all-black fallback.
+func w32CaptureRGBA(w winInfo) (*image.RGBA, error) {
+	if isDisplayID(w.ID) {
+		return w32BitBltScreen(w.X, w.Y, w.W, w.H)
+	}
+	hwnd, err := w32ParseHWND(w.ID)
+	if err != nil {
+		return nil, err
+	}
+	frame, ok := w32FrameBounds(hwnd)
+	if !ok {
+		frame, _ = w32WindowRect(hwnd)
+	}
+	if img, ok := w32PrintWindowRGBA(hwnd, frame); ok {
+		return img, nil
+	}
+	return w32BitBltScreen(w.X, w.Y, w.W, w.H)
+}
+
+// captureRaw returns one frame as tightly-packed RGBA at exactly tw×th, for the
+// ffmpeg H.264 helper (see capture_ffmpeg.go).
+func (win32Windows) captureRaw(w winInfo, tw, th int) ([]byte, error) {
+	rgba, err := w32CaptureRGBA(w)
+	if err != nil {
+		return nil, err
+	}
+	scaled := w32ScaleExact(rgba, tw, th)
+	// image.NewRGBA(0,0,tw,th) is tightly packed (Stride == 4*tw), so Pix is
+	// already exactly tw*th*4 bytes of RGBA — what ffmpeg's rawvideo wants.
+	return scaled.Pix, nil
+}
+
 // w32EncodeFrame downscales and JPEG-encodes a captured frame.
 func w32EncodeFrame(img *image.RGBA) ([]byte, error) {
 	var buf bytes.Buffer
@@ -195,6 +271,18 @@ func w32BitBltScreen(x, y, w, h int) (*image.RGBA, error) {
 // then cropped to the DWM frame bounds so pixels line up 1:1 with the rect we
 // enumerate and map clicks against. ok=false → caller falls back to BitBlt.
 func w32PrintWindowCapture(hwnd uintptr, frame w32Rect) ([]byte, bool) {
+	rgba, ok := w32PrintWindowRGBA(hwnd, frame)
+	if !ok {
+		return nil, false
+	}
+	img, err := w32EncodeFrame(rgba)
+	return img, err == nil
+}
+
+// w32PrintWindowRGBA is w32PrintWindowCapture returning the cropped RGBA instead
+// of a JPEG, so the raw H.264 feed can reuse it. ok=false → caller falls back to
+// BitBlt.
+func w32PrintWindowRGBA(hwnd uintptr, frame w32Rect) (*image.RGBA, bool) {
 	wr, ok := w32WindowRect(hwnd)
 	if !ok {
 		return nil, false
@@ -232,33 +320,11 @@ func w32PrintWindowCapture(hwnd uintptr, frame w32Rect) ([]byte, bool) {
 	if crop.Empty() {
 		crop = image.Rect(0, 0, fullW, fullH)
 	}
-	img, err := w32EncodeFrame(w32BGRAToRGBA(bits, fullW, crop))
-	return img, err == nil
+	return w32BGRAToRGBA(bits, fullW, crop), true
 }
 
 func (win32Windows) capture(w winInfo) ([]byte, error) {
-	if isDisplayID(w.ID) {
-		// Whole desktop: blt the monitor rect straight off the screen DC.
-		rgba, err := w32BitBltScreen(w.X, w.Y, w.W, w.H)
-		if err != nil {
-			return nil, err
-		}
-		return w32EncodeFrame(rgba)
-	}
-	hwnd, err := w32ParseHWND(w.ID)
-	if err != nil {
-		return nil, err
-	}
-	frame, ok := w32FrameBounds(hwnd)
-	if !ok {
-		frame, _ = w32WindowRect(hwnd)
-	}
-	if img, ok := w32PrintWindowCapture(hwnd, frame); ok {
-		return img, nil
-	}
-	// PrintWindow failed or drew all-black — grab the window's screen rect
-	// instead (loses occluded content, but always shows what the user sees).
-	rgba, err := w32BitBltScreen(w.X, w.Y, w.W, w.H)
+	rgba, err := w32CaptureRGBA(w)
 	if err != nil {
 		return nil, err
 	}
