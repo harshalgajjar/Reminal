@@ -109,18 +109,27 @@ func (a *Agent) runAttention(logPath string) {
 		}
 
 		// "An agent is running here" = a full-screen TUI took the alt screen, OR
-		// the tty's foreground process group is something other than the shell
-		// itself (job control put a launched program in front). The latter is
-		// what catches inline TUIs like Claude Code, which never take the alt
-		// screen — so alt alone would miss them.
+		// a program other than the login shell holds the tty's foreground. The
+		// latter is what catches inline TUIs like Claude Code, which never take
+		// the alt screen — so alt alone would miss them.
+		//
+		// We decide it from the foreground command's NAME, not a pid compare,
+		// because a pid compare breaks after a hot-restart: the resumed agent no
+		// longer knows the shell's own pid, so Pid() falls back to the SAME
+		// TIOCGPGRP as ForegroundPgrp — making `fgPgrp != shell` never true and an
+		// idle Claude look like a bare shell, which dropped its badge the instant
+		// the hook state aged out. The name check works either way; the pid
+		// compare stays as a backstop for when the name can't be read.
 		agentActive := alt
 		fg := ""
 		if a.term != nil {
 			if fgPgrp := a.term.ForegroundPgrp(); fgPgrp > 0 {
-				if shell := a.term.Pid(); shell > 0 && fgPgrp != shell {
+				fg = attentionForegroundName(fgPgrp)
+				if fg != "" && !isLoginShell(fg) {
+					agentActive = true
+				} else if shell := a.term.Pid(); shell > 0 && fgPgrp != shell {
 					agentActive = true
 				}
-				fg = attentionForegroundName(fgPgrp)
 			}
 		}
 
@@ -221,6 +230,17 @@ func attentionProbeTail(render string, n int) string {
 		rows = rows[len(rows)-n:]
 	}
 	return strings.Join(rows, "\n")
+}
+
+// isLoginShell reports whether a foreground command name is an interactive
+// shell — i.e. the session is sitting at the prompt with nothing launched. A
+// login shell shows up with a leading '-' in argv[0] ("-zsh"), so strip it first.
+func isLoginShell(name string) bool {
+	switch strings.TrimPrefix(name, "-") {
+	case "sh", "bash", "zsh", "fish", "dash", "ash", "ksh", "tcsh", "csh", "pwsh", "powershell":
+		return true
+	}
+	return false
 }
 
 // attentionForegroundName resolves a pid to its short command name: /proc/<pid>/comm

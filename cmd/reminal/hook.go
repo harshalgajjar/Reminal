@@ -35,6 +35,10 @@ func runHook(args []string) error {
 	}
 	arg := strings.ToLower(strings.TrimSpace(args[0]))
 
+	// REMINAL_SESSION is set in every session's environment; a hook fired outside
+	// a reminal session has nothing to report — succeed silently below.
+	id := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
+
 	var state string
 	switch arg {
 	case "working", "input", "done":
@@ -43,16 +47,14 @@ func runHook(args []string) error {
 		go func() { _, _ = io.Copy(io.Discard, os.Stdin) }()
 		state = arg
 	case "notify":
-		// Ambiguous notification — decide "needs you" vs "done" from the payload.
-		state = classifyNotify(readCappedStdin())
+		// Ambiguous notification — decide "needs you" vs "done" from the payload
+		// AND the current turn state (see classifyNotify).
+		state = classifyNotify(readCappedStdin(), id)
 	default:
 		go func() { _, _ = io.Copy(io.Discard, os.Stdin) }()
 		return fmt.Errorf("unknown state %q (want working|input|done|notify)", arg)
 	}
 
-	// REMINAL_SESSION is set in every session's environment; a hook fired outside
-	// a reminal session has nothing to report — succeed silently.
-	id := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
 	if id == "" {
 		return nil
 	}
@@ -66,19 +68,33 @@ func readCappedStdin() []byte {
 	return b
 }
 
-// classifyNotify maps a harness "notification" payload to an attention state. A
-// plain idle-waiting timeout — the common case, and the only one that fires when
-// tool permissions are auto-approved — is "done" (finished, sitting idle at the
-// prompt, nothing blocked). Anything else, including a real permission/approval
-// request or an unrecognised payload, is "input" so a genuine one is never missed.
-func classifyNotify(payload []byte) string {
+// classifyNotify maps a harness "notification" payload to an attention state.
+// This event is ambiguous: a harness (Claude Code, Qwen) fires it BOTH for a
+// permission/approval request AND for a plain "you've been idle" timeout — and
+// worse, the idle message is identical whether the agent is genuinely blocked
+// mid-turn waiting on you or simply finished and sitting quiet. We split it two
+// ways:
+//
+//   - A permission/approval message always needs you — it blocks the turn.
+//   - Otherwise it's an idle ping, disambiguated by the CURRENT turn state:
+//     mid-turn (still "working", or already flagged "input") means the agent is
+//     waiting on you → "input"; a turn that already ended ("done"), or no state
+//     at all, means it just went quiet → "done".
+//
+// Getting this right is what stops a fleet of finished agents from all turning
+// amber after a minute, while still not downgrading a real "needs you" that the
+// user simply hasn't answered yet.
+func classifyNotify(payload []byte, id string) string {
 	low := strings.ToLower(notifyMessage(payload))
-	for _, cue := range []string{"waiting for your input", "waiting for input", "is idle", "idle for"} {
+	for _, cue := range []string{"permission", "approve", "approval"} {
 		if strings.Contains(low, cue) {
-			return "done"
+			return "input"
 		}
 	}
-	return "input"
+	if cur := session.ReadHookState(id); cur != nil && (cur.State == "working" || cur.State == "input") {
+		return "input"
+	}
+	return "done"
 }
 
 // notifyMessage pulls the human-readable text out of a harness hook payload,

@@ -3,33 +3,53 @@
 
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/reminal/reminal/internal/session"
+)
 
 func TestClassifyNotify(t *testing.T) {
+	// Isolate hook-state I/O to a temp HOME so the test never touches ~/.reminal
+	// (session.WriteHookState/ReadHookState resolve under os.UserHomeDir()).
+	t.Setenv("HOME", t.TempDir())
+	const id = "TESTSESS"
+
+	set := func(state string) {
+		if state == "" {
+			_ = session.ClearHookState(id)
+			return
+		}
+		if err := session.WriteHookState(id, state); err != nil {
+			t.Fatalf("seed hook state: %v", err)
+		}
+	}
+
 	cases := []struct {
 		name    string
+		cur     string // current turn state to seed first
 		payload string
 		want    string
 	}{
-		// Idle-timeout notifications are "done" (finished, sitting at the prompt),
-		// not "needs you" — otherwise every quiet session turns yellow after a
-		// minute. This is the ONLY notification that fires under bypass-permissions.
-		{"claude idle", `{"message":"Claude is waiting for your input"}`, "done"},
-		{"idle variant", `{"message":"Agent is idle, waiting for input"}`, "done"},
-		// A real permission/approval prompt genuinely needs the user.
-		{"claude permission", `{"message":"Claude needs your permission to use Bash"}`, "input"},
-		// Unknown / unparseable payloads default to "input" so a genuine
-		// attention request is never silently dropped.
-		{"empty object", `{}`, "input"},
-		{"not json", `something happened`, "input"},
-		{"empty", ``, "input"},
-		// Match on the raw body when there is no message field.
-		{"raw idle text", `notification: waiting for your input now`, "done"},
+		// A real permission/approval request always needs you, regardless of turn.
+		{"permission while done", "done", `{"message":"Claude needs your permission to use Bash"}`, "input"},
+		{"permission no state", "", `{"message":"needs your approval"}`, "input"},
+
+		// An idle "waiting for your input" ping is split by the turn state.
+		{"idle after done", "done", `{"message":"Claude is waiting for your input"}`, "done"},
+		{"idle no state", "", `{"message":"Claude is waiting for your input"}`, "done"},
+		{"idle mid-turn (working)", "working", `{"message":"Claude is waiting for your input"}`, "input"},
+		{"idle while already input", "input", `{"message":"Claude is waiting for your input"}`, "input"},
+
+		// Unknown / unparseable payloads follow the same turn-state rule.
+		{"empty after done", "done", `{}`, "done"},
+		{"empty mid-turn", "working", ``, "input"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := classifyNotify([]byte(c.payload)); got != c.want {
-				t.Errorf("classifyNotify(%q) = %q, want %q", c.payload, got, c.want)
+			set(c.cur)
+			if got := classifyNotify([]byte(c.payload), id); got != c.want {
+				t.Errorf("classifyNotify(%q, cur=%q) = %q, want %q", c.payload, c.cur, got, c.want)
 			}
 		})
 	}
