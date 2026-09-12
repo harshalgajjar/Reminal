@@ -54,10 +54,13 @@ export class SessionRoom {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
 
-    // /p/<id>/... — port-forward HTTP proxy. Handled before the
-    // WS-upgrade branch since the visitor's browser never sends
-    // Upgrade: websocket for plain GETs.
+    // /p/<id>/... — port-forward proxy. A visitor WebSocket (Upgrade:
+    // websocket) is multiplexed to the agent's backend; everything else is a
+    // plain HTTP request/response.
     if (parts[0] === "p") {
+      if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+        return this.handleTunnelWS(request, url);
+      }
       return this.handleTunnelHttp(request, url);
     }
 
@@ -112,6 +115,30 @@ export class SessionRoom {
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
     const attachment = ws.deserializeAttachment() as Attachment;
 
+    // A proxied WebSocket visitor: forward the frame verbatim to the agent,
+    // before any control-message parsing (these are opaque app frames).
+    if (attachment.role === "visitor") {
+      const tunnel = this.getSocket("tunnel");
+      if (!tunnel || tunnel.readyState !== WebSocket.OPEN) {
+        try { ws.close(1011, "reminal: tunnel offline"); } catch { /* already closing */ }
+        return;
+      }
+      let dataB64: string;
+      let binary: boolean;
+      if (typeof message === "string") {
+        dataB64 = bytesToBase64(new TextEncoder().encode(message));
+        binary = false;
+      } else {
+        dataB64 = bytesToBase64(new Uint8Array(message));
+        binary = true;
+      }
+      tunnel.send(JSON.stringify({
+        type: "tunnel_ws_data",
+        data: JSON.stringify({ stream_id: attachment.streamId, data: dataB64, binary }),
+      }));
+      return;
+    }
+
     if (typeof message === "string") {
       let parsed: any = null;
       try {
@@ -143,6 +170,14 @@ export class SessionRoom {
           }
           if (parsed.type === "tunnel_resp") {
             this.handleTunnelResp(parsed.data ?? "");
+            return;
+          }
+          if (parsed.type === "tunnel_ws_data") {
+            this.handleTunnelWSDataFromAgent(parsed.data ?? "");
+            return;
+          }
+          if (parsed.type === "tunnel_ws_close") {
+            this.handleTunnelWSCloseFromAgent(parsed.data ?? "");
             return;
           }
           // tunnel sockets don't broadcast to viewers; ignore anything else.
@@ -217,7 +252,21 @@ export class SessionRoom {
         }
       }
       this.pendingTunnelReqs.clear();
+      // Every proxied visitor WebSocket rode over this control socket; close them
+      // so browsers reconnect instead of hanging on a dead stream.
+      for (const v of this.getSockets("visitor")) {
+        try { v.close(1011, "reminal: tunnel disconnected"); } catch { /* already closing */ }
+      }
       await this.state.storage.setAlarm(Date.now() + ORPHAN_TTL_MS);
+    } else if (attachment.role === "visitor") {
+      // Visitor hung up: tell the agent to close the backend connection.
+      const tunnel = this.getSocket("tunnel");
+      if (tunnel?.readyState === WebSocket.OPEN && attachment.streamId) {
+        tunnel.send(JSON.stringify({
+          type: "tunnel_ws_close",
+          data: JSON.stringify({ stream_id: attachment.streamId }),
+        }));
+      }
     }
   }
 
@@ -448,6 +497,103 @@ export class SessionRoom {
     });
     armStall();
     entry.resolve({ status, headers, body: stream });
+  }
+
+  // ---- tunnel: WebSocket proxy ----
+
+  // handleTunnelWS upgrades a visitor WebSocket and hands the agent a matching
+  // stream id so it can dial the local backend. Frames then flow both ways as
+  // tunnel_ws_data over the agent's control socket (see webSocketMessage).
+  private async handleTunnelWS(request: Request, url: URL): Promise<Response> {
+    const m = url.pathname.match(/^\/p\/([A-Z0-9]+)(\/.*|$)/i);
+    if (!m) {
+      return new Response("Not found", { status: 404 });
+    }
+    const sessionId = m[1].toUpperCase();
+    const rest = m[2] || "/";
+
+    const meta = (await this.state.storage.get<TunnelMeta>("tunnelMeta")) ?? null;
+    if (!meta) {
+      return new Response("reminal: tunnel not found\n", { status: 404 });
+    }
+
+    // Non-public tunnels: a WebSocket can't render the HTML PIN gate, so the
+    // visitor must already hold the auth cookie from a normal page load.
+    if (!meta.public) {
+      const cookies = parseCookies(request.headers.get("Cookie") ?? "");
+      const cookieVal = cookies[AUTH_COOKIE_PREFIX + sessionId] ?? "";
+      const expected = await hmacHex(meta.signingKey, "ok");
+      if (cookieVal !== expected) {
+        return new Response("reminal: authentication required\n", { status: 401 });
+      }
+    }
+
+    const tunnel = this.getSocket("tunnel");
+    if (!tunnel || tunnel.readyState !== WebSocket.OPEN) {
+      return new Response("reminal: tunnel offline\n", { status: 503 });
+    }
+
+    const streamId = crypto.randomUUID();
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.serializeAttachment({ role: "visitor", authed: true, streamId } satisfies Attachment);
+    this.state.acceptWebSocket(server);
+
+    const headers: Record<string, string> = {};
+    request.headers.forEach((v, k) => {
+      if (k.toLowerCase() === "cookie") return; // don't leak the reminal auth cookie to the app
+      headers[k] = v;
+    });
+    tunnel.send(JSON.stringify({
+      type: "tunnel_ws_open",
+      data: JSON.stringify({ stream_id: streamId, url: rest + (url.search ?? ""), headers }),
+    }));
+
+    // Echo the client's first requested subprotocol so a client that asked for
+    // one still completes its handshake. (Negotiating against the backend's
+    // actual pick is a known limitation.)
+    const respHeaders: Record<string, string> = {};
+    const proto = request.headers.get("Sec-WebSocket-Protocol");
+    if (proto) respHeaders["Sec-WebSocket-Protocol"] = proto.split(",")[0].trim();
+
+    return new Response(null, { status: 101, webSocket: client, headers: respHeaders });
+  }
+
+  // handleTunnelWSDataFromAgent delivers a backend→visitor frame to the right
+  // visitor socket.
+  private handleTunnelWSDataFromAgent(dataJSON: string) {
+    let m: any = null;
+    try { m = JSON.parse(dataJSON); } catch { return; }
+    const streamId = m?.stream_id;
+    if (!streamId) return;
+    const sock = this.getVisitorSocket(streamId);
+    if (!sock || sock.readyState !== WebSocket.OPEN) return;
+    const bytes = typeof m.data === "string" ? base64ToBytes(m.data) : new Uint8Array();
+    try {
+      if (m.binary) sock.send(bytes);
+      else sock.send(new TextDecoder().decode(bytes));
+    } catch { /* visitor gone */ }
+  }
+
+  // handleTunnelWSCloseFromAgent closes the visitor socket because the backend
+  // side ended.
+  private handleTunnelWSCloseFromAgent(dataJSON: string) {
+    let m: any = null;
+    try { m = JSON.parse(dataJSON); } catch { return; }
+    const streamId = m?.stream_id;
+    if (!streamId) return;
+    const sock = this.getVisitorSocket(streamId);
+    if (sock) {
+      try { sock.close(1000); } catch { /* already closing */ }
+    }
+  }
+
+  private getVisitorSocket(streamId: string): WebSocket | null {
+    for (const ws of this.state.getWebSockets()) {
+      const att = ws.deserializeAttachment() as Attachment;
+      if (att?.role === "visitor" && att.streamId === streamId) return ws;
+    }
+    return null;
   }
 
   // ---- tunnel: HTTP proxy ----
