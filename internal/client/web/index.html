@@ -1207,6 +1207,15 @@
       display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 28px;
       cursor: pointer; border-radius: 6px; margin: 1px 4px;
     }
+    /* Attention state chip — right-aligned before the actions, colour + word so
+       working / needs you / done reads at a glance. Idle sessions show nothing. */
+    .machine-session .ms-state {
+      flex: none; align-self: center; font-size: 11px; font-weight: 600;
+      letter-spacing: 0.01em; white-space: nowrap; padding: 2px 8px; border-radius: 999px;
+    }
+    .machine-session .ms-state.attn-input   { color: #e3b341; background: rgba(227,179,65,0.14); }
+    .machine-session .ms-state.attn-working { color: #4fc4d6; background: rgba(79,196,214,0.12); }
+    .machine-session .ms-state.attn-done    { color: #57ab6a; background: rgba(87,171,106,0.12); }
     .machine-session:hover { background: #161b22; }
     .machine-session.is-current { background: rgba(56,139,253,0.10); }
     .machine-session.is-current .ms-label { color: #79c0ff; font-weight: 500; }
@@ -4929,6 +4938,14 @@
         main.appendChild(label);
         main.appendChild(meta);
         row.appendChild(main);
+        // Attention state word — a quiet chip, right-aligned before the actions,
+        // so working/needs-you/done reads without hunting. Idle shows nothing.
+        if (s.attn && s.kind !== 'port' && ATTN_LABELS[s.attn]) {
+          const st = document.createElement('div');
+          st.className = 'ms-state attn-' + s.attn;
+          st.textContent = ATTN_LABELS[s.attn];
+          row.appendChild(st);
+        }
         const actions = document.createElement('div');
         actions.className = 'ms-actions';
         if (s.kind !== 'port') {
@@ -4978,6 +4995,8 @@
       }
     }
 
+    // Attention state → the word shown in the session's state chip.
+    const ATTN_LABELS = { input: 'needs you', working: 'working', done: 'done' };
     function sessionLabelWeb(s) {
       if (s.kind === 'port') return 'port :' + (s.port || '?');
       return s.name || s.title || s.cwd || (s.headless ? 'background shell' : 'shell');

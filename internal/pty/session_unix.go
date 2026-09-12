@@ -114,6 +114,22 @@ func (s *Session) Pid() int {
 	return 0
 }
 
+// ForegroundPgrp returns the PTY's current foreground process group (TIOCGPGRP
+// on the master), or 0 if unavailable. Unlike Pid, it ALWAYS reports what is
+// actually in the foreground — the shell itself when idle, or a launched
+// program's group when one is running. That lets a caller tell "an agent is
+// running" from "sitting at the shell prompt" even for inline TUIs that never
+// take the alt screen (e.g. Claude Code): compare it against the shell's pid.
+func (s *Session) ForegroundPgrp() int {
+	if s.ptmx == nil {
+		return 0
+	}
+	if pgrp, err := unix.IoctlGetInt(int(s.ptmx.Fd()), unix.TIOCGPGRP); err == nil && pgrp > 0 {
+		return pgrp
+	}
+	return 0
+}
+
 func (s *Session) CopyFrom(r io.Reader, done chan<- struct{}) {
 	defer close(done)
 	_, _ = io.Copy(s.ptmx, r)

@@ -216,6 +216,14 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "hook":
+			// Hidden. The callback an integrated agent's lifecycle hook fires to
+			// report its attention state (see `reminal integrate`).
+			if err := runHook(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "settings":
 			if err := runSettings(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -1538,7 +1546,22 @@ func runList(args []string) error {
 		return rows[i].LastActive().After(rows[j].LastActive())
 	})
 
-	if len(rows) == 0 {
+	// Pull the session you're in out of the table — it renders on its own line
+	// above, so the table's colors are only ever about the OTHER sessions and
+	// "current" never has to share the green with "done".
+	var curRow *session.Active
+	if currentID != "" {
+		for i := range rows {
+			if rows[i].ID == currentID {
+				c := rows[i]
+				curRow = &c
+				rows = append(rows[:i], rows[i+1:]...)
+				break
+			}
+		}
+	}
+
+	if len(rows) == 0 && curRow == nil {
 		if len(all) == 0 {
 			fmt.Println("No reminal sessions running. Start one with:")
 			fmt.Println("  reminal                # share this terminal")
@@ -1560,12 +1583,22 @@ func runList(args []string) error {
 	// Pre-compute the name column width so rows line up. Unnamed sessions show a
 	// dim "—" so the column never collapses. Cap it tighter on narrow terminals
 	// so the id/state columns still fit.
-	nameCap := 24
-	if width < 90 {
-		nameCap = 16
+	// On a phone-width terminal, drop the project tail so rows fit.
+	narrow := width < 76
+	// Give the name every column the row can spare instead of a fixed cap — the
+	// name is what you actually read, and on a phone the id/state columns are
+	// narrow, so most of the width belongs to the name. Reserve the fixed columns
+	// (dot 2 + gap 2 + id 8 + gap 2 + state 12 + margin 1 = 25) and, on wider
+	// terminals, some room for the project column.
+	nameCap := width - 25
+	if !narrow {
+		nameCap -= 16
 	}
-	if width < 70 {
-		nameCap = 12
+	if nameCap < 8 {
+		nameCap = 8
+	}
+	if nameCap > 32 {
+		nameCap = 32
 	}
 	nameW := 4
 	for _, a := range rows {
@@ -1577,18 +1610,37 @@ func runList(args []string) error {
 		nameW = nameCap
 	}
 
-	fmt.Printf("%d session(s):\n\n", len(rows))
-	for _, a := range rows {
-		var mode string
-		switch {
-		case a.IsPort():
-			mode = fmt.Sprintf("port:%d", a.Port)
-		case a.Headless:
-			mode = "headless"
-		default:
-			mode = "foreground"
-		}
+	// One cohesive truecolor (24-bit) palette instead of the terminal's garish
+	// 16-color set — all four share a luminance so nothing clashes with the
+	// bright "current" anchor. Warm amber wants you, luminous teal is working,
+	// soft green is done, and current is a clean vivid green (replacing the raw
+	// ANSI green that used to stick out).
+	light := terminalIsLight()
+	cCurrent := func(s string) string { return sgr(attnColor("current", light), s) }
+	cAmber := func(s string) string { return sgr(attnColor("needs", light), s) }
+	cCyan := func(s string) string { return sgr(attnColor("working", light), s) }
+	cDone := func(s string) string { return sgr(attnColor("done", light), s) }
 
+	// The session you're in, on its own line above the table.
+	if curRow != nil {
+		nm := curRow.Name
+		if nm == "" {
+			nm = "this session"
+		}
+		fmt.Printf("%s%s  %s  %s\n\n",
+			attnMarker(curRow.Attn, light), cBold(nm), cDim(curRow.ID), cCurrent("· you're here"))
+	}
+
+	switch {
+	case len(rows) == 0:
+		fmt.Println(cDim("  no other sessions."))
+		return nil
+	case curRow != nil:
+		fmt.Printf("%d other session(s):\n\n", len(rows))
+	default:
+		fmt.Printf("%d session(s):\n\n", len(rows))
+	}
+	for _, a := range rows {
 		var name string
 		if a.Name == "" {
 			name = cDim("—") + strings.Repeat(" ", max(0, nameW-1))
@@ -1600,71 +1652,234 @@ func runList(args []string) error {
 			name += strings.Repeat(" ", max(0, nameW-len([]rune(a.Name))))
 		}
 
-		// State column: who's watching / how idle. Ports have no viewer or
-		// activity concept, so they just show their mode. Green highlights a
-		// session that's live (watched or the one you're in).
+		// State column — the one word that says what the session wants. Priority:
+		// what needs you first (needs you > working), then live/idle. The colored
+		// word is the intuitive signal; the left dot mirrors it as a scannable rail.
 		var state string
 		stateColor := cDim
+		// Activity axis — one mutually-exclusive state per session. Watchers are a
+		// SEPARATE axis (presence) and render as their own dim marker below, so a
+		// working-and-watched session shows both instead of one masking the other.
 		switch {
 		case a.IsPort():
-			state = "up " + humanShort(now.Sub(a.StartedAt))
-		case a.Viewers > 0:
-			noun := "viewer"
-			if a.Viewers != 1 {
-				noun = "viewers"
-			}
-			state = fmt.Sprintf("%d %s", a.Viewers, noun)
-			stateColor = cGreen
-		case a.ID == currentID:
-			// The shell we're typing in can't meaningfully be "idle" — its
-			// last PTY output is just whenever we last hit Enter. Show it as
-			// active so the [current] row never looks prunable.
-			state = "active"
-			stateColor = cGreen
+			state, stateColor = fmt.Sprintf("→ :%d", a.Port), cCurrent
+		case a.Attn == "input":
+			state, stateColor = "needs you", cAmber
+		case a.Attn == "working":
+			state, stateColor = "working", cCyan
+		case a.Attn == "done":
+			state, stateColor = "done", cDone
 		default:
 			state = "idle " + humanShort(a.IdleFor(now))
 		}
+		// Presence marker: dim, orthogonal to activity. Wide terminals only —
+		// on a phone the activity state is what matters; watchers can wait.
+		presence, presenceLen := "", 0
+		if !narrow && !a.IsPort() && a.Viewers > 0 {
+			txt := fmt.Sprintf("· %d watching", a.Viewers)
+			presence, presenceLen = "  "+cDim(txt), 2+len(txt)
+		}
 
-		// Identity tail: cwd (home-abbreviated) + live title hint, TRUNCATED to
-		// whatever width is left so a long path never wraps onto the next line.
-		tailPlain := abbrevHome(a.Cwd)
-		if a.Title != "" {
-			// Title is sniffed from the PTY (a program could set escapes in it).
-			title := cleanTerm(a.Title)
-			if tailPlain != "" {
-				tailPlain += "  · " + title
-			} else {
-				tailPlain = "· " + title
+		// Tail: just the project folder name (not the full path, not the sniffed
+		// title) — enough to tell two same-named sessions apart without the long
+		// path that used to overflow and wrap. Full path/title live in `info`.
+		// Dropped entirely on narrow (phone) terminals. Windows or Unix separator.
+		proj := a.Cwd
+		if i := strings.LastIndexAny(proj, `/\`); i >= 0 {
+			proj = proj[i+1:]
+		}
+		// Fixed prefix: marker(2) + name + 2 + id(8) + 2 + state(12) + a margin.
+		reserved := 2 + nameW + 2 + 8 + 2 + 12 + 1
+		tail := ""
+		if !narrow {
+			if budget := width - reserved - presenceLen; budget >= 6 && proj != "" {
+				tail = "  " + cDim(truncate(proj, budget))
 			}
 		}
-		currentTag := ""
-		if a.ID == currentID {
-			currentTag = "  " + sgr("1;32", "[current]")
-		}
-		// Fixed prefix width up through the state column: 2 + name + 2 + id(8) +
-		// 2 + mode(10) + 1 + state(12). Reserve the current tag and a margin.
-		reserved := 2 + nameW + 2 + 8 + 2 + 10 + 1 + 12 + 2 + 1
-		if a.ID == currentID {
-			reserved += len("  [current]")
-		}
-		tail := ""
-		if budget := width - reserved; budget >= 6 && tailPlain != "" {
-			tail = "  " + cDim(truncate(tailPlain, budget))
-		}
 
-		fmt.Printf("  %s  %s  %s %s%s%s\n",
-			name, cBold(a.ID), padCol(mode, 10, cDim), padCol(state, 12, stateColor), tail, currentTag)
+		fmt.Printf("%s%s  %s  %s%s%s\n",
+			attnMarker(a.Attn, light), name, cBold(a.ID), padCol(state, 12, stateColor), presence, tail)
 		if verbose {
 			fmt.Printf("  %s  %s\n",
 				strings.Repeat(" ", nameW), cDim(a.OpenURL+"  ·  PIN "+a.PIN))
 		}
 	}
 	fmt.Println()
-	fmt.Println("  \x1b[2mAccepts id, name, unique prefix, or substring:\x1b[0m")
-	fmt.Println("  reminal attach [id|name]       drive a session (no arg → interactive picker)")
-	fmt.Println("  reminal kill   <id|name>       fully terminate a session (destroys the shell)")
-	fmt.Println("  reminal prune                  kill idle, unwatched sessions in one go")
+	if narrow {
+		// Phone width: the wide two-column help wraps into an unreadable mess.
+		// Drop the "reminal " prefix (implied) and shorten the hints so each
+		// command + gloss fits one line.
+		fmt.Println("  " + sgr("2", "by id, name, or prefix:"))
+		fmt.Printf("  %-12s %s\n", "attach <id>", sgr("2", "drive it"))
+		fmt.Printf("  %-12s %s\n", "kill <id>", sgr("2", "end it"))
+		fmt.Printf("  %-12s %s\n", "prune", sgr("2", "clear idle"))
+	} else {
+		fmt.Println("  " + sgr("2", "Accepts id, name, unique prefix, or substring:"))
+		fmt.Println("  reminal attach [id|name]       drive a session (no arg → interactive picker)")
+		fmt.Println("  reminal kill   <id|name>       fully terminate a session (destroys the shell)")
+		fmt.Println("  reminal prune                  kill idle, unwatched sessions in one go")
+	}
 	return nil
+}
+
+// terminalIsLight best-effort-detects a light terminal background so the
+// attention palette can switch to darker, higher-contrast shades (amber/teal/
+// green wash out on white). A manual REMINAL_THEME=light|dark wins; otherwise we
+// read COLORFGBG (set by some terminals as "fg;…;bg", light bg = 7 or 15).
+// Default dark: reminal's own viewer is dark, as are most terminals, and a wrong
+// guess there is the costly case.
+func terminalIsLight() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("REMINAL_THEME"))) {
+	case "light":
+		return true
+	case "dark":
+		return false
+	}
+	// Inside a reminal session the viewer is dark, and an OSC query would round-
+	// trip over the network (adding latency to every `list`) — so skip it and use
+	// dark. A local terminal (no REMINAL_SESSION) is where we actually query.
+	if os.Getenv("REMINAL_SESSION") != "" {
+		return false
+	}
+	// Ask the terminal for its actual background (OSC 11). This is the only thing
+	// that works on Terminal.app / iTerm, which don't set COLORFGBG. Falls through
+	// on no reply (unsupported terminal) to the env hint below, then dark.
+	if light, ok := queryTerminalBGLight(); ok {
+		return light
+	}
+	if fgbg := os.Getenv("COLORFGBG"); fgbg != "" {
+		p := strings.Split(fgbg, ";")
+		switch p[len(p)-1] {
+		case "7", "15":
+			return true
+		}
+	}
+	return false
+}
+
+// queryTerminalBGLight sends an OSC 11 background-color query and parses the
+// reply (`ESC]11;rgb:rrrr/gggg/bbbb`), returning whether the background is light.
+// ok is false when there's no usable reply. Requires a real terminal on both
+// stdin (to read the reply) and stdout (to send the query).
+func queryTerminalBGLight() (light, ok bool) {
+	inFd, outFd := int(os.Stdin.Fd()), int(os.Stdout.Fd())
+	if !term.IsTerminal(inFd) || !term.IsTerminal(outFd) {
+		return false, false
+	}
+	old, err := term.MakeRaw(inFd)
+	if err != nil {
+		return false, false
+	}
+	defer func() { _ = term.Restore(inFd, old) }()
+
+	if _, err := os.Stdout.WriteString("\x1b]11;?\x1b\\"); err != nil {
+		return false, false
+	}
+	// Read the reply with a timeout so an unsupported terminal can't hang us.
+	replyCh := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 0, 64)
+		tmp := make([]byte, 32)
+		for len(buf) < 128 {
+			n, err := os.Stdin.Read(tmp)
+			if n > 0 {
+				buf = append(buf, tmp[:n]...)
+				if strings.ContainsRune(string(buf), '\a') || strings.Contains(string(buf), "\x1b\\") {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		replyCh <- string(buf)
+	}()
+	select {
+	case reply := <-replyCh:
+		return parseOSC11Light(reply)
+	case <-time.After(250 * time.Millisecond):
+		return false, false
+	}
+}
+
+// parseOSC11Light pulls rgb: components out of an OSC 11 reply and decides light
+// vs dark by relative luminance. Components may be 1–4 hex digits each.
+func parseOSC11Light(reply string) (light, ok bool) {
+	i := strings.Index(reply, "rgb:")
+	if i < 0 {
+		return false, false
+	}
+	rest := reply[i+4:]
+	if j := strings.IndexAny(rest, "\a\x1b"); j >= 0 {
+		rest = rest[:j]
+	}
+	parts := strings.Split(rest, "/")
+	if len(parts) < 3 {
+		return false, false
+	}
+	frac := func(s string) (float64, bool) {
+		v, err := strconv.ParseUint(strings.TrimSpace(s), 16, 64)
+		if err != nil || s == "" {
+			return 0, false
+		}
+		return float64(v) / float64(uint64(1)<<uint(4*len(strings.TrimSpace(s)))-1), true
+	}
+	r, okR := frac(parts[0])
+	g, okG := frac(parts[1])
+	b, okB := frac(parts[2])
+	if !okR || !okG || !okB {
+		return false, false
+	}
+	return 0.2126*r+0.7152*g+0.0722*b > 0.5, true
+}
+
+// attnColor returns the SGR code for an attention role in the shade that reads
+// on the current background: luminous on dark, darker on light. Uses 256-color
+// (38;5;N), NOT 24-bit truecolor — macOS Terminal.app silently ignores truecolor
+// and renders it as default text, and 256-color is universally supported. The
+// indices share a brightness level within each theme so the set stays cohesive.
+func attnColor(role string, light bool) string {
+	switch role {
+	case "needs":
+		if light {
+			return "38;5;130" // dark orange
+		}
+		return "38;5;214" // amber
+	case "working":
+		if light {
+			return "38;5;30" // deep teal
+		}
+		return "38;5;80" // teal
+	case "done":
+		if light {
+			return "38;5;29" // sea green
+		}
+		return "38;5;78" // green
+	case "current":
+		if light {
+			return "38;5;28" // dark green
+		}
+		return "38;5;77" // green
+	}
+	return ""
+}
+
+// attnMarker is a compact left-gutter status dot for `reminal list` — the rows
+// form a quiet status rail down the left edge, color carrying the meaning so the
+// mark stays subtle and never wraps: amber = needs you, teal = working, green =
+// just finished, blank = an idle shell. It occupies the same two leading columns
+// the plain indent used, so it adds no width.
+func attnMarker(attn string, light bool) string {
+	switch attn {
+	case "input":
+		return sgr(attnColor("needs", light), "●") + " "
+	case "working":
+		return sgr(attnColor("working", light), "●") + " "
+	case "done":
+		return sgr(attnColor("done", light), "●") + " "
+	default:
+		return "  "
+	}
 }
 
 // parseDuration is time.ParseDuration plus day ("d") and week ("w") units,

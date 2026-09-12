@@ -45,10 +45,148 @@ type agentTarget struct {
 	file    string   // path relative to $HOME
 	keyPath []string // where the server map lives, e.g. ["mcpServers"]
 	entry   func(exe string) map[string]any
+
+	// hooks, when set, installs reminal's attention lifecycle hooks into this
+	// agent's config (separate from MCP registration). nil for agents whose hook
+	// support we haven't wired yet — those still get MCP + the screen fallback.
+	hooks *hookSpec
 }
 
 func stdioEntry(exe string) map[string]any {
 	return map[string]any{"command": exe, "args": []string{"mcp"}}
+}
+
+// ---- Attention hooks -------------------------------------------------------
+//
+// Alongside the MCP server, `reminal integrate` installs lifecycle hooks so an
+// agent reports its attention state (working / input / done) precisely, via
+// `reminal hook <state>`, instead of us inferring it from the screen. Each agent
+// exposes different events and a different config shape; hookSpec captures both.
+
+const hookMarker = "reminalHook" // tags OUR hook entries so we can find/remove them
+
+type hookShape int
+
+const (
+	// shapeMatcher: Claude Code / Gemini / Qwen — an event maps to a list of
+	// {matcher?, hooks:[{type:"command", command}]} groups.
+	shapeMatcher hookShape = iota
+	// shapeFlat: Cursor / Crush — an event maps to a list of {command,...} entries.
+	shapeFlat
+)
+
+type hookEvent struct {
+	Event string // the agent's own event name, e.g. "Notification"
+	State string // our state it maps to: "working" | "input" | "done"
+}
+
+// hookSpec is how to install reminal's attention hooks into one agent's config.
+type hookSpec struct {
+	file   string      // config file, relative to $HOME
+	key    []string    // path to the hooks object within it, e.g. ["hooks"]
+	extra  map[string]any // top-level keys to ensure (e.g. Cursor's {"version":1})
+	events []hookEvent // event → state mappings (an agent may lack some states)
+	shape  hookShape
+}
+
+// hookCommand is the shell command an agent runs on an event. The reminal path is
+// quoted so an app-bundle path with spaces still works when run via a shell.
+func hookCommand(exe, state string) string {
+	q := exe
+	if strings.ContainsAny(exe, " \t") {
+		q = "'" + strings.ReplaceAll(exe, "'", `'\''`) + "'"
+	}
+	return q + " hook " + state
+}
+
+// applyHooks merges reminal's attention hooks into an agent's JSON config —
+// preserving every other hook and key, backing up first, and (on remove, or
+// re-run) dropping only the entries tagged with hookMarker so it's idempotent.
+func applyHooks(spec *hookSpec, home, exe string, remove bool) error {
+	path := filepath.Join(home, spec.file)
+	root := map[string]any{}
+	if raw, err := os.ReadFile(path); err == nil {
+		if len(strings.TrimSpace(string(raw))) > 0 {
+			if err := json.Unmarshal(raw, &root); err != nil {
+				return fmt.Errorf("%s is not valid JSON; leaving it alone", path)
+			}
+		}
+		if err := os.WriteFile(path+".bak", raw, 0o600); err != nil {
+			return fmt.Errorf("writing backup: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	} else if remove {
+		return nil // nothing installed
+	}
+
+	// Walk to the hooks object, creating levels only when installing.
+	node := root
+	for _, k := range spec.key {
+		next, ok := node[k].(map[string]any)
+		if !ok {
+			if remove {
+				return nil
+			}
+			next = map[string]any{}
+			node[k] = next
+		}
+		node = next
+	}
+
+	for _, ev := range spec.events {
+		list, _ := node[ev.Event].([]any)
+		// Drop any prior reminal entry for this event (idempotent + removal).
+		kept := list[:0:0]
+		for _, item := range list {
+			if m, ok := item.(map[string]any); ok {
+				if _, mine := m[hookMarker]; mine {
+					continue
+				}
+			}
+			kept = append(kept, item)
+		}
+		if !remove {
+			kept = append(kept, hookEntry(spec.shape, exe, ev.State))
+		}
+		if len(kept) == 0 {
+			delete(node, ev.Event)
+		} else {
+			node[ev.Event] = kept
+		}
+	}
+
+	if !remove {
+		for k, v := range spec.extra {
+			if _, ok := root[k]; !ok {
+				root[k] = v
+			}
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	buf, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(buf, '\n'), 0o600)
+}
+
+// hookEntry builds one config entry in the agent's expected shape, tagged with
+// hookMarker so we can find and remove exactly our own on a re-run or --remove.
+func hookEntry(shape hookShape, exe, state string) map[string]any {
+	cmd := hookCommand(exe, state)
+	switch shape {
+	case shapeFlat:
+		return map[string]any{"command": cmd, hookMarker: state}
+	default: // shapeMatcher
+		return map[string]any{
+			"hooks":    []any{map[string]any{"type": "command", "command": cmd}},
+			hookMarker: state,
+		}
+	}
 }
 
 // agentTargets is the registration matrix. Kept explicit rather than clever:
@@ -65,6 +203,14 @@ func agentTargets() []agentTarget {
 			Name: "Claude Code", Bin: "claude",
 			cliAdd:    []string{"mcp", "add", "--scope", "user", mcpServerName, "--", "%CMD%", "mcp"},
 			cliRemove: []string{"mcp", "remove", "--scope", "user", mcpServerName},
+			hooks: &hookSpec{
+				file: ".claude/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
+				events: []hookEvent{
+					{"UserPromptSubmit", "working"}, // a turn begins
+					{"Notification", "input"},       // blocked, needs the user
+					{"Stop", "done"},                // turn finished
+				},
+			},
 		},
 		{
 			Name: "Codex CLI", Bin: "codex",
@@ -91,6 +237,26 @@ func agentTargets() []agentTarget {
 		{
 			Name: "Gemini CLI", Bin: "gemini",
 			file: ".gemini/settings.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
+			hooks: &hookSpec{
+				file: ".gemini/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
+				events: []hookEvent{
+					{"BeforeAgent", "working"},
+					{"Notification", "input"}, // observability-only; fires on tool-permission
+					{"AfterAgent", "done"},
+				},
+			},
+		},
+		{
+			Name: "Qwen Code", Bin: "qwen",
+			file: ".qwen/settings.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
+			hooks: &hookSpec{
+				file: ".qwen/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
+				events: []hookEvent{
+					{"UserPromptSubmit", "working"},
+					{"Notification", "input"}, // idle_prompt + permission_prompt
+					{"Stop", "done"},
+				},
+			},
 		},
 		{
 			Name: "Amp", Bin: "amp",
@@ -157,6 +323,9 @@ func runIntegrate(args []string) error {
 		} else {
 			how = filepath.Join("~", t.file)
 		}
+		if t.hooks != nil {
+			how += " + attention hooks"
+		}
 		plan = append(plan, planStep{target: t, binPath: path, how: how})
 	}
 
@@ -204,6 +373,10 @@ func runIntegrate(args []string) error {
 		} else {
 			err = applyViaFile(p.target, home, exe, remove)
 		}
+		// The MCP server and the attention hooks are separate installs; do both.
+		if err == nil && p.target.hooks != nil {
+			err = applyHooks(p.target.hooks, home, exe, remove)
+		}
 		if err != nil {
 			failures++
 			fmt.Printf("  ✗ %-18s %v\n", p.target.Name, err)
@@ -216,8 +389,9 @@ func runIntegrate(args []string) error {
 		return fmt.Errorf("%d of %d failed", failures, len(plan))
 	}
 	if !remove {
-		fmt.Printf("\nDone. Restart any running agent to pick it up, then ask it to\n" +
-			"list your windows — it can leave notes on them.\n")
+		fmt.Printf("\nDone. Restart any running agent to pick it up. It can now leave\n" +
+			"notes on your windows (MCP), and its live state — working / needs you /\n" +
+			"done — shows in `reminal list` and the Machines view (attention hooks).\n")
 	} else {
 		fmt.Printf("\nRemoved.\n")
 	}
@@ -324,15 +498,21 @@ func firstLine(s string) string {
 }
 
 func printIntegrateHelp() {
-	fmt.Print(`reminal integrate — register reminal's MCP server with your coding agents
+	fmt.Print(`reminal integrate — wire reminal into your coding agents
 
-  reminal integrate                 register with every agent found on PATH
+  reminal integrate                 set up every agent found on PATH
   reminal integrate claude codex    only these
   reminal integrate --dry-run       show the plan, change nothing
-  reminal integrate --remove        unregister
+  reminal integrate --remove        undo
   reminal integrate -y              skip the confirmation
 
-Agents are registered in their own native format: an ` + "`mcp add`" + ` subcommand
-where one exists, otherwise a merge into their JSON config (backed up first).
+Two things get installed, in each agent's own native format (an ` + "`mcp add`" + `
+subcommand where one exists, otherwise a merge into its JSON config, backed up
+first):
+
+  • the reminal MCP server — so the agent can leave notes on your windows;
+  • attention hooks — so the agent reports its live state (working / needs you /
+    done) to ` + "`reminal list`" + ` and the Machines view. Agents without hook support
+    fall back to reminal's screen-based detection automatically.
 `)
 }

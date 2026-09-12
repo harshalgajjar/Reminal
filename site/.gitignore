@@ -1,4 +1,17 @@
 # Generated from ../docs/*.gif by build.sh — the gifs are the source of truth.
-public/assets/
+#
+# The glob is `assets/*` rather than `assets/`: git will not re-include a file
+# whose parent directory is excluded, so ignoring the directory itself makes
+# the exceptions below unreachable.
+public/assets/*
+
+# Except the ones build.sh cannot rebuild. switch.mp4 has no docs/switch.gif
+# behind it — it was cut straight to mp4 — so it is a source file wearing a
+# generated file's name, and ignoring it left the session-dock section of the
+# homepage one laptop away from a dead <video>. Anything else added this way
+# belongs here too, or it only exists on the machine that made it.
+!public/assets/switch.mp4
+!public/assets/switch.jpg
+
 node_modules/
 .wrangler/
