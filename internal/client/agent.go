@@ -758,10 +758,10 @@ func (a *Agent) Run() error {
 
 	// Note: the headless startup handshake (writing the spawned session's
 	// credentials to the inherited fd 3) is deliberately NOT done here. It fires
-	// from signalRegistered once the session is joinable — the local attach
-	// socket binding (serveAttach) or the first relay registration, whichever is
-	// first — so `reminal new` reports the session ready as soon as a viewer
-	// could actually join it, offline (local) or on.
+	// from signalRegistered — on relay registration when online (so the printed
+	// URL is joinable the moment `reminal new` returns), or on the first failed
+	// relay dial when offline (still prompt, and the session is locally
+	// attachable). See serveRelay / signalRegistered.
 
 	sessionStart := time.Now()
 	// Deferred so it runs on every clean exit path — shell exit, agent
@@ -886,6 +886,18 @@ func (a *Agent) serveRelay(shellExit <-chan struct{}) error {
 		case <-a.hostEscape:
 			return nil
 		default:
+		}
+
+		// Release the `reminal new` parent when the relay is UNREACHABLE (offline
+		// / nothing listening): the session is only locally attachable, so return
+		// rather than hang out the handshake timeout. On a reachable relay,
+		// runConnection already signalled after authenticate (session is
+		// relay-joinable) — and a transient failure against a reachable relay is
+		// deliberately NOT signalled here, so the parent waits for the retry's
+		// registration and the printed URL is joinable the moment it returns.
+		// sync.Once → a no-op once either path has fired.
+		if isRelayUnreachable(err) {
+			a.signalRegistered()
 		}
 
 		// runConnection returned because pause() closed the WS — don't
@@ -1071,9 +1083,16 @@ func (a *Agent) broadcastSize(cols, rows uint16) {
 }
 
 // signalRegistered releases the parent (`reminal new`) handshake the first time
-// the session becomes joinable — whichever comes first: the local attach socket
-// binding (serveAttach, so `reminal new` returns even with no network) or the
-// first successful relay registration (runConnection). The sync.Once makes all
+// we know how the session is reachable — whichever comes first:
+//   - relay registration succeeded (runConnection, right after authenticate) —
+//     the session is joinable over the relay, so the printed URL works now;
+//   - the first relay attempt failed (serveRelay) — the relay is unreachable
+//     (offline), but the session is still locally attachable, so release rather
+//     than hang.
+//
+// It deliberately does NOT fire merely because the local socket bound: that
+// returned `reminal new` before the relay had the session, so an immediately-
+// opened URL 404'd ("session not found or not ready"). The sync.Once makes all
 // later calls no-ops, so reconnects and the second path don't re-signal. No-op
 // for non-spawned agents (handshakeFD 0).
 func (a *Agent) signalRegistered() {
