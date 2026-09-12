@@ -5080,7 +5080,28 @@
       // on its own poll and reads the same live value through attnOf, so it lands
       // there within a poll without a heavy full re-render here.
       renderRecents();
-      if (sessdockEl && sessdockEl.classList.contains('open')) buildSessdockItems();
+      // The dock is only ever open DURING a drag gesture, so NEVER rebuild it here:
+      // a full rebuild mid-drag drops the .active highlight under the finger AND
+      // invalidates sessdockHits (the cached boxes point at the destroyed rows),
+      // breaking the whole hit-test. Patch just the changed row's chip in place —
+      // the row height is unchanged (the chip sits inline in the name row), so the
+      // highlight and the hit cache survive.
+      if (sessdockEl && sessdockEl.classList.contains('open')) updateSessdockChip(id);
+    }
+
+    // updateSessdockChip surgically refreshes one open-dock row's attention chip
+    // without touching the rest of the DOM. Used mid-drag (see setLiveAttn).
+    function updateSessdockChip(id) {
+      for (const item of sessdockEl.children) {
+        if (!item._entry || item._entry.id !== id) continue;
+        const nameRow = item.querySelector('.name-row');
+        if (!nameRow) return;
+        const old = nameRow.querySelector('.attn-chip');
+        if (old) old.remove();
+        const chip = attnChipEl(attnOf(id, item._entry.attn));
+        if (chip) nameRow.appendChild(chip);
+        return;
+      }
     }
 
     // machineAttn rolls a machine's sessions up to one dot state: 'input' if any
