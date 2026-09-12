@@ -478,17 +478,29 @@ export class SessionRoom {
 
     const out = await promise;
 
-    // Rewrite absolute-path redirects so they stay under /p/<id>/.
-    // Upstream apps don't know we're behind a prefix, so they emit
-    // headers like `Location: /folder/` which the browser would otherwise
-    // resolve to the relay root (404). Path-relative + absolute-URL
-    // redirects are passed through unchanged.
+    // Rewrite redirects so they stay under /p/<id>/. Upstream apps don't know
+    // we're behind a prefix (and see their own Host as 127.0.0.1:<port>), so
+    // they emit Location headers we have to fix:
+    //   - absolute-PATH ("/folder/") — the browser would resolve it to the
+    //     relay root (404); re-prefix to /p/<id>/folder/.
+    //   - absolute-URL to LOOPBACK ("https://127.0.0.1:10000/x", "http://localhost/x",
+    //     "http://[::1]/x") — the app built it from the Host we handed it. The
+    //     browser would follow it to the VISITOR'S own machine; rewrite to the
+    //     public path+query under the prefix. A loopback host is unambiguously
+    //     wrong for a public tunnel, so this is always safe.
+    // Absolute URLs to any OTHER host are left alone (real off-site redirects).
     const prefix = `/p/${sessionId}`;
     for (const key of Object.keys(out.headers)) {
       if (key.toLowerCase() !== "location") continue;
       const v = out.headers[key];
-      if (v && v.startsWith("/") && !v.startsWith(prefix + "/") && !v.startsWith("//")) {
+      if (!v) continue;
+      if (v.startsWith("/") && !v.startsWith(prefix + "/") && !v.startsWith("//")) {
         out.headers[key] = prefix + v;
+        continue;
+      }
+      const loop = loopbackLocationPath(v);
+      if (loop !== null) {
+        out.headers[key] = prefix + loop;
       }
     }
 
@@ -592,6 +604,25 @@ async function hmacHex(keyHex: string, message: string): Promise<string> {
   const data = new TextEncoder().encode(message);
   const sig = await crypto.subtle.sign("HMAC", key, data.buffer as ArrayBuffer);
   return toHex(new Uint8Array(sig));
+}
+
+// loopbackLocationPath returns the path+query of a Location header value IFF it
+// is an absolute URL pointing at a loopback host — 127.0.0.0/8, localhost, or
+// ::1, any port. That's the address the tunnel agent hands the upstream as its
+// Host, so an app that builds an absolute self-redirect (canonical host / HTTPS
+// / trailing slash) emits e.g. "https://127.0.0.1:10000/x"; following it would
+// send the visitor to their OWN machine. Returns null for anything else — real
+// off-site redirects and relative/opaque values are left untouched.
+function loopbackLocationPath(loc: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(loc);
+  } catch {
+    return null; // not an absolute URL (relative path handled elsewhere)
+  }
+  const h = u.hostname.toLowerCase();
+  const isLoopback = h === "localhost" || h === "::1" || h === "[::1]" || h.startsWith("127.");
+  return isLoopback ? u.pathname + u.search : null;
 }
 
 function toHex(b: Uint8Array): string {
