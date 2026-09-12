@@ -82,10 +82,10 @@ type hookEvent struct {
 
 // hookSpec is how to install reminal's attention hooks into one agent's config.
 type hookSpec struct {
-	file   string      // config file, relative to $HOME
-	key    []string    // path to the hooks object within it, e.g. ["hooks"]
+	file   string         // config file, relative to $HOME
+	key    []string       // path to the hooks object within it, e.g. ["hooks"]
 	extra  map[string]any // top-level keys to ensure (e.g. Cursor's {"version":1})
-	events []hookEvent // event → state mappings (an agent may lack some states)
+	events []hookEvent    // event → state mappings (an agent may lack some states)
 	shape  hookShape
 }
 
