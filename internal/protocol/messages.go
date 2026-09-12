@@ -144,6 +144,26 @@ const (
 	//    "body":"<base64>"}
 	TypeTunnelResp MessageType = "tunnel_resp"
 
+	// ---- Port-forward WebSocket proxying ----
+	// A visitor WebSocket to /p/<id>/… is multiplexed over the same tunnel
+	// control socket as HTTP requests, keyed by a per-connection stream id.
+	// This lets `reminal expose` proxy apps that need a live socket (Node-RED,
+	// Jupyter, dev-server HMR, …), not just request/response HTTP.
+
+	// TypeTunnelWSOpen is relay→agent: a visitor opened a WebSocket. The agent
+	// dials the local backend and starts pumping frames. Payload (Data, JSON):
+	//   {"stream_id":"abc","url":"/path?q=1","headers":{...}}
+	TypeTunnelWSOpen MessageType = "tunnel_ws_open"
+	// TypeTunnelWSData carries one WebSocket frame in EITHER direction (relay↔
+	// agent). Payload (Data, JSON):
+	//   {"stream_id":"abc","data":"<base64>","binary":false}
+	TypeTunnelWSData MessageType = "tunnel_ws_data"
+	// TypeTunnelWSClose tears a proxied WebSocket down from EITHER side (relay↔
+	// agent). Payload (Data, JSON):
+	//   {"stream_id":"abc","code":1000,"reason":"..."}
+	// A code/reason are best-effort; an empty payload beyond stream_id is fine.
+	TypeTunnelWSClose MessageType = "tunnel_ws_close"
+
 	// ---- Window mirroring (view + control a host window in the browser) ----
 	// Like uploads/downloads, every payload rides end-to-end encrypted in
 	// Data as JSON; the relay forwards these opaquely (no relay changes).
