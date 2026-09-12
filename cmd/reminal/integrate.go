@@ -208,7 +208,7 @@ func agentTargets() []agentTarget {
 				file: ".claude/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
 					{"UserPromptSubmit", "working"}, // a turn begins
-					{"Notification", "input"},       // blocked, needs the user
+					{"Notification", "notify"},      // permission OR idle — split by payload
 					{"Stop", "done"},                // turn finished
 				},
 			},
@@ -254,7 +254,7 @@ func agentTargets() []agentTarget {
 				file: ".qwen/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
 					{"UserPromptSubmit", "working"},
-					{"Notification", "input"}, // idle_prompt + permission_prompt
+					{"Notification", "notify"}, // idle_prompt + permission_prompt — split by payload
 					{"Stop", "done"},
 				},
 			},
