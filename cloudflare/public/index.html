@@ -1204,21 +1204,11 @@
     .machine-sessions { padding: 4px 0; }
     .machine-sub { font-size: 11px; color: #8b949e; padding: 8px 12px 8px 30px; font-style: italic; }
     .machine-session {
-      position: relative;
       display: flex; align-items: center; gap: 6px; padding: 8px 10px 8px 28px;
       cursor: pointer; border-radius: 6px; margin: 1px 4px;
     }
-    /* Attention rail: a status dot in the row's left indent (absolute so it never
-       fights the a.ms-main negative-margin click target). Colour = state; an empty
-       gutter means an idle shell. Chip on the right spells the state out. */
-    .machine-session .ms-dot {
-      position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
-      width: 7px; height: 7px; border-radius: 50%; background: transparent;
-      pointer-events: none;
-    }
-    .machine-session .ms-dot.attn-input   { background: #e3b341; box-shadow: 0 0 0 3px rgba(227,179,65,0.20); animation: mdotpulse 1.6s ease-in-out infinite; }
-    .machine-session .ms-dot.attn-working { background: #4fc4d6; box-shadow: 0 0 0 3px rgba(79,196,214,0.16); }
-    .machine-session .ms-dot.attn-done    { background: #57ab6a; box-shadow: 0 0 0 3px rgba(87,171,106,0.14); }
+    /* Attention state chip — right-aligned before the actions, colour + word so
+       working / needs you / done reads at a glance. Idle sessions show nothing. */
     .machine-session .ms-state {
       flex: none; align-self: center; font-size: 11px; font-weight: 600;
       letter-spacing: 0.01em; white-space: nowrap; padding: 2px 8px; border-radius: 999px;
@@ -1226,7 +1216,6 @@
     .machine-session .ms-state.attn-input   { color: #e3b341; background: rgba(227,179,65,0.14); }
     .machine-session .ms-state.attn-working { color: #4fc4d6; background: rgba(79,196,214,0.12); }
     .machine-session .ms-state.attn-done    { color: #57ab6a; background: rgba(87,171,106,0.12); }
-    @media (prefers-reduced-motion: reduce) { .machine-session .ms-dot { animation: none !important; } }
     .machine-session:hover { background: #161b22; }
     .machine-session.is-current { background: rgba(56,139,253,0.10); }
     .machine-session.is-current .ms-label { color: #79c0ff; font-weight: 500; }
@@ -4919,12 +4908,6 @@
         const isCurrent = !!sessionId && s.id === sessionId;
         const row = document.createElement('div');
         row.className = 'machine-session' + (isCurrent ? ' is-current' : '');
-        // Attention rail: a status dot per session (amber = needs you, teal =
-        // working, green = done). Idle rows keep an empty gutter so the dots line
-        // up and a coloured one always means an agent is doing something here.
-        const adot = document.createElement('span');
-        adot.className = 'ms-dot' + (s.attn ? ' attn-' + s.attn : '');
-        row.appendChild(adot);
         // Two-line block: the label (title/cwd, wraps up to 2 lines) over its
         // metadata (id · viewers · idle), so nothing gets crushed to an ellipsis.
         // A shell row is an anchor to ?s=<id> so the browser's own "open this
