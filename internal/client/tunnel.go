@@ -115,6 +115,15 @@ type Tunnel struct {
 	// reader/writer goroutines (see handleTunnelWSOpen).
 	wsMu      sync.Mutex
 	wsStreams map[string]*wsStream
+
+	// reqBodiesMu guards reqBodies — in-flight request bodies too large to fit a
+	// single relay message. The relay splits a big upload into a head tunnel_req
+	// (first chunk, body_more=true) plus tunnel_req_body chunks; the channel
+	// carries those follow-on chunks to the waiting handleTunnelReq. A nil/absent
+	// entry means the whole body already arrived in the tunnel_req (the common
+	// case). Closed by the final chunk (more=false) or by connection teardown.
+	reqBodiesMu sync.Mutex
+	reqBodies   map[string]chan []byte
 }
 
 // wsStream is one proxied visitor WebSocket. It's registered synchronously the
@@ -198,6 +207,7 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 		handshakeFD:   opts.HandshakeFD,
 		handshakeAddr: opts.HandshakeAddr,
 		wsStreams:     make(map[string]*wsStream),
+		reqBodies:     make(map[string]chan []byte),
 	}, nil
 }
 
@@ -347,6 +357,9 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		// The control socket is gone; every proxied visitor WebSocket rode over
 		// it, so tear them all down. The relay closes the visitor sides too.
 		t.closeAllWSStreams()
+		// Unblock any handler still waiting for follow-on upload chunks that can
+		// no longer arrive on the dead socket.
+		t.closeAllReqBodies()
 	}()
 
 	if err := t.writeMsg(conn, protocol.Message{Type: protocol.TypeAuth, PinHash: t.pinHash}); err != nil {
@@ -401,7 +414,20 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		case protocol.TypePing:
 			_ = t.writeMsg(conn, protocol.Message{Type: protocol.TypePong})
 		case protocol.TypeTunnelReq:
-			go t.handleTunnelReq(conn, m.Data)
+			// A large upload arrives as a head tunnel_req (body_more=true) plus
+			// follow-on tunnel_req_body chunks. Register the body channel INLINE
+			// here — before spawning the handler and before the next message is
+			// read — so a chunk racing in right behind the head always finds it.
+			var bodyCh chan []byte
+			if reqID, more := peekReqBodyMore(m.Data); more && reqID != "" {
+				bodyCh = make(chan []byte, 8)
+				t.reqBodiesMu.Lock()
+				t.reqBodies[reqID] = bodyCh
+				t.reqBodiesMu.Unlock()
+			}
+			go t.handleTunnelReq(conn, m.Data, bodyCh)
+		case protocol.TypeTunnelReqBody:
+			t.handleTunnelReqBody(m.Data)
 		case protocol.TypeTunnelWSOpen:
 			// Runs inline: it only parses + registers the stream (no network), so
 			// a tunnel_ws_data racing in right behind it always finds the stream
@@ -417,10 +443,70 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 	}
 }
 
+// peekReqBodyMore extracts just the req_id and body_more flag from a tunnel_req
+// payload, so the read loop can register the body channel before spawning the
+// handler (and before the first follow-on chunk is read).
+func peekReqBodyMore(payload string) (reqID string, more bool) {
+	var h struct {
+		ReqID    string `json:"req_id"`
+		BodyMore bool   `json:"body_more"`
+	}
+	_ = json.Unmarshal([]byte(payload), &h)
+	return h.ReqID, h.BodyMore
+}
+
+// handleTunnelReqBody routes one follow-on request-body chunk to the waiting
+// handleTunnelReq. The final chunk (more=false) closes the channel so the
+// handler sees the body end. Runs inline on the read loop; the channel is
+// buffered and the handler drains it into a buffer without touching the
+// backend, so this never blocks on a slow upstream.
+func (t *Tunnel) handleTunnelReqBody(payload string) {
+	var msg struct {
+		ReqID string `json:"req_id"`
+		Body  string `json:"body"` // base64
+		More  bool   `json:"more"`
+	}
+	if err := json.Unmarshal([]byte(payload), &msg); err != nil {
+		return
+	}
+	t.reqBodiesMu.Lock()
+	ch := t.reqBodies[msg.ReqID]
+	if !msg.More && ch != nil {
+		// Last chunk: unregister now so a late duplicate can't touch a closed
+		// channel, and close after sending the final bytes below.
+		delete(t.reqBodies, msg.ReqID)
+	}
+	t.reqBodiesMu.Unlock()
+	if ch == nil {
+		return
+	}
+	if msg.Body != "" {
+		if raw, err := base64.StdEncoding.DecodeString(msg.Body); err == nil {
+			ch <- raw
+		}
+	}
+	if !msg.More {
+		close(ch)
+	}
+}
+
+// closeAllReqBodies closes every in-flight request-body channel on connection
+// teardown, so a handleTunnelReq blocked waiting for more chunks unblocks
+// (with a truncated body) instead of leaking a goroutine.
+func (t *Tunnel) closeAllReqBodies() {
+	t.reqBodiesMu.Lock()
+	chans := t.reqBodies
+	t.reqBodies = make(map[string]chan []byte)
+	t.reqBodiesMu.Unlock()
+	for _, ch := range chans {
+		close(ch)
+	}
+}
+
 // handleTunnelReq parses one tunnel_req payload, performs the local
 // HTTP request, and sends back a tunnel_resp. Errors surface to the
 // visitor as a 502 with the message in the body.
-func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
+func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string, bodyCh chan []byte) {
 	// Spawned per relay-forwarded request (go t.handleTunnelReq); a panic here would
 	// crash the port-forward. Contain it so one bad request just fails.
 	defer func() {
@@ -429,19 +515,53 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 		}
 	}()
 	var req struct {
-		ReqID   string            `json:"req_id"`
-		Method  string            `json:"method"`
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers"`
-		Body    string            `json:"body"` // base64
+		ReqID    string            `json:"req_id"`
+		Method   string            `json:"method"`
+		URL      string            `json:"url"`
+		Headers  map[string]string `json:"headers"`
+		Body     string            `json:"body"`      // base64 (first chunk if BodyMore)
+		BodyMore bool              `json:"body_more"` // more of the body arrives as tunnel_req_body chunks
 	}
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return
 	}
+	// Assemble the request body. The common case is a single chunk in req.Body.
+	// A large upload's remaining chunks arrive on bodyCh (registered by the read
+	// loop); drain them here, bounded so a runaway upload can't OOM the agent.
 	var body io.Reader
-	if req.Body != "" {
-		raw, err := base64.StdEncoding.DecodeString(req.Body)
-		if err == nil {
+	if req.Body != "" || bodyCh != nil {
+		var raw []byte
+		if req.Body != "" {
+			if b, err := base64.StdEncoding.DecodeString(req.Body); err == nil {
+				raw = b
+			}
+		}
+		if bodyCh != nil {
+			defer func() {
+				t.reqBodiesMu.Lock()
+				delete(t.reqBodies, req.ReqID)
+				t.reqBodiesMu.Unlock()
+				// Drain any straggler chunks so a blocked sender in the read loop
+				// (buffered channel full) can never wedge; the close came from the
+				// final chunk or connection teardown.
+				for range bodyCh {
+				}
+			}()
+			for chunk := range bodyCh {
+				if len(raw)+len(chunk) > maxTunnelResponse {
+					// Over the ceiling — truncate rather than grow unbounded. The
+					// backend will get a short body and most likely 400; that's a
+					// clean failure, not an OOM.
+					take := maxTunnelResponse - len(raw)
+					if take > 0 {
+						raw = append(raw, chunk[:take]...)
+					}
+					break
+				}
+				raw = append(raw, chunk...)
+			}
+		}
+		if raw != nil {
 			body = bytes.NewReader(raw)
 		}
 	}

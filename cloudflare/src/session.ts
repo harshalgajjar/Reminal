@@ -745,6 +745,13 @@ export class SessionRoom {
       this.pendingTunnelReqs.set(reqID, { resolve, timeout });
     });
 
+    // A big upload can't ride one WS message (the DO caps a message near 1 MiB).
+    // Send the head tunnel_req with the first chunk; if there's more, mark
+    // body_more and stream the rest as tunnel_req_body chunks. 700 KiB raw →
+    // ~933 KiB base64, comfortably under the cap even with the head's headers.
+    const bodyArr = new Uint8Array(bodyBytes);
+    const REQ_BODY_CHUNK = 700 * 1024;
+    const bodyMore = bodyArr.byteLength > REQ_BODY_CHUNK;
     tunnel.send(JSON.stringify({
       type: "tunnel_req",
       data: JSON.stringify({
@@ -752,9 +759,23 @@ export class SessionRoom {
         method: request.method,
         url: rest + (url.search ?? ""),
         headers,
-        body: bytesToBase64(new Uint8Array(bodyBytes)),
+        body: bytesToBase64(bodyMore ? bodyArr.subarray(0, REQ_BODY_CHUNK) : bodyArr),
+        ...(bodyMore ? { body_more: true } : {}),
       }),
     }));
+    if (bodyMore) {
+      for (let off = REQ_BODY_CHUNK; off < bodyArr.byteLength; off += REQ_BODY_CHUNK) {
+        const end = Math.min(off + REQ_BODY_CHUNK, bodyArr.byteLength);
+        tunnel.send(JSON.stringify({
+          type: "tunnel_req_body",
+          data: JSON.stringify({
+            req_id: reqID,
+            body: bytesToBase64(bodyArr.subarray(off, end)),
+            more: end < bodyArr.byteLength,
+          }),
+        }));
+      }
+    }
 
     const out = await promise;
 
