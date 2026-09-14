@@ -314,16 +314,41 @@ func main() {
 			return
 		case "stop":
 			idArg := ""
+			machine := ""
+			machineSeen := false
 			yes := false
-			for _, a := range os.Args[2:] {
-				switch a {
-				case "-y", "--yes":
+			for i := 2; i < len(os.Args); i++ {
+				a := os.Args[i]
+				switch {
+				case a == "-y" || a == "--yes":
 					yes = true
-				default:
-					if !strings.HasPrefix(a, "-") && idArg == "" {
-						idArg = a
+				case a == "--machine" || a == "-machine" || a == "-m":
+					machineSeen = true
+					if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
+						machine = os.Args[i+1]
+						i++
 					}
+				case strings.HasPrefix(a, "--machine="):
+					machineSeen = true
+					machine = strings.TrimPrefix(a, "--machine=")
+				case !strings.HasPrefix(a, "-") && idArg == "":
+					idArg = a
 				}
+			}
+			if machineSeen && strings.TrimSpace(machine) == "" {
+				fmt.Fprintln(os.Stderr, "error: --machine needs a machine name or id (see reminal machines)")
+				os.Exit(1)
+			}
+			if strings.TrimSpace(machine) != "" {
+				// A session on another machine can only be ended from afar (there's
+				// no remote "keep the shell, stop broadcasting"), so --machine routes
+				// stop to the same terminate as kill. On THIS machine it still does a
+				// real local stop (runStop).
+				if err := runKillOnMachine(idArg, machine, yes, runStop); err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					os.Exit(1)
+				}
+				return
 			}
 			if err := runStop(idArg, yes); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -376,6 +401,7 @@ func main() {
 			// session on another machine you own instead of this one; `--cwd`
 			// picks the shell's starting directory (remote only).
 			name, machine, cwd := "", "", ""
+			machineSeen := false
 			for i := 2; i < len(os.Args); i++ {
 				a := os.Args[i]
 				switch {
@@ -389,11 +415,16 @@ func main() {
 				case strings.HasPrefix(a, "-name="):
 					name = strings.TrimPrefix(a, "-name=")
 				case a == "--machine" || a == "-machine" || a == "-m":
-					if i+1 < len(os.Args) {
+					machineSeen = true
+					// Only consume the next arg as the value if it isn't itself a
+					// flag — so `--machine --cwd x` doesn't swallow `--cwd`, and a
+					// bare `--machine` at the end is caught as a missing value.
+					if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
 						machine = os.Args[i+1]
 						i++
 					}
 				case strings.HasPrefix(a, "--machine="):
+					machineSeen = true
 					machine = strings.TrimPrefix(a, "--machine=")
 				case a == "--cwd":
 					if i+1 < len(os.Args) {
@@ -405,6 +436,10 @@ func main() {
 				case !strings.HasPrefix(a, "-") && name == "":
 					name = a
 				}
+			}
+			if machineSeen && strings.TrimSpace(machine) == "" {
+				fmt.Fprintln(os.Stderr, "error: --machine needs a machine name or id (see reminal machines)")
+				os.Exit(1)
 			}
 			if strings.TrimSpace(machine) != "" {
 				// Spawn on another owned machine over its directory channel.
@@ -540,6 +575,7 @@ func main() {
 		case "kill":
 			idArg := ""
 			machine := ""
+			machineSeen := false
 			yes := false
 			for i := 2; i < len(os.Args); i++ {
 				a := os.Args[i]
@@ -547,18 +583,24 @@ func main() {
 				case a == "-y" || a == "--yes":
 					yes = true
 				case a == "--machine" || a == "-machine" || a == "-m":
-					if i+1 < len(os.Args) {
+					machineSeen = true
+					if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
 						machine = os.Args[i+1]
 						i++
 					}
 				case strings.HasPrefix(a, "--machine="):
+					machineSeen = true
 					machine = strings.TrimPrefix(a, "--machine=")
 				case !strings.HasPrefix(a, "-") && idArg == "":
 					idArg = a
 				}
 			}
+			if machineSeen && strings.TrimSpace(machine) == "" {
+				fmt.Fprintln(os.Stderr, "error: --machine needs a machine name or id (see reminal machines)")
+				os.Exit(1)
+			}
 			if strings.TrimSpace(machine) != "" {
-				if err := runKillOnMachine(idArg, machine, yes); err != nil {
+				if err := runKillOnMachine(idArg, machine, yes, runKill); err != nil {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
 					os.Exit(1)
 				}

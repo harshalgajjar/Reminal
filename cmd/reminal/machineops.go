@@ -50,9 +50,17 @@ func runNewOnMachine(name, selector, cwd string) error {
 }
 
 // runKillOnMachine terminates a session on another machine you own — over its
-// owner directory channel. `selector` is a machine name or mach_ id.
-func runKillOnMachine(sessionID, selector string, yes bool) error {
-	sessionID = strings.ToUpper(strings.TrimSpace(sessionID))
+// owner directory channel. `selector` is a machine name or mach_ id. Remote
+// termination is by session id (the id shown in `reminal machines`); the host
+// upper-cases it, so any case works.
+//
+// localFn handles the case where the selector names THIS machine: `kill
+// --machine <self>` passes runKill, `stop --machine <self>` passes runStop, so
+// the local path keeps each verb's own meaning (kill ends the shell; stop only
+// stops broadcasting). Remotely there is no "stop broadcasting", so both verbs
+// terminate the session.
+func runKillOnMachine(sessionID, selector string, yes bool, localFn func(string, bool) error) error {
+	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return fmt.Errorf("which session? usage: reminal kill <session> --machine <id|name>")
 	}
@@ -60,14 +68,16 @@ func runKillOnMachine(sessionID, selector string, yes bool) error {
 	if err != nil {
 		return err
 	}
+	// This machine → the normal local verb, which accepts an id OR a name. (Don't
+	// upper-case first: that would break name matching on the local path.)
 	if local, _ := client.MachinePub(); local != nil && om.Key.Equal(local) {
-		return runKill(sessionID, yes) // this machine → the normal local kill
+		return localFn(sessionID, yes)
 	}
 	label := machineLabel(om)
 	if err := client.KillOnMachine(om.Key, sessionID, machineOpTimeout); err != nil {
-		return fmt.Errorf("kill %s on %s: %w", sessionID, label, err)
+		return fmt.Errorf("end %s on %s: %w", sessionID, label, err)
 	}
-	fmt.Printf("  %s Killed %s on %s\n", cGreen("✓"), cBold(sessionID), cBold(label))
+	fmt.Printf("  %s Ended %s on %s\n", cGreen("✓"), cBold(strings.ToUpper(sessionID)), cBold(label))
 	return nil
 }
 

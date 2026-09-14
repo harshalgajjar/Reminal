@@ -210,8 +210,6 @@ func findOwnedMachineKey(selector string) (ed25519.PublicKey, error) {
 	}
 }
 
-// RenameOwnedMachine sets the friendly name of an owned machine, resolving
-// selector by name or id/key prefix.
 // ResolveOwnedMachine resolves a selector — a machine name or a mach_ id (or id
 // prefix), exactly as shown by `reminal machines` — to the owned machine it
 // identifies. The same matching `reminal machines rename` uses.
@@ -232,6 +230,8 @@ func ResolveOwnedMachine(selector string) (OwnedMachine, error) {
 	return OwnedMachine{Key: key}, nil
 }
 
+// RenameOwnedMachine sets the friendly name of an owned machine, resolving
+// selector by name or id/key prefix.
 func RenameOwnedMachine(selector, name string) (OwnedMachine, error) {
 	key, err := findOwnedMachineKey(selector)
 	if err != nil {
