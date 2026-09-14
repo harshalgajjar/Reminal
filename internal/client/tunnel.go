@@ -514,8 +514,18 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 	defer resp.Body.Close()
 
 	headers := map[string]string{}
+	var setCookies []string
 	for k, v := range resp.Header {
 		if isHopHeader(k) || len(v) == 0 {
+			continue
+		}
+		// Set-Cookie is the one response header that legitimately repeats —
+		// webmin/UniFi and many apps set several at login. A map[string]string
+		// can only hold one, so carry the full list separately; the relay
+		// re-emits each as its own Set-Cookie. (Collapsing them dropped the
+		// app's session cookie and broke staying logged in.)
+		if strings.EqualFold(k, "Set-Cookie") {
+			setCookies = append(setCookies, v...)
 			continue
 		}
 		headers[k] = v[0]
@@ -544,6 +554,9 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 		if !firstSent {
 			payload["status"] = resp.StatusCode
 			payload["headers"] = headers
+			if len(setCookies) > 0 {
+				payload["set_cookies"] = setCookies
+			}
 			firstSent = true
 		}
 		out, _ := json.Marshal(payload)
@@ -770,7 +783,18 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 	// negotiate them properly instead of us hand-rolling the header.
 	hdr := http.Header{}
 	var subprotocols []string
+	var wsHost string
 	for k, v := range reqHeaders {
+		if strings.EqualFold(k, "Host") {
+			// Forward the visitor's public host as the WS Host (before the
+			// reserved-header skip, which lists Host). gorilla maps a "Host" key
+			// in the request header onto req.Host, so the backend's upgrade sees
+			// a Host matching the Origin the browser sends — apps that enforce
+			// same-origin on the WebSocket (e.g. UniFi's live portal) otherwise
+			// reject the upgrade. The dial still targets 127.0.0.1 via dialURL.
+			wsHost = v
+			continue
+		}
 		if isHopHeader(k) || isWSReservedHeader(k) {
 			continue
 		}
@@ -783,6 +807,9 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 			continue
 		}
 		hdr.Set(k, v)
+	}
+	if wsHost != "" {
+		hdr.Set("Host", wsHost)
 	}
 
 	dialer := *websocket.DefaultDialer

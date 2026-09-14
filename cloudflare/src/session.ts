@@ -39,7 +39,7 @@ export class SessionRoom {
   // for a single chunk, or a ReadableStream for a multi-chunk one); later chunks
   // enqueue into that stream's controller until one arrives with more=false.
   private pendingTunnelReqs: Map<string, {
-    resolve: (resp: { status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | Uint8Array }) => void;
+    resolve: (resp: { status: number; headers: Record<string, string>; setCookies?: string[]; body: ReadableStream<Uint8Array> | Uint8Array }) => void;
     timeout: ReturnType<typeof setTimeout>;
     controller?: ReadableStreamDefaultController<Uint8Array>; // set once a multi-chunk (streamed) response begins
   }> = new Map();
@@ -498,15 +498,16 @@ export class SessionRoom {
       return;
     }
 
-    // Head chunk — carries status + headers.
+    // Head chunk — carries status + headers (+ any repeated Set-Cookie list).
     clearTimeout(entry.timeout);
     const status = typeof resp.status === "number" ? resp.status : 502;
     const headers: Record<string, string> = resp.headers ?? {};
+    const setCookies: string[] | undefined = Array.isArray(resp.set_cookies) ? resp.set_cookies : undefined;
 
     if (!more) {
       // Single-chunk response (small body, or an older single-message agent).
       this.pendingTunnelReqs.delete(reqID);
-      entry.resolve({ status, headers, body: chunk });
+      entry.resolve({ status, headers, setCookies, body: chunk });
       return;
     }
 
@@ -526,7 +527,7 @@ export class SessionRoom {
       },
     });
     armStall();
-    entry.resolve({ status, headers, body: stream });
+    entry.resolve({ status, headers, setCookies, body: stream });
   }
 
   // ---- tunnel: WebSocket proxy ----
@@ -586,6 +587,11 @@ export class SessionRoom {
       if (k.toLowerCase().startsWith("x-reminal-")) return; // don't leak internal routing headers
       headers[k] = v;
     });
+    // Same as the HTTP path: forward the real public host so the backend's WS
+    // upgrade sees a Host matching the Origin the browser sends (apps like
+    // UniFi's live portal enforce same-origin on the WebSocket too).
+    const wsPublicHost = request.headers.get("x-reminal-public-host");
+    if (wsPublicHost) headers["host"] = wsPublicHost;
     try {
       tunnel.send(JSON.stringify({
         type: "tunnel_ws_open",
@@ -727,7 +733,7 @@ export class SessionRoom {
     const publicHost = request.headers.get("x-reminal-public-host");
     if (publicHost) headers["host"] = publicHost;
 
-    const promise = new Promise<{ status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | Uint8Array }>((resolve) => {
+    const promise = new Promise<{ status: number; headers: Record<string, string>; setCookies?: string[]; body: ReadableStream<Uint8Array> | Uint8Array }>((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingTunnelReqs.delete(reqID);
         resolve({
@@ -780,7 +786,13 @@ export class SessionRoom {
       }
     }
 
-    return new Response(out.body as BodyInit, { status: out.status, headers: out.headers });
+    // Build the response headers, then append each Set-Cookie individually — a
+    // plain object collapses repeats to one, which would drop all but one of an
+    // app's login cookies. `Headers.append` preserves them, and Cloudflare emits
+    // one Set-Cookie line each to the visitor.
+    const respHeaders = new Headers(out.headers);
+    for (const c of out.setCookies ?? []) respHeaders.append("Set-Cookie", c);
+    return new Response(out.body as BodyInit, { status: out.status, headers: respHeaders });
   }
 
   private async handleTunnelAuth(request: Request, sessionId: string, meta: TunnelMeta, hostMode = false): Promise<Response> {
