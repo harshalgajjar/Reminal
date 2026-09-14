@@ -2581,6 +2581,7 @@
                 seen.add(s.id);
                 pool.push({
                   id: s.id, owned: true, label: sessionLabelWeb(s), machine: machineLabel(rec, b64),
+                  mkey: b64, // which owned machine this lives on — the warm poller tiers by it
                   last: hist.get(s.id)?.lastSeen || 0,
                   act: now - (s.idle_secs || 0) * 1000,
                   attn: s.attn || '',
@@ -2691,12 +2692,12 @@
       sessdockHandle.setPointerCapture(e.pointerId);
       sessdockGesture = { startY: e.clientY, tried: false };
       // Refresh in the dead travel before the 8px threshold — by the time the
-      // dock opens, the pool is usually current. Also re-query the fleet
-      // directory so the attention chips reflect the current state, not the last
-      // time the Machines panel happened to be open; it lands via surgical chip
-      // updates while the dock stays open (never a mid-drag rebuild).
+      // dock opens, the pool is usually current. Also poll every warm machine
+      // connection right now so the chips show the freshest state; replies land
+      // via surgical chip updates while the dock stays open (never a mid-drag
+      // rebuild).
       refreshSessdockPool();
-      refreshFleetAttn();
+      pollFleetNow();
     });
     sessdockHandle.addEventListener('pointermove', (e) => {
       const g = sessdockGesture;
@@ -5134,30 +5135,124 @@
       }
     }
 
-    // refreshFleetAttn re-queries every owned machine's directory into the local
-    // cache — the same data the Machines panel polls, but decoupled from it — so
-    // the swipe-up dock and Recents show current per-session attention WITHOUT the
-    // panel being open (or the session being connected). Single-flight. Repaints
-    // Recents and, for an OPEN dock, patches each row's chip surgically (never a
-    // rebuild — that would drop the drag highlight; see updateSessdockChip).
-    // Per-machine and independent: an offline machine (whose query hits the
-    // timeout) must not hold up the others, or a later refresh, or the swipe
-    // gesture's own refresh. So there's NO shared busy lock (the old one made
-    // every refresh wait on the slowest machine and dropped the gesture refresh
-    // meanwhile) — just a per-machine in-flight set, a short timeout, and each
-    // machine repaints the fleet list the moment its own reply lands.
-    const fleetMachineBusy = new Set();
-    async function refreshFleetAttn() {
-      let store;
-      try { store = await loadOwnedMachines(); } catch (_) { return; }
-      for (const b64 of Object.keys(store)) {
-        if (store[b64].pendingRevoke || fleetMachineBusy.has(b64)) continue;
-        fleetMachineBusy.add(b64);
-        // Observation time = when we ASKED, so a reply that arrives after a
-        // newer live push can't overwrite it (see attnStore).
-        const at = Date.now();
-        queryDirectory(base64ToU8(b64URLToStd(b64)), { timeout: 3000 })
-          .then(async (resp) => {
+    // ---- Warm owner connections: fleet attention polling at socket cost ----
+    //
+    // The daemon's machine channel answers `dir_query` REPEATEDLY on one open,
+    // authenticated socket (handleDirQuery is served from the persistent reader
+    // loop and re-reads the registry each time). queryDirectory() does the full
+    // owner handshake — a fresh WebSocket plus X25519/Ed25519/HKDF/AES — and
+    // closes after one reply. Fine for a one-off; far too expensive to repeat
+    // every second per machine (continuous crypto + radio on a phone, and ~4
+    // billable relay messages per query). So the fleet poller keeps ONE warm
+    // connection per owned machine: handshake once, then each poll is a single
+    // tiny message each way. That is what makes a 1s cadence affordable.
+    //
+    // Cadence is tiered by what the switcher shows: a machine that owns a
+    // session in the swipe-up dock (the top SESSDOCK_MAX recents — the ones the
+    // user is choosing between) is polled every FLEET_HOT_MS; every other owned
+    // machine every FLEET_COLD_MS. Nothing runs while the tab is hidden — nobody
+    // is looking — connections are dropped on hide and reopened on show, and an
+    // unreachable machine backs off (2s → 30s) instead of being hammered.
+    //
+    // The handshake below is deliberately IDENTICAL to queryDirectory()'s (same
+    // transcript labels, same HKDF salt/info). Keep the two in lockstep.
+    const FLEET_HOT_MS = 1000;
+    const FLEET_COLD_MS = 5000;
+    const FLEET_TICK_MS = 1000;
+    const FLEET_REPLY_TIMEOUT_MS = 5000;
+    const warmDirs = new Map(); // b64 -> { sock, box, state, inflight, sentAt, lastPoll, fails, retryAt }
+
+    function warmEntry(b64) {
+      let w = warmDirs.get(b64);
+      if (!w) {
+        w = { sock: null, box: null, state: 'closed', inflight: false, sentAt: 0, lastPoll: 0, fails: 0, retryAt: 0 };
+        warmDirs.set(b64, w);
+      }
+      return w;
+    }
+    function warmFail(w) {
+      w.sock = null; w.box = null; w.inflight = false; w.state = 'closed';
+      w.fails = Math.min((w.fails || 0) + 1, 5);
+      w.retryAt = Date.now() + Math.min(30000, 2000 * Math.pow(2, w.fails - 1)); // 2s, 4s, 8s, 16s, 30s
+    }
+    function warmClose(w) {
+      const s = w.sock;
+      w.sock = null; w.box = null; w.inflight = false; w.state = 'closed';
+      if (s) { s.onclose = null; s.onerror = null; try { s.close(); } catch (_) {} }
+    }
+    function warmCloseAll() { for (const w of warmDirs.values()) warmClose(w); }
+    function warmSend(b64, w) {
+      if (w.state !== 'open' || !w.sock || w.inflight) return;
+      w.inflight = true; w.sentAt = Date.now(); w.lastPoll = w.sentAt;
+      try { w.sock.send(JSON.stringify({ type: 'dir_query' })); } catch (_) { warmClose(w); warmFail(w); }
+    }
+
+    async function warmOpen(b64) {
+      const w = warmEntry(b64);
+      if (w.state !== 'closed') return;
+      w.state = 'opening';
+      let dk = null;
+      try { dk = await loadDeviceKeyPair(); } catch (_) {}
+      if (!dk) { warmFail(w); return; }
+      const machinePubU8 = base64ToU8(b64URLToStd(b64));
+      const machineB64Cmp = u8ToBase64(machinePubU8);
+      let dirID;
+      try { dirID = await deriveDirectoryID(machinePubU8); } catch (_) { warmFail(w); return; }
+      const sock = new WebSocket(relayURL(dirID));
+      let hs = 'auth', att = null;
+      w.sock = sock;
+      const timer = setTimeout(() => { if (w.sock === sock && w.state === 'opening') { try { sock.close(); } catch (_) {} } }, 6000);
+      sock.onopen = () => sock.send(JSON.stringify({ type: 'auth' }));
+      sock.onerror = () => {};
+      sock.onclose = () => { clearTimeout(timer); if (w.sock === sock) warmFail(w); };
+      sock.onmessage = async (ev) => {
+        if (w.sock !== sock) return; // superseded
+        let msg; try { msg = JSON.parse(ev.data); } catch (_) { return; }
+        try {
+          if (msg.type === 'error') { try { sock.close(); } catch (_) {} return; }
+          if (hs === 'auth') {
+            if (msg.type !== 'auth_ok') return;
+            const eph = await newEphemeralX25519();
+            const exIDBytes = crypto.getRandomValues(new Uint8Array(16));
+            const exID = Array.from(exIDBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+            const tr = await ownerTranscript('reminal-owner-cli-v1', dirID, [eph.pub, dk.pubRaw]);
+            const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
+            att = { eph, exIDBytes, exID, viewerEph: eph.pub, devicePubRaw: dk.pubRaw };
+            sock.send(JSON.stringify({ type: 'own_init', ex_id: exID, data: u8ToBase64(eph.pub), device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig) }));
+            hs = 'own';
+            return;
+          }
+          if (hs === 'own') {
+            if (msg.type !== 'own_resp' || msg.ex_id !== att.exID) return;
+            const agentEph = base64ToU8(msg.data || '');
+            const machinePub = base64ToU8(msg.machine_pub || '');
+            const machineSig = base64ToU8(msg.machine_sig || '');
+            if (agentEph.length !== 32 || machinePub.length !== 32) throw new Error('bad key length');
+            // Must be the machine we asked for, and its signature must verify.
+            if (u8ToBase64(machinePub) !== machineB64Cmp) throw new Error('unexpected machine identity');
+            const tr = await ownerTranscript('reminal-owner-srv-v1', dirID, [att.viewerEph, agentEph, att.devicePubRaw, machinePub]);
+            const macKey = await crypto.subtle.importKey('raw', machinePub, { name: 'Ed25519' }, false, ['verify']);
+            if (!(await crypto.subtle.verify({ name: 'Ed25519' }, macKey, machineSig, tr))) throw new Error('machine signature invalid');
+            const shared = await att.eph.deriveShared(agentEph);
+            const sharedKey = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveBits']);
+            const wrapBits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: att.exIDBytes, info: new TextEncoder().encode('reminal-wrap-v2') }, sharedKey, 256);
+            const wrapKey = await crypto.subtle.importKey('raw', wrapBits, { name: 'AES-GCM' }, false, ['decrypt']);
+            const wrapped = base64ToU8(msg.wrap || '');
+            if (wrapped.length < 28) throw new Error('wrap too short');
+            const skRaw = new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
+            w.box = await crypto.subtle.importKey('raw', skRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+            clearTimeout(timer);
+            hs = 'ready'; w.state = 'open'; w.fails = 0;
+            warmSend(b64, w); // first poll right away — don't wait for the tick
+            return;
+          }
+          if (hs === 'ready' && msg.type === 'dir_resp') {
+            // Observation time = when we ASKED, so a reply that lands after a
+            // newer live push can't overwrite it (see attnStore).
+            const sentAt = w.sentAt;
+            w.inflight = false;
+            const pt = await decrypt(w.box, msg.data || '');
+            const resp = JSON.parse(new TextDecoder().decode(pt));
             if (!resp || typeof resp !== 'object' || !Array.isArray(resp.sessions)) return;
             const list = resp.sessions;
             await withOwnedMachines(m => {
@@ -5165,29 +5260,57 @@
               m[b64].sessions = list;
               if (resp.hostname) m[b64].host = resp.hostname;
             });
-            noteAttnList(list, at);
+            const changed = noteAttnList(list, sentAt);
             await refreshSessdockPool();
-            repaintAttn();
-          })
-          .catch(() => {})
-          .finally(() => { fleetMachineBusy.delete(b64); });
-      }
+            // Only repaint when a pill actually changed — at 1Hz, rebuilding the
+            // Recents list under the user's finger for no reason would be rude.
+            if (changed) repaintAttn();
+          }
+        } catch (_) {
+          try { sock.close(); } catch (_) {}
+        }
+      };
     }
 
-    // Keep the fleet's attention fresh for the dock/Recents without the Machines
-    // panel: a light background poll while the tab is visible (the panel, when
-    // open, already polls — don't double up), plus an immediate refresh the
-    // moment a swipe-up gesture starts (see the pointerdown handler). NOT gated
-    // on being connected to a session — the directory query uses the owner key,
-    // and browsing the fleet to decide what to open next is exactly when you're
-    // NOT connected yet.
-    const FLEET_ATTN_POLL_MS = 10000;
-    setInterval(() => {
+    // The machines whose sessions are in the dock right now — polled hot.
+    function fleetHotMachines() {
+      const hot = new Set();
+      for (const e of sessdockPool.slice(0, SESSDOCK_MAX)) if (e.mkey) hot.add(e.mkey);
+      return hot;
+    }
+
+    async function fleetTick() {
       if (document.hidden) return;
-      const md = document.getElementById('machines');
-      if (md && md.open) return; // the panel's own poll covers this
-      refreshFleetAttn();
-    }, FLEET_ATTN_POLL_MS);
+      let store;
+      try { store = await loadOwnedMachines(); } catch (_) { return; }
+      const hot = fleetHotMachines();
+      const now = Date.now();
+      for (const b64 of Object.keys(store)) {
+        if (store[b64].pendingRevoke) {
+          const gone = warmDirs.get(b64);
+          if (gone) { warmClose(gone); warmDirs.delete(b64); }
+          continue;
+        }
+        const w = warmEntry(b64);
+        // A reply that never came: the daemon or relay went away under us.
+        if (w.inflight && now - w.sentAt > FLEET_REPLY_TIMEOUT_MS) { warmClose(w); warmFail(w); }
+        if (w.state === 'closed') { if (now >= w.retryAt) warmOpen(b64); continue; }
+        if (w.state !== 'open') continue;
+        const period = hot.has(b64) ? FLEET_HOT_MS : FLEET_COLD_MS;
+        if (now - w.lastPoll >= period - 50) warmSend(b64, w); // -50: don't skip a beat to tick jitter
+      }
+    }
+    setInterval(fleetTick, FLEET_TICK_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) warmCloseAll(); else fleetTick();
+    });
+
+    // pollFleetNow: the swipe-up gesture wants the freshest state immediately —
+    // fire every open connection now rather than waiting for the next tick.
+    function pollFleetNow() {
+      for (const [b64, w] of warmDirs) warmSend(b64, w);
+      fleetTick();
+    }
 
     // machineAttn rolls a machine's sessions up to one dot state: 'input' if any
     // session needs you, else 'working' if any is working, else '' (idle / all
