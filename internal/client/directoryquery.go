@@ -59,15 +59,19 @@ func (r dirQueryReq) empty() bool {
 		strings.TrimSpace(r.Keys) == ""
 }
 
-// queryDirectory is QueryDirectory with optional search / one-session dump.
-func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dirQueryReq) (protocol.DirResponse, error) {
-	var zero protocol.DirResponse
+// dialDirectoryOwner connects to a machine's directory channel and proves
+// ownership (the same own_init the PIN-free connect sends, transcript-bound to
+// the directory id), returning the live connection and the established
+// encryption box. The caller owns the connection and MUST Close it. Shared by
+// queryDirectory (list/search), SpawnOnMachine (new_session), and KillOnMachine
+// (dir_kill).
+func dialDirectoryOwner(machinePub ed25519.PublicKey, timeout time.Duration) (*websocket.Conn, *crypto.Box, error) {
 	if len(machinePub) != ed25519.PublicKeySize {
-		return zero, fmt.Errorf("machine key must be %d bytes", ed25519.PublicKeySize)
+		return nil, nil, fmt.Errorf("machine key must be %d bytes", ed25519.PublicKeySize)
 	}
 	deviceKey, err := loadOrCreateDeviceKey()
 	if err != nil {
-		return zero, err
+		return nil, nil, err
 	}
 	devicePub := deviceKey.Public().(ed25519.PublicKey)
 
@@ -80,9 +84,8 @@ func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dir
 	dialer.HandshakeTimeout = timeout
 	conn, _, err := dialer.Dial(wsURL, nil)
 	if err != nil {
-		return zero, ErrDirUnreachable
+		return nil, nil, ErrDirUnreachable
 	}
-	defer conn.Close()
 	// The relay is untrusted, and `reminal machines` opens one of these per owned
 	// machine in parallel — cap the read so a malicious relay can't OOM us with an
 	// oversized frame (it just fails to that machine). Matches the relay's own cap.
@@ -92,21 +95,25 @@ func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dir
 	// Join the channel. A machine that isn't hosting → relay replies "not ready"
 	// → treat as unreachable/offline.
 	if err := writeDir(conn, protocol.Message{Type: protocol.TypeAuth}); err != nil {
-		return zero, err
+		conn.Close()
+		return nil, nil, err
 	}
 	if err := waitAuthOK(conn); err != nil {
-		return zero, ErrDirUnreachable
+		conn.Close()
+		return nil, nil, ErrDirUnreachable
 	}
 
 	// Prove ownership: the identical own_init the PIN-free connect sends, but the
 	// transcript binds the directory id.
 	exHex, exID, err := crypto.NewExID()
 	if err != nil {
-		return zero, err
+		conn.Close()
+		return nil, nil, err
 	}
 	eph, err := crypto.NewEphemeralKey()
 	if err != nil {
-		return zero, err
+		conn.Close()
+		return nil, nil, err
 	}
 	viewerEph := eph.PublicKey().Bytes()
 	sig := crypto.SignOwner(deviceKey, crypto.OwnerClientTranscript(dirID, viewerEph, devicePub))
@@ -117,13 +124,26 @@ func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dir
 		DevicePub: base64.StdEncoding.EncodeToString(devicePub),
 		DeviceSig: base64.StdEncoding.EncodeToString(sig),
 	}); err != nil {
-		return zero, err
+		conn.Close()
+		return nil, nil, err
 	}
 
 	box, err := readOwnerResp(conn, dirID, exHex, exID, viewerEph, devicePub, machinePub, eph)
 	if err != nil {
+		conn.Close()
+		return nil, nil, err
+	}
+	return conn, box, nil
+}
+
+// queryDirectory is QueryDirectory with optional search / one-session dump.
+func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dirQueryReq) (protocol.DirResponse, error) {
+	var zero protocol.DirResponse
+	conn, box, err := dialDirectoryOwner(machinePub, timeout)
+	if err != nil {
 		return zero, err
 	}
+	defer conn.Close()
 
 	// Ask, and read the encrypted session list. Search / dump ride as
 	// encrypted Data so older hosts (which ignore Data) still answer.
@@ -163,6 +183,131 @@ func queryDirectory(machinePub ed25519.PublicKey, timeout time.Duration, req dir
 			return zero, fmt.Errorf("directory: bad response")
 		}
 		return resp, nil
+	}
+}
+
+// SpawnOnMachine asks an owned machine to start a fresh detached session over
+// its directory channel — the CLI counterpart to the web Machines panel's
+// "+ New session on this host" — and returns the new session's credentials.
+func SpawnOnMachine(machinePub ed25519.PublicKey, name, cwd string, timeout time.Duration) (*SpawnedSession, error) {
+	conn, box, err := dialDirectoryOwner(machinePub, timeout)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	reqID, _, err := crypto.NewExID()
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(struct {
+		Name  string `json:"name"`
+		Cwd   string `json:"cwd"`
+		ReqID string `json:"req_id"`
+	}{name, cwd, reqID})
+	if err != nil {
+		return nil, err
+	}
+	enc, err := box.Encrypt(body)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeDir(conn, protocol.Message{Type: protocol.TypeNewSession, Data: enc}); err != nil {
+		return nil, err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	for {
+		var msg protocol.Message
+		if err := readDir(conn, &msg); err != nil {
+			return nil, err
+		}
+		if msg.Type != protocol.TypeNewSession {
+			continue
+		}
+		plain, err := box.Decrypt(msg.Data)
+		if err != nil {
+			return nil, fmt.Errorf("directory: decrypt failed")
+		}
+		var resp struct {
+			ReqID string `json:"req_id"`
+			ID    string `json:"id"`
+			PIN   string `json:"pin"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(plain, &resp); err != nil {
+			return nil, fmt.Errorf("directory: bad response")
+		}
+		if resp.ReqID != "" && resp.ReqID != reqID {
+			continue // a stale reply to some other request on this channel
+		}
+		if resp.Error != "" {
+			return nil, fmt.Errorf("%s", resp.Error)
+		}
+		if resp.ID == "" {
+			return nil, fmt.Errorf("the machine did not start a session")
+		}
+		return &SpawnedSession{ID: resp.ID, PIN: resp.PIN}, nil
+	}
+}
+
+// KillOnMachine terminates a session on an owned machine over its directory
+// channel — the CLI counterpart to the Machines panel's kill button.
+func KillOnMachine(machinePub ed25519.PublicKey, sessionID string, timeout time.Duration) error {
+	conn, box, err := dialDirectoryOwner(machinePub, timeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	reqID, _, err := crypto.NewExID()
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(struct {
+		ID    string `json:"id"`
+		ReqID string `json:"req_id"`
+	}{sessionID, reqID})
+	if err != nil {
+		return err
+	}
+	enc, err := box.Encrypt(body)
+	if err != nil {
+		return err
+	}
+	if err := writeDir(conn, protocol.Message{Type: protocol.TypeDirKill, Data: enc}); err != nil {
+		return err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(timeout))
+	for {
+		var msg protocol.Message
+		if err := readDir(conn, &msg); err != nil {
+			return err
+		}
+		if msg.Type != protocol.TypeDirKill {
+			continue
+		}
+		plain, err := box.Decrypt(msg.Data)
+		if err != nil {
+			return fmt.Errorf("directory: decrypt failed")
+		}
+		var ack struct {
+			ReqID string `json:"req_id"`
+			OK    bool   `json:"ok"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal(plain, &ack); err != nil {
+			return fmt.Errorf("directory: bad response")
+		}
+		if ack.ReqID != "" && ack.ReqID != reqID {
+			continue
+		}
+		if ack.Error != "" {
+			return fmt.Errorf("%s", ack.Error)
+		}
+		if !ack.OK {
+			return fmt.Errorf("the machine did not confirm the kill")
+		}
+		return nil
 	}
 }
 
