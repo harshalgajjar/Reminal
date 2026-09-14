@@ -16,6 +16,15 @@ workers_dev = true
 # that table — put it below and wrangler parses it as assets.routes.
 routes = [
   { pattern = "live.reminal.app", custom_domain = true },
+  # Subdomain-per-tunnel: each `reminal expose` is served at port-<id>.reminal.app
+  # so the forwarded app sits at its own origin root (absolute paths / service
+  # workers / same-origin work). Cloudflare only allows a wildcard at the START
+  # of the host, so the route is *.reminal.app/* — but that's safe: the marketing
+  # site (reminal.app/*, www.reminal.app/* -> reminal-site) and live.reminal.app
+  # (custom domain) are MORE specific and win, so this only ever catches
+  # port-<id> and other undefined subdomains. The port- scoping lives in the
+  # worker code (index.ts). Relies on the proxied *.reminal.app DNS record.
+  { pattern = "*.reminal.app/*", zone_name = "reminal.app" },
 ]
 
 [durable_objects]
@@ -35,6 +44,13 @@ new_sqlite_classes = ["RendezvousRoom"]
 [assets]
 directory = "./public"
 binding = "ASSETS"
+# Run the Worker BEFORE serving a static asset. Without this, a request whose
+# path matches a file in ./public (notably "/" -> index.html) is served the
+# viewer directly and the Worker never runs — which meant port-<id>.reminal.app/
+# served the viewer instead of the tunnelled app's root. With it, the Worker
+# routes tunnel hosts first and falls through to env.ASSETS.fetch() for everything
+# else (live.reminal.app still gets the viewer, via the fall-through).
+run_worker_first = true
 
 [vars]
 # Version below which reminal clients FORCE an upgrade (served at /version). Set
