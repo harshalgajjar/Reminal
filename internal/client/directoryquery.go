@@ -50,13 +50,19 @@ type dirQueryReq struct {
 	Transcript string `json:"transcript,omitempty"` // session id to dump
 	KeysID     string `json:"keys_id,omitempty"`    // session id to type into
 	Keys       string `json:"keys,omitempty"`       // base64 of PTY bytes
+	// Restart asks the host to hot-restart every session on it. It rides the
+	// query rather than taking a message type of its own so it needs no relay
+	// forwarding change — and dir_query is already reserved to the machine
+	// channel (dirChannelOnly), so it is owner-only by construction.
+	Restart bool `json:"restart,omitempty"`
 }
 
 func (r dirQueryReq) empty() bool {
 	return strings.TrimSpace(r.Pattern) == "" &&
 		strings.TrimSpace(r.Transcript) == "" &&
 		strings.TrimSpace(r.KeysID) == "" &&
-		strings.TrimSpace(r.Keys) == ""
+		strings.TrimSpace(r.Keys) == "" &&
+		!r.Restart
 }
 
 // dialDirectoryOwner connects to a machine's directory channel and proves

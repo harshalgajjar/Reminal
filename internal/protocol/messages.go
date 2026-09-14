@@ -399,6 +399,13 @@ type DirResponse struct {
 	// one session. Omitted by older hosts (they still return the session list).
 	KeysOK    bool   `json:"keys_ok,omitempty"`
 	KeysError string `json:"keys_error,omitempty"`
+	// Restart* are set when the query asked to hot-restart this machine's
+	// sessions. Omitted by older hosts, which ignore the request and still
+	// return the session list — so a caller must read RestartOK, never the
+	// absence of an error, as proof the restart happened.
+	RestartOK    bool   `json:"restart_ok,omitempty"`
+	RestartError string `json:"restart_error,omitempty"`
+	RestartCount int    `json:"restart_count,omitempty"`
 	// Battery* describe the machine's power state when it answered. A machine
 	// with no battery — desktop, VM, server — and any host too old to report
 	// omit all three, and the UI then shows no battery at all: absence is the
