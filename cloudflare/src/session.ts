@@ -85,7 +85,7 @@ export class SessionRoom {
       // the auth cookie, or the gate — see handleTunnelHttp/handleTunnelAuth.
       const hostMode = request.headers.get("x-reminal-host-mode") === "1";
       if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-        return this.handleTunnelWS(request, url);
+        return this.handleTunnelWS(request, url, hostMode);
       }
       return this.handleTunnelHttp(request, url, hostMode);
     }
@@ -541,7 +541,7 @@ export class SessionRoom {
   // handleTunnelWS upgrades a visitor WebSocket and hands the agent a matching
   // stream id so it can dial the local backend. Frames then flow both ways as
   // tunnel_ws_data over the agent's control socket (see webSocketMessage).
-  private async handleTunnelWS(request: Request, url: URL): Promise<Response> {
+  private async handleTunnelWS(request: Request, url: URL, hostMode = false): Promise<Response> {
     const m = url.pathname.match(/^\/p\/([A-Z0-9]+)(\/.*|$)/i);
     if (!m) {
       return new Response("Not found", { status: 404 });
@@ -585,7 +585,11 @@ export class SessionRoom {
     const headers: Record<string, string> = {};
     request.headers.forEach((v, k) => {
       if (k.toLowerCase() === "cookie") {
-        // Strip only reminal's auth cookie; keep the app's own cookies.
+        // Only in host-mode, where this tunnel owns its own origin. See the
+        // note in handleTunnelHttp: in path-mode every tunnel shares the relay
+        // origin, so forwarding app cookies would hand one tunnel's backend the
+        // cookies another tunnel's app set.
+        if (!hostMode) return;
         const kept = stripAuthCookie(v, sessionId);
         if (kept) headers[k] = kept;
         return;
@@ -740,8 +744,14 @@ export class SessionRoom {
       // The agent re-adds X-Forwarded-* itself; we shouldn't trust
       // what Cloudflare passed (already added cf-* headers etc.).
       if (lk === "cookie") {
-        // Strip only reminal's auth cookie; forward the app's own cookies so
-        // it can keep the visitor logged in after its login sets one.
+        // Forward the app's own cookies (minus ours) so it can keep the visitor
+        // logged in after its login sets one — but ONLY in host-mode, where the
+        // tunnel owns its own origin (port-<id>.reminal.app) and the browser
+        // scopes cookies to it. In path-mode every tunnel shares the relay
+        // origin, so an app cookie set at Path=/ by one tunnel is sent to all of
+        // them; forwarding it would leak one tunnel's session cookie to another
+        // tunnel's backend operator. There we keep dropping the whole header.
+        if (!hostMode) return;
         const kept = stripAuthCookie(v, sessionId);
         if (kept) headers[k] = kept;
         return;
@@ -827,14 +837,14 @@ export class SessionRoom {
       }
       const loop = loopbackLocationPath(v);
       if (loop !== null) {
-        out.headers[key] = base + loop; // base === "" in host-mode → bare path
+        out.headers[key] = base + sameOriginPath(loop); // base === "" in host-mode
         continue;
       }
       // App redirected to our own public host but with a stray port (webmin
       // appends :10000) — collapse it to a same-origin path the tunnel serves.
       const self = selfHostLocationPath(v, publicHost);
       if (self !== null) {
-        out.headers[key] = base + self;
+        out.headers[key] = base + sameOriginPath(self);
       }
     }
 
@@ -973,6 +983,15 @@ function loopbackLocationPath(loc: string): string | null {
   return isLoopback ? u.pathname + u.search : null;
 }
 
+// sameOriginPath collapses leading slashes on a rewritten Location path. A
+// URL's pathname keeps a doubled slash ("https://host//evil.com/x" →
+// "//evil.com/x"), and in host-mode we emit it with an empty base — so without
+// this the browser would read "//evil.com/x" as a protocol-relative URL and
+// leave the origin entirely: an open redirect on a *.reminal.app host.
+function sameOriginPath(p: string): string {
+  return "/" + p.replace(/^\/+/, "");
+}
+
 // selfHostLocationPath returns the bare path+query of an absolute Location that
 // points back at our OWN public host — regardless of port. Apps that build
 // self-referential redirects from the Host we hand them can tack on their own
@@ -987,7 +1006,14 @@ function selfHostLocationPath(loc: string, publicHost: string | null): string | 
   } catch {
     return null;
   }
-  const want = publicHost.split(":")[0].toLowerCase(); // hostname only
+  // Parse rather than split on ":" — a bracketed IPv6 literal ("[::1]:8443")
+  // would otherwise compare as "[" and silently never match.
+  let want: string;
+  try {
+    want = new URL(`http://${publicHost}`).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
   return u.hostname.toLowerCase() === want ? u.pathname + u.search : null;
 }
 
