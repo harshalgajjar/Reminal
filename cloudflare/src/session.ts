@@ -437,12 +437,24 @@ export class SessionRoom {
     const isPublic = !!info.public;
     if (!port || !pinHash) return;
 
-    // Generate a per-session signing key for the auth cookie HMAC. New
-    // each registration so a stale cookie from a prior session-ID reuse
-    // doesn't accidentally grant access.
-    const keyBytes = new Uint8Array(32);
-    crypto.getRandomValues(keyBytes);
-    const signingKey = toHex(keyBytes);
+    // Keep the auth-cookie signing key STABLE across re-registrations of the
+    // same tunnel. The agent re-sends tunnel_register on every reconnect (its
+    // relay socket is dropped every few minutes — Cloudflare caps WebSocket
+    // duration), and rotating the key each time would invalidate every visitor's
+    // auth cookie, bouncing them back to the PIN gate mid-session. So reuse the
+    // existing key whenever the PIN is unchanged; only mint a fresh one for a
+    // brand-new tunnel or when the PIN actually changes — the latter is exactly
+    // when old cookies SHOULD stop granting access (new credentials, or a prior
+    // session-ID reused by a different expose).
+    const prev = await this.state.storage.get<TunnelMeta>("tunnelMeta");
+    let signingKey: string;
+    if (prev && prev.signingKey && prev.pinHash === pinHash) {
+      signingKey = prev.signingKey;
+    } else {
+      const keyBytes = new Uint8Array(32);
+      crypto.getRandomValues(keyBytes);
+      signingKey = toHex(keyBytes);
+    }
 
     const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey };
     await this.state.storage.put("tunnelMeta", meta);
