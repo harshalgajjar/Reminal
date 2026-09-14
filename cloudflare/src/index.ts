@@ -18,6 +18,30 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    // Subdomain-per-tunnel: port-<id>.<domain> serves the forwarded app at the
+    // ROOT of its own origin, so the app's absolute-path assets, service worker,
+    // and same-origin/CORS all resolve (which a shared /p/<id>/ path prefix
+    // breaks). Routed to the same SessionRoom DO as /p/<id>/, but tagged
+    // host-mode via a header so the DO serves at root (no prefix rewriting).
+    // Matches the id as the first label regardless of base domain, so it works
+    // for reminal.app and for Host-spoofed tests. IDs are uppercase on the wire
+    // elsewhere but hostnames are lowercased by browsers, so we re-uppercase.
+    // Match on the Host header (equivalent to url.hostname in production, but
+    // also correct behind a local `wrangler dev`, where url.hostname is
+    // "localhost" while the Host header carries the real tunnel hostname).
+    const hostHeader = request.headers.get("host") || url.hostname;
+    const hostSub = hostHeader.match(/^port-([a-z0-9]+)\./i);
+    if (hostSub) {
+      const sessionId = hostSub[1].toUpperCase();
+      const id = env.SESSION.idFromName(sessionId);
+      const stub = env.SESSION.get(id);
+      const doUrl = new URL(request.url);
+      doUrl.pathname = `/p/${sessionId}${url.pathname === "/" ? "/" : url.pathname}`;
+      const hdrs = new Headers(request.headers);
+      hdrs.set("x-reminal-host-mode", "1");
+      return stub.fetch(new Request(new Request(doUrl.toString(), request), { headers: hdrs }));
+    }
+
     // Shell-session WS: /ws/<id>/agent | viewer | tunnel
     // tunnel is for port-forward agents (registered by `reminal expose`).
     const wsMatch = url.pathname.match(/^\/ws\/([A-Z0-9]+)\/(agent|viewer|tunnel)$/i);

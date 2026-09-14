@@ -201,8 +201,18 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 	}, nil
 }
 
-// PublicURL is the path-based URL visitors hit.
+// PublicURL is the URL visitors hit. On the hosted relay each tunnel gets its
+// own subdomain (port-<id>.reminal.app) so the forwarded app is served at the
+// root of its own origin — its absolute-path assets, service worker, and
+// same-origin/CORS all resolve, which a shared /p/<id>/ path prefix breaks.
+// The id is lowercased because hostnames are case-insensitive and browsers
+// lowercase them; the relay re-uppercases it to look up the session. For any
+// other relay host (self-hosted / a custom REMINAL_WEB, or a *.workers.dev
+// preview that can't have a custom wildcard cert) we keep the path form.
 func (t *Tunnel) PublicURL() string {
+	if u, err := url.Parse(t.webURL); err == nil && u.Host == "live.reminal.app" {
+		return fmt.Sprintf("https://port-%s.reminal.app/", strings.ToLower(t.sessionID))
+	}
 	return fmt.Sprintf("%s/p/%s/", t.webURL, t.sessionID)
 }
 

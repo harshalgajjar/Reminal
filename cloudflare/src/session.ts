@@ -74,10 +74,14 @@ export class SessionRoom {
     // websocket) is multiplexed to the agent's backend; everything else is a
     // plain HTTP request/response.
     if (parts[0] === "p") {
+      // Host-mode (set by the front worker for port-<id>.<domain>): the app is
+      // served at the origin root, so no /p/<id>/ prefix is added to redirects,
+      // the auth cookie, or the gate — see handleTunnelHttp/handleTunnelAuth.
+      const hostMode = request.headers.get("x-reminal-host-mode") === "1";
       if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
         return this.handleTunnelWS(request, url);
       }
-      return this.handleTunnelHttp(request, url);
+      return this.handleTunnelHttp(request, url, hostMode);
     }
 
     // /ws/<id>/<role> — WebSocket upgrade path (agent / viewer / tunnel).
@@ -624,7 +628,7 @@ export class SessionRoom {
 
   // ---- tunnel: HTTP proxy ----
 
-  private async handleTunnelHttp(request: Request, url: URL): Promise<Response> {
+  private async handleTunnelHttp(request: Request, url: URL, hostMode = false): Promise<Response> {
     // Match `/p/<id>` and slice the rest verbatim so the trailing slash
     // (and anything else) survives intact. The earlier split/join
     // approach dropped a trailing slash, which caused upstream apps to
@@ -645,9 +649,14 @@ export class SessionRoom {
       });
     }
 
-    // POST /p/<id>/__auth — submit PIN.
+    // Where the app "root" and the gate's POST target live: at the origin root
+    // in host-mode, under /p/<id>/ in path-mode.
+    const base = hostMode ? "" : `/p/${sessionId}`;
+    const authAction = `${base}/__auth`;
+
+    // POST __auth — submit PIN.
     if (rest === "/__auth" && request.method === "POST") {
-      return this.handleTunnelAuth(request, sessionId, meta);
+      return this.handleTunnelAuth(request, sessionId, meta, hostMode);
     }
 
     // Public tunnels skip the gate entirely.
@@ -656,8 +665,10 @@ export class SessionRoom {
       const cookieVal = cookies[AUTH_COOKIE_PREFIX + sessionId] ?? "";
       const expected = await hmacHex(meta.signingKey, "ok");
       if (cookieVal !== expected) {
-        const wantTo = url.pathname + url.search;
-        return new Response(pinGatePage(sessionId, wantTo, ""), {
+        // In host-mode the visitor's real path is `rest`; in path-mode it's the
+        // full /p/<id>/… pathname. Either way keep the query.
+        const wantTo = (hostMode ? rest : url.pathname) + url.search;
+        return new Response(pinGatePage(sessionId, wantTo, "", authAction), {
           status: 200,
           headers: { "Content-Type": "text/html; charset=utf-8" },
         });
@@ -720,32 +731,38 @@ export class SessionRoom {
     //     public path+query under the prefix. A loopback host is unambiguously
     //     wrong for a public tunnel, so this is always safe.
     // Absolute URLs to any OTHER host are left alone (real off-site redirects).
-    const prefix = `/p/${sessionId}`;
+    // In host-mode the app is at the origin root, so absolute-PATH Locations
+    // ("/folder/") already resolve correctly and are left untouched — only a
+    // loopback absolute-URL is rewritten, down to its bare path.
     for (const key of Object.keys(out.headers)) {
       if (key.toLowerCase() !== "location") continue;
       const v = out.headers[key];
       if (!v) continue;
-      if (v.startsWith("/") && !v.startsWith(prefix + "/") && !v.startsWith("//")) {
-        out.headers[key] = prefix + v;
+      if (!hostMode && v.startsWith("/") && !v.startsWith(base + "/") && !v.startsWith("//")) {
+        out.headers[key] = base + v;
         continue;
       }
       const loop = loopbackLocationPath(v);
       if (loop !== null) {
-        out.headers[key] = prefix + loop;
+        out.headers[key] = base + loop; // base === "" in host-mode → bare path
       }
     }
 
     return new Response(out.body as BodyInit, { status: out.status, headers: out.headers });
   }
 
-  private async handleTunnelAuth(request: Request, sessionId: string, meta: TunnelMeta): Promise<Response> {
+  private async handleTunnelAuth(request: Request, sessionId: string, meta: TunnelMeta, hostMode = false): Promise<Response> {
+    // In host-mode the tunnel owns the whole origin, so the cookie + redirects
+    // are scoped to "/"; in path-mode they're confined to /p/<id>/.
+    const root = hostMode ? "/" : `/p/${sessionId}/`;
+    const authAction = hostMode ? "/__auth" : `/p/${sessionId}/__auth`;
     const form = await request.formData();
     const pin = String(form.get("pin") ?? "");
-    const to = String(form.get("to") ?? `/p/${sessionId}/`);
+    const to = String(form.get("to") ?? root);
 
     const m = await this.loadMeta();
     if (m.lockedUntil && Date.now() < m.lockedUntil) {
-      return new Response(pinGatePage(sessionId, to, "Too many failed attempts — try again in a few minutes."), {
+      return new Response(pinGatePage(sessionId, to, "Too many failed attempts — try again in a few minutes.", authAction), {
         status: 429,
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
@@ -754,7 +771,7 @@ export class SessionRoom {
     const { compare } = await import("bcryptjs");
     if (!pin || !(await compare(pin, meta.pinHash))) {
       await this.recordFailure();
-      return new Response(pinGatePage(sessionId, to, "Incorrect PIN."), {
+      return new Response(pinGatePage(sessionId, to, "Incorrect PIN.", authAction), {
         status: 401,
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
@@ -764,11 +781,15 @@ export class SessionRoom {
     const cookieVal = await hmacHex(meta.signingKey, "ok");
     const cookie =
       `${AUTH_COOKIE_PREFIX}${sessionId}=${cookieVal}; ` +
-      `Path=/p/${sessionId}/; ` +
+      `Path=${root}; ` +
       `Max-Age=${COOKIE_MAX_AGE}; ` +
       `HttpOnly; Secure; SameSite=Lax`;
-    // Defensive: only redirect within /p/<id>/.
-    const safeTo = to.startsWith(`/p/${sessionId}/`) ? to : `/p/${sessionId}/`;
+    // Defensive: only redirect same-origin. Host-mode allows any absolute path
+    // on the tunnel's own origin (but not "//host" protocol-relative); path-mode
+    // stays confined to /p/<id>/.
+    const safeTo = hostMode
+      ? (to.startsWith("/") && !to.startsWith("//") ? to : "/")
+      : (to.startsWith(`/p/${sessionId}/`) ? to : `/p/${sessionId}/`);
     return new Response(null, {
       status: 302,
       headers: { Location: safeTo, "Set-Cookie": cookie },
@@ -897,8 +918,9 @@ function parseCookies(header: string): Record<string, string> {
 
 // ---- HTML pages ----
 
-function pinGatePage(sessionId: string, to: string, errorMsg: string): string {
+function pinGatePage(sessionId: string, to: string, errorMsg: string, authAction: string): string {
   const escTo = escapeHtml(to);
+  const escAction = escapeHtml(authAction);
   const escErr = errorMsg ? `<p class="err">${escapeHtml(errorMsg)}</p>` : "";
   // Inline page; reads URL fragment (#p=NNNNNN) and auto-submits so the
   // QR-code / quick-link flow is one-tap. Fragment never leaves the
@@ -926,7 +948,7 @@ function pinGatePage(sessionId: string, to: string, errorMsg: string): string {
   .foot{margin-top:16px;font-size:11px;color:#6e7681}
 </style>
 </head><body>
-<form class="card" method="POST" action="/p/${sessionId}/__auth" id="f">
+<form class="card" method="POST" action="${escAction}" id="f">
   <h1><span>re</span>minal</h1>
   <p class="sub">PIN required to reach <code>${sessionId}</code></p>
   ${escErr}
