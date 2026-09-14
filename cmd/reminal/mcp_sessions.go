@@ -249,11 +249,30 @@ func localTranscriptHits(pattern string) map[string][]string {
 	return out
 }
 
-func mcpReadTranscript(sessionSel, machineSel string) (string, error) {
+func mcpReadTranscript(sessionSel, machineSel, pin string) (string, error) {
 	sessionSel = strings.TrimSpace(sessionSel)
 	machineSel = strings.TrimSpace(machineSel)
+	pin = strings.TrimSpace(pin)
 	if sessionSel == "" {
-		return "", fmt.Errorf("session is required (id from list_sessions)")
+		return "", fmt.Errorf("session is required (id from list_sessions, or a join URL)")
+	}
+
+	// PIN path: read any reminal you have the id and PIN for, even one this
+	// device doesn't own — the read counterpart to send_keys' PIN path. Mirrors
+	// the same id/URL parsing so "id + pin" and a join URL both work.
+	id, urlPin := parseConnectTarget(sessionSel)
+	if pin == "" {
+		pin = urlPin
+	}
+	if pin != "" {
+		if id == "" {
+			id = strings.ToUpper(sessionSel)
+		}
+		text, truncated, err := client.ReadTranscriptPIN(id, pin)
+		if err != nil {
+			return "", err
+		}
+		return formatTranscriptJSON(transcriptMeta{ID: id, Machine: "remote (PIN)", Truncated: truncated}, text), nil
 	}
 
 	refs, err := findSessionRefs(sessionSel, machineSel)

@@ -544,11 +544,13 @@ func mcpToolList() []map[string]any {
 		{
 			"name": "read_transcript",
 			"description": "Read one reminal session's live terminal as plain text (ANSI stripped). " +
-				"Use list_sessions to get the id. Long history is truncated to the newest tail. " +
-				"Does not attach a viewer and does not include the PIN.",
+				"Owned sessions: pass session id from list_sessions. Any other reminal: pass session + pin " +
+				"(or a join URL) — the read counterpart to send_keys, so with an id and PIN you can both " +
+				"read and write a session this device does not own. Long history is truncated to the newest tail.",
 			"inputSchema": obj(map[string]any{
-				"session": str("Session id from list_sessions (or a unique session name)."),
-				"machine": str("Optional machine name or id when the session id exists on more than one box."),
+				"session": str("Session id from list_sessions (a unique session name), or a join URL like https://live.reminal.app/?s=ID#p=PIN."),
+				"pin":     str("Session PIN. Needed only for a reminal this device does not own (list_sessions), unless the URL already has #p=."),
+				"machine": str("Optional machine name or id when the session id exists on more than one owned box."),
 			}, "session"),
 		},
 		{
@@ -659,7 +661,11 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 	case "search_sessions":
 		return mcpSearchSessions(argStr(args, "pattern", argStr(args, "regex", "")))
 	case "read_transcript":
-		return mcpReadTranscript(argStr(args, "session", argStr(args, "id", "")), argStr(args, "machine", ""))
+		return mcpReadTranscript(
+			argStr(args, "session", argStr(args, "id", "")),
+			argStr(args, "machine", ""),
+			argStr(args, "pin", argStr(args, "PIN", "")),
+		)
 	case "send_keys":
 		return mcpSendKeys(
 			argStr(args, "session", argStr(args, "id", "")),
