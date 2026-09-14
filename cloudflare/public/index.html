@@ -5122,43 +5122,51 @@
     // panel being open (or the session being connected). Single-flight. Repaints
     // Recents and, for an OPEN dock, patches each row's chip surgically (never a
     // rebuild — that would drop the drag highlight; see updateSessdockChip).
-    let fleetAttnBusy = false;
+    // Per-machine and independent: an offline machine (whose query hits the
+    // timeout) must not hold up the others, or a later refresh, or the swipe
+    // gesture's own refresh. So there's NO shared busy lock (the old one made
+    // every refresh wait on the slowest machine and dropped the gesture refresh
+    // meanwhile) — just a per-machine in-flight set, a short timeout, and each
+    // machine repaints the fleet list the moment its own reply lands.
+    const fleetMachineBusy = new Set();
     async function refreshFleetAttn() {
-      if (fleetAttnBusy) return;
-      fleetAttnBusy = true;
-      try {
-        const store = await loadOwnedMachines();
-        const keys = Object.keys(store).filter(b64 => !store[b64].pendingRevoke);
-        await Promise.all(keys.map(async (b64) => {
-          let resp;
-          try { resp = await queryDirectory(base64ToU8(b64URLToStd(b64))); } catch (_) { return; }
-          if (!resp || typeof resp !== 'object' || !Array.isArray(resp.sessions)) return;
-          const list = resp.sessions;
-          await withOwnedMachines(m => {
-            if (!m[b64]) return false;
-            m[b64].sessions = list;
-            if (resp.hostname) m[b64].host = resp.hostname;
-          });
-        }));
-        await refreshSessdockPool();
-        renderRecents();
-        if (sessdockEl && sessdockEl.classList.contains('open')) {
-          for (const item of [...sessdockEl.children]) {
-            if (item._entry) updateSessdockChip(item._entry.id);
-          }
-        }
-      } finally {
-        fleetAttnBusy = false;
+      let store;
+      try { store = await loadOwnedMachines(); } catch (_) { return; }
+      for (const b64 of Object.keys(store)) {
+        if (store[b64].pendingRevoke || fleetMachineBusy.has(b64)) continue;
+        fleetMachineBusy.add(b64);
+        queryDirectory(base64ToU8(b64URLToStd(b64)), { timeout: 3000 })
+          .then(async (resp) => {
+            if (!resp || typeof resp !== 'object' || !Array.isArray(resp.sessions)) return;
+            const list = resp.sessions;
+            await withOwnedMachines(m => {
+              if (!m[b64]) return false;
+              m[b64].sessions = list;
+              if (resp.hostname) m[b64].host = resp.hostname;
+            });
+            await refreshSessdockPool();
+            renderRecents();
+            if (sessdockEl && sessdockEl.classList.contains('open')) {
+              for (const item of [...sessdockEl.children]) {
+                if (item._entry) updateSessdockChip(item._entry.id);
+              }
+            }
+          })
+          .catch(() => {})
+          .finally(() => { fleetMachineBusy.delete(b64); });
       }
     }
 
     // Keep the fleet's attention fresh for the dock/Recents without the Machines
-    // panel: a light background poll while the tab is visible and connected (the
-    // panel, when open, already polls — don't double up), plus an immediate
-    // refresh the moment a swipe-up gesture starts (see the pointerdown handler).
+    // panel: a light background poll while the tab is visible (the panel, when
+    // open, already polls — don't double up), plus an immediate refresh the
+    // moment a swipe-up gesture starts (see the pointerdown handler). NOT gated
+    // on being connected to a session — the directory query uses the owner key,
+    // and browsing the fleet to decide what to open next is exactly when you're
+    // NOT connected yet.
     const FLEET_ATTN_POLL_MS = 10000;
     setInterval(() => {
-      if (document.hidden || !sessionId) return;
+      if (document.hidden) return;
       const md = document.getElementById('machines');
       if (md && md.open) return; // the panel's own poll covers this
       refreshFleetAttn();
