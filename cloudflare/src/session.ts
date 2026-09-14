@@ -804,6 +804,13 @@ export class SessionRoom {
       const loop = loopbackLocationPath(v);
       if (loop !== null) {
         out.headers[key] = base + loop; // base === "" in host-mode → bare path
+        continue;
+      }
+      // App redirected to our own public host but with a stray port (webmin
+      // appends :10000) — collapse it to a same-origin path the tunnel serves.
+      const self = selfHostLocationPath(v, publicHost);
+      if (self !== null) {
+        out.headers[key] = base + self;
       }
     }
 
@@ -940,6 +947,24 @@ function loopbackLocationPath(loc: string): string | null {
   const h = u.hostname.toLowerCase();
   const isLoopback = h === "localhost" || h === "::1" || h === "[::1]" || h.startsWith("127.");
   return isLoopback ? u.pathname + u.search : null;
+}
+
+// selfHostLocationPath returns the bare path+query of an absolute Location that
+// points back at our OWN public host — regardless of port. Apps that build
+// self-referential redirects from the Host we hand them can tack on their own
+// listening port (webmin emits https://<public-host>:10000/), which the browser
+// can't reach. Any redirect to our public host is same-origin, so collapse it to
+// a path the tunnel actually serves.
+function selfHostLocationPath(loc: string, publicHost: string | null): string | null {
+  if (!publicHost) return null;
+  let u: URL;
+  try {
+    u = new URL(loc);
+  } catch {
+    return null;
+  }
+  const want = publicHost.split(":")[0].toLowerCase(); // hostname only
+  return u.hostname.toLowerCase() === want ? u.pathname + u.search : null;
 }
 
 function toHex(b: Uint8Array): string {
