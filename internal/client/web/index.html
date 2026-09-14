@@ -4847,6 +4847,7 @@
     async function fillMachineSessions(b64, rec, gen) {
       let resp;
       let ok = true;
+      const attnAt = Date.now(); // observation time for attnStore = when we asked
       try {
         resp = await queryDirectory(base64ToU8(b64URLToStd(b64)));
         // The reply comes from a remote machine — validate its shape before
@@ -4926,6 +4927,7 @@
       }
       paintStats(box, resp.stats || null);
       const list = (resp.sessions || []);
+      noteAttnList(list, attnAt); // feed the store before painting, so the chips read fresh values
       renderMachineSessions(box, list, b64);
       // Colour the (online) machine dot by what its sessions need — anything
       // awaiting you wins, else anything working, else stay green (idle / all
@@ -5065,39 +5067,60 @@
       return c;
     }
 
-    // liveAttn holds attention states pushed live over host_info for sessions
-    // this viewer is connected to (keyed by id) — fresher than the fleet
-    // directory poll, so every per-session pill prefers it. attnOf is the one
-    // accessor: live value if we have one, else the polled directory value.
-    const liveAttn = new Map();
-    function attnOf(id, polled) {
-      const live = liveAttn.get(id);
-      return live !== undefined ? live : (polled || '');
+    // attnStore is the ONE source of truth for per-session attention in this
+    // viewer. Both feeds write into it — the connected session's live push and
+    // every fleet directory poll — and each write carries the time the state was
+    // OBSERVED. The newest observation wins; no source ever permanently outranks
+    // another. That is what makes it self-healing: a live push lands instantly,
+    // and if that socket ever goes quiet, the next poll (≤10s) simply overwrites
+    // it. A poll records the time it was STARTED, so a slow in-flight poll can't
+    // clobber a push that arrived while it was on the wire.
+    //
+    // (The previous model — a "live" map that hard-overrode the polled value —
+    // could never be invalidated, so a session that went idle stayed stuck on its
+    // last non-idle pill. That is gone.)
+    const attnStore = new Map(); // id -> { attn, at }
+    function noteAttn(id, attn, at) {
+      const cur = attnStore.get(id);
+      if (cur && cur.at > at) return false; // we already know something newer
+      const v = attn || '';
+      const changed = !cur || cur.attn !== v;
+      attnStore.set(id, { attn: v, at });
+      return changed;
     }
-
-    // setLiveAttn records a live-pushed state and re-renders the switchers that
-    // show a per-session pill, so a flip lands immediately instead of at the
-    // next poll. Empty clears the entry (bare shell). No-op when unchanged.
-    function setLiveAttn(id, attn) {
-      const prev = liveAttn.get(id);
-      if (attn) liveAttn.set(id, attn); else liveAttn.delete(id);
-      if ((prev || '') === (attn || '')) return;
-      // Repaint the switchers (Recents dropdown + mobile dock) now — they're the
-      // cheap, always-reachable surfaces. The Machines panel, when open, refreshes
-      // on its own poll and reads the same live value through attnOf, so it lands
-      // there within a poll without a heavy full re-render here.
+    function attnOf(id, polled) {
+      const e = attnStore.get(id);
+      return e ? e.attn : (polled || '');
+    }
+    // noteAttnList folds a directory reply's sessions into the store, stamped
+    // with the time that query was started. Returns true if any pill changed.
+    function noteAttnList(list, at) {
+      let changed = false;
+      for (const s of (list || [])) {
+        if (s && s.id && s.kind !== 'port') changed = noteAttn(s.id, s.attn, at) || changed;
+      }
+      return changed;
+    }
+    // repaintAttn refreshes the switchers that show a per-session pill: the
+    // Recents dropdown, and the mobile dock IF it's open — patched row by row,
+    // never rebuilt: the dock is only open mid-drag, and a rebuild would drop the
+    // .active highlight under the finger and invalidate the cached hit boxes.
+    function repaintAttn() {
       renderRecents();
-      // The dock is only ever open DURING a drag gesture, so NEVER rebuild it here:
-      // a full rebuild mid-drag drops the .active highlight under the finger AND
-      // invalidates sessdockHits (the cached boxes point at the destroyed rows),
-      // breaking the whole hit-test. Patch just the changed row's chip in place —
-      // the row height is unchanged (the chip sits inline in the name row), so the
-      // highlight and the hit cache survive.
-      if (sessdockEl && sessdockEl.classList.contains('open')) updateSessdockChip(id);
+      if (sessdockEl && sessdockEl.classList.contains('open')) {
+        for (const item of [...sessdockEl.children]) {
+          if (item._entry) updateSessdockChip(item._entry.id);
+        }
+      }
+    }
+    // setLiveAttn records the connected session's live-pushed state (observed
+    // now) and repaints if it changed. Empty means idle — an explicit, real value.
+    function setLiveAttn(id, attn) {
+      if (noteAttn(id, attn, Date.now())) repaintAttn();
     }
 
     // updateSessdockChip surgically refreshes one open-dock row's attention chip
-    // without touching the rest of the DOM. Used mid-drag (see setLiveAttn).
+    // without touching the rest of the DOM (see repaintAttn).
     function updateSessdockChip(id) {
       for (const item of sessdockEl.children) {
         if (!item._entry || item._entry.id !== id) continue;
@@ -5105,12 +5128,7 @@
         if (!nameRow) return;
         const old = nameRow.querySelector('.attn-chip');
         if (old) old.remove();
-        // Freshest source wins: a live push (liveAttn), else the latest polled
-        // directory value from the pool, else the entry's build-time snapshot.
-        const pooled = sessdockPool.find(p => p.id === id);
-        const polled = pooled ? pooled.attn : item._entry.attn;
-        if (pooled) item._entry.attn = pooled.attn || ''; // keep the entry in sync
-        const chip = attnChipEl(attnOf(id, polled));
+        const chip = attnChipEl(attnOf(id, item._entry.attn));
         if (chip) nameRow.appendChild(chip);
         return;
       }
@@ -5135,6 +5153,9 @@
       for (const b64 of Object.keys(store)) {
         if (store[b64].pendingRevoke || fleetMachineBusy.has(b64)) continue;
         fleetMachineBusy.add(b64);
+        // Observation time = when we ASKED, so a reply that arrives after a
+        // newer live push can't overwrite it (see attnStore).
+        const at = Date.now();
         queryDirectory(base64ToU8(b64URLToStd(b64)), { timeout: 3000 })
           .then(async (resp) => {
             if (!resp || typeof resp !== 'object' || !Array.isArray(resp.sessions)) return;
@@ -5144,13 +5165,9 @@
               m[b64].sessions = list;
               if (resp.hostname) m[b64].host = resp.hostname;
             });
+            noteAttnList(list, at);
             await refreshSessdockPool();
-            renderRecents();
-            if (sessdockEl && sessdockEl.classList.contains('open')) {
-              for (const item of [...sessdockEl.children]) {
-                if (item._entry) updateSessdockChip(item._entry.id);
-              }
-            }
+            repaintAttn();
           })
           .catch(() => {})
           .finally(() => { fleetMachineBusy.delete(b64); });

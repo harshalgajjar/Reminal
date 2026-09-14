@@ -156,8 +156,11 @@ type HostInfo struct {
 	// same values as protocol.DirSession.Attn. It rides host_info so a connected
 	// viewer learns the state of the session it's watching the instant it
 	// changes — the agent pushes a host_info on every transition — instead of
-	// waiting for the fleet directory's slower poll. Empty for a bare shell.
-	Attn string `json:"attn,omitempty"`
+	// waiting for the fleet directory's slower poll. Empty for a bare shell —
+	// and deliberately NOT omitempty: the viewer must be told when a session
+	// goes back to idle, or its pill sticks on the last non-idle state forever.
+	// (That was a real bug: `omitempty` swallowed the idle transition.)
+	Attn string `json:"attn"`
 }
 
 // gatherHostInfo collects the cross-platform basics, then lets the per-OS hook
