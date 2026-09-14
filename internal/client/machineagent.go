@@ -176,7 +176,7 @@ func (a *Agent) servesOnThisChannel(t protocol.MessageType) bool {
 // reachable by every enrolled owner device at once, and some actions fork a
 // process, so a runaway client must not be able to turn that into a storm.
 type dirLimits struct {
-	hshake, query, spawn, rename *tokenBucket
+	hshake, query, spawn, rename, restart *tokenBucket
 }
 
 func newDirLimits() *dirLimits {
@@ -185,6 +185,9 @@ func newDirLimits() *dirLimits {
 		query:  newTokenBucket(32, 16),
 		spawn:  newTokenBucket(4, 1), // spawns fork a process — keep tight
 		rename: newTokenBucket(16, 8),
+		// A restart moves every shell on the machine — as heavy as a spawn,
+		// and just as unwelcome in a loop. Same tight bucket.
+		restart: newTokenBucket(4, 1),
 	}
 }
 
@@ -194,6 +197,7 @@ const (
 	dirActQuery dirAction = iota
 	dirActSpawn
 	dirActRename
+	dirActRestart
 )
 
 // allowOwnerHandshake gates owner handshakes: the machine channel's wider
@@ -217,6 +221,8 @@ func (a *Agent) allowDir(act dirAction) bool {
 		return a.dirLimits.query.allow(now)
 	case dirActSpawn:
 		return a.dirLimits.spawn.allow(now)
+	case dirActRestart:
+		return a.dirLimits.restart.allow(now)
 	default:
 		return a.dirLimits.rename.allow(now)
 	}
@@ -242,6 +248,15 @@ func (a *Agent) handleDirQuery(conn *websocket.Conn, data string) {
 	}
 	if q.KeysID != "" && q.Keys != "" {
 		applyLocalKeys(&resp, q.KeysID, q.Keys)
+	}
+	// Gated on its own bucket, not the query's: reading the directory is cheap
+	// and frequent, restarting every shell on the machine is neither.
+	if q.Restart {
+		if a.allowDir(dirActRestart) {
+			applyLocalRestart(&resp)
+		} else {
+			resp.RestartError = "too many restart requests; try again shortly"
+		}
 	}
 	a.sendWindowMsg(conn, protocol.TypeDirResp, resp)
 }

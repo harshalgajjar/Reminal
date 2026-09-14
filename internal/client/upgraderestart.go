@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/reminal/reminal/internal/protocol"
 	"github.com/reminal/reminal/internal/session"
 )
 
@@ -52,6 +53,26 @@ func countRestartableSessions() int {
 	}
 	sessCountVal, sessCountRead = n, time.Now()
 	return n
+}
+
+// applyLocalRestart hot-restarts this machine's sessions in answer to a
+// directory query that asked for it, recording the outcome on the response.
+//
+// Served by the machine channel's agent — the daemon — which is not itself a
+// session, so restartOtherSessions moves every shell and leaves the channel
+// carrying this request intact. That is what lets the host answer at all: a
+// restart that took the daemon with it could never report back.
+func applyLocalRestart(resp *protocol.DirResponse) {
+	if resp == nil {
+		return
+	}
+	n := countRestartableSessions()
+	if err := restartOtherSessions(); err != nil {
+		resp.RestartError = err.Error()
+		return
+	}
+	resp.RestartOK = true
+	resp.RestartCount = n
 }
 
 // restartOtherSessions hot-restarts every session on this host except the one

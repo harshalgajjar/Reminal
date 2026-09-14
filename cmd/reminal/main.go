@@ -133,23 +133,26 @@ func main() {
 			}
 			return
 		case "upgrade":
-			updated, err := updater.Upgrade(version)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			// Default: upgrade this machine. --machine <id|name> upgrades one you
+			// own; --all-owned-machines upgrades the whole fleet (this machine last,
+			// since upgrading ourselves re-execs the process running the fan-out).
+			sc, serr := parseMachineScope(os.Args[2:])
+			if serr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", serr)
 				os.Exit(1)
 			}
-			if updated {
-				// Re-INSTALL (not just restart) so the service DEFINITION is refreshed —
-				// this is how a plist fix (e.g. dropping ProcessType=Background, which
-				// was throttling spawned sessions) reaches machines set up by an older
-				// version. It also moves the daemon onto the new binary. On darwin ALWAYS
-				// do it: a bare→bundle migration just installed the app with no daemon
-				// yet, and correctness (not version) is what we key on. Linux keeps the
-				// refresh-if-present behavior (its daemon is ownership-driven).
-				// Best-effort.
-				if runtime.GOOS == "darwin" || client.DaemonServiceInstalled() {
-					_ = client.InstallDaemonService()
-				}
+			var uerr error
+			switch {
+			case sc.allOwned:
+				uerr = runUpgradeAllOwned()
+			case strings.TrimSpace(sc.selector) != "":
+				uerr = runUpgradeOnMachineSel(sc.selector)
+			default:
+				_, uerr = runUpgradeLocal()
+			}
+			if uerr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", uerr)
+				os.Exit(1)
 			}
 			return
 		case "info":
@@ -524,6 +527,25 @@ func main() {
 			}
 			return
 		case "restart":
+			// --machine <id|name> / --all-owned-machines restart the sessions on
+			// machines you own, over their owner directory channel. Checked first:
+			// the local flags below mean "which session on THIS machine".
+			if sc, serr := parseMachineScope(os.Args[2:]); serr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", serr)
+				os.Exit(1)
+			} else if sc.remote() {
+				var rerr error
+				if sc.allOwned {
+					rerr = runRestartAllOwned()
+				} else {
+					rerr = runRestartOnMachineSel(sc.selector)
+				}
+				if rerr != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", rerr)
+					os.Exit(1)
+				}
+				return
+			}
 			// No arg → the current/active session. An id|name → that session.
 			// --all → every shell session (handy after `reminal upgrade` to
 			// roll the whole machine onto the new binary at once).
@@ -818,8 +840,8 @@ func printHelp() {
 		{"reminal doctor", "Self-diagnostic: version, relay reachability, terminal, shell"},
 		{"reminal settings", "Open the settings page (e.g. keep this Mac unlocked)"},
 		{"reminal completion <bash|zsh|fish|powershell>", "Print a shell completion script"},
-		{"reminal upgrade", "Upgrade to the latest release"},
-		{"reminal restart [--all]", "Hot-swap the running agent(s) onto the latest binary"},
+		{"reminal upgrade [--machine <id|name>|--all-owned-machines]", "Upgrade to the latest release, here or on machines you own"},
+		{"reminal restart [--all] [--machine <id|name>|--all-owned-machines]", "Hot-swap the running agent(s) onto the latest binary"},
 		{"reminal version [--verbose]", "Print version (--verbose adds build date / commit)"},
 		{"reminal help", "Show this help"},
 	})
