@@ -29,7 +29,7 @@ func runNewOnMachine(name, selector, cwd string) error {
 	// (and the machine doesn't host a directory channel to itself for spawning).
 	if local, _ := client.MachinePub(); local != nil && om.Key.Equal(local) {
 		selfHealBundle()
-		return runNew(name)
+		return runNew(name, cwd)
 	}
 	label := machineLabel(om)
 	sp, err := client.SpawnOnMachine(om.Key, name, cwd, machineOpTimeout)

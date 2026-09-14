@@ -399,14 +399,17 @@ func main() {
 			// `reminal new --name <name>` / `--name=<name>`. First non-flag
 			// arg wins for the positional form. `--machine <id|name>` starts the
 			// session on another machine you own instead of this one; `--cwd`
-			// picks the shell's starting directory (remote only).
+			// picks the shell's starting directory (here or remote).
 			name, machine, cwd := "", "", ""
 			machineSeen := false
 			for i := 2; i < len(os.Args); i++ {
 				a := os.Args[i]
 				switch {
 				case a == "--name" || a == "-name":
-					if i+1 < len(os.Args) {
+					// Guard like --machine/--cwd: don't let a following flag become
+					// the name (so `new --name --machine box` errors on the empty
+					// --machine value instead of naming the session "--machine").
+					if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
 						name = os.Args[i+1]
 						i++
 					}
@@ -427,7 +430,7 @@ func main() {
 					machineSeen = true
 					machine = strings.TrimPrefix(a, "--machine=")
 				case a == "--cwd":
-					if i+1 < len(os.Args) {
+					if i+1 < len(os.Args) && !strings.HasPrefix(os.Args[i+1], "-") {
 						cwd = os.Args[i+1]
 						i++
 					}
@@ -452,7 +455,7 @@ func main() {
 			// Heal a loose post-upgrade install into the bundle first — a "+"
 			// background session needs the daemon the bundle carries.
 			selfHealBundle()
-			if err := runNew(name); err != nil {
+			if err := runNew(name, cwd); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
@@ -1562,11 +1565,11 @@ func runExpose(port int, public bool) error {
 // its credentials in the calling terminal. Behaves exactly like opening
 // a new terminal and typing `reminal` — except the shell runs detached,
 // so killing this terminal doesn't kill the session.
-func runNew(name string) error {
+func runNew(name, cwd string) error {
 	if os.Getenv("REMINAL_NEW_NESTED") == "1" {
 		return errors.New("refusing to spawn from inside another reminal new — protection against runaway recursion")
 	}
-	sp, err := client.Spawn(name, "")
+	sp, err := client.Spawn(name, cwd)
 	if err != nil {
 		return err
 	}

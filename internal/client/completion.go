@@ -315,7 +315,7 @@ complete -c reminal -n '__fish_seen_subcommand_from completion' -a 'bash zsh fis
 # directly to completion candidates with descriptions.
 complete -c reminal -f -n '__fish_seen_subcommand_from attach kill stop rename info qr' -a '(reminal __complete)'
 
-# --machine <id|name>: complete names/ids of machines you own (new/kill/stop).
-complete -c reminal -f -n '__fish_seen_subcommand_from new kill stop' -l machine -x -d 'Machine you own' -a '(reminal __complete-machines)'
-complete -c reminal -n '__fish_seen_subcommand_from new' -l cwd -d 'Starting directory (remote)'
+# --machine <id|name> (-m): complete names/ids of machines you own (new/kill/stop).
+complete -c reminal -f -n '__fish_seen_subcommand_from new kill stop' -s m -l machine -x -d 'Machine you own' -a '(reminal __complete-machines)'
+complete -c reminal -n '__fish_seen_subcommand_from new' -l cwd -d 'Starting directory (here or remote)'
 `
