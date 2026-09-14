@@ -866,6 +866,9 @@ func runMCP(_ []string) error {
 	// Ask once, at startup, who owns the notes. Reachable daemon (the normal
 	// case) => this process is stateless and every tool call is forwarded.
 	srv.daemonOwned = client.NotesDaemonReachable()
+	// Record the version we boot at so a later in-place re-exec (self-update) can
+	// tell the client's cached tool list is stale (see schemaStaleWarning).
+	rememberBootVersion()
 	defer srv.shutdown()
 
 	out := json.NewEncoder(os.Stdout)
@@ -914,18 +917,23 @@ func runMCP(_ []string) error {
 			}
 			_ = json.Unmarshal(msg.Params, &p)
 			text, err := srv.callTool(p.Name, p.Arguments)
+			// A version-skew warning, when present, rides as its OWN content
+			// block — never inlined into the result text, which for some tools is
+			// JSON the agent parses.
+			warn := schemaStaleWarning()
+			content := make([]any, 0, 2)
+			if warn != "" {
+				content = append(content, map[string]any{"type": "text", "text": warn})
+			}
 			if err != nil {
 				// Tool failures are results, not protocol errors — the model
 				// should see them and be able to correct course.
-				reply(msg.ID, map[string]any{
-					"content": []any{map[string]any{"type": "text", "text": "Error: " + err.Error()}},
-					"isError": true,
-				})
+				content = append(content, map[string]any{"type": "text", "text": "Error: " + err.Error()})
+				reply(msg.ID, map[string]any{"content": content, "isError": true})
 				continue
 			}
-			reply(msg.ID, map[string]any{
-				"content": []any{map[string]any{"type": "text", "text": text}},
-			})
+			content = append(content, map[string]any{"type": "text", "text": text})
+			reply(msg.ID, map[string]any{"content": content})
 		default:
 			if len(msg.ID) == 0 {
 				continue // a notification; nothing to answer

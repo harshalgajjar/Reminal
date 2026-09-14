@@ -722,6 +722,12 @@ func sweepDisplaced(dir string) {
 // newer returns true if latest > current. Versions are dotted ints with an
 // optional leading "v"; non-numeric suffixes (-rc1 etc.) are ignored on the
 // part that contains them.
+// Newer reports whether candidate is a strictly newer reminal release than
+// current. Exported wrapper around the internal comparator so other packages can
+// compare two version strings (with or without a leading "v", with or without a
+// pre-release suffix) without re-implementing the parse.
+func Newer(current, candidate string) bool { return newer(current, candidate) }
+
 func newer(current, latestTag string) bool {
 	cur := parseVer(current)
 	lat := parseVer(latestTag)
