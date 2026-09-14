@@ -261,6 +261,10 @@ func main() {
 			// Best-effort and silent — completion must never print errors.
 			client.CompleteSessions()
 			return
+		case "__complete-machines":
+			// Hidden helper: owned-machine name/id candidates for `--machine`.
+			client.CompleteMachines()
+			return
 		case "daemon":
 			// Hidden. The always-on directory host: keeps an owned machine
 			// reachable (listable + "+"-spawnable) even with no live session.
@@ -368,8 +372,10 @@ func main() {
 		case "new":
 			// Name may be given as `reminal new <name>` (positional) or
 			// `reminal new --name <name>` / `--name=<name>`. First non-flag
-			// arg wins for the positional form.
-			name := ""
+			// arg wins for the positional form. `--machine <id|name>` starts the
+			// session on another machine you own instead of this one; `--cwd`
+			// picks the shell's starting directory (remote only).
+			name, machine, cwd := "", "", ""
 			for i := 2; i < len(os.Args); i++ {
 				a := os.Args[i]
 				switch {
@@ -382,9 +388,31 @@ func main() {
 					name = strings.TrimPrefix(a, "--name=")
 				case strings.HasPrefix(a, "-name="):
 					name = strings.TrimPrefix(a, "-name=")
+				case a == "--machine" || a == "-machine" || a == "-m":
+					if i+1 < len(os.Args) {
+						machine = os.Args[i+1]
+						i++
+					}
+				case strings.HasPrefix(a, "--machine="):
+					machine = strings.TrimPrefix(a, "--machine=")
+				case a == "--cwd":
+					if i+1 < len(os.Args) {
+						cwd = os.Args[i+1]
+						i++
+					}
+				case strings.HasPrefix(a, "--cwd="):
+					cwd = strings.TrimPrefix(a, "--cwd=")
 				case !strings.HasPrefix(a, "-") && name == "":
 					name = a
 				}
+			}
+			if strings.TrimSpace(machine) != "" {
+				// Spawn on another owned machine over its directory channel.
+				if err := runNewOnMachine(name, machine, cwd); err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					os.Exit(1)
+				}
+				return
 			}
 			// Heal a loose post-upgrade install into the bundle first — a "+"
 			// background session needs the daemon the bundle carries.
@@ -511,16 +539,30 @@ func main() {
 			return
 		case "kill":
 			idArg := ""
+			machine := ""
 			yes := false
-			for _, a := range os.Args[2:] {
-				switch a {
-				case "-y", "--yes":
+			for i := 2; i < len(os.Args); i++ {
+				a := os.Args[i]
+				switch {
+				case a == "-y" || a == "--yes":
 					yes = true
-				default:
-					if !strings.HasPrefix(a, "-") && idArg == "" {
-						idArg = a
+				case a == "--machine" || a == "-machine" || a == "-m":
+					if i+1 < len(os.Args) {
+						machine = os.Args[i+1]
+						i++
 					}
+				case strings.HasPrefix(a, "--machine="):
+					machine = strings.TrimPrefix(a, "--machine=")
+				case !strings.HasPrefix(a, "-") && idArg == "":
+					idArg = a
 				}
+			}
+			if strings.TrimSpace(machine) != "" {
+				if err := runKillOnMachine(idArg, machine, yes); err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					os.Exit(1)
+				}
+				return
 			}
 			if err := runKill(idArg, yes); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -708,7 +750,7 @@ func printHelp() {
 
 	helpTable(w, "Commands", []helpRow{
 		{"reminal [--name <name>]", "Share this terminal (works out of the box)"},
-		{"reminal new [name]", "Spawn a detached background session (survives this terminal closing)"},
+		{"reminal new [name] [--machine <id|name>]", "Spawn a detached background session — here, or on a machine you own"},
 		{"reminal expose <port> [--public]", "Forward a local HTTP port to a public URL (PIN-protected by default)"},
 		{"reminal list [filter] [-v]", "List sessions, recent-first; filter by id/name/cwd/title (--idle/--viewers/--headless)"},
 		{"reminal prune [dur] [-y]", "Kill idle, unwatched shell sessions (default idle 30m+; e.g. 12h, 1d, 2w)"},
@@ -720,7 +762,7 @@ func printHelp() {
 		{"reminal owners [rename|revoke|restore]", "List and manage this machine's owner devices"},
 		{"reminal machines [rename <id> <name>]", "List every machine you own and its live sessions"},
 		{"reminal stop [id|name|port] [-y]", "Stop the reminal layer — your shell/server keeps running"},
-		{"reminal kill [id|name] [-y]", "Fully terminate a shell session (irreversible)"},
+		{"reminal kill [id|name] [--machine <id|name>] [-y]", "Fully terminate a shell session — here or on a machine you own (irreversible)"},
 		{"reminal send <file>", "Push a file to every connected viewer (web auto-downloads)"},
 		{"reminal copy [--ttl <dur>] [-f] <file>", "Offer a file for pickup elsewhere; prints a one-time code"},
 		{"reminal paste <code> [dest]", "Fetch a file offered by 'reminal copy' (default dest: .)"},
@@ -751,6 +793,7 @@ func printHelp() {
 
 	helpTable(w, "Examples", []helpRow{
 		{"reminal new deploy", "named background session"},
+		{"reminal new --machine away", "start a session on another machine you own (see reminal machines)"},
 		{"reminal attach deploy", "attach to it by name"},
 		{"reminal list ~/project", "filter by working directory"},
 		{"reminal connect ABC12345 482916", "connect with id + pin"},

@@ -45,6 +45,29 @@ func CompleteSessions() {
 	}
 }
 
+// CompleteMachines prints completion candidates for `--machine` — the name and
+// the mach_ id of every machine you own, as "value<TAB>description" lines. The
+// generated shell scripts call this via the hidden `reminal __complete-machines`
+// when the word being completed follows --machine. Best-effort and silent.
+func CompleteMachines() {
+	list, err := ListOwnedMachines()
+	if err != nil {
+		return
+	}
+	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
+	for _, om := range list {
+		// The id without the trailing ellipsis, so the completed token is a clean
+		// prefix the resolver accepts as-is.
+		short := strings.TrimSuffix(ShortMachineID(om.Key), "…")
+		if om.Name != "" {
+			fmt.Printf("%s\t%s\n", clean(om.Name), short)
+			fmt.Printf("%s\t%s\n", short, clean(om.Name))
+		} else {
+			fmt.Printf("%s\t%s\n", short, "unnamed machine")
+		}
+	}
+}
+
 // Completion prints a shell completion script for the given shell to stdout.
 // Supported shells: bash, zsh, fish. Returns an error on unknown shells.
 //
@@ -95,6 +118,17 @@ Register-ArgumentCompleter -Native -CommandName reminal -ScriptBlock {
         }
         return
     }
+    # After --machine, offer names/ids of machines you own.
+    if ($prev -in @('--machine','-m')) {
+        reminal __complete-machines 2>$null | ForEach-Object {
+            $parts = $_ -split "` + "`" + `t", 2
+            if ($parts[0] -like "$wordToComplete*") {
+                $desc = if ($parts.Count -gt 1) { $parts[1] } else { $parts[0] }
+                [System.Management.Automation.CompletionResult]::new($parts[0], $parts[0], 'ParameterValue', $desc)
+            }
+        }
+        return
+    }
     if ($prev -eq 'completion') {
         @('bash','zsh','fish','powershell') | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
             [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterValue', $_)
@@ -120,11 +154,16 @@ _reminal_complete() {
     }
 
     local subcommands="connect new attach list ls kill stop rename prune restart expose send copy paste notify connections info qr own owners machines doctor completion upgrade relay version help"
-    local flags="--connect --pin --name --verbose -v"
+    local flags="--connect --pin --name --machine --cwd --verbose -v"
 
     case "${prev}" in
         completion)
             COMPREPLY=( $(compgen -W "bash zsh fish" -- "${cur}") )
+            return 0
+            ;;
+        --machine|-m)
+            # Complete names/ids of machines you own (for new/kill/stop --machine).
+            COMPREPLY=( $(compgen -W "$(reminal __complete-machines 2>/dev/null | cut -f1)" -- "${cur}") )
             return 0
             ;;
         attach|kill|stop|rename|info|qr)
@@ -200,6 +239,16 @@ _reminal() {
                 '(-v --verbose)'{-v,--verbose}'[Verbose mode]'
             ;;
         args)
+            # --machine <id|name>: complete owned-machine names/ids.
+            if [[ "$words[CURRENT-1]" == "--machine" || "$words[CURRENT-1]" == "-m" ]]; then
+                local -a machs
+                local line
+                for line in ${(f)"$(reminal __complete-machines 2>/dev/null)"}; do
+                    machs+=("${line%%$'\t'*}:${line#*$'\t'}")
+                done
+                _describe -t machines 'machine' machs
+                return
+            fi
             case "$words[1]" in
                 completion)
                     _values 'shell' 'bash' 'zsh' 'fish'
@@ -265,4 +314,8 @@ complete -c reminal -n '__fish_seen_subcommand_from completion' -a 'bash zsh fis
 # 'reminal __complete' prints "value<tab>description" lines, which fish maps
 # directly to completion candidates with descriptions.
 complete -c reminal -f -n '__fish_seen_subcommand_from attach kill stop rename info qr' -a '(reminal __complete)'
+
+# --machine <id|name>: complete names/ids of machines you own (new/kill/stop).
+complete -c reminal -f -n '__fish_seen_subcommand_from new kill stop' -l machine -x -d 'Machine you own' -a '(reminal __complete-machines)'
+complete -c reminal -n '__fish_seen_subcommand_from new' -l cwd -d 'Starting directory (remote)'
 `
