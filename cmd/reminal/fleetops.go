@@ -172,16 +172,30 @@ func fleetLabel(m client.FleetMachine) string {
 	return m.ShortID
 }
 
-// upgradeOutcome renders the host's last narrated step as one line. The host
-// says "Already on the latest version — nothing to do" itself when there was
-// nothing to do, which is how an up-to-date machine reports being skipped
-// without us having to ask its version first.
+// upgradeOutcome turns the host's last narrated step into a RESULT, not an echo
+// of the narration — "upgraded — restarting" reads as an ending, where the
+// host's own last words ("Restarting this session — reconnecting shortly") read
+// as a story cut off mid-sentence.
+//
+// A host that had nothing to do says so itself, and that wording is kept: it is
+// how an up-to-date machine reports being skipped without us having to ask its
+// version first.
 func upgradeOutcome(st client.UpgradeStep) string {
-	if strings.TrimSpace(st.Detail) != "" {
-		return st.Detail
-	}
-	if st.Version != "" {
-		return fmt.Sprintf("%s (v%s)", st.Stage, st.Version)
+	detail := strings.TrimSpace(st.Detail)
+	switch {
+	case st.Error != "":
+		return st.Error
+	case st.Stage == "done":
+		if detail != "" {
+			return detail
+		}
+		return "already on the latest version"
+	case st.Stage == "restart":
+		// The host publishes its last step BEFORE it re-execs, so reaching this
+		// stage is the successful ending rather than a truncated one.
+		return "upgraded — restarting"
+	case detail != "":
+		return detail
 	}
 	return st.Stage
 }
