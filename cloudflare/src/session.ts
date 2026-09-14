@@ -432,7 +432,7 @@ export class SessionRoom {
   // ---- tunnel: register + request/response correlation ----
 
   private async handleTunnelRegister(dataJSON: string) {
-    let info: { port?: number; pin_hash?: string; public?: boolean } = {};
+    let info: { port?: number; pin_hash?: string; public?: boolean; caps?: string[] } = {};
     try {
       info = JSON.parse(dataJSON);
     } catch {
@@ -462,7 +462,11 @@ export class SessionRoom {
       signingKey = toHex(keyBytes);
     }
 
-    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey };
+    // Capabilities are re-advertised on every registration, so read them fresh
+    // rather than inheriting from prev — a downgrade must actually take effect.
+    const reqChunk = Array.isArray(info.caps) && info.caps.includes("req_chunk");
+
+    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey, reqChunk };
     await this.state.storage.put("tunnelMeta", meta);
   }
 
@@ -786,6 +790,15 @@ export class SessionRoom {
     const bodyArr = new Uint8Array(bodyBytes);
     const REQ_BODY_CHUNK = 700 * 1024;
     const bodyMore = bodyArr.byteLength > REQ_BODY_CHUNK;
+    if (bodyMore && !meta.reqChunk) {
+      // Agent predates chunked request bodies: it would ignore the follow-on
+      // tunnel_req_body messages and hand the backend a TRUNCATED body — a
+      // silently corrupted upload. Refuse instead, and say why.
+      return new Response(
+        "reminal: this upload is too large for the reminal version running on the target machine.\nRun `reminal upgrade` there, then retry.\n",
+        { status: 413, headers: { "Content-Type": "text/plain" } },
+      );
+    }
     tunnel.send(JSON.stringify({
       type: "tunnel_req",
       data: JSON.stringify({
@@ -853,7 +866,16 @@ export class SessionRoom {
     // app's login cookies. `Headers.append` preserves them, and Cloudflare emits
     // one Set-Cookie line each to the visitor.
     const respHeaders = new Headers(out.headers);
-    for (const c of out.setCookies ?? []) respHeaders.append("Set-Cookie", c);
+    if (hostMode) {
+      for (const c of out.setCookies ?? []) respHeaders.append("Set-Cookie", c);
+    } else {
+      // Path-mode is symmetric with the inbound gate above: every tunnel shares
+      // the relay origin, and since we never forward cookies back to the app, a
+      // Set-Cookie here can only pollute the shared jar — including letting one
+      // tunnel's app write a reminal_auth_<otherId> at Path=/ that shadows
+      // another tunnel's gate cookie and forces its visitor to re-authenticate.
+      respHeaders.delete("Set-Cookie");
+    }
     return new Response(out.body as BodyInit, { status: out.status, headers: respHeaders });
   }
 

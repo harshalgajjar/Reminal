@@ -391,6 +391,11 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		"port":     t.port,
 		"public":   t.public,
 		"pin_hash": t.pinHash,
+		// Tell the relay this agent can reassemble a chunked request body
+		// (body_more + tunnel_req_body). Without it the relay must refuse an
+		// upload too big for one message rather than chunk it — an older agent
+		// silently drops the follow-on chunks and would write a TRUNCATED file.
+		"caps": []string{"req_chunk"},
 	})
 	if err := t.writeMsg(conn, protocol.Message{
 		Type: protocol.TypeTunnelRegister,
@@ -426,7 +431,9 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 			// here — before spawning the handler and before the next message is
 			// read — so a chunk racing in right behind the head always finds it.
 			var bodyCh chan []byte
+			var bodyReqID string
 			if reqID, more := peekReqBodyMore(m.Data); more && reqID != "" {
+				bodyReqID = reqID
 				t.reqBodiesMu.Lock()
 				// Bound in-flight chunked uploads the way maxWSStreams bounds
 				// proxied sockets — a relay that opens chunked bodies and never
@@ -446,7 +453,7 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 				}
 				t.reqBodiesMu.Unlock()
 			}
-			go t.handleTunnelReq(conn, m.Data, bodyCh)
+			go t.handleTunnelReq(conn, m.Data, bodyReqID, bodyCh)
 		case protocol.TypeTunnelReqBody:
 			t.handleTunnelReqBody(m.Data)
 		case protocol.TypeTunnelWSOpen:
@@ -527,7 +534,7 @@ func (t *Tunnel) closeAllReqBodies() {
 // handleTunnelReq parses one tunnel_req payload, performs the local
 // HTTP request, and sends back a tunnel_resp. Errors surface to the
 // visitor as a 502 with the message in the body.
-func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string, bodyCh chan []byte) {
+func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string, bodyCh chan []byte) {
 	// Spawned per relay-forwarded request (go t.handleTunnelReq); a panic here would
 	// crash the port-forward. Contain it so one bad request just fails.
 	defer func() {
@@ -535,6 +542,26 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string, bodyCh ch
 			recoverLog("handleTunnelReq", r)
 		}
 	}()
+	if bodyCh != nil {
+		// Install the body-channel cleanup BEFORE anything that can return
+		// early. The read loop registered this channel off a permissive peek of
+		// the same payload; the strict unmarshal below can still reject it (a
+		// type-mismatched field parses for one struct and not the other). If we
+		// returned without draining, the read loop would block forever feeding a
+		// channel nobody reads — and because it's parked on a channel send, not
+		// a socket read, closing the socket wouldn't free it and teardown's
+		// closeAllReqBodies would never run. Draining keeps the loop moving even
+		// when this request is abandoned; bodyReqID is the key the loop used.
+		defer func() {
+			t.reqBodiesMu.Lock()
+			if t.reqBodies[bodyReqID] == bodyCh {
+				delete(t.reqBodies, bodyReqID)
+			}
+			t.reqBodiesMu.Unlock()
+			for range bodyCh {
+			}
+		}()
+	}
 	var req struct {
 		ReqID    string            `json:"req_id"`
 		Method   string            `json:"method"`
@@ -558,21 +585,7 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string, bodyCh ch
 			}
 		}
 		if bodyCh != nil {
-			defer func() {
-				t.reqBodiesMu.Lock()
-				// Only drop OUR entry: a relay that reuses a req_id replaces the
-				// map value, and deleting blindly would unregister the newer
-				// request's channel (stranding it until teardown).
-				if t.reqBodies[req.ReqID] == bodyCh {
-					delete(t.reqBodies, req.ReqID)
-				}
-				t.reqBodiesMu.Unlock()
-				// Drain any straggler chunks so a blocked sender in the read loop
-				// (buffered channel full) can never wedge; the close came from the
-				// final chunk or connection teardown.
-				for range bodyCh {
-				}
-			}()
+			// Cleanup (unregister + drain) is already deferred at function entry.
 			for chunk := range bodyCh {
 				// Over the ceiling — truncate rather than grow unbounded. Keep
 				// DRAINING (never break): handleTunnelReqBody feeds this channel
