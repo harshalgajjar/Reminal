@@ -24,6 +24,12 @@ const MAX_WS_FRAME_BYTES = 700 * 1024;
 // would only catch after the fact. Matches the agent's maxWSStreams.
 const MAX_VISITOR_SOCKETS = 512;
 
+// Largest request body we'll relay. Matches the agent's assembled-body ceiling
+// (maxTunnelResponse), so anything bigger would be truncated into garbage
+// anyway — a clean 413 beats a silently mangled upload, and it keeps the body
+// plus its queued base64 chunks inside the DO's ~128 MB budget.
+const MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024;
+
 // Cookie name scoped per-session so multiple port-forwards can each
 // have their own auth state in a single browser.
 const AUTH_COOKIE_PREFIX = "reminal_auth_";
@@ -708,8 +714,26 @@ export class SessionRoom {
       });
     }
 
+    // Refuse an upload we'd only mangle anyway: the agent caps an assembled
+    // request body at the same ceiling, and buffering + chunk-queueing much more
+    // than this risks the DO's ~128 MB budget. Check the declared length first so
+    // an oversized body is rejected before we read it into memory.
+    const declaredLen = Number(request.headers.get("content-length") ?? "");
+    if (Number.isFinite(declaredLen) && declaredLen > MAX_REQUEST_BODY_BYTES) {
+      return new Response("reminal: request body too large\n", {
+        status: 413,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
     const reqID = crypto.randomUUID();
     const bodyBytes = await request.arrayBuffer();
+    if (bodyBytes.byteLength > MAX_REQUEST_BODY_BYTES) {
+      // Missing or wrong Content-Length (chunked upload) — catch it after the fact.
+      return new Response("reminal: request body too large\n", {
+        status: 413,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
     const headers: Record<string, string> = {};
     request.headers.forEach((v, k) => {
       const lk = k.toLowerCase();

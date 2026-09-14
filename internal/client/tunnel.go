@@ -159,6 +159,13 @@ const wsStreamSendBuffer = 256
 // immediate close rather than allocating a backend dial + two pumps.
 const maxWSStreams = 512
 
+// maxChunkedUploads caps how many large uploads may be mid-assembly at once.
+// Each one holds a registered channel and a parked handler goroutine until its
+// final chunk arrives, so an upstream that opens chunked bodies and never
+// finishes them would otherwise grow both without bound. Past the cap a request
+// is handled with only its first chunk instead of being tracked.
+const maxChunkedUploads = 64
+
 // NewTunnel constructs a port-forward agent. Session ID + PIN are
 // freshly generated — every `reminal expose` invocation gets a new
 // pair, even for the same port, so old URLs become invalid the moment
@@ -420,9 +427,23 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 			// read — so a chunk racing in right behind the head always finds it.
 			var bodyCh chan []byte
 			if reqID, more := peekReqBodyMore(m.Data); more && reqID != "" {
-				bodyCh = make(chan []byte, 8)
 				t.reqBodiesMu.Lock()
-				t.reqBodies[reqID] = bodyCh
+				// Bound in-flight chunked uploads the way maxWSStreams bounds
+				// proxied sockets — a relay that opens chunked bodies and never
+				// finishes them must not grow the map without limit. Over the
+				// cap we simply don't register: the handler proceeds with just
+				// the first chunk and the follow-on chunks find no entry and are
+				// dropped. Bounded, and it never blocks the read loop.
+				if _, replacing := t.reqBodies[reqID]; replacing || len(t.reqBodies) < maxChunkedUploads {
+					// A relay that reuses an in-flight req_id would otherwise
+					// strand the previous handler on a channel nobody ever closes
+					// (and which teardown can no longer see). Close as we displace.
+					if prev := t.reqBodies[reqID]; prev != nil {
+						close(prev)
+					}
+					bodyCh = make(chan []byte, 8)
+					t.reqBodies[reqID] = bodyCh
+				}
 				t.reqBodiesMu.Unlock()
 			}
 			go t.handleTunnelReq(conn, m.Data, bodyCh)
@@ -539,7 +560,12 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string, bodyCh ch
 		if bodyCh != nil {
 			defer func() {
 				t.reqBodiesMu.Lock()
-				delete(t.reqBodies, req.ReqID)
+				// Only drop OUR entry: a relay that reuses a req_id replaces the
+				// map value, and deleting blindly would unregister the newer
+				// request's channel (stranding it until teardown).
+				if t.reqBodies[req.ReqID] == bodyCh {
+					delete(t.reqBodies, req.ReqID)
+				}
 				t.reqBodiesMu.Unlock()
 				// Drain any straggler chunks so a blocked sender in the read loop
 				// (buffered channel full) can never wedge; the close came from the
@@ -548,15 +574,17 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string, bodyCh ch
 				}
 			}()
 			for chunk := range bodyCh {
+				// Over the ceiling — truncate rather than grow unbounded. Keep
+				// DRAINING (never break): handleTunnelReqBody feeds this channel
+				// inline on the shared read loop, so abandoning it would fill the
+				// buffer and block every other request and proxied WebSocket
+				// frame until this handler's backend call finished.
+				if len(raw) >= maxTunnelResponse {
+					continue
+				}
 				if len(raw)+len(chunk) > maxTunnelResponse {
-					// Over the ceiling — truncate rather than grow unbounded. The
-					// backend will get a short body and most likely 400; that's a
-					// clean failure, not an OOM.
-					take := maxTunnelResponse - len(raw)
-					if take > 0 {
-						raw = append(raw, chunk[:take]...)
-					}
-					break
+					raw = append(raw, chunk[:maxTunnelResponse-len(raw)]...)
+					continue
 				}
 				raw = append(raw, chunk...)
 			}
