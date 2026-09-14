@@ -577,7 +577,13 @@ export class SessionRoom {
 
     const headers: Record<string, string> = {};
     request.headers.forEach((v, k) => {
-      if (k.toLowerCase() === "cookie") return; // don't leak the reminal auth cookie to the app
+      if (k.toLowerCase() === "cookie") {
+        // Strip only reminal's auth cookie; keep the app's own cookies.
+        const kept = stripAuthCookie(v, sessionId);
+        if (kept) headers[k] = kept;
+        return;
+      }
+      if (k.toLowerCase().startsWith("x-reminal-")) return; // don't leak internal routing headers
       headers[k] = v;
     });
     try {
@@ -703,9 +709,23 @@ export class SessionRoom {
       const lk = k.toLowerCase();
       // The agent re-adds X-Forwarded-* itself; we shouldn't trust
       // what Cloudflare passed (already added cf-* headers etc.).
-      if (lk === "cookie") return; // don't leak the reminal auth cookie to the user's app
+      if (lk === "cookie") {
+        // Strip only reminal's auth cookie; forward the app's own cookies so
+        // it can keep the visitor logged in after its login sets one.
+        const kept = stripAuthCookie(v, sessionId);
+        if (kept) headers[k] = kept;
+        return;
+      }
+      if (lk.startsWith("x-reminal-")) return; // don't leak our internal routing headers
       headers[k] = v;
     });
+    // The Host header does not survive Cloudflare's DO fetch, so the agent would
+    // send the backend Host: 127.0.0.1:<port>. index.ts stashed the real public
+    // host in x-reminal-public-host; forward it as the Host so the backend sees a
+    // Host that matches the Origin/Referer the browser sends — webmin/UniFi
+    // reject a login POST whose Referer/Origin host differs from the served host.
+    const publicHost = request.headers.get("x-reminal-public-host");
+    if (publicHost) headers["host"] = publicHost;
 
     const promise = new Promise<{ status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | Uint8Array }>((resolve) => {
       const timeout = setTimeout(() => {
@@ -926,6 +946,27 @@ function parseCookies(header: string): Record<string, string> {
     out[part.slice(0, eq).trim()] = decodeURIComponent(part.slice(eq + 1).trim());
   }
   return out;
+}
+
+// Remove ONLY reminal's own PIN-gate cookie from a Cookie header, forwarding
+// every other cookie to the app untouched. The old behaviour dropped the whole
+// header — which also stripped the app's OWN session cookie, so an app like
+// webmin couldn't stay logged in after its login set a cookie (the visitor's
+// browser sent it back, but the relay never passed it on). Values are kept as
+// their original substrings (no decode/re-encode) so nothing is corrupted.
+function stripAuthCookie(header: string, sessionId: string): string {
+  if (!header) return "";
+  const authName = AUTH_COOKIE_PREFIX + sessionId;
+  return header
+    .split(";")
+    .map((p) => p.trim())
+    .filter((p) => {
+      if (!p) return false;
+      const eq = p.indexOf("=");
+      const name = (eq < 0 ? p : p.slice(0, eq)).trim();
+      return name !== authName;
+    })
+    .join("; ");
 }
 
 // ---- HTML pages ----

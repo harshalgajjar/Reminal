@@ -466,7 +466,24 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 		t.sendError(conn, req.ReqID, fmt.Sprintf("build request: %v", err))
 		return
 	}
+	var visitorHost string
 	for k, v := range req.Headers {
+		if strings.EqualFold(k, "Host") {
+			// Handle Host BEFORE the hop-header guard (which lists "host"):
+			// Go's Transport takes the outgoing Host from req.Host, NOT the
+			// header map, so setting the header here would be silently ignored
+			// and the backend would see Host: 127.0.0.1:<port>. Forward the
+			// visitor's public host instead, so the backend's Host matches the
+			// Origin/Referer the browser sends. Apps like webmin and UniFi
+			// reject a login POST whose Referer/Origin host differs from the
+			// host they were served at (CSRF / same-origin defence) — exactly
+			// what a Cloudflare quick tunnel avoids by forwarding the public
+			// host. The connection still dials 127.0.0.1:<port> via URL.Host.
+			// (The relay forwards the header lowercased as "host".)
+			visitorHost = v
+			httpReq.Host = v
+			continue
+		}
 		if isHopHeader(k) {
 			continue
 		}
@@ -485,8 +502,8 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 	// Reverse-proxy hygiene — give the upstream the original scheme +
 	// host so it can log + redirect correctly.
 	httpReq.Header.Set("X-Forwarded-Proto", "https")
-	if h := req.Headers["Host"]; h != "" {
-		httpReq.Header.Set("X-Forwarded-Host", h)
+	if visitorHost != "" {
+		httpReq.Header.Set("X-Forwarded-Host", visitorHost)
 	}
 
 	resp, err := t.httpClient.Do(httpReq)

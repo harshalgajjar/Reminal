@@ -39,6 +39,9 @@ export default {
       doUrl.pathname = `/p/${sessionId}${url.pathname === "/" ? "/" : url.pathname}`;
       const hdrs = new Headers(request.headers);
       hdrs.set("x-reminal-host-mode", "1");
+      // The Host header does not survive the DO fetch, so carry the real public
+      // host in a private header for the DO to forward to the agent's backend.
+      hdrs.set("x-reminal-public-host", hostHeader);
       return stub.fetch(new Request(new Request(doUrl.toString(), request), { headers: hdrs }));
     }
 
@@ -78,7 +81,11 @@ export default {
       const stub = env.SESSION.get(id);
       const doUrl = new URL(request.url);
       doUrl.pathname = `/p/${sessionId}${rest}`;
-      return stub.fetch(new Request(doUrl.toString(), request));
+      // The Host header does not survive the DO fetch, so carry the real public
+      // host in a private header for the DO to forward to the agent's backend.
+      const hdrs = new Headers(request.headers);
+      hdrs.set("x-reminal-public-host", hostHeader);
+      return stub.fetch(new Request(new Request(doUrl.toString(), request), { headers: hdrs }));
     }
 
     // Version beacon: the online, maintainer-controlled critical-upgrade switch.
