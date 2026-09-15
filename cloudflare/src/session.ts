@@ -24,12 +24,6 @@ const MAX_WS_FRAME_BYTES = 700 * 1024;
 // would only catch after the fact. Matches the agent's maxWSStreams.
 const MAX_VISITOR_SOCKETS = 512;
 
-// Largest request body we'll relay. Matches the agent's assembled-body ceiling
-// (maxTunnelResponse), so anything bigger would be truncated into garbage
-// anyway — a clean 413 beats a silently mangled upload, and it keeps the body
-// plus its queued base64 chunks inside the DO's ~128 MB budget.
-const MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024;
-
 // Cookie name scoped per-session so multiple port-forwards can each
 // have their own auth state in a single browser.
 const AUTH_COOKIE_PREFIX = "reminal_auth_";
@@ -45,7 +39,7 @@ export class SessionRoom {
   // for a single chunk, or a ReadableStream for a multi-chunk one); later chunks
   // enqueue into that stream's controller until one arrives with more=false.
   private pendingTunnelReqs: Map<string, {
-    resolve: (resp: { status: number; headers: Record<string, string>; setCookies?: string[]; body: ReadableStream<Uint8Array> | Uint8Array }) => void;
+    resolve: (resp: { status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | Uint8Array }) => void;
     timeout: ReturnType<typeof setTimeout>;
     controller?: ReadableStreamDefaultController<Uint8Array>; // set once a multi-chunk (streamed) response begins
   }> = new Map();
@@ -85,7 +79,7 @@ export class SessionRoom {
       // the auth cookie, or the gate — see handleTunnelHttp/handleTunnelAuth.
       const hostMode = request.headers.get("x-reminal-host-mode") === "1";
       if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-        return this.handleTunnelWS(request, url, hostMode);
+        return this.handleTunnelWS(request, url);
       }
       return this.handleTunnelHttp(request, url, hostMode);
     }
@@ -432,7 +426,7 @@ export class SessionRoom {
   // ---- tunnel: register + request/response correlation ----
 
   private async handleTunnelRegister(dataJSON: string) {
-    let info: { port?: number; pin_hash?: string; public?: boolean; caps?: string[] } = {};
+    let info: { port?: number; pin_hash?: string; public?: boolean } = {};
     try {
       info = JSON.parse(dataJSON);
     } catch {
@@ -443,30 +437,14 @@ export class SessionRoom {
     const isPublic = !!info.public;
     if (!port || !pinHash) return;
 
-    // Keep the auth-cookie signing key STABLE across re-registrations of the
-    // same tunnel. The agent re-sends tunnel_register on every reconnect (its
-    // relay socket is dropped every few minutes — Cloudflare caps WebSocket
-    // duration), and rotating the key each time would invalidate every visitor's
-    // auth cookie, bouncing them back to the PIN gate mid-session. So reuse the
-    // existing key whenever the PIN is unchanged; only mint a fresh one for a
-    // brand-new tunnel or when the PIN actually changes — the latter is exactly
-    // when old cookies SHOULD stop granting access (new credentials, or a prior
-    // session-ID reused by a different expose).
-    const prev = await this.state.storage.get<TunnelMeta>("tunnelMeta");
-    let signingKey: string;
-    if (prev && prev.signingKey && prev.pinHash === pinHash) {
-      signingKey = prev.signingKey;
-    } else {
-      const keyBytes = new Uint8Array(32);
-      crypto.getRandomValues(keyBytes);
-      signingKey = toHex(keyBytes);
-    }
+    // Generate a per-session signing key for the auth cookie HMAC. New
+    // each registration so a stale cookie from a prior session-ID reuse
+    // doesn't accidentally grant access.
+    const keyBytes = new Uint8Array(32);
+    crypto.getRandomValues(keyBytes);
+    const signingKey = toHex(keyBytes);
 
-    // Capabilities are re-advertised on every registration, so read them fresh
-    // rather than inheriting from prev — a downgrade must actually take effect.
-    const reqChunk = Array.isArray(info.caps) && info.caps.includes("req_chunk");
-
-    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey, reqChunk };
+    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey };
     await this.state.storage.put("tunnelMeta", meta);
   }
 
@@ -508,16 +486,15 @@ export class SessionRoom {
       return;
     }
 
-    // Head chunk — carries status + headers (+ any repeated Set-Cookie list).
+    // Head chunk — carries status + headers.
     clearTimeout(entry.timeout);
     const status = typeof resp.status === "number" ? resp.status : 502;
     const headers: Record<string, string> = resp.headers ?? {};
-    const setCookies: string[] | undefined = Array.isArray(resp.set_cookies) ? resp.set_cookies : undefined;
 
     if (!more) {
       // Single-chunk response (small body, or an older single-message agent).
       this.pendingTunnelReqs.delete(reqID);
-      entry.resolve({ status, headers, setCookies, body: chunk });
+      entry.resolve({ status, headers, body: chunk });
       return;
     }
 
@@ -537,7 +514,7 @@ export class SessionRoom {
       },
     });
     armStall();
-    entry.resolve({ status, headers, setCookies, body: stream });
+    entry.resolve({ status, headers, body: stream });
   }
 
   // ---- tunnel: WebSocket proxy ----
@@ -545,7 +522,7 @@ export class SessionRoom {
   // handleTunnelWS upgrades a visitor WebSocket and hands the agent a matching
   // stream id so it can dial the local backend. Frames then flow both ways as
   // tunnel_ws_data over the agent's control socket (see webSocketMessage).
-  private async handleTunnelWS(request: Request, url: URL, hostMode = false): Promise<Response> {
+  private async handleTunnelWS(request: Request, url: URL): Promise<Response> {
     const m = url.pathname.match(/^\/p\/([A-Z0-9]+)(\/.*|$)/i);
     if (!m) {
       return new Response("Not found", { status: 404 });
@@ -588,24 +565,9 @@ export class SessionRoom {
 
     const headers: Record<string, string> = {};
     request.headers.forEach((v, k) => {
-      if (k.toLowerCase() === "cookie") {
-        // Only in host-mode, where this tunnel owns its own origin. See the
-        // note in handleTunnelHttp: in path-mode every tunnel shares the relay
-        // origin, so forwarding app cookies would hand one tunnel's backend the
-        // cookies another tunnel's app set.
-        if (!hostMode) return;
-        const kept = stripAuthCookie(v, sessionId);
-        if (kept) headers[k] = kept;
-        return;
-      }
-      if (k.toLowerCase().startsWith("x-reminal-")) return; // don't leak internal routing headers
+      if (k.toLowerCase() === "cookie") return; // don't leak the reminal auth cookie to the app
       headers[k] = v;
     });
-    // Same as the HTTP path: forward the real public host so the backend's WS
-    // upgrade sees a Host matching the Origin the browser sends (apps like
-    // UniFi's live portal enforce same-origin on the WebSocket too).
-    const wsPublicHost = request.headers.get("x-reminal-public-host");
-    if (wsPublicHost) headers["host"] = wsPublicHost;
     try {
       tunnel.send(JSON.stringify({
         type: "tunnel_ws_open",
@@ -722,56 +684,18 @@ export class SessionRoom {
       });
     }
 
-    // Refuse an upload we'd only mangle anyway: the agent caps an assembled
-    // request body at the same ceiling, and buffering + chunk-queueing much more
-    // than this risks the DO's ~128 MB budget. Check the declared length first so
-    // an oversized body is rejected before we read it into memory.
-    const declaredLen = Number(request.headers.get("content-length") ?? "");
-    if (Number.isFinite(declaredLen) && declaredLen > MAX_REQUEST_BODY_BYTES) {
-      return new Response("reminal: request body too large\n", {
-        status: 413,
-        headers: { "Content-Type": "text/plain" },
-      });
-    }
     const reqID = crypto.randomUUID();
     const bodyBytes = await request.arrayBuffer();
-    if (bodyBytes.byteLength > MAX_REQUEST_BODY_BYTES) {
-      // Missing or wrong Content-Length (chunked upload) — catch it after the fact.
-      return new Response("reminal: request body too large\n", {
-        status: 413,
-        headers: { "Content-Type": "text/plain" },
-      });
-    }
     const headers: Record<string, string> = {};
     request.headers.forEach((v, k) => {
       const lk = k.toLowerCase();
       // The agent re-adds X-Forwarded-* itself; we shouldn't trust
       // what Cloudflare passed (already added cf-* headers etc.).
-      if (lk === "cookie") {
-        // Forward the app's own cookies (minus ours) so it can keep the visitor
-        // logged in after its login sets one — but ONLY in host-mode, where the
-        // tunnel owns its own origin (port-<id>.reminal.app) and the browser
-        // scopes cookies to it. In path-mode every tunnel shares the relay
-        // origin, so an app cookie set at Path=/ by one tunnel is sent to all of
-        // them; forwarding it would leak one tunnel's session cookie to another
-        // tunnel's backend operator. There we keep dropping the whole header.
-        if (!hostMode) return;
-        const kept = stripAuthCookie(v, sessionId);
-        if (kept) headers[k] = kept;
-        return;
-      }
-      if (lk.startsWith("x-reminal-")) return; // don't leak our internal routing headers
+      if (lk === "cookie") return; // don't leak the reminal auth cookie to the user's app
       headers[k] = v;
     });
-    // The Host header does not survive Cloudflare's DO fetch, so the agent would
-    // send the backend Host: 127.0.0.1:<port>. index.ts stashed the real public
-    // host in x-reminal-public-host; forward it as the Host so the backend sees a
-    // Host that matches the Origin/Referer the browser sends — webmin/UniFi
-    // reject a login POST whose Referer/Origin host differs from the served host.
-    const publicHost = request.headers.get("x-reminal-public-host");
-    if (publicHost) headers["host"] = publicHost;
 
-    const promise = new Promise<{ status: number; headers: Record<string, string>; setCookies?: string[]; body: ReadableStream<Uint8Array> | Uint8Array }>((resolve) => {
+    const promise = new Promise<{ status: number; headers: Record<string, string>; body: ReadableStream<Uint8Array> | Uint8Array }>((resolve) => {
       const timeout = setTimeout(() => {
         this.pendingTunnelReqs.delete(reqID);
         resolve({
@@ -783,22 +707,6 @@ export class SessionRoom {
       this.pendingTunnelReqs.set(reqID, { resolve, timeout });
     });
 
-    // A big upload can't ride one WS message (the DO caps a message near 1 MiB).
-    // Send the head tunnel_req with the first chunk; if there's more, mark
-    // body_more and stream the rest as tunnel_req_body chunks. 700 KiB raw →
-    // ~933 KiB base64, comfortably under the cap even with the head's headers.
-    const bodyArr = new Uint8Array(bodyBytes);
-    const REQ_BODY_CHUNK = 700 * 1024;
-    const bodyMore = bodyArr.byteLength > REQ_BODY_CHUNK;
-    if (bodyMore && !meta.reqChunk) {
-      // Agent predates chunked request bodies: it would ignore the follow-on
-      // tunnel_req_body messages and hand the backend a TRUNCATED body — a
-      // silently corrupted upload. Refuse instead, and say why.
-      return new Response(
-        "reminal: this upload is too large for the reminal version running on the target machine.\nRun `reminal upgrade` there, then retry.\n",
-        { status: 413, headers: { "Content-Type": "text/plain" } },
-      );
-    }
     tunnel.send(JSON.stringify({
       type: "tunnel_req",
       data: JSON.stringify({
@@ -806,23 +714,9 @@ export class SessionRoom {
         method: request.method,
         url: rest + (url.search ?? ""),
         headers,
-        body: bytesToBase64(bodyMore ? bodyArr.subarray(0, REQ_BODY_CHUNK) : bodyArr),
-        ...(bodyMore ? { body_more: true } : {}),
+        body: bytesToBase64(new Uint8Array(bodyBytes)),
       }),
     }));
-    if (bodyMore) {
-      for (let off = REQ_BODY_CHUNK; off < bodyArr.byteLength; off += REQ_BODY_CHUNK) {
-        const end = Math.min(off + REQ_BODY_CHUNK, bodyArr.byteLength);
-        tunnel.send(JSON.stringify({
-          type: "tunnel_req_body",
-          data: JSON.stringify({
-            req_id: reqID,
-            body: bytesToBase64(bodyArr.subarray(off, end)),
-            more: end < bodyArr.byteLength,
-          }),
-        }));
-      }
-    }
 
     const out = await promise;
 
@@ -850,33 +744,11 @@ export class SessionRoom {
       }
       const loop = loopbackLocationPath(v);
       if (loop !== null) {
-        out.headers[key] = base + sameOriginPath(loop); // base === "" in host-mode
-        continue;
-      }
-      // App redirected to our own public host but with a stray port (webmin
-      // appends :10000) — collapse it to a same-origin path the tunnel serves.
-      const self = selfHostLocationPath(v, publicHost);
-      if (self !== null) {
-        out.headers[key] = base + sameOriginPath(self);
+        out.headers[key] = base + loop; // base === "" in host-mode → bare path
       }
     }
 
-    // Build the response headers, then append each Set-Cookie individually — a
-    // plain object collapses repeats to one, which would drop all but one of an
-    // app's login cookies. `Headers.append` preserves them, and Cloudflare emits
-    // one Set-Cookie line each to the visitor.
-    const respHeaders = new Headers(out.headers);
-    if (hostMode) {
-      for (const c of out.setCookies ?? []) respHeaders.append("Set-Cookie", c);
-    } else {
-      // Path-mode is symmetric with the inbound gate above: every tunnel shares
-      // the relay origin, and since we never forward cookies back to the app, a
-      // Set-Cookie here can only pollute the shared jar — including letting one
-      // tunnel's app write a reminal_auth_<otherId> at Path=/ that shadows
-      // another tunnel's gate cookie and forces its visitor to re-authenticate.
-      respHeaders.delete("Set-Cookie");
-    }
-    return new Response(out.body as BodyInit, { status: out.status, headers: respHeaders });
+    return new Response(out.body as BodyInit, { status: out.status, headers: out.headers });
   }
 
   private async handleTunnelAuth(request: Request, sessionId: string, meta: TunnelMeta, hostMode = false): Promise<Response> {
@@ -1005,40 +877,6 @@ function loopbackLocationPath(loc: string): string | null {
   return isLoopback ? u.pathname + u.search : null;
 }
 
-// sameOriginPath collapses leading slashes on a rewritten Location path. A
-// URL's pathname keeps a doubled slash ("https://host//evil.com/x" →
-// "//evil.com/x"), and in host-mode we emit it with an empty base — so without
-// this the browser would read "//evil.com/x" as a protocol-relative URL and
-// leave the origin entirely: an open redirect on a *.reminal.app host.
-function sameOriginPath(p: string): string {
-  return "/" + p.replace(/^\/+/, "");
-}
-
-// selfHostLocationPath returns the bare path+query of an absolute Location that
-// points back at our OWN public host — regardless of port. Apps that build
-// self-referential redirects from the Host we hand them can tack on their own
-// listening port (webmin emits https://<public-host>:10000/), which the browser
-// can't reach. Any redirect to our public host is same-origin, so collapse it to
-// a path the tunnel actually serves.
-function selfHostLocationPath(loc: string, publicHost: string | null): string | null {
-  if (!publicHost) return null;
-  let u: URL;
-  try {
-    u = new URL(loc);
-  } catch {
-    return null;
-  }
-  // Parse rather than split on ":" — a bracketed IPv6 literal ("[::1]:8443")
-  // would otherwise compare as "[" and silently never match.
-  let want: string;
-  try {
-    want = new URL(`http://${publicHost}`).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
-  return u.hostname.toLowerCase() === want ? u.pathname + u.search : null;
-}
-
 function toHex(b: Uint8Array): string {
   let s = "";
   for (let i = 0; i < b.length; i++) s += b[i].toString(16).padStart(2, "0");
@@ -1076,27 +914,6 @@ function parseCookies(header: string): Record<string, string> {
     out[part.slice(0, eq).trim()] = decodeURIComponent(part.slice(eq + 1).trim());
   }
   return out;
-}
-
-// Remove ONLY reminal's own PIN-gate cookie from a Cookie header, forwarding
-// every other cookie to the app untouched. The old behaviour dropped the whole
-// header — which also stripped the app's OWN session cookie, so an app like
-// webmin couldn't stay logged in after its login set a cookie (the visitor's
-// browser sent it back, but the relay never passed it on). Values are kept as
-// their original substrings (no decode/re-encode) so nothing is corrupted.
-function stripAuthCookie(header: string, sessionId: string): string {
-  if (!header) return "";
-  const authName = AUTH_COOKIE_PREFIX + sessionId;
-  return header
-    .split(";")
-    .map((p) => p.trim())
-    .filter((p) => {
-      if (!p) return false;
-      const eq = p.indexOf("=");
-      const name = (eq < 0 ? p : p.slice(0, eq)).trim();
-      return name !== authName;
-    })
-    .join("; ");
 }
 
 // ---- HTML pages ----

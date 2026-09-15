@@ -115,15 +115,6 @@ type Tunnel struct {
 	// reader/writer goroutines (see handleTunnelWSOpen).
 	wsMu      sync.Mutex
 	wsStreams map[string]*wsStream
-
-	// reqBodiesMu guards reqBodies — in-flight request bodies too large to fit a
-	// single relay message. The relay splits a big upload into a head tunnel_req
-	// (first chunk, body_more=true) plus tunnel_req_body chunks; the channel
-	// carries those follow-on chunks to the waiting handleTunnelReq. A nil/absent
-	// entry means the whole body already arrived in the tunnel_req (the common
-	// case). Closed by the final chunk (more=false) or by connection teardown.
-	reqBodiesMu sync.Mutex
-	reqBodies   map[string]chan []byte
 }
 
 // wsStream is one proxied visitor WebSocket. It's registered synchronously the
@@ -158,13 +149,6 @@ const wsStreamSendBuffer = 256
 // use (a handful of apps × their viewers); past it new opens are refused with an
 // immediate close rather than allocating a backend dial + two pumps.
 const maxWSStreams = 512
-
-// maxChunkedUploads caps how many large uploads may be mid-assembly at once.
-// Each one holds a registered channel and a parked handler goroutine until its
-// final chunk arrives, so an upstream that opens chunked bodies and never
-// finishes them would otherwise grow both without bound. Past the cap a request
-// is handled with only its first chunk instead of being tracked.
-const maxChunkedUploads = 64
 
 // NewTunnel constructs a port-forward agent. Session ID + PIN are
 // freshly generated — every `reminal expose` invocation gets a new
@@ -214,7 +198,6 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 		handshakeFD:   opts.HandshakeFD,
 		handshakeAddr: opts.HandshakeAddr,
 		wsStreams:     make(map[string]*wsStream),
-		reqBodies:     make(map[string]chan []byte),
 	}, nil
 }
 
@@ -364,9 +347,6 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		// The control socket is gone; every proxied visitor WebSocket rode over
 		// it, so tear them all down. The relay closes the visitor sides too.
 		t.closeAllWSStreams()
-		// Unblock any handler still waiting for follow-on upload chunks that can
-		// no longer arrive on the dead socket.
-		t.closeAllReqBodies()
 	}()
 
 	if err := t.writeMsg(conn, protocol.Message{Type: protocol.TypeAuth, PinHash: t.pinHash}); err != nil {
@@ -391,11 +371,6 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		"port":     t.port,
 		"public":   t.public,
 		"pin_hash": t.pinHash,
-		// Tell the relay this agent can reassemble a chunked request body
-		// (body_more + tunnel_req_body). Without it the relay must refuse an
-		// upload too big for one message rather than chunk it — an older agent
-		// silently drops the follow-on chunks and would write a TRUNCATED file.
-		"caps": []string{"req_chunk"},
 	})
 	if err := t.writeMsg(conn, protocol.Message{
 		Type: protocol.TypeTunnelRegister,
@@ -426,36 +401,7 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		case protocol.TypePing:
 			_ = t.writeMsg(conn, protocol.Message{Type: protocol.TypePong})
 		case protocol.TypeTunnelReq:
-			// A large upload arrives as a head tunnel_req (body_more=true) plus
-			// follow-on tunnel_req_body chunks. Register the body channel INLINE
-			// here — before spawning the handler and before the next message is
-			// read — so a chunk racing in right behind the head always finds it.
-			var bodyCh chan []byte
-			var bodyReqID string
-			if reqID, more := peekReqBodyMore(m.Data); more && reqID != "" {
-				bodyReqID = reqID
-				t.reqBodiesMu.Lock()
-				// Bound in-flight chunked uploads the way maxWSStreams bounds
-				// proxied sockets — a relay that opens chunked bodies and never
-				// finishes them must not grow the map without limit. Over the
-				// cap we simply don't register: the handler proceeds with just
-				// the first chunk and the follow-on chunks find no entry and are
-				// dropped. Bounded, and it never blocks the read loop.
-				if _, replacing := t.reqBodies[reqID]; replacing || len(t.reqBodies) < maxChunkedUploads {
-					// A relay that reuses an in-flight req_id would otherwise
-					// strand the previous handler on a channel nobody ever closes
-					// (and which teardown can no longer see). Close as we displace.
-					if prev := t.reqBodies[reqID]; prev != nil {
-						close(prev)
-					}
-					bodyCh = make(chan []byte, 8)
-					t.reqBodies[reqID] = bodyCh
-				}
-				t.reqBodiesMu.Unlock()
-			}
-			go t.handleTunnelReq(conn, m.Data, bodyReqID, bodyCh)
-		case protocol.TypeTunnelReqBody:
-			t.handleTunnelReqBody(m.Data)
+			go t.handleTunnelReq(conn, m.Data)
 		case protocol.TypeTunnelWSOpen:
 			// Runs inline: it only parses + registers the stream (no network), so
 			// a tunnel_ws_data racing in right behind it always finds the stream
@@ -471,70 +417,10 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 	}
 }
 
-// peekReqBodyMore extracts just the req_id and body_more flag from a tunnel_req
-// payload, so the read loop can register the body channel before spawning the
-// handler (and before the first follow-on chunk is read).
-func peekReqBodyMore(payload string) (reqID string, more bool) {
-	var h struct {
-		ReqID    string `json:"req_id"`
-		BodyMore bool   `json:"body_more"`
-	}
-	_ = json.Unmarshal([]byte(payload), &h)
-	return h.ReqID, h.BodyMore
-}
-
-// handleTunnelReqBody routes one follow-on request-body chunk to the waiting
-// handleTunnelReq. The final chunk (more=false) closes the channel so the
-// handler sees the body end. Runs inline on the read loop; the channel is
-// buffered and the handler drains it into a buffer without touching the
-// backend, so this never blocks on a slow upstream.
-func (t *Tunnel) handleTunnelReqBody(payload string) {
-	var msg struct {
-		ReqID string `json:"req_id"`
-		Body  string `json:"body"` // base64
-		More  bool   `json:"more"`
-	}
-	if err := json.Unmarshal([]byte(payload), &msg); err != nil {
-		return
-	}
-	t.reqBodiesMu.Lock()
-	ch := t.reqBodies[msg.ReqID]
-	if !msg.More && ch != nil {
-		// Last chunk: unregister now so a late duplicate can't touch a closed
-		// channel, and close after sending the final bytes below.
-		delete(t.reqBodies, msg.ReqID)
-	}
-	t.reqBodiesMu.Unlock()
-	if ch == nil {
-		return
-	}
-	if msg.Body != "" {
-		if raw, err := base64.StdEncoding.DecodeString(msg.Body); err == nil {
-			ch <- raw
-		}
-	}
-	if !msg.More {
-		close(ch)
-	}
-}
-
-// closeAllReqBodies closes every in-flight request-body channel on connection
-// teardown, so a handleTunnelReq blocked waiting for more chunks unblocks
-// (with a truncated body) instead of leaking a goroutine.
-func (t *Tunnel) closeAllReqBodies() {
-	t.reqBodiesMu.Lock()
-	chans := t.reqBodies
-	t.reqBodies = make(map[string]chan []byte)
-	t.reqBodiesMu.Unlock()
-	for _, ch := range chans {
-		close(ch)
-	}
-}
-
 // handleTunnelReq parses one tunnel_req payload, performs the local
 // HTTP request, and sends back a tunnel_resp. Errors surface to the
 // visitor as a 502 with the message in the body.
-func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string, bodyCh chan []byte) {
+func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 	// Spawned per relay-forwarded request (go t.handleTunnelReq); a panic here would
 	// crash the port-forward. Contain it so one bad request just fails.
 	defer func() {
@@ -542,67 +428,20 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 			recoverLog("handleTunnelReq", r)
 		}
 	}()
-	if bodyCh != nil {
-		// Install the body-channel cleanup BEFORE anything that can return
-		// early. The read loop registered this channel off a permissive peek of
-		// the same payload; the strict unmarshal below can still reject it (a
-		// type-mismatched field parses for one struct and not the other). If we
-		// returned without draining, the read loop would block forever feeding a
-		// channel nobody reads — and because it's parked on a channel send, not
-		// a socket read, closing the socket wouldn't free it and teardown's
-		// closeAllReqBodies would never run. Draining keeps the loop moving even
-		// when this request is abandoned; bodyReqID is the key the loop used.
-		defer func() {
-			t.reqBodiesMu.Lock()
-			if t.reqBodies[bodyReqID] == bodyCh {
-				delete(t.reqBodies, bodyReqID)
-			}
-			t.reqBodiesMu.Unlock()
-			for range bodyCh {
-			}
-		}()
-	}
 	var req struct {
-		ReqID    string            `json:"req_id"`
-		Method   string            `json:"method"`
-		URL      string            `json:"url"`
-		Headers  map[string]string `json:"headers"`
-		Body     string            `json:"body"`      // base64 (first chunk if BodyMore)
-		BodyMore bool              `json:"body_more"` // more of the body arrives as tunnel_req_body chunks
+		ReqID   string            `json:"req_id"`
+		Method  string            `json:"method"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers"`
+		Body    string            `json:"body"` // base64
 	}
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return
 	}
-	// Assemble the request body. The common case is a single chunk in req.Body.
-	// A large upload's remaining chunks arrive on bodyCh (registered by the read
-	// loop); drain them here, bounded so a runaway upload can't OOM the agent.
 	var body io.Reader
-	if req.Body != "" || bodyCh != nil {
-		var raw []byte
-		if req.Body != "" {
-			if b, err := base64.StdEncoding.DecodeString(req.Body); err == nil {
-				raw = b
-			}
-		}
-		if bodyCh != nil {
-			// Cleanup (unregister + drain) is already deferred at function entry.
-			for chunk := range bodyCh {
-				// Over the ceiling — truncate rather than grow unbounded. Keep
-				// DRAINING (never break): handleTunnelReqBody feeds this channel
-				// inline on the shared read loop, so abandoning it would fill the
-				// buffer and block every other request and proxied WebSocket
-				// frame until this handler's backend call finished.
-				if len(raw) >= maxTunnelResponse {
-					continue
-				}
-				if len(raw)+len(chunk) > maxTunnelResponse {
-					raw = append(raw, chunk[:maxTunnelResponse-len(raw)]...)
-					continue
-				}
-				raw = append(raw, chunk...)
-			}
-		}
-		if raw != nil {
+	if req.Body != "" {
+		raw, err := base64.StdEncoding.DecodeString(req.Body)
+		if err == nil {
 			body = bytes.NewReader(raw)
 		}
 	}
@@ -627,24 +466,7 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 		t.sendError(conn, req.ReqID, fmt.Sprintf("build request: %v", err))
 		return
 	}
-	var visitorHost string
 	for k, v := range req.Headers {
-		if strings.EqualFold(k, "Host") {
-			// Handle Host BEFORE the hop-header guard (which lists "host"):
-			// Go's Transport takes the outgoing Host from req.Host, NOT the
-			// header map, so setting the header here would be silently ignored
-			// and the backend would see Host: 127.0.0.1:<port>. Forward the
-			// visitor's public host instead, so the backend's Host matches the
-			// Origin/Referer the browser sends. Apps like webmin and UniFi
-			// reject a login POST whose Referer/Origin host differs from the
-			// host they were served at (CSRF / same-origin defence) — exactly
-			// what a Cloudflare quick tunnel avoids by forwarding the public
-			// host. The connection still dials 127.0.0.1:<port> via URL.Host.
-			// (The relay forwards the header lowercased as "host".)
-			visitorHost = v
-			httpReq.Host = v
-			continue
-		}
 		if isHopHeader(k) {
 			continue
 		}
@@ -663,8 +485,8 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 	// Reverse-proxy hygiene — give the upstream the original scheme +
 	// host so it can log + redirect correctly.
 	httpReq.Header.Set("X-Forwarded-Proto", "https")
-	if visitorHost != "" {
-		httpReq.Header.Set("X-Forwarded-Host", visitorHost)
+	if h := req.Headers["Host"]; h != "" {
+		httpReq.Header.Set("X-Forwarded-Host", h)
 	}
 
 	resp, err := t.httpClient.Do(httpReq)
@@ -675,18 +497,8 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 	defer resp.Body.Close()
 
 	headers := map[string]string{}
-	var setCookies []string
 	for k, v := range resp.Header {
 		if isHopHeader(k) || len(v) == 0 {
-			continue
-		}
-		// Set-Cookie is the one response header that legitimately repeats —
-		// webmin/UniFi and many apps set several at login. A map[string]string
-		// can only hold one, so carry the full list separately; the relay
-		// re-emits each as its own Set-Cookie. (Collapsing them dropped the
-		// app's session cookie and broke staying logged in.)
-		if strings.EqualFold(k, "Set-Cookie") {
-			setCookies = append(setCookies, v...)
 			continue
 		}
 		headers[k] = v[0]
@@ -715,9 +527,6 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 		if !firstSent {
 			payload["status"] = resp.StatusCode
 			payload["headers"] = headers
-			if len(setCookies) > 0 {
-				payload["set_cookies"] = setCookies
-			}
 			firstSent = true
 		}
 		out, _ := json.Marshal(payload)
@@ -944,18 +753,7 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 	// negotiate them properly instead of us hand-rolling the header.
 	hdr := http.Header{}
 	var subprotocols []string
-	var wsHost string
 	for k, v := range reqHeaders {
-		if strings.EqualFold(k, "Host") {
-			// Forward the visitor's public host as the WS Host (before the
-			// reserved-header skip, which lists Host). gorilla maps a "Host" key
-			// in the request header onto req.Host, so the backend's upgrade sees
-			// a Host matching the Origin the browser sends — apps that enforce
-			// same-origin on the WebSocket (e.g. UniFi's live portal) otherwise
-			// reject the upgrade. The dial still targets 127.0.0.1 via dialURL.
-			wsHost = v
-			continue
-		}
 		if isHopHeader(k) || isWSReservedHeader(k) {
 			continue
 		}
@@ -968,9 +766,6 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 			continue
 		}
 		hdr.Set(k, v)
-	}
-	if wsHost != "" {
-		hdr.Set("Host", wsHost)
 	}
 
 	dialer := *websocket.DefaultDialer
