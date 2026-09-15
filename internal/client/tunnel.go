@@ -831,9 +831,22 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 
 	headers := map[string]string{}
 	var setCookies []string
+	var multiHeaders map[string][]string
 	for k, v := range resp.Header {
 		if isHopHeader(k) || len(v) == 0 {
 			continue
+		}
+		// Set-Cookie is not the only header that legitimately repeats: Vary,
+		// Link, WWW-Authenticate, Content-Language and friends do too, and a
+		// map[string]string keeps exactly one of them. Losing a Vary dimension
+		// is the dangerous case — a cache then serves the wrong variant to the
+		// wrong client. Carry every repeated header alongside the flat map,
+		// which older relays keep reading as before.
+		if len(v) > 1 && !strings.EqualFold(k, "Set-Cookie") {
+			if multiHeaders == nil {
+				multiHeaders = map[string][]string{}
+			}
+			multiHeaders[k] = v
 		}
 		// Set-Cookie is the one response header that legitimately repeats —
 		// webmin/UniFi and many apps set several at login. A map[string]string
@@ -846,6 +859,17 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 		}
 		headers[k] = v[0]
 	}
+
+	// NOTE: we deliberately do NOT forward the backend's Content-Length to give
+	// the visitor a length contract. It was tried: the Workers runtime builds a
+	// streamed response from a ReadableStream and drops/recomputes
+	// content-length, so the header only ever survives on single-chunk bodies —
+	// i.e. never on the large downloads where a truncated file actually matters.
+	// Combined with the edge repairing chunked framing (so erroring the stream
+	// is invisible too, verified on both HTTP/2 and HTTP/1.1), a body that ends
+	// early cannot currently be signalled to the visitor through this relay. The
+	// abort below still matters: it stops the agent treating a failed read as a
+	// clean finish, and logs it for the operator.
 
 	// Stream the body as one or more tunnel_resp chunks. The FIRST chunk carries
 	// status + headers; every chunk carries `more` (true = another follows). The
@@ -873,11 +897,30 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 			if len(setCookies) > 0 {
 				payload["set_cookies"] = setCookies
 			}
+			if len(multiHeaders) > 0 {
+				payload["multi_headers"] = multiHeaders
+			}
 			firstSent = true
 		}
 		out, _ := json.Marshal(payload)
 		return t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelResp, Data: string(out)})
 	}
+	// sendAbort ends the response as a FAILURE. Once status+headers are on the
+	// wire we can no longer change the status, so the only honest signal left is
+	// to break the body stream: the relay errors the visitor's stream and their
+	// client reports a failed transfer, instead of a 200 that looks complete but
+	// is half a file.
+	sendAbort := func(chunk []byte, msg string) error {
+		payload := map[string]any{
+			"req_id": req.ReqID,
+			"body":   base64.StdEncoding.EncodeToString(chunk),
+			"more":   false,
+			"error":  msg,
+		}
+		out, _ := json.Marshal(payload)
+		return t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelResp, Data: string(out)})
+	}
+
 	// emit sends one chunk and tracks the abuse cap. Returns stop=true once the
 	// stream should end — either because this was the final chunk or the cap was
 	// reached (in which case the chunk goes out with more=false, truncating).
@@ -955,13 +998,19 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 				}
 			}
 			if br.err != nil {
-				// End of body (io.EOF) or a read error. Either way flush whatever's
-				// left as the final chunk — unless nothing has gone out yet and this
-				// is a real error, where a clean 502 is better than a bogus 200.
+				// End of body (io.EOF) → flush what's left as the final chunk.
+				// A real read error means the backend's body ended EARLY (upstream
+				// reset, crash, short write against its own Content-Length). If
+				// nothing has gone out yet a clean 502 is right; if status+headers
+				// are already committed we must break the stream instead, or the
+				// visitor receives a successful-looking 200 that is half a file —
+				// silent corruption of, say, a database dump they will only find
+				// out about when they try to restore it.
 				if br.err == io.EOF {
 					_, _ = emit(pending, true)
 				} else if firstSent {
-					_, _ = emit(pending, true)
+					fmt.Fprintf(os.Stderr, "reminal expose: upstream ended early on %s: %v — signalling a failed transfer\n", req.URL, br.err)
+					_ = sendAbort(pending, br.err.Error())
 				} else {
 					t.sendError(conn, req.ReqID, fmt.Sprintf("read response: %v", br.err))
 				}
