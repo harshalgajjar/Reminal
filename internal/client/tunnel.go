@@ -1288,6 +1288,33 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 		_ = resp.Body.Close()
 	}
 	if err != nil {
+		// Same staleness the HTTP path guards against, and the WS path needs it
+		// independently: this dial picked ws/wss from the CACHED scheme, so a
+		// backend that switched TLS on or off leaves every upgrade failing. HTTP
+		// requests re-probe and recover on their own, but a client that only ever
+		// opens a WebSocket would stay broken for the tunnel's whole life. Only
+		// retry when the re-probe actually disagrees with what we just used, so a
+		// genuinely unreachable backend still fails fast.
+		usedWSScheme := scheme
+		t.forgetBackendScheme()
+		freshWSScheme := "ws"
+		if t.backendScheme() == "https" {
+			freshWSScheme = "wss"
+		}
+		if freshWSScheme != usedWSScheme {
+			retryURL := (&url.URL{
+				Scheme:   freshWSScheme,
+				Host:     fmt.Sprintf("127.0.0.1:%d", t.port),
+				Path:     ref.Path,
+				RawQuery: ref.RawQuery,
+			}).String()
+			backend, resp, err = dialer.Dial(retryURL, hdr)
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+		}
+	}
+	if err != nil {
 		t.closeWSStream(conn, streamID, st, true)
 		return
 	}
