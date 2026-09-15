@@ -92,8 +92,14 @@ func restartOtherSessions() error {
 		}
 		if a.IsPort() {
 			// Forwards hot-swap in place (same id/PIN/URL) so an upgrade reaches
-			// them too; on Windows this errors and the forward is counted as
+			// them too. Skip a forward whose record has no version: it predates
+			// hot-swap and would read the signal as shutdown. It stays on the old
+			// code until the user re-exposes — better than killing its URL. On
+			// Windows RestartPortForward errors and the forward is counted as
 			// left behind, which the message below reports.
+			if a.Version == "" {
+				continue
+			}
 			if err := RestartPortForward(a.PID); err != nil {
 				failed++
 			}

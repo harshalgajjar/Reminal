@@ -401,6 +401,7 @@ func (t *Tunnel) activeRecord() session.Active {
 		StartedAt:    t.startedAt,
 		Kind:         session.KindPort,
 		Port:         t.port,
+		Version:      t.version, // marks this forward as hot-swap-capable (see Active.Version)
 	}
 }
 

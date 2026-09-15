@@ -1480,6 +1480,9 @@ func runRestart(arg string) error {
 	}
 	if a.IsPort() {
 		// Hot-swap the forward in place (same id, PIN and public URL).
+		if hint := portRestartHint(a); hint != "" {
+			return fmt.Errorf("%s", hint)
+		}
 		if err := client.RestartPortForward(a.PID); err != nil {
 			return fmt.Errorf("restart port forward %s (port %d): %w", a.ID, a.Port, err)
 		}
@@ -1497,6 +1500,18 @@ func runRestart(arg string) error {
 // command rolls the whole box onto the freshly-upgraded binary. Port forwards
 // are skipped (they have no PTY to preserve). Best-effort: a failure on one
 // session is reported but doesn't stop the rest.
+// portRestartHint returns a non-empty message when a port forward must NOT be
+// signalled to restart: a forward whose record carries no version predates
+// in-place hot-swap, and a signal to it means shutdown, not restart — so we'd
+// silently kill the URL. Tell the user to re-expose instead. A hot-swap-capable
+// forward (version set) returns "".
+func portRestartHint(a *session.Active) string {
+	if a.Version == "" {
+		return fmt.Sprintf("this forward predates in-place restart — run `reminal stop %d` then `reminal expose %d` to move it onto the new version", a.Port, a.Port)
+	}
+	return ""
+}
+
 func runRestartAll() error {
 	all, err := session.ReadAllActive()
 	if err != nil {
@@ -1544,6 +1559,11 @@ func runRestartAll() error {
 			// picks up the new binary too — otherwise `upgrade` + `restart --all`
 			// left every running forward on the old code, and the user saw no
 			// change. Unsupported on Windows: say so rather than skip silently.
+			if hint := portRestartHint(a); hint != "" {
+				fmt.Fprintf(os.Stderr, "  %-24s port %d: %s\n", a.ID, a.Port, hint)
+				skipped++
+				continue
+			}
 			if err := client.RestartPortForward(a.PID); err != nil {
 				fmt.Fprintf(os.Stderr, "  %-24s port %d: %v\n", a.ID, a.Port, err)
 				skipped++
