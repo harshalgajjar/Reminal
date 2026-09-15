@@ -20,4 +20,9 @@ export type TunnelMeta = {
   pinHash: string;
   public: boolean;
   signingKey: string; // hex-encoded 32 bytes
+  // Agent advertised "req_chunk" at registration: it can reassemble a request
+  // body split across tunnel_req + tunnel_req_body. Absent on every agent
+  // released before that support landed — those silently drop the follow-on
+  // chunks, so the relay must refuse an oversized upload instead of chunking it.
+  reqChunk?: boolean;
 };
