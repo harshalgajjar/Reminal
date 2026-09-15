@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -155,6 +156,20 @@ type wsFrame struct {
 	binary bool
 }
 
+// Tunnel hot-swap resume env. Deliberately DISTINCT from the shell agent's
+// REMINAL_RESUME_* set: main() routes any REMINAL_RESUME=1 into the shell PTY
+// resume path (which needs a pty fd), so a forward must not reuse that name or
+// its re-exec is misrouted into shell-resume and dies. These carry the forward's
+// identity across the exec so it keeps the same public URL, and — via an
+// unchanged PIN hash — the same auth-cookie signing key, so visitors stay in.
+const (
+	envTunResume    = "REMINAL_EXPOSE_RESUME"
+	envTunSessionID = "REMINAL_EXPOSE_SESSION_ID"
+	envTunPIN       = "REMINAL_EXPOSE_PIN"
+	envTunPinHash   = "REMINAL_EXPOSE_PIN_HASH"
+	envTunStartedAt = "REMINAL_EXPOSE_STARTED_AT"
+)
+
 // wsStreamSendBuffer bounds queued visitor→backend frames per stream. If a
 // backend can't keep up and the buffer fills, the stream is torn down rather
 // than stalling the shared tunnel control socket (head-of-line blocking).
@@ -182,17 +197,36 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 	if opts.Port <= 0 || opts.Port > 65535 {
 		return nil, fmt.Errorf("port %d out of range (1-65535)", opts.Port)
 	}
-	id, err := session.NewID(8)
-	if err != nil {
-		return nil, err
-	}
-	pin, err := session.NewPIN(6)
-	if err != nil {
-		return nil, err
-	}
-	pinHash, err := session.HashPIN(pin)
-	if err != nil {
-		return nil, err
+	// A hot-swap restart (see execRestart) re-execs this binary with the
+	// previous identity in the environment. Reuse it: the visitor's URL is
+	// port-<id>.reminal.app, so a fresh id would silently invalidate every link
+	// the user has shared, and an unchanged PIN hash lets the relay keep the
+	// auth-cookie signing key, so visitors stay logged in across an upgrade.
+	var (
+		id, pin, pinHash string
+		startedAt        time.Time
+		err              error
+	)
+	if os.Getenv(envTunResume) == "1" && os.Getenv(envTunSessionID) != "" && os.Getenv(envTunPinHash) != "" {
+		id = os.Getenv(envTunSessionID)
+		pin = os.Getenv(envTunPIN)
+		pinHash = os.Getenv(envTunPinHash)
+		if unix, perr := strconv.ParseInt(os.Getenv(envTunStartedAt), 10, 64); perr == nil && unix > 0 {
+			startedAt = time.Unix(unix, 0)
+		}
+		for _, k := range []string{envTunResume, envTunSessionID, envTunPIN, envTunPinHash, envTunStartedAt} {
+			_ = os.Unsetenv(k) // don't leak the identity into anything we spawn
+		}
+	} else {
+		if id, err = session.NewID(8); err != nil {
+			return nil, err
+		}
+		if pin, err = session.NewPIN(6); err != nil {
+			return nil, err
+		}
+		if pinHash, err = session.HashPIN(pin); err != nil {
+			return nil, err
+		}
 	}
 	// Clone the default transport so we keep sane connection pooling/timeouts,
 	// then allow self-signed TLS: HTTPS admin UIs on localhost (webmin, UniFi,
@@ -230,6 +264,7 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 		httpClient:    hc,
 		handshakeFD:   opts.HandshakeFD,
 		handshakeAddr: opts.HandshakeAddr,
+		startedAt:     startedAt, // zero unless resumed; Run stamps a fresh start otherwise
 		wsStreams:     make(map[string]*wsStream),
 		reqBodies:     make(map[string]chan []byte),
 	}, nil
@@ -261,7 +296,9 @@ func (t *Tunnel) Run() error {
 			t.port, existing.ID, time.Since(existing.StartedAt).Round(time.Second))
 	}
 
-	t.startedAt = time.Now()
+	if t.startedAt.IsZero() {
+		t.startedAt = time.Now() // a resumed forward keeps its original start time
+	}
 	_ = session.WriteActive(t.activeRecord())
 	defer func() { _ = session.ClearActive(t.sessionID) }()
 
@@ -270,18 +307,33 @@ func (t *Tunnel) Run() error {
 	defer signal.Stop(sigCh)
 	stop := make(chan struct{})
 	go func() {
-		// Any of SIGINT/SIGTERM/SIGUSR1 shuts the forward down — a tunnel has no
-		// local shell to keep alive, so (unlike the shell agent) there's nothing
-		// to pause; `reminal stop` simply ends the forward.
-		<-sigCh
-		close(stop)
-		// Close the live WS too — otherwise the read in runConnection sits until
-		// its 60s deadline, which makes `reminal stop` look like it didn't work.
-		t.connMu.Lock()
-		if t.conn != nil {
-			_ = t.conn.Close()
+		for sig := range sigCh {
+			// SIGUSR1 (the shell agent's "pause" signal) means something else for
+			// a forward, which has nothing to pause: hot-swap onto the binary now
+			// on disk, keeping this session's id + PIN. `reminal restart --all`
+			// and the post-upgrade restart send it — without this, a forward
+			// started before an upgrade kept running the OLD code indefinitely,
+			// so a user who upgraded to pick up a fix saw no change at all.
+			if isPauseSignal(sig) {
+				if err := t.execRestart(); err != nil {
+					// Exec failed (binary missing/unreadable); keep serving on the
+					// current image rather than dying.
+					fmt.Fprintf(os.Stderr, "reminal expose: restart failed: %v — still running the previous version\n", err)
+					continue
+				}
+				return // unreachable: the process image was replaced
+			}
+			// SIGINT/SIGTERM shut the forward down; `reminal stop` simply ends it.
+			close(stop)
+			// Close the live WS too — otherwise the read in runConnection sits
+			// until its deadline, which makes `reminal stop` look like it didn't work.
+			t.connMu.Lock()
+			if t.conn != nil {
+				_ = t.conn.Close()
+			}
+			t.connMu.Unlock()
+			return
 		}
-		t.connMu.Unlock()
 	}()
 
 	// Serve this machine's owner-derived directory channel too, so a machine
@@ -1288,6 +1340,52 @@ func (t *Tunnel) writeMsg(conn *websocket.Conn, m protocol.Message) error {
 	defer t.writeMu.Unlock()
 	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteJSON(m)
+}
+
+// errPortRestartUnsupported is returned where a forward can't be hot-swapped
+// in place (Windows has no exec-in-place); the CLI turns it into a hint.
+var errPortRestartUnsupported = errors.New("hot-swapping a port forward is not supported on this platform — run `reminal stop <port>` then `reminal expose <port>` again")
+
+// execRestart replaces this process with the binary now on disk, carrying the
+// forward's identity (id, PIN, PIN hash, start time) in the environment so the
+// new image resumes the SAME session: the public URL stays valid and, since the
+// PIN hash is unchanged, the relay keeps the auth-cookie signing key and every
+// visitor stays logged in. The relay sees the control socket drop and the new
+// image re-register within a second; in-flight requests on the old image are
+// lost, as with any restart. Never returns on success.
+func (t *Tunnel) execRestart() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate self: %w", err)
+	}
+	// After an upgrade the binary at our path has been REPLACED, so on Linux
+	// /proc/self/exe now points at the unlinked old inode and reads as
+	// "/path/reminal (deleted)". Exec-ing that string fails and we'd silently
+	// stay on the old code — the precise outcome this restart exists to prevent.
+	// The path minus the marker is where the new binary lives; use that.
+	exe = strings.TrimSuffix(exe, " (deleted)")
+	if st, serr := os.Stat(exe); serr != nil || st.IsDir() {
+		return fmt.Errorf("binary to restart into is missing at %s: %v", exe, serr)
+	}
+	// Drop the relay connection first so the relay isn't left with a stale
+	// socket that the new image's registration has to evict.
+	t.connMu.Lock()
+	if t.conn != nil {
+		_ = t.conn.Close()
+	}
+	t.connMu.Unlock()
+	args := []string{exe, "--expose-headless", "--expose-port", strconv.Itoa(t.port)}
+	if t.public {
+		args = append(args, "--expose-public")
+	}
+	env := append(os.Environ(),
+		envTunResume+"=1",
+		envTunSessionID+"="+t.sessionID,
+		envTunPIN+"="+t.pin,
+		envTunPinHash+"="+t.pinHash,
+		envTunStartedAt+"="+strconv.FormatInt(t.startedAt.Unix(), 10),
+	)
+	return execTunnelBinary(exe, args, env)
 }
 
 func (t *Tunnel) writeHandshake() {

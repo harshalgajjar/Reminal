@@ -1479,7 +1479,12 @@ func runRestart(arg string) error {
 		return err
 	}
 	if a.IsPort() {
-		return fmt.Errorf("session %s is a port forward — restart is for shell agents only", a.ID)
+		// Hot-swap the forward in place (same id, PIN and public URL).
+		if err := client.RestartPortForward(a.PID); err != nil {
+			return fmt.Errorf("restart port forward %s (port %d): %w", a.ID, a.Port, err)
+		}
+		fmt.Printf("  restarted %s (port %d)\n", a.ID, a.Port)
+		return nil
 	}
 	if _, err := sendControl(a.PID, "restart"); err != nil {
 		return fmt.Errorf("ask agent to restart: %w", err)
@@ -1535,7 +1540,17 @@ func runRestartAll() error {
 	for i := range all {
 		a := &all[i]
 		if a.IsPort() {
-			skipped++
+			// A forward hot-swaps in place (same id, PIN and public URL) so it
+			// picks up the new binary too — otherwise `upgrade` + `restart --all`
+			// left every running forward on the old code, and the user saw no
+			// change. Unsupported on Windows: say so rather than skip silently.
+			if err := client.RestartPortForward(a.PID); err != nil {
+				fmt.Fprintf(os.Stderr, "  %-24s port %d: %v\n", a.ID, a.Port, err)
+				skipped++
+				continue
+			}
+			fmt.Printf("  restarted %s (port %d)\n", a.ID, a.Port)
+			ok++
 			continue
 		}
 		if current != "" && a.ID == current {

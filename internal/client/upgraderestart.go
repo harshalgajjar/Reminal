@@ -87,7 +87,16 @@ func restartOtherSessions() error {
 	var failed int
 	for i := range all {
 		a := &all[i]
-		if a.IsPort() || a.PID <= 0 || a.PID == self {
+		if a.PID <= 0 || a.PID == self {
+			continue
+		}
+		if a.IsPort() {
+			// Forwards hot-swap in place (same id/PIN/URL) so an upgrade reaches
+			// them too; on Windows this errors and the forward is counted as
+			// left behind, which the message below reports.
+			if err := RestartPortForward(a.PID); err != nil {
+				failed++
+			}
 			continue
 		}
 		if _, err := sendControlTo(a.PID, "restart"); err != nil {

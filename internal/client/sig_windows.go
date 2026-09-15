@@ -24,6 +24,13 @@ func notifyAgentSignals(ch chan os.Signal) {
 // isPauseSignal: pause never arrives as a signal on Windows.
 func isPauseSignal(sig os.Signal) bool { return false }
 
+// execTunnelBinary: Windows has no exec-in-place; a port forward can't be
+// hot-swapped, so the CLI tells the user to stop + re-expose instead.
+func execTunnelBinary(exe string, args, env []string) error { return errPortRestartUnsupported }
+
+// RestartPortForward: no SIGUSR1 on Windows — see execTunnelBinary.
+func RestartPortForward(pid int) error { return errPortRestartUnsupported }
+
 // resizePollInterval is how often the Windows resize watcher samples the
 // console size. There is no SIGWINCH; conhost's window-resize console events
 // would need a raw ReadConsoleInput loop that fights the stdin reader, so a
