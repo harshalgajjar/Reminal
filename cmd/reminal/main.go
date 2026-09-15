@@ -581,10 +581,20 @@ func main() {
 					public = true
 				default:
 					if !strings.HasPrefix(a, "-") && port == 0 {
-						if _, err := fmt.Sscanf(a, "%d", &port); err != nil || port <= 0 {
-							fmt.Fprintf(os.Stderr, "reminal expose: %q is not a valid port number\n", a)
+						// Parse the WHOLE token. Sscanf's %d stops at the first
+						// non-digit and still reports success, so "8080abc" used
+						// to silently expose port 8080 — a mistyped port quietly
+						// forwarding something other than what was typed. Range
+						// is checked here too: NewTunnel rejects it in the
+						// spawned child, whose stderr goes to /dev/null, so the
+						// user only saw "read handshake: EOF" with no mention of
+						// the port.
+						n, err := strconv.Atoi(a)
+						if err != nil || n <= 0 || n > 65535 {
+							fmt.Fprintf(os.Stderr, "reminal expose: %q is not a valid port number (expected 1-65535)\n", a)
 							os.Exit(2)
 						}
+						port = n
 					}
 				}
 			}
