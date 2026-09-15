@@ -705,7 +705,18 @@ export class SessionRoom {
       if (cookieVal !== expected) {
         // In host-mode the visitor's real path is `rest`; in path-mode it's the
         // full /p/<id>/… pathname. Either way keep the query.
+        // Only a real page load should get the HTML gate. An app's XHR/fetch
+        // would otherwise receive a 200 whose body is our login page: it parses
+        // as garbage ("Unexpected token '<'"), and clients that retry rather
+        // than treat it as an auth failure sit in a reconnect loop for minutes
+        // instead of failing fast. Give those a machine-readable 401.
         const wantTo = (hostMode ? rest : url.pathname) + url.search;
+        if (!isNavigationRequest(request)) {
+          return new Response("reminal: authentication required\n", {
+            status: 401,
+            headers: { "Content-Type": "text/plain" },
+          });
+        }
         return new Response(pinGatePage(sessionId, wantTo, "", authAction), {
           status: 200,
           headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -1065,6 +1076,17 @@ function bytesToBase64(b: Uint8Array): string {
     s += String.fromCharCode.apply(null, Array.from(b.subarray(i, i + stride)));
   }
   return btoa(s);
+}
+
+// isNavigationRequest reports whether this looks like a browser loading a page,
+// as opposed to an app's XHR/fetch/subresource. Only the former should be shown
+// the HTML PIN gate. Sec-Fetch-Mode is authoritative in every current browser;
+// the Accept sniff covers clients that don't send it.
+function isNavigationRequest(request: Request): boolean {
+  const mode = request.headers.get("sec-fetch-mode");
+  if (mode) return mode === "navigate";
+  if (request.headers.get("x-requested-with")) return false; // classic XHR
+  return (request.headers.get("accept") ?? "").includes("text/html");
 }
 
 function parseCookies(header: string): Record<string, string> {
