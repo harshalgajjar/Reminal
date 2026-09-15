@@ -30,6 +30,13 @@ const MAX_VISITOR_SOCKETS = 512;
 // plus its queued base64 chunks inside the DO's ~128 MB budget.
 const MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024;
 
+// How long the visitor's WebSocket 101 waits for the agent to report which
+// subprotocol the backend chose. Only ever waited on when the client offered a
+// subprotocol AND the agent advertised ws_subproto, so a normal socket opens
+// with no delay; past it we fall back to echoing the client's first offer
+// rather than failing an otherwise-fine handshake.
+const WS_OPEN_TIMEOUT_MS = 10 * 1000;
+
 // Cookie name scoped per-session so multiple port-forwards can each
 // have their own auth state in a single browser.
 const AUTH_COOKIE_PREFIX = "reminal_auth_";
@@ -48,6 +55,16 @@ export class SessionRoom {
     resolve: (resp: { status: number; headers: Record<string, string>; setCookies?: string[]; body: ReadableStream<Uint8Array> | Uint8Array }) => void;
     timeout: ReturnType<typeof setTimeout>;
     controller?: ReadableStreamDefaultController<Uint8Array>; // set once a multi-chunk (streamed) response begins
+  }> = new Map();
+
+  // Visitor WebSocket handshakes waiting on the agent to report the backend's
+  // chosen subprotocol (tunnel_ws_opened). Keyed by stream id; resolved with
+  // the pick, or with null when the agent reports the dial failed or never
+  // answers. Like pendingTunnelReqs this lives in instance memory — the
+  // pending request keeps the DO awake until it settles.
+  private pendingWSOpens: Map<string, {
+    resolve: (subprotocol: string | null) => void;
+    timeout: ReturnType<typeof setTimeout>;
   }> = new Map();
 
   constructor(state: DurableObjectState) {
@@ -196,6 +213,10 @@ export class SessionRoom {
             this.handleTunnelResp(parsed.data ?? "");
             return;
           }
+          if (parsed.type === "tunnel_ws_opened") {
+            this.handleTunnelWSOpened(parsed.data ?? "");
+            return;
+          }
           if (parsed.type === "tunnel_ws_data") {
             this.handleTunnelWSDataFromAgent(parsed.data ?? "");
             return;
@@ -232,7 +253,7 @@ export class SessionRoom {
     // tunnel sockets don't pass through opaque messages.
   }
 
-  async webSocketClose(ws: WebSocket) {
+  async webSocketClose(ws: WebSocket, code?: number, reason?: string) {
     const attachment = ws.deserializeAttachment() as Attachment;
     if (attachment.rejected) return;
 
@@ -276,6 +297,12 @@ export class SessionRoom {
         }
       }
       this.pendingTunnelReqs.clear();
+      // Release any visitor handshake still held for a subprotocol answer that
+      // can no longer come, so it falls back immediately instead of sitting out
+      // the full timeout on a tunnel that is already gone.
+      for (const streamId of [...this.pendingWSOpens.keys()]) {
+        this.settleWSOpen(streamId, null);
+      }
       // Every proxied visitor WebSocket rode over this control socket; close them
       // so browsers reconnect instead of hanging on a dead stream.
       for (const v of this.getSockets("visitor")) {
@@ -286,9 +313,15 @@ export class SessionRoom {
       // Visitor hung up: tell the agent to close the backend connection.
       const tunnel = this.getSocket("tunnel");
       if (tunnel?.readyState === WebSocket.OPEN && attachment.streamId) {
+        // Carry the browser's close code + reason so the backend learns why the
+        // visitor left, instead of just seeing the socket vanish.
         tunnel.send(JSON.stringify({
           type: "tunnel_ws_close",
-          data: JSON.stringify({ stream_id: attachment.streamId }),
+          data: JSON.stringify({
+            stream_id: attachment.streamId,
+            ...(typeof code === "number" && code > 0 ? { code } : {}),
+            ...(reason ? { reason: String(reason).slice(0, 120) } : {}),
+          }),
         }));
       }
     }
@@ -465,8 +498,9 @@ export class SessionRoom {
     // Capabilities are re-advertised on every registration, so read them fresh
     // rather than inheriting from prev — a downgrade must actually take effect.
     const reqChunk = Array.isArray(info.caps) && info.caps.includes("req_chunk");
+    const wsSubproto = Array.isArray(info.caps) && info.caps.includes("ws_subproto");
 
-    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey, reqChunk };
+    const meta: TunnelMeta = { port, pinHash, public: isPublic, signingKey, reqChunk, wsSubproto };
     await this.state.storage.put("tunnelMeta", meta);
   }
 
@@ -606,6 +640,21 @@ export class SessionRoom {
     // UniFi's live portal enforce same-origin on the WebSocket too).
     const wsPublicHost = request.headers.get("x-reminal-public-host");
     if (wsPublicHost) headers["host"] = wsPublicHost;
+    // Register BEFORE sending the open so an agent that answers instantly still
+    // finds a waiter. Only when a subprotocol was actually offered and the agent
+    // can report the backend's pick — otherwise there is nothing to negotiate
+    // and the handshake must not wait at all.
+    const offeredProto = request.headers.get("Sec-WebSocket-Protocol");
+    let openedPromise: Promise<string | null> | null = null;
+    if (offeredProto && meta.wsSubproto) {
+      openedPromise = new Promise<string | null>((resolve) => {
+        const timeout = setTimeout(() => {
+          this.pendingWSOpens.delete(streamId);
+          resolve(null);
+        }, WS_OPEN_TIMEOUT_MS);
+        this.pendingWSOpens.set(streamId, { resolve, timeout });
+      });
+    }
     try {
       tunnel.send(JSON.stringify({
         type: "tunnel_ws_open",
@@ -617,12 +666,19 @@ export class SessionRoom {
       try { server.close(1011, "reminal: tunnel offline"); } catch { /* already closing */ }
     }
 
-    // Echo the client's first requested subprotocol so a client that asked for
-    // one still completes its handshake. (Negotiating against the backend's
-    // actual pick is a known limitation.)
+    // Complete the handshake with the subprotocol the BACKEND chose. Echoing
+    // the client's first offer instead told the browser it was speaking a
+    // protocol the backend had not selected — a protocol violation that
+    // silently misinterprets frames for any subprotocol-using app (graphql-ws,
+    // MQTT-over-WS, ActionCable). An older agent never reports the pick, so
+    // there we still fall back to the echo rather than break the handshake.
     const respHeaders: Record<string, string> = {};
-    const proto = request.headers.get("Sec-WebSocket-Protocol");
-    if (proto) respHeaders["Sec-WebSocket-Protocol"] = proto.split(",")[0].trim();
+    if (offeredProto) {
+      let chosen: string | null = null;
+      if (openedPromise) chosen = await openedPromise;
+      if (chosen === null) chosen = offeredProto.split(",")[0].trim();
+      if (chosen) respHeaders["Sec-WebSocket-Protocol"] = chosen;
+    }
 
     return new Response(null, { status: 101, webSocket: client, headers: respHeaders });
   }
@@ -650,10 +706,41 @@ export class SessionRoom {
     try { m = JSON.parse(dataJSON); } catch { return; }
     const streamId = m?.stream_id;
     if (!streamId) return;
+    // A close can arrive because the backend DIAL failed, i.e. before any
+    // tunnel_ws_opened. Settle the waiting handshake now instead of letting it
+    // sit out the full timeout.
+    this.settleWSOpen(streamId, null);
     const sock = this.getVisitorSocket(streamId);
     if (sock) {
-      try { sock.close(1000); } catch { /* already closing */ }
+      // Pass the backend's close code + reason through so the browser learns
+      // WHY the socket closed. Some codes can't be sent from this side; fall
+      // back to a plain 1000 rather than leaving the socket hanging.
+      const code = typeof m.code === "number" && m.code > 0 ? m.code : 1000;
+      const reason = typeof m.reason === "string" ? m.reason.slice(0, 120) : "";
+      try {
+        sock.close(code, reason);
+      } catch {
+        try { sock.close(1000, reason); } catch { /* already closing */ }
+      }
     }
+  }
+
+  // handleTunnelWSOpened carries the subprotocol the backend picked, releasing
+  // the visitor's held 101 (see handleTunnelWS).
+  private handleTunnelWSOpened(dataJSON: string) {
+    let m: any = null;
+    try { m = JSON.parse(dataJSON); } catch { return; }
+    if (!m?.stream_id) return;
+    this.settleWSOpen(m.stream_id, typeof m.subprotocol === "string" ? m.subprotocol : "");
+  }
+
+  // settleWSOpen resolves a pending handshake exactly once and clears its timer.
+  private settleWSOpen(streamId: string, subprotocol: string | null) {
+    const pending = this.pendingWSOpens.get(streamId);
+    if (!pending) return;
+    this.pendingWSOpens.delete(streamId);
+    clearTimeout(pending.timeout);
+    pending.resolve(subprotocol);
   }
 
   private getVisitorSocket(streamId: string): WebSocket | null {

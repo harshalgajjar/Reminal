@@ -44,6 +44,7 @@ var exemptFromSessionForwarding = map[protocol.MessageType]string{
 	protocol.TypeTunnelReqBody:  "tunnels unsupported on this relay",
 	protocol.TypeTunnelResp:     "tunnels unsupported on this relay",
 	protocol.TypeTunnelWSOpen:   "tunnels unsupported on this relay",
+	protocol.TypeTunnelWSOpened: "tunnels unsupported on this relay",
 	protocol.TypeTunnelWSData:   "tunnels unsupported on this relay",
 	protocol.TypeTunnelWSClose:  "tunnels unsupported on this relay",
 }

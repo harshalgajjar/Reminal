@@ -465,7 +465,7 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		// (body_more + tunnel_req_body). Without it the relay must refuse an
 		// upload too big for one message rather than chunk it — an older agent
 		// silently drops the follow-on chunks and would write a TRUNCATED file.
-		"caps": []string{"req_chunk"},
+		"caps": []string{"req_chunk", "ws_subproto"},
 	})
 	if err := t.writeMsg(conn, protocol.Message{
 		Type: protocol.TypeTunnelRegister,
@@ -1147,6 +1147,18 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 	// other proxied stream on it, stays up. Matches the HTTP path's chunk ceiling.
 	backend.SetReadLimit(tunnelChunkBytes)
 
+	// Tell the relay which subprotocol the BACKEND actually chose. The relay
+	// holds the visitor's 101 until this arrives (only when the client offered
+	// one), so the handshake completes with the real pick instead of an echo of
+	// the client's first offer — which left the browser believing it spoke a
+	// protocol the backend had not selected.
+	if op, merr := json.Marshal(map[string]any{
+		"stream_id":   streamID,
+		"subprotocol": backend.Subprotocol(),
+	}); merr == nil {
+		_ = t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelWSOpened, Data: string(op)})
+	}
+
 	// Publish the backend, unless the stream was torn down while we were dialing
 	// (visitor hung up, or the control socket that delivered the open has since
 	// been replaced by a reconnect). In either case the dialed socket is orphaned.
@@ -1200,7 +1212,14 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 		for {
 			mt, data, rerr := backend.ReadMessage()
 			if rerr != nil {
-				t.closeWSStream(conn, streamID, st, true)
+				// Relay the backend's close code + reason. Without it every
+				// proxied socket reached the browser as a bare 1000, so a
+				// client could not distinguish a policy close from a clean one.
+				code, reason := 0, ""
+				if ce, ok := rerr.(*websocket.CloseError); ok {
+					code, reason = ce.Code, ce.Text
+				}
+				t.closeWSStreamCode(conn, streamID, st, true, code, reason)
 				return
 			}
 			if err := t.sendWSData(conn, streamID, data, mt == websocket.BinaryMessage); err != nil {
@@ -1251,6 +1270,8 @@ func (t *Tunnel) handleTunnelWSData(conn *websocket.Conn, payload string) {
 func (t *Tunnel) handleTunnelWSClose(payload string) {
 	var m struct {
 		StreamID string `json:"stream_id"`
+		Code     int    `json:"code"`
+		Reason   string `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(payload), &m); err != nil || m.StreamID == "" {
 		return
@@ -1259,7 +1280,9 @@ func (t *Tunnel) handleTunnelWSClose(payload string) {
 	st := t.wsStreams[m.StreamID]
 	t.wsMu.Unlock()
 	// Visitor side initiated the close, so don't echo one back (notify=false).
-	t.closeWSStream(nil, m.StreamID, st, false)
+	// Its code+reason still go to the backend as a real close frame, so the app
+	// sees why the browser left instead of a bare disconnect.
+	t.closeWSStreamCode(nil, m.StreamID, st, false, m.Code, m.Reason)
 }
 
 // closeWSStream stops both pumps, closes the backend socket, and (when notify is
@@ -1269,8 +1292,20 @@ func (t *Tunnel) handleTunnelWSClose(payload string) {
 // this stream. Idempotent via closeOnce, so the reader, writer, and control
 // paths can all call it safely.
 func (t *Tunnel) closeWSStream(conn *websocket.Conn, streamID string, st *wsStream, notify bool) {
+	t.closeWSStreamCode(conn, streamID, st, notify, 0, "")
+}
+
+// closeWSStreamCode is closeWSStream carrying a close code + reason. When one
+// is present it goes to the backend as a real close frame before the socket is
+// dropped (so the app learns why the visitor left) and is relayed onward to the
+// visitor. 1005/1006 are status codes a peer never puts on the wire, so they
+// are treated as "no code" rather than forged into a frame.
+func (t *Tunnel) closeWSStreamCode(conn *websocket.Conn, streamID string, st *wsStream, notify bool, code int, reason string) {
 	if st == nil {
 		return
+	}
+	if code == websocket.CloseNoStatusReceived || code == websocket.CloseAbnormalClosure {
+		code, reason = 0, ""
 	}
 	t.wsMu.Lock()
 	if t.wsStreams[streamID] == st {
@@ -1281,11 +1316,15 @@ func (t *Tunnel) closeWSStream(conn *websocket.Conn, streamID string, st *wsStre
 		close(st.done)
 		st.mu.Lock()
 		if st.conn != nil { // nil if torn down before the backend dial resolved
+			if code != 0 {
+				_ = st.conn.WriteControl(websocket.CloseMessage,
+					websocket.FormatCloseMessage(code, reason), time.Now().Add(wsWriteWait))
+			}
 			_ = st.conn.Close()
 		}
 		st.mu.Unlock()
 		if notify && conn != nil {
-			t.sendWSClose(conn, streamID)
+			t.sendWSCloseCode(conn, streamID, code, reason)
 		}
 	})
 }
@@ -1312,7 +1351,21 @@ func (t *Tunnel) sendWSData(conn *websocket.Conn, streamID string, data []byte, 
 }
 
 func (t *Tunnel) sendWSClose(conn *websocket.Conn, streamID string) {
-	payload, _ := json.Marshal(map[string]any{"stream_id": streamID})
+	t.sendWSCloseCode(conn, streamID, 0, "")
+}
+
+// sendWSCloseCode reports a proxied socket's end, carrying the close code and
+// reason the BACKEND sent. Without them every proxied socket reached the
+// browser as a plain 1000 "normal closure", so a client could not tell
+// "policy violation" (1008) or "going away" (1001) from a clean finish and its
+// reconnect logic misfired. code 0 means no code was available.
+func (t *Tunnel) sendWSCloseCode(conn *websocket.Conn, streamID string, code int, reason string) {
+	m := map[string]any{"stream_id": streamID}
+	if code != 0 {
+		m["code"] = code
+		m["reason"] = reason
+	}
+	payload, _ := json.Marshal(m)
 	_ = t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelWSClose, Data: string(payload)})
 }
 
