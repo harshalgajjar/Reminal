@@ -137,14 +137,7 @@ const (
 	// request. Payload (Data, JSON):
 	//   {"req_id":"abc","method":"GET","url":"/path?q=1",
 	//    "headers":{"User-Agent":"...", ...}, "body":"<base64>"}
-	// A request body too large for one relay message (the DO caps a WS message
-	// near 1 MiB) sets "body_more":true and carries only the first chunk here;
-	// the rest follow as TypeTunnelReqBody messages.
 	TypeTunnelReq MessageType = "tunnel_req"
-	// TypeTunnelReqBody carries a follow-on chunk of a chunked request body.
-	// Payload (Data, JSON): {"req_id":"abc","body":"<base64>","more":true}.
-	// The final chunk sets "more":false (its body may be empty).
-	TypeTunnelReqBody MessageType = "tunnel_req_body"
 	// TypeTunnelResp is the agent→relay reply. Payload (Data, JSON):
 	//   {"req_id":"abc","status":200,
 	//    "headers":{"Content-Type":"text/html", ...},
