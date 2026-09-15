@@ -1073,7 +1073,17 @@ function parseCookies(header: string): Record<string, string> {
   for (const part of header.split(";")) {
     const eq = part.indexOf("=");
     if (eq < 0) continue;
-    out[part.slice(0, eq).trim()] = decodeURIComponent(part.slice(eq + 1).trim());
+    const name = part.slice(0, eq).trim();
+    const raw = part.slice(eq + 1).trim();
+    // decodeURIComponent THROWS on a malformed escape, and this runs over every
+    // cookie the visitor carries — not just ours. One app cookie containing a
+    // bare "%" (a percentage in a value) would otherwise throw here and 500 the
+    // whole request, breaking the tunnel for that visitor until they cleared it.
+    try {
+      out[name] = decodeURIComponent(raw);
+    } catch {
+      out[name] = raw;
+    }
   }
   return out;
 }

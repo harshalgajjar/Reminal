@@ -624,10 +624,17 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 		t.sendError(conn, req.ReqID, "bad request url")
 		return
 	}
+	// RawPath preserves the ORIGINAL percent-encoding. Path alone is the decoded
+	// form, so a literal %2F in the visitor's URL would reach the backend as a
+	// real "/" — silently changing which resource is addressed (file managers and
+	// APIs that put an encoded id or path in a segment depend on the difference).
+	// url.URL only honours RawPath when it round-trips to Path, which is exactly
+	// the case we care about.
 	target := (&url.URL{
 		Scheme:   t.backendScheme(),
 		Host:     fmt.Sprintf("127.0.0.1:%d", t.port),
 		Path:     ref.Path,
+		RawPath:  ref.EscapedPath(),
 		RawQuery: ref.RawQuery,
 	}).String()
 	httpReq, err := http.NewRequest(strings.ToUpper(req.Method), target, body)
@@ -635,8 +642,34 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 		t.sendError(conn, req.ReqID, fmt.Sprintf("build request: %v", err))
 		return
 	}
+	// Headers named in the visitor's own Connection header are hop-by-hop by
+	// definition (RFC 9110 §7.6.1) and must not be relayed. Skipping only the
+	// fixed list let a visitor smuggle a header past a backend that trusts the
+	// proxy to have stripped it (the CVE-2022-31813 shape).
+	connTokens := map[string]bool{}
+	for k, v := range req.Headers {
+		if !strings.EqualFold(k, "Connection") {
+			continue
+		}
+		for _, tok := range strings.Split(v, ",") {
+			if tok = strings.TrimSpace(tok); tok != "" {
+				connTokens[strings.ToLower(tok)] = true
+			}
+		}
+	}
 	var visitorHost string
 	for k, v := range req.Headers {
+		if connTokens[strings.ToLower(k)] {
+			continue
+		}
+		// The visitor does not get to choose what the backend believes about the
+		// hop in front of it. Drop any client-supplied forwarding headers so ours
+		// below are authoritative — otherwise a crafted X-Forwarded-For lands in
+		// the app's audit log and can satisfy an `allow=`/`Require ip` rule, and a
+		// crafted X-Forwarded-Proto convinces an app it is already on TLS.
+		if isForwardingHeader(k) {
+			continue
+		}
 		if strings.EqualFold(k, "Host") {
 			// Handle Host BEFORE the hop-header guard (which lists "host"):
 			// Go's Transport takes the outgoing Host from req.Host, NOT the
@@ -650,7 +683,17 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 			// host. The connection still dials 127.0.0.1:<port> via URL.Host.
 			// (The relay forwards the header lowercased as "host".)
 			visitorHost = v
-			httpReq.Host = v
+			// Carry an EXPLICIT port. Apps that implement a referer/origin check
+			// compare the port implied by the browser's Referer (443 for https)
+			// against the port they think they're serving on — which, with a
+			// port-less Host, is their own listening port. Webmin is the clearest
+			// case: with Host "x.reminal.app" it sees SERVER_PORT=10000, decides
+			// 443 != 10000, and fails every non-index page with "Security
+			// Warning … outside the Webmin server" (the dashboard is auto-trusted,
+			// so it looks fine until the first Save/Apply). Measured on real
+			// webmin: 2 warnings without the port, 0 with it. nginx's $http_host
+			// and Caddy's {hostport} pass the port for the same reason.
+			httpReq.Host = withDefaultPort(v)
 			continue
 		}
 		if isHopHeader(k) {
@@ -673,6 +716,16 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 	httpReq.Header.Set("X-Forwarded-Proto", "https")
 	if visitorHost != "" {
 		httpReq.Header.Set("X-Forwarded-Host", visitorHost)
+	}
+	// Give the app the visitor's real address. Without it every request looks
+	// like it came from the loopback hop, so access logs are useless and any
+	// per-IP rate-limit or lockout counts the whole internet as one client —
+	// webmin's default (5 failures / 60s) then lets one visitor lock everybody
+	// out. Cloudflare hands us the client IP; it is the only trustworthy source
+	// here, which is why the client's own X-Forwarded-* was dropped above.
+	if ip := req.Headers["cf-connecting-ip"]; ip != "" {
+		httpReq.Header.Set("X-Forwarded-For", ip)
+		httpReq.Header.Set("X-Real-IP", ip)
 	}
 
 	resp, err := t.httpClient.Do(httpReq)
@@ -1223,6 +1276,37 @@ func (t *Tunnel) writeHandshake() {
 
 // isHopHeader returns true for headers that mustn't be forwarded across
 // proxies (RFC 7230 §6.1). Standard reverse-proxy hygiene.
+// isForwardingHeader reports whether a header describes the proxy hop. These are
+// ours to set: a visitor-supplied value must never reach the backend, or it can
+// forge its way into audit logs and past IP-based access rules.
+func isForwardingHeader(name string) bool {
+	switch strings.ToLower(name) {
+	case "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
+		"x-forwarded-port", "x-forwarded-scheme", "x-real-ip", "forwarded":
+		return true
+	}
+	return false
+}
+
+// withDefaultPort appends the public HTTPS port when a host carries none, so a
+// backend comparing the Referer's implied port against its own sees a match.
+func withDefaultPort(host string) string {
+	if host == "" {
+		return host
+	}
+	// An IPv6 literal is bracketed; a port is a colon AFTER the closing bracket.
+	if i := strings.LastIndex(host, "]"); i >= 0 {
+		if strings.Contains(host[i:], ":") {
+			return host
+		}
+		return host + ":443"
+	}
+	if strings.Contains(host, ":") {
+		return host // already has a port
+	}
+	return host + ":443"
+}
+
 func isHopHeader(name string) bool {
 	switch strings.ToLower(name) {
 	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
