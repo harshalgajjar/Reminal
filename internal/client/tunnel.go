@@ -54,7 +54,15 @@ const schemeProbeTimeout = 3 * time.Second
 // promptly instead of being held until the buffer fills. A big fast download
 // still batches into full tunnelChunkBytes chunks — the timer only matters when
 // the body is slow.
-const streamFlushInterval = 2 * time.Second
+//
+// Keep this SMALL: it is pure added latency on every streamed message. At 2s an
+// SSE event, a live log line or a dashboard tick reached the browser up to two
+// seconds after the app emitted it — which reads as lag on exactly the apps that
+// stream (UniFi live stats, Node-RED's debug pane, tail-style pages). A fast body
+// hits the tunnelChunkBytes threshold long before this fires, so shrinking it
+// costs those nothing; it only makes genuinely trickling bodies prompt, at the
+// price of more and smaller messages for them, which is the right trade.
+const streamFlushInterval = 100 * time.Millisecond
 
 // streamReadBytes is one Read from the local response body. Small enough that a
 // trickle is noticed quickly, large enough that a fast body fills a chunk in a
