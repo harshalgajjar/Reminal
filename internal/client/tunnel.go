@@ -201,8 +201,17 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 	// loopback hop. This is the same posture as `cloudflared --no-tls-verify`.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	// Bound time-to-FIRST-BYTE, never total duration. http.Client.Timeout is a
+	// wall-clock cap on the whole exchange *including reading the body*, so with
+	// it set any response that takes longer than it — a UniFi backup download, a
+	// webmin package install streaming its log, a long SSE feed — was cut off
+	// mid-body. Worse, it surfaced as a clean EOF (curl exit 0), so the caller
+	// believed it had the complete file: silent truncation, not an error.
+	// Measured through a live tunnel: a 75s stream stopped at 60s with no error.
+	// Idleness is still bounded, in the right place — the relay re-arms a stall
+	// watchdog on every chunk and gives up if one stops arriving.
+	tr.ResponseHeaderTimeout = 60 * time.Second
 	hc := &http.Client{
-		Timeout:   60 * time.Second,
 		Transport: tr,
 		// Don't follow redirects: the visitor's browser should see the
 		// 3xx so it can update its URL bar / honour cookie scope etc.
@@ -414,6 +423,35 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 
 	// Connected + registered → tell `reminal expose` to print + exit.
 	t.writeHandshake()
+
+	// Keep the control socket alive. Every read below arms a 60s deadline, and
+	// the relay only sends us something when a NEW request arrives — so while we
+	// are merely streaming one long response back (a big download, a package
+	// install's log, an SSE feed) nothing comes inbound, the deadline expires,
+	// and runConnection tears the tunnel down, destroying every in-flight
+	// request. That surfaced as a response silently truncated at exactly 60s
+	// with a clean EOF, so the visitor believed the file was complete.
+	// The relay auto-answers this ping without even waking its Durable Object,
+	// and the pong refreshes the read deadline. The shell agent already does the
+	// same thing on its socket; the tunnel never did.
+	pingDone := make(chan struct{})
+	defer close(pingDone)
+	go func() {
+		tk := time.NewTicker(30 * time.Second)
+		defer tk.Stop()
+		for {
+			select {
+			case <-pingDone:
+				return
+			case <-stop:
+				return
+			case <-tk.C:
+				if err := t.writeMsg(conn, protocol.Message{Type: protocol.TypePing}); err != nil {
+					return
+				}
+			}
+		}
+	}()
 
 	for {
 		select {
