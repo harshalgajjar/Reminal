@@ -721,17 +721,20 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 			// host. The connection still dials 127.0.0.1:<port> via URL.Host.
 			// (The relay forwards the header lowercased as "host".)
 			visitorHost = v
-			// Carry an EXPLICIT port. Apps that implement a referer/origin check
-			// compare the port implied by the browser's Referer (443 for https)
-			// against the port they think they're serving on — which, with a
-			// port-less Host, is their own listening port. Webmin is the clearest
-			// case: with Host "x.reminal.app" it sees SERVER_PORT=10000, decides
-			// 443 != 10000, and fails every non-index page with "Security
-			// Warning … outside the Webmin server" (the dashboard is auto-trusted,
-			// so it looks fine until the first Save/Apply). Measured on real
-			// webmin: 2 warnings without the port, 0 with it. nginx's $http_host
-			// and Caddy's {hostport} pass the port for the same reason.
-			httpReq.Host = withDefaultPort(v)
+			// Forward the Host EXACTLY as the browser sent it — which for https
+			// never includes ":443". Do not "helpfully" add the port: apps that
+			// CSRF-check with an exact string compare of Origin against
+			// scheme://Host (Django, and any hand-rolled check) then see
+			// "https://x" != "https://x:443" and reject every POST. Measured: a
+			// Django-style check failed with the port appended and passed
+			// without it. This matches what nginx ($http_host), Caddy
+			// ({hostport}) and cloudflared all forward, since they too relay the
+			// browser's header verbatim. (Webmin's referer check wants the port
+			// to match its own listening port and warns on action pages without
+			// it — but it does so behind Cloudflare's quick tunnel identically;
+			// that is webmin's documented reverse-proxy configuration, not ours
+			// to paper over by breaking other apps.)
+			httpReq.Host = v
 			continue
 		}
 		if isHopHeader(k) {
@@ -1324,25 +1327,6 @@ func isForwardingHeader(name string) bool {
 		return true
 	}
 	return false
-}
-
-// withDefaultPort appends the public HTTPS port when a host carries none, so a
-// backend comparing the Referer's implied port against its own sees a match.
-func withDefaultPort(host string) string {
-	if host == "" {
-		return host
-	}
-	// An IPv6 literal is bracketed; a port is a colon AFTER the closing bracket.
-	if i := strings.LastIndex(host, "]"); i >= 0 {
-		if strings.Contains(host[i:], ":") {
-			return host
-		}
-		return host + ":443"
-	}
-	if strings.Contains(host, ":") {
-		return host // already has a port
-	}
-	return host + ":443"
 }
 
 func isHopHeader(name string) bool {
