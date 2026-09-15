@@ -676,6 +676,10 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 	// A large upload's remaining chunks arrive on bodyCh (registered by the read
 	// loop); drain them here, bounded so a runaway upload can't OOM the agent.
 	var body io.Reader
+	// Kept so the request can be rebuilt if the first attempt fails because the
+	// backend changed protocol (see the retry after httpClient.Do below) — the
+	// io.Reader is consumed by then.
+	var bodyBytes []byte
 	if req.Body != "" || bodyCh != nil {
 		var raw []byte
 		if req.Body != "" {
@@ -702,6 +706,7 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 			}
 		}
 		if raw != nil {
+			bodyBytes = raw
 			body = bytes.NewReader(raw)
 		}
 	}
@@ -824,8 +829,63 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 
 	resp, err := t.httpClient.Do(httpReq)
 	if err != nil {
+		// The backend may have changed protocol under us — a server restarted
+		// with TLS switched on or off keeps the same port, and the scheme we
+		// cached on the first request is then wrong for every request after.
+		// Without this the tunnel stays pinned to the stale scheme for its whole
+		// life (a plain server answering every request with a TLS handshake
+		// error, or vice versa) until the user stops and re-exposes. Re-probe,
+		// and retry once only if the answer actually changed; when it hasn't,
+		// fall through to the 502 below so a genuinely-down backend still fails
+		// fast instead of paying for a pointless second attempt.
+		usedScheme := httpReq.URL.Scheme
+		t.forgetBackendScheme()
+		if fresh := t.backendScheme(); fresh != usedScheme {
+			retryReq := httpReq.Clone(httpReq.Context())
+			retryReq.URL.Scheme = fresh
+			if bodyBytes != nil {
+				retryReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				retryReq.ContentLength = int64(len(bodyBytes))
+				retryReq.GetBody = func() (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+				}
+			}
+			resp, err = t.httpClient.Do(retryReq)
+		}
+	}
+	if err != nil {
 		t.sendError(conn, req.ReqID, fmt.Sprintf("local server unreachable: %v", err))
 		return
+	}
+	// The other direction of the same staleness: a TLS backend spoken to in
+	// cleartext does NOT fail at the transport layer, it answers politely — so
+	// err is nil and the retry above never fires. Every server phrases it
+	// differently (Go: 400 "Client sent an HTTP request to an HTTPS server";
+	// UniFi: 400 "This combination of host and port requires TLS"; webmin: 302 to
+	// https://<same host:port>), so matching those strings would be brittle and
+	// would miss the next app. Treat the response only as a HINT and let the
+	// probe decide — a plain-HTTP backend can never complete a TLS handshake, so
+	// a genuine 400/302 from a real HTTP server is left untouched.
+	if httpReq.URL.Scheme == "http" && looksLikeTLSWanted(resp, t.port) {
+		t.forgetBackendScheme()
+		if t.backendScheme() == "https" {
+			_ = resp.Body.Close()
+			retryReq := httpReq.Clone(httpReq.Context())
+			retryReq.URL.Scheme = "https"
+			if bodyBytes != nil {
+				retryReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				retryReq.ContentLength = int64(len(bodyBytes))
+				retryReq.GetBody = func() (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+				}
+			}
+			r2, e2 := t.httpClient.Do(retryReq)
+			if e2 != nil {
+				t.sendError(conn, req.ReqID, fmt.Sprintf("local server unreachable: %v", e2))
+				return
+			}
+			resp = r2
+		}
 	}
 	defer resp.Body.Close()
 
@@ -1036,6 +1096,48 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string
 // backend is unreachable at probe time we deliberately DON'T cache the answer,
 // so a server started after `reminal expose` is detected correctly on a later
 // request instead of being pinned to the wrong scheme for the tunnel's life.
+// looksLikeTLSWanted reports whether a response smells like "you just spoke
+// plain HTTP to a TLS port". It is only a HINT — the caller confirms with a real
+// TLS probe before changing anything — so it never has to be certain, and a
+// genuine 400/redirect from a real HTTP server survives because that server
+// cannot complete a TLS handshake.
+//
+// Kept deliberately narrow so ordinary traffic doesn't pay for a probe: exactly
+// 400 (Go's "Client sent an HTTP request to an HTTPS server", UniFi's "This
+// combination of host and port requires TLS"), or a redirect pointing at https
+// on our own loopback port (webmin's MiniServ answers 302 to
+// https://<same host>:<same port>). A plain 404 does not trigger it.
+func looksLikeTLSWanted(resp *http.Response, port int) bool {
+	if resp.StatusCode == http.StatusBadRequest {
+		return true
+	}
+	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
+		return false
+	}
+	loc, err := resp.Location()
+	if err != nil || loc == nil || loc.Scheme != "https" {
+		return false
+	}
+	switch loc.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+	default:
+		return false
+	}
+	return loc.Port() == "" || loc.Port() == strconv.Itoa(port)
+}
+
+// forgetBackendScheme drops the cached http/https answer so the next
+// backendScheme() call re-probes. Called when a request fails in a way that
+// suggests the backend changed protocol under us — a server restarted with TLS
+// switched on or off keeps the same port, and without this the tunnel stays
+// pinned to the stale scheme for its whole life (every request failing with a
+// TLS error against a plain server, or vice versa) until the user re-exposes.
+func (t *Tunnel) forgetBackendScheme() {
+	t.schemeMu.Lock()
+	t.scheme = ""
+	t.schemeMu.Unlock()
+}
+
 func (t *Tunnel) backendScheme() string {
 	t.schemeMu.Lock()
 	defer t.schemeMu.Unlock()
