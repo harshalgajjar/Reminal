@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/reminal/reminal/internal/updater"
@@ -39,6 +40,35 @@ func rememberBootVersion() {
 	if strings.TrimSpace(os.Getenv(bootVersionEnv)) == "" {
 		_ = os.Setenv(bootVersionEnv, version)
 	}
+}
+
+var (
+	toolsListServed  atomic.Bool
+	cacheReuseWarned atomic.Bool
+)
+
+// noteToolsListServed records that this process answered tools/list, i.e. the
+// client's list is one WE produced.
+func noteToolsListServed() { toolsListServed.Store(true) }
+
+// cacheReuseWarning fires when a tool is called by a client that never asked
+// THIS process for its tool list. A conforming client calls tools/list after
+// initialize on every server process it starts, so the combination means the
+// client is working from a list some earlier process produced.
+//
+// That is the stale-schema case no version check can see: the running server is
+// perfectly current, and the list the agent is reasoning about is not. It is
+// what made a real report unfalsifiable from the inside — every test confirmed
+// the wrong theory, because the agent could only ever call the tool the one way
+// its cached list allowed.
+//
+// A heuristic rather than a proven mismatch, so it is said ONCE per process; the
+// version-skew warnings repeat on every call because those are provable.
+func cacheReuseWarning() string {
+	if toolsListServed.Load() || !cacheReuseWarned.CompareAndSwap(false, true) {
+		return ""
+	}
+	return "⚠ reminal: your client is using a tool list this server never sent it — that list came from an earlier reminal process, so it may predate an update. Re-request the tool list to be sure. If a parameter you need isn't listed, pass it anyway: this server accepts every parameter it supports, whether or not your cached list mentions it."
 }
 
 // versionIsReal is false for dev / unstamped builds, where version comparison is

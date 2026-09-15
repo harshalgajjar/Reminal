@@ -871,9 +871,25 @@ func runMCP(_ []string) error {
 	rememberBootVersion()
 	defer srv.shutdown()
 
+	// Watch for reminal replacing our own binary (a self-update) so we can swap
+	// onto it between requests instead of serving a stale tool list until the
+	// client happens to restart us.
+	stopWatch := make(chan struct{})
+	defer close(stopWatch)
+	go mcpWatchBinary(stopWatch)
+
 	out := json.NewEncoder(os.Stdout)
 	reply := func(id json.RawMessage, result any) {
 		_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+	}
+
+	// We just re-exec'd onto a new binary, keeping the client's pipes: the tools
+	// it listed came from the previous image and may be out of date. Tell it, the
+	// way the protocol provides for, so a client that honours listChanged
+	// refreshes on its own and nobody has to restart anything.
+	if os.Getenv(reloadedEnv) != "" {
+		_ = os.Unsetenv(reloadedEnv)
+		_ = out.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
 	}
 
 	sc := bufio.NewScanner(os.Stdin)
@@ -902,13 +918,16 @@ func runMCP(_ []string) error {
 			}
 			reply(msg.ID, map[string]any{
 				"protocolVersion": proto,
-				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"capabilities":    map[string]any{"tools": map[string]any{"listChanged": true}},
 				"serverInfo":      map[string]any{"name": "reminal", "version": version},
 				"instructions":    mcpInstructions,
 			})
 		case "ping":
 			reply(msg.ID, map[string]any{})
 		case "tools/list":
+			// The client's list is now one we produced, so a later tool call is
+			// not cache reuse (see cacheReuseWarning).
+			noteToolsListServed()
 			reply(msg.ID, map[string]any{"tools": mcpToolList()})
 		case "tools/call":
 			var p struct {
@@ -921,6 +940,11 @@ func runMCP(_ []string) error {
 			// block — never inlined into the result text, which for some tools is
 			// JSON the agent parses.
 			warn := schemaStaleWarning()
+			if warn == "" {
+				// No provable version skew — but the client may still be working
+				// from a list an earlier process gave it.
+				warn = cacheReuseWarning()
+			}
 			content := make([]any, 0, 2)
 			if warn != "" {
 				content = append(content, map[string]any{"type": "text", "text": warn})
@@ -930,10 +954,10 @@ func runMCP(_ []string) error {
 				// should see them and be able to correct course.
 				content = append(content, map[string]any{"type": "text", "text": "Error: " + err.Error()})
 				reply(msg.ID, map[string]any{"content": content, "isError": true})
-				continue
+			} else {
+				content = append(content, map[string]any{"type": "text", "text": text})
+				reply(msg.ID, map[string]any{"content": content})
 			}
-			content = append(content, map[string]any{"type": "text", "text": text})
-			reply(msg.ID, map[string]any{"content": content})
 		default:
 			if len(msg.ID) == 0 {
 				continue // a notification; nothing to answer
@@ -943,6 +967,11 @@ func runMCP(_ []string) error {
 				"error": map[string]any{"code": -32601, "message": "method not found: " + msg.Method},
 			})
 		}
+		// Between requests is the only safe moment to swap onto a newly installed
+		// binary: we have just answered, so the client has not sent the next
+		// message and there is nothing buffered to lose across exec. On success
+		// this does not return — the new image picks up the same pipes.
+		maybeReexec()
 	}
 	return nil
 }
