@@ -1326,12 +1326,36 @@
       background: #21262d; border: 1px solid #30363d; border-radius: 5px;
       color: #c9d1d9; padding: 4px 6px; cursor: pointer;
     }
-    /* Keyboard toggle: a MODE, not a button. Off, a tap on the window is just a
+    /* Keyboard toggle: a MODE, not an action. Off, a tap on the window is just a
        click. On, every tap also raises the soft keyboard, so tapping a text
-       field in the remote app leaves you ready to type it. Lit while armed --
-       the state belongs to THIS window, so it survives the keyboard being
-       dismissed and never follows another pane's focus. */
-    .wpane-kbd[aria-pressed="true"] { background: #1f6feb; border-color: #388bfd; color: #fff; }
+       field in the remote app leaves you ready to type it. The state belongs to
+       THIS window, so it survives the keyboard being dismissed and never
+       follows another pane's focus.
+       Shaped as a switch rather than another square icon button, because it is
+       the one control up here that holds a state instead of doing a thing --
+       and kept at exactly the others' height so the bar still reads as one row.
+       Selectors are element+class so the shared .wpane-btn:hover cannot repaint
+       the lit track. */
+    button.wpane-kbd {
+      position: relative; flex: none; padding: 0;
+      width: 40px; height: 25px; border-radius: 999px;
+      background: #21262d; border: 1px solid #30363d;
+      transition: background .16s ease, border-color .16s ease;
+    }
+    button.wpane-kbd .wkbd-knob {
+      position: absolute; top: 2px; left: 2px; width: 19px; height: 19px;
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 50%; background: #8b949e; color: #21262d;
+      transition: transform .16s ease, background .16s ease, color .16s ease;
+    }
+    button.wpane-kbd svg { width: 13px; height: 13px; }
+    button.wpane-kbd:hover { border-color: #8b949e; }
+    button.wpane-kbd[aria-pressed="true"] { background: #1f6feb; border-color: #388bfd; }
+    /* 15px = the track's inner width (38) less the knob (19) and its 2px insets. */
+    button.wpane-kbd[aria-pressed="true"] .wkbd-knob { transform: translateX(15px); background: #fff; color: #1f6feb; }
+    @media (prefers-reduced-motion: reduce) {
+      button.wpane-kbd, button.wpane-kbd .wkbd-knob { transition: none; }
+    }
     .wpane-btn:hover { background: #30363d; color: #e6edf3; }
     .wpane-close:hover { background: #da3633; border-color: #da3633; color: #fff; }
     /* Swipe-up-from-✕ menu: the one deliberate way to close the window ON THE
@@ -9684,7 +9708,7 @@
       const spacer = document.createElement('span'); spacer.className = 'wpane-spacer';
       const popBtn = document.createElement('button'); popBtn.className = 'wpane-btn wpane-pop'; popBtn.innerHTML = ICON_POPOUT; popBtn.title = 'Open in its own browser window';
       const infoBtn = document.createElement('button'); infoBtn.className = 'wpane-btn wpane-info-btn'; infoBtn.innerHTML = ICON_INFO; infoBtn.title = 'Connection details';
-      const kbdBtn = document.createElement('button'); kbdBtn.className = 'wpane-btn wpane-kbd'; kbdBtn.innerHTML = ICON_KEYBOARD;
+      const kbdBtn = document.createElement('button'); kbdBtn.className = 'wpane-btn wpane-kbd'; kbdBtn.innerHTML = '<span class="wkbd-knob">' + ICON_KEYBOARD + '</span>';
       kbdBtn.setAttribute('role', 'switch'); kbdBtn.setAttribute('aria-pressed', 'false');
       kbdBtn.title = 'Tap to type: off';
       const closeBtn = document.createElement('button'); closeBtn.className = 'wpane-btn wpane-close'; closeBtn.innerHTML = ICON_CLOSE; closeBtn.title = 'Close';
