@@ -1326,9 +1326,12 @@
       background: #21262d; border: 1px solid #30363d; border-radius: 5px;
       color: #c9d1d9; padding: 4px 6px; cursor: pointer;
     }
-    /* Keyboard-mode indicator: lit while the hidden key input holds focus (the
-       soft keyboard is up); the same button then acts as the dismiss toggle. */
-    .wkbd-open .wpane-kbd { background: #1f6feb; border-color: #388bfd; color: #fff; }
+    /* Keyboard toggle: a MODE, not a button. Off, a tap on the window is just a
+       click. On, every tap also raises the soft keyboard, so tapping a text
+       field in the remote app leaves you ready to type it. Lit while armed --
+       the state belongs to THIS window, so it survives the keyboard being
+       dismissed and never follows another pane's focus. */
+    .wpane-kbd[aria-pressed="true"] { background: #1f6feb; border-color: #388bfd; color: #fff; }
     .wpane-btn:hover { background: #30363d; color: #e6edf3; }
     .wpane-close:hover { background: #da3633; border-color: #da3633; color: #fff; }
     /* Swipe-up-from-✕ menu: the one deliberate way to close the window ON THE
@@ -9681,7 +9684,9 @@
       const spacer = document.createElement('span'); spacer.className = 'wpane-spacer';
       const popBtn = document.createElement('button'); popBtn.className = 'wpane-btn wpane-pop'; popBtn.innerHTML = ICON_POPOUT; popBtn.title = 'Open in its own browser window';
       const infoBtn = document.createElement('button'); infoBtn.className = 'wpane-btn wpane-info-btn'; infoBtn.innerHTML = ICON_INFO; infoBtn.title = 'Connection details';
-      const kbdBtn = document.createElement('button'); kbdBtn.className = 'wpane-btn wpane-kbd'; kbdBtn.innerHTML = ICON_KEYBOARD; kbdBtn.title = 'Keyboard';
+      const kbdBtn = document.createElement('button'); kbdBtn.className = 'wpane-btn wpane-kbd'; kbdBtn.innerHTML = ICON_KEYBOARD;
+      kbdBtn.setAttribute('role', 'switch'); kbdBtn.setAttribute('aria-pressed', 'false');
+      kbdBtn.title = 'Tap to type: off';
       const closeBtn = document.createElement('button'); closeBtn.className = 'wpane-btn wpane-close'; closeBtn.innerHTML = ICON_CLOSE; closeBtn.title = 'Close';
       // Slot rather than a built pill: notes arrive and change independently of
       // the pane, so the pane keeps a mount point and re-fills it.
@@ -9712,7 +9717,7 @@
       el.append(bar, body, infoEl, rz);
       document.body.appendChild(el);
 
-      const pane = { el, img, ctx, body, cursorEl, notesSlot, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false };
+      const pane = { el, img, ctx, body, cursorEl, notesSlot, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false, kbdMode: false };
       panes.set(w.id, pane);
       refreshPaneNotes(w.id, pane);
       paneDrag(pane, bar);
@@ -9742,14 +9747,16 @@
       popBtn.addEventListener('click', (e) => { e.stopPropagation(); popOutPane(pane); });
       kbdBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        window.kbdlog('KBD BTN tap (wkey focused=' + (document.activeElement === wkey) + ')');
-        // Toggle: a second tap dismisses the soft keyboard. Without an explicit
-        // exit the hidden input kept focus forever — pane taps preventDefault,
-        // which suppresses the browser's natural tap-elsewhere blur — so on
-        // mobile every tap re-summoned the keyboard with no way out.
-        if (document.activeElement === wkey) { wkey.blur(); return; }
-        focusPane(w.id);
-        wkey.focus();
+        pane.kbdMode = !pane.kbdMode;
+        kbdBtn.setAttribute('aria-pressed', pane.kbdMode ? 'true' : 'false');
+        kbdBtn.title = pane.kbdMode ? 'Tap to type: on' : 'Tap to type: off';
+        window.kbdlog('KBD TOGGLE ' + (pane.kbdMode ? 'on' : 'off') + ' ' + w.id);
+        // Arming is itself the request to type, so raise the keyboard now
+        // rather than making the user arm it and then tap again. Disarming puts
+        // it away: pane taps preventDefault, which suppresses the browser's own
+        // tap-elsewhere blur, so nothing else would.
+        if (pane.kbdMode) { focusPane(w.id); wkey.focus(); }
+        else if (document.activeElement === wkey) wkey.blur();
       });
       infoBtn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -11195,14 +11202,17 @@
         if (g === 'tap' || (!moved && dur <= 600)) {
           click(pane.cursor || { fx: 0.5, fy: 0.5 });
           flash();
-          // Tapping the picture puts the soft keyboard away, the way tapping
-          // outside a text field does everywhere else. It has to be explicit:
-          // pane taps preventDefault, which suppresses the browser's own
-          // tap-elsewhere blur, so without this the keyboard could only be
-          // dismissed from the keyboard button. Scrolls and drags are excluded
-          // above, so this only fires on a deliberate tap; the button brings
-          // it straight back.
-          if (document.activeElement === wkey) wkey.blur();
+          // Armed, a tap means "put me in this field": the click above already
+          // went to the remote window, and the soft keyboard comes up, so
+          // tapping a text box leaves you ready to type into it.
+          //
+          // Disarmed, a tap is only a click and puts the keyboard away, the way
+          // tapping outside a text field does everywhere else. That has to be
+          // explicit: pane taps preventDefault, which suppresses the browser's
+          // own tap-elsewhere blur. Scrolls and drags are excluded above, so
+          // this only fires on a deliberate tap.
+          if (pane.kbdMode) wkey.focus();
+          else if (document.activeElement === wkey) wkey.blur();
         }
       }
       img.addEventListener('pointerup', endPointer);
