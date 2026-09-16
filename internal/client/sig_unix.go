@@ -22,6 +22,19 @@ func notifyAgentSignals(ch chan os.Signal) {
 // isPauseSignal reports whether sig is the pause-broadcast request.
 func isPauseSignal(sig os.Signal) bool { return sig == syscall.SIGUSR1 }
 
+// execTunnelBinary replaces the current process image with exe (a port
+// forward's hot-swap, see Tunnel.execRestart). Never returns on success.
+func execTunnelBinary(exe string, args, env []string) error {
+	return syscall.Exec(exe, args, env)
+}
+
+// RestartPortForward asks a running port forward (by pid) to hot-swap onto the
+// binary now on disk, keeping its session id and PIN. The forward treats
+// SIGUSR1 as that request (the shell agent uses the same signal for "pause").
+func RestartPortForward(pid int) error {
+	return syscall.Kill(pid, syscall.SIGUSR1)
+}
+
 // watchResize delivers a tick whenever the host terminal's size may have
 // changed (SIGWINCH here; a size poller on Windows). The returned stop func
 // unregisters the watcher.

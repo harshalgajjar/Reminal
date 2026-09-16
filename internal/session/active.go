@@ -45,6 +45,13 @@ type Active struct {
 	// Port is the local TCP port being forwarded. Set only when
 	// Kind == "port"; zero otherwise.
 	Port int `json:"port,omitempty"`
+	// Version is the running binary's version. Written by port forwards from
+	// the release that added in-place hot-swap onward; its ABSENCE on a port
+	// record therefore means the forward predates hot-swap, so a `restart`
+	// must not signal it (an old forward treats the signal as shutdown) —
+	// the CLI tells the user to stop and re-expose instead. Empty on shell
+	// records, which are restarted over their control socket regardless.
+	Version string `json:"version,omitempty"`
 	// Headless is true when the agent was spawned with --headless (no
 	// host terminal attached). Surfaced by `reminal list` so the user
 	// can tell foreground vs. background sessions apart. Port forwards

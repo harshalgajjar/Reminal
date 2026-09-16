@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,17 @@ import (
 // downloads are no longer truncated at the old single-message limit.
 const tunnelChunkBytes = 700 * 1024
 
+// maxTunnelMessageBytes is the safe ceiling for ONE tunnel_resp message on the
+// wire (JSON envelope + base64 body + first-chunk headers), kept under the DO's
+// ~1 MiB per-message cap with ~48 KiB of margin. tunnelChunkBytes sizes the BODY
+// so its base64 fits beneath this; the FIRST chunk additionally co-locates the
+// status+headers JSON, which is unbounded (Go's HTTP client accepts large
+// response headers). A backend that emits big headers next to a full body chunk
+// would otherwise push the head message over the cap and drop the whole control
+// socket — taking every in-flight request and proxied WebSocket with it. The
+// head chunk's body is shrunk to stay under this ceiling (see handleTunnelReq).
+const maxTunnelMessageBytes = 1000 * 1024
+
 // maxTunnelResponse caps a whole streamed response. It's an abuse guard AND a
 // memory guard: a slow visitor lets chunks queue in the relay's Durable Object
 // (which has ~128 MB), so the ceiling stays well under that. 64 MB is ~90x the
@@ -54,7 +66,15 @@ const schemeProbeTimeout = 3 * time.Second
 // promptly instead of being held until the buffer fills. A big fast download
 // still batches into full tunnelChunkBytes chunks — the timer only matters when
 // the body is slow.
-const streamFlushInterval = 2 * time.Second
+//
+// Keep this SMALL: it is pure added latency on every streamed message. At 2s an
+// SSE event, a live log line or a dashboard tick reached the browser up to two
+// seconds after the app emitted it — which reads as lag on exactly the apps that
+// stream (UniFi live stats, Node-RED's debug pane, tail-style pages). A fast body
+// hits the tunnelChunkBytes threshold long before this fires, so shrinking it
+// costs those nothing; it only makes genuinely trickling bodies prompt, at the
+// price of more and smaller messages for them, which is the right trade.
+const streamFlushInterval = 100 * time.Millisecond
 
 // streamReadBytes is one Read from the local response body. Small enough that a
 // trickle is noticed quickly, large enough that a fast body fills a chunk in a
@@ -97,12 +117,14 @@ type Tunnel struct {
 	handshakeFD   int
 	handshakeAddr string
 
-	// schemeMu guards scheme, the cached result of probing whether the local
-	// backend speaks plain HTTP or HTTPS. Detected lazily on the first proxied
-	// request (see backendScheme) so `reminal expose 8443` transparently reaches
+	// schemeMu guards scheme and addr, the cached results of probing the local
+	// backend: whether it speaks plain HTTP or HTTPS, and which loopback address
+	// it answers on. Both are detected lazily and together on the first proxied
+	// request (see backendTarget) so `reminal expose 8443` transparently reaches
 	// an HTTPS admin UI (webmin, UniFi, …) the same way it reaches an HTTP one.
 	schemeMu sync.Mutex
 	scheme   string // "" (unknown), "http", or "https"
+	addr     string // "" (unknown), else the loopback host:port that answered
 
 	// connMu guards conn so the signal handler can close the live WS
 	// the moment stop fires, instead of waiting up to 60s for the read
@@ -115,6 +137,15 @@ type Tunnel struct {
 	// reader/writer goroutines (see handleTunnelWSOpen).
 	wsMu      sync.Mutex
 	wsStreams map[string]*wsStream
+
+	// reqBodiesMu guards reqBodies — in-flight request bodies too large to fit a
+	// single relay message. The relay splits a big upload into a head tunnel_req
+	// (first chunk, body_more=true) plus tunnel_req_body chunks; the channel
+	// carries those follow-on chunks to the waiting handleTunnelReq. A nil/absent
+	// entry means the whole body already arrived in the tunnel_req (the common
+	// case). Closed by the final chunk (more=false) or by connection teardown.
+	reqBodiesMu sync.Mutex
+	reqBodies   map[string]chan []byte
 }
 
 // wsStream is one proxied visitor WebSocket. It's registered synchronously the
@@ -138,6 +169,20 @@ type wsFrame struct {
 	binary bool
 }
 
+// Tunnel hot-swap resume env. Deliberately DISTINCT from the shell agent's
+// REMINAL_RESUME_* set: main() routes any REMINAL_RESUME=1 into the shell PTY
+// resume path (which needs a pty fd), so a forward must not reuse that name or
+// its re-exec is misrouted into shell-resume and dies. These carry the forward's
+// identity across the exec so it keeps the same public URL, and — via an
+// unchanged PIN hash — the same auth-cookie signing key, so visitors stay in.
+const (
+	envTunResume    = "REMINAL_EXPOSE_RESUME"
+	envTunSessionID = "REMINAL_EXPOSE_SESSION_ID"
+	envTunPIN       = "REMINAL_EXPOSE_PIN"
+	envTunPinHash   = "REMINAL_EXPOSE_PIN_HASH"
+	envTunStartedAt = "REMINAL_EXPOSE_STARTED_AT"
+)
+
 // wsStreamSendBuffer bounds queued visitor→backend frames per stream. If a
 // backend can't keep up and the buffer fills, the stream is torn down rather
 // than stalling the shared tunnel control socket (head-of-line blocking).
@@ -150,6 +195,13 @@ const wsStreamSendBuffer = 256
 // immediate close rather than allocating a backend dial + two pumps.
 const maxWSStreams = 512
 
+// maxChunkedUploads caps how many large uploads may be mid-assembly at once.
+// Each one holds a registered channel and a parked handler goroutine until its
+// final chunk arrives, so an upstream that opens chunked bodies and never
+// finishes them would otherwise grow both without bound. Past the cap a request
+// is handled with only its first chunk instead of being tracked.
+const maxChunkedUploads = 64
+
 // NewTunnel constructs a port-forward agent. Session ID + PIN are
 // freshly generated — every `reminal expose` invocation gets a new
 // pair, even for the same port, so old URLs become invalid the moment
@@ -158,17 +210,36 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 	if opts.Port <= 0 || opts.Port > 65535 {
 		return nil, fmt.Errorf("port %d out of range (1-65535)", opts.Port)
 	}
-	id, err := session.NewID(8)
-	if err != nil {
-		return nil, err
-	}
-	pin, err := session.NewPIN(6)
-	if err != nil {
-		return nil, err
-	}
-	pinHash, err := session.HashPIN(pin)
-	if err != nil {
-		return nil, err
+	// A hot-swap restart (see execRestart) re-execs this binary with the
+	// previous identity in the environment. Reuse it: the visitor's URL is
+	// port-<id>.reminal.app, so a fresh id would silently invalidate every link
+	// the user has shared, and an unchanged PIN hash lets the relay keep the
+	// auth-cookie signing key, so visitors stay logged in across an upgrade.
+	var (
+		id, pin, pinHash string
+		startedAt        time.Time
+		err              error
+	)
+	if os.Getenv(envTunResume) == "1" && os.Getenv(envTunSessionID) != "" && os.Getenv(envTunPinHash) != "" {
+		id = os.Getenv(envTunSessionID)
+		pin = os.Getenv(envTunPIN)
+		pinHash = os.Getenv(envTunPinHash)
+		if unix, perr := strconv.ParseInt(os.Getenv(envTunStartedAt), 10, 64); perr == nil && unix > 0 {
+			startedAt = time.Unix(unix, 0)
+		}
+		for _, k := range []string{envTunResume, envTunSessionID, envTunPIN, envTunPinHash, envTunStartedAt} {
+			_ = os.Unsetenv(k) // don't leak the identity into anything we spawn
+		}
+	} else {
+		if id, err = session.NewID(8); err != nil {
+			return nil, err
+		}
+		if pin, err = session.NewPIN(6); err != nil {
+			return nil, err
+		}
+		if pinHash, err = session.HashPIN(pin); err != nil {
+			return nil, err
+		}
 	}
 	// Clone the default transport so we keep sane connection pooling/timeouts,
 	// then allow self-signed TLS: HTTPS admin UIs on localhost (webmin, UniFi,
@@ -177,8 +248,17 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 	// loopback hop. This is the same posture as `cloudflared --no-tls-verify`.
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	// Bound time-to-FIRST-BYTE, never total duration. http.Client.Timeout is a
+	// wall-clock cap on the whole exchange *including reading the body*, so with
+	// it set any response that takes longer than it — a UniFi backup download, a
+	// webmin package install streaming its log, a long SSE feed — was cut off
+	// mid-body. Worse, it surfaced as a clean EOF (curl exit 0), so the caller
+	// believed it had the complete file: silent truncation, not an error.
+	// Measured through a live tunnel: a 75s stream stopped at 60s with no error.
+	// Idleness is still bounded, in the right place — the relay re-arms a stall
+	// watchdog on every chunk and gives up if one stops arriving.
+	tr.ResponseHeaderTimeout = 60 * time.Second
 	hc := &http.Client{
-		Timeout:   60 * time.Second,
 		Transport: tr,
 		// Don't follow redirects: the visitor's browser should see the
 		// 3xx so it can update its URL bar / honour cookie scope etc.
@@ -197,7 +277,9 @@ func NewTunnel(opts TunnelOptions) (*Tunnel, error) {
 		httpClient:    hc,
 		handshakeFD:   opts.HandshakeFD,
 		handshakeAddr: opts.HandshakeAddr,
+		startedAt:     startedAt, // zero unless resumed; Run stamps a fresh start otherwise
 		wsStreams:     make(map[string]*wsStream),
+		reqBodies:     make(map[string]chan []byte),
 	}, nil
 }
 
@@ -227,7 +309,9 @@ func (t *Tunnel) Run() error {
 			t.port, existing.ID, time.Since(existing.StartedAt).Round(time.Second))
 	}
 
-	t.startedAt = time.Now()
+	if t.startedAt.IsZero() {
+		t.startedAt = time.Now() // a resumed forward keeps its original start time
+	}
 	_ = session.WriteActive(t.activeRecord())
 	defer func() { _ = session.ClearActive(t.sessionID) }()
 
@@ -236,18 +320,33 @@ func (t *Tunnel) Run() error {
 	defer signal.Stop(sigCh)
 	stop := make(chan struct{})
 	go func() {
-		// Any of SIGINT/SIGTERM/SIGUSR1 shuts the forward down — a tunnel has no
-		// local shell to keep alive, so (unlike the shell agent) there's nothing
-		// to pause; `reminal stop` simply ends the forward.
-		<-sigCh
-		close(stop)
-		// Close the live WS too — otherwise the read in runConnection sits until
-		// its 60s deadline, which makes `reminal stop` look like it didn't work.
-		t.connMu.Lock()
-		if t.conn != nil {
-			_ = t.conn.Close()
+		for sig := range sigCh {
+			// SIGUSR1 (the shell agent's "pause" signal) means something else for
+			// a forward, which has nothing to pause: hot-swap onto the binary now
+			// on disk, keeping this session's id + PIN. `reminal restart --all`
+			// and the post-upgrade restart send it — without this, a forward
+			// started before an upgrade kept running the OLD code indefinitely,
+			// so a user who upgraded to pick up a fix saw no change at all.
+			if isPauseSignal(sig) {
+				if err := t.execRestart(); err != nil {
+					// Exec failed (binary missing/unreadable); keep serving on the
+					// current image rather than dying.
+					fmt.Fprintf(os.Stderr, "reminal expose: restart failed: %v — still running the previous version\n", err)
+					continue
+				}
+				return // unreachable: the process image was replaced
+			}
+			// SIGINT/SIGTERM shut the forward down; `reminal stop` simply ends it.
+			close(stop)
+			// Close the live WS too — otherwise the read in runConnection sits
+			// until its deadline, which makes `reminal stop` look like it didn't work.
+			t.connMu.Lock()
+			if t.conn != nil {
+				_ = t.conn.Close()
+			}
+			t.connMu.Unlock()
+			return
 		}
-		t.connMu.Unlock()
 	}()
 
 	// Serve this machine's owner-derived directory channel too, so a machine
@@ -315,6 +414,7 @@ func (t *Tunnel) activeRecord() session.Active {
 		StartedAt:    t.startedAt,
 		Kind:         session.KindPort,
 		Port:         t.port,
+		Version:      t.version, // marks this forward as hot-swap-capable (see Active.Version)
 	}
 }
 
@@ -347,6 +447,9 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		// The control socket is gone; every proxied visitor WebSocket rode over
 		// it, so tear them all down. The relay closes the visitor sides too.
 		t.closeAllWSStreams()
+		// Unblock any handler still waiting for follow-on upload chunks that can
+		// no longer arrive on the dead socket.
+		t.closeAllReqBodies()
 	}()
 
 	if err := t.writeMsg(conn, protocol.Message{Type: protocol.TypeAuth, PinHash: t.pinHash}); err != nil {
@@ -371,6 +474,11 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		"port":     t.port,
 		"public":   t.public,
 		"pin_hash": t.pinHash,
+		// Tell the relay this agent can reassemble a chunked request body
+		// (body_more + tunnel_req_body). Without it the relay must refuse an
+		// upload too big for one message rather than chunk it — an older agent
+		// silently drops the follow-on chunks and would write a TRUNCATED file.
+		"caps": []string{"req_chunk", "ws_subproto"},
 	})
 	if err := t.writeMsg(conn, protocol.Message{
 		Type: protocol.TypeTunnelRegister,
@@ -381,6 +489,35 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 
 	// Connected + registered → tell `reminal expose` to print + exit.
 	t.writeHandshake()
+
+	// Keep the control socket alive. Every read below arms a 60s deadline, and
+	// the relay only sends us something when a NEW request arrives — so while we
+	// are merely streaming one long response back (a big download, a package
+	// install's log, an SSE feed) nothing comes inbound, the deadline expires,
+	// and runConnection tears the tunnel down, destroying every in-flight
+	// request. That surfaced as a response silently truncated at exactly 60s
+	// with a clean EOF, so the visitor believed the file was complete.
+	// The relay auto-answers this ping without even waking its Durable Object,
+	// and the pong refreshes the read deadline. The shell agent already does the
+	// same thing on its socket; the tunnel never did.
+	pingDone := make(chan struct{})
+	defer close(pingDone)
+	go func() {
+		tk := time.NewTicker(30 * time.Second)
+		defer tk.Stop()
+		for {
+			select {
+			case <-pingDone:
+				return
+			case <-stop:
+				return
+			case <-tk.C:
+				if err := t.writeMsg(conn, protocol.Message{Type: protocol.TypePing}); err != nil {
+					return
+				}
+			}
+		}
+	}()
 
 	for {
 		select {
@@ -401,7 +538,36 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 		case protocol.TypePing:
 			_ = t.writeMsg(conn, protocol.Message{Type: protocol.TypePong})
 		case protocol.TypeTunnelReq:
-			go t.handleTunnelReq(conn, m.Data)
+			// A large upload arrives as a head tunnel_req (body_more=true) plus
+			// follow-on tunnel_req_body chunks. Register the body channel INLINE
+			// here — before spawning the handler and before the next message is
+			// read — so a chunk racing in right behind the head always finds it.
+			var bodyCh chan []byte
+			var bodyReqID string
+			if reqID, more := peekReqBodyMore(m.Data); more && reqID != "" {
+				bodyReqID = reqID
+				t.reqBodiesMu.Lock()
+				// Bound in-flight chunked uploads the way maxWSStreams bounds
+				// proxied sockets — a relay that opens chunked bodies and never
+				// finishes them must not grow the map without limit. Over the
+				// cap we simply don't register: the handler proceeds with just
+				// the first chunk and the follow-on chunks find no entry and are
+				// dropped. Bounded, and it never blocks the read loop.
+				if _, replacing := t.reqBodies[reqID]; replacing || len(t.reqBodies) < maxChunkedUploads {
+					// A relay that reuses an in-flight req_id would otherwise
+					// strand the previous handler on a channel nobody ever closes
+					// (and which teardown can no longer see). Close as we displace.
+					if prev := t.reqBodies[reqID]; prev != nil {
+						close(prev)
+					}
+					bodyCh = make(chan []byte, 8)
+					t.reqBodies[reqID] = bodyCh
+				}
+				t.reqBodiesMu.Unlock()
+			}
+			go t.handleTunnelReq(conn, m.Data, bodyReqID, bodyCh)
+		case protocol.TypeTunnelReqBody:
+			t.handleTunnelReqBody(m.Data)
 		case protocol.TypeTunnelWSOpen:
 			// Runs inline: it only parses + registers the stream (no network), so
 			// a tunnel_ws_data racing in right behind it always finds the stream
@@ -417,10 +583,70 @@ func (t *Tunnel) runConnection(stop <-chan struct{}) (err error) {
 	}
 }
 
+// peekReqBodyMore extracts just the req_id and body_more flag from a tunnel_req
+// payload, so the read loop can register the body channel before spawning the
+// handler (and before the first follow-on chunk is read).
+func peekReqBodyMore(payload string) (reqID string, more bool) {
+	var h struct {
+		ReqID    string `json:"req_id"`
+		BodyMore bool   `json:"body_more"`
+	}
+	_ = json.Unmarshal([]byte(payload), &h)
+	return h.ReqID, h.BodyMore
+}
+
+// handleTunnelReqBody routes one follow-on request-body chunk to the waiting
+// handleTunnelReq. The final chunk (more=false) closes the channel so the
+// handler sees the body end. Runs inline on the read loop; the channel is
+// buffered and the handler drains it into a buffer without touching the
+// backend, so this never blocks on a slow upstream.
+func (t *Tunnel) handleTunnelReqBody(payload string) {
+	var msg struct {
+		ReqID string `json:"req_id"`
+		Body  string `json:"body"` // base64
+		More  bool   `json:"more"`
+	}
+	if err := json.Unmarshal([]byte(payload), &msg); err != nil {
+		return
+	}
+	t.reqBodiesMu.Lock()
+	ch := t.reqBodies[msg.ReqID]
+	if !msg.More && ch != nil {
+		// Last chunk: unregister now so a late duplicate can't touch a closed
+		// channel, and close after sending the final bytes below.
+		delete(t.reqBodies, msg.ReqID)
+	}
+	t.reqBodiesMu.Unlock()
+	if ch == nil {
+		return
+	}
+	if msg.Body != "" {
+		if raw, err := base64.StdEncoding.DecodeString(msg.Body); err == nil {
+			ch <- raw
+		}
+	}
+	if !msg.More {
+		close(ch)
+	}
+}
+
+// closeAllReqBodies closes every in-flight request-body channel on connection
+// teardown, so a handleTunnelReq blocked waiting for more chunks unblocks
+// (with a truncated body) instead of leaking a goroutine.
+func (t *Tunnel) closeAllReqBodies() {
+	t.reqBodiesMu.Lock()
+	chans := t.reqBodies
+	t.reqBodies = make(map[string]chan []byte)
+	t.reqBodiesMu.Unlock()
+	for _, ch := range chans {
+		close(ch)
+	}
+}
+
 // handleTunnelReq parses one tunnel_req payload, performs the local
 // HTTP request, and sends back a tunnel_resp. Errors surface to the
 // visitor as a 502 with the message in the body.
-func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
+func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload, bodyReqID string, bodyCh chan []byte) {
 	// Spawned per relay-forwarded request (go t.handleTunnelReq); a panic here would
 	// crash the port-forward. Contain it so one bad request just fails.
 	defer func() {
@@ -428,20 +654,72 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 			recoverLog("handleTunnelReq", r)
 		}
 	}()
+	if bodyCh != nil {
+		// Install the body-channel cleanup BEFORE anything that can return
+		// early. The read loop registered this channel off a permissive peek of
+		// the same payload; the strict unmarshal below can still reject it (a
+		// type-mismatched field parses for one struct and not the other). If we
+		// returned without draining, the read loop would block forever feeding a
+		// channel nobody reads — and because it's parked on a channel send, not
+		// a socket read, closing the socket wouldn't free it and teardown's
+		// closeAllReqBodies would never run. Draining keeps the loop moving even
+		// when this request is abandoned; bodyReqID is the key the loop used.
+		defer func() {
+			t.reqBodiesMu.Lock()
+			if t.reqBodies[bodyReqID] == bodyCh {
+				delete(t.reqBodies, bodyReqID)
+			}
+			t.reqBodiesMu.Unlock()
+			for range bodyCh {
+			}
+		}()
+	}
 	var req struct {
-		ReqID   string            `json:"req_id"`
-		Method  string            `json:"method"`
-		URL     string            `json:"url"`
-		Headers map[string]string `json:"headers"`
-		Body    string            `json:"body"` // base64
+		ReqID    string            `json:"req_id"`
+		Method   string            `json:"method"`
+		URL      string            `json:"url"`
+		Headers  map[string]string `json:"headers"`
+		Body     string            `json:"body"`      // base64 (first chunk if BodyMore)
+		BodyMore bool              `json:"body_more"` // more of the body arrives as tunnel_req_body chunks
 	}
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return
 	}
+	// Assemble the request body. The common case is a single chunk in req.Body.
+	// A large upload's remaining chunks arrive on bodyCh (registered by the read
+	// loop); drain them here, bounded so a runaway upload can't OOM the agent.
 	var body io.Reader
-	if req.Body != "" {
-		raw, err := base64.StdEncoding.DecodeString(req.Body)
-		if err == nil {
+	// Kept so the request can be rebuilt if the first attempt fails because the
+	// backend changed protocol (see the retry after httpClient.Do below) — the
+	// io.Reader is consumed by then.
+	var bodyBytes []byte
+	if req.Body != "" || bodyCh != nil {
+		var raw []byte
+		if req.Body != "" {
+			if b, err := base64.StdEncoding.DecodeString(req.Body); err == nil {
+				raw = b
+			}
+		}
+		if bodyCh != nil {
+			// Cleanup (unregister + drain) is already deferred at function entry.
+			for chunk := range bodyCh {
+				// Over the ceiling — truncate rather than grow unbounded. Keep
+				// DRAINING (never break): handleTunnelReqBody feeds this channel
+				// inline on the shared read loop, so abandoning it would fill the
+				// buffer and block every other request and proxied WebSocket
+				// frame until this handler's backend call finished.
+				if len(raw) >= maxTunnelResponse {
+					continue
+				}
+				if len(raw)+len(chunk) > maxTunnelResponse {
+					raw = append(raw, chunk[:maxTunnelResponse-len(raw)]...)
+					continue
+				}
+				raw = append(raw, chunk...)
+			}
+		}
+		if raw != nil {
+			bodyBytes = raw
 			body = bytes.NewReader(raw)
 		}
 	}
@@ -455,10 +733,18 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 		t.sendError(conn, req.ReqID, "bad request url")
 		return
 	}
+	// RawPath preserves the ORIGINAL percent-encoding. Path alone is the decoded
+	// form, so a literal %2F in the visitor's URL would reach the backend as a
+	// real "/" — silently changing which resource is addressed (file managers and
+	// APIs that put an encoded id or path in a segment depend on the difference).
+	// url.URL only honours RawPath when it round-trips to Path, which is exactly
+	// the case we care about.
+	backendScheme, backendAddr := t.backendTarget()
 	target := (&url.URL{
-		Scheme:   t.backendScheme(),
-		Host:     fmt.Sprintf("127.0.0.1:%d", t.port),
+		Scheme:   backendScheme,
+		Host:     backendAddr,
 		Path:     ref.Path,
+		RawPath:  ref.EscapedPath(),
 		RawQuery: ref.RawQuery,
 	}).String()
 	httpReq, err := http.NewRequest(strings.ToUpper(req.Method), target, body)
@@ -466,7 +752,63 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 		t.sendError(conn, req.ReqID, fmt.Sprintf("build request: %v", err))
 		return
 	}
+	// Headers named in the visitor's own Connection header are hop-by-hop by
+	// definition (RFC 9110 §7.6.1) and must not be relayed. Skipping only the
+	// fixed list let a visitor smuggle a header past a backend that trusts the
+	// proxy to have stripped it (the CVE-2022-31813 shape).
+	connTokens := map[string]bool{}
 	for k, v := range req.Headers {
+		if !strings.EqualFold(k, "Connection") {
+			continue
+		}
+		for _, tok := range strings.Split(v, ",") {
+			if tok = strings.TrimSpace(tok); tok != "" {
+				connTokens[strings.ToLower(tok)] = true
+			}
+		}
+	}
+	var visitorHost string
+	for k, v := range req.Headers {
+		if connTokens[strings.ToLower(k)] {
+			continue
+		}
+		// The visitor does not get to choose what the backend believes about the
+		// hop in front of it. Drop any client-supplied forwarding headers so ours
+		// below are authoritative — otherwise a crafted X-Forwarded-For lands in
+		// the app's audit log and can satisfy an `allow=`/`Require ip` rule, and a
+		// crafted X-Forwarded-Proto convinces an app it is already on TLS.
+		if isForwardingHeader(k) {
+			continue
+		}
+		if strings.EqualFold(k, "Host") {
+			// Handle Host BEFORE the hop-header guard (which lists "host"):
+			// Go's Transport takes the outgoing Host from req.Host, NOT the
+			// header map, so setting the header here would be silently ignored
+			// and the backend would see Host: 127.0.0.1:<port>. Forward the
+			// visitor's public host instead, so the backend's Host matches the
+			// Origin/Referer the browser sends. Apps like webmin and UniFi
+			// reject a login POST whose Referer/Origin host differs from the
+			// host they were served at (CSRF / same-origin defence) — exactly
+			// what a Cloudflare quick tunnel avoids by forwarding the public
+			// host. The connection still dials 127.0.0.1:<port> via URL.Host.
+			// (The relay forwards the header lowercased as "host".)
+			visitorHost = v
+			// Forward the Host EXACTLY as the browser sent it — which for https
+			// never includes ":443". Do not "helpfully" add the port: apps that
+			// CSRF-check with an exact string compare of Origin against
+			// scheme://Host (Django, and any hand-rolled check) then see
+			// "https://x" != "https://x:443" and reject every POST. Measured: a
+			// Django-style check failed with the port appended and passed
+			// without it. This matches what nginx ($http_host), Caddy
+			// ({hostport}) and cloudflared all forward, since they too relay the
+			// browser's header verbatim. (Webmin's referer check wants the port
+			// to match its own listening port and warns on action pages without
+			// it — but it does so behind Cloudflare's quick tunnel identically;
+			// that is webmin's documented reverse-proxy configuration, not ours
+			// to paper over by breaking other apps.)
+			httpReq.Host = v
+			continue
+		}
 		if isHopHeader(k) {
 			continue
 		}
@@ -485,23 +827,186 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 	// Reverse-proxy hygiene — give the upstream the original scheme +
 	// host so it can log + redirect correctly.
 	httpReq.Header.Set("X-Forwarded-Proto", "https")
-	if h := req.Headers["Host"]; h != "" {
-		httpReq.Header.Set("X-Forwarded-Host", h)
+	if visitorHost != "" {
+		httpReq.Header.Set("X-Forwarded-Host", visitorHost)
+	}
+	// Give the app the visitor's real address. Without it every request looks
+	// like it came from the loopback hop, so access logs are useless and any
+	// per-IP rate-limit or lockout counts the whole internet as one client —
+	// webmin's default (5 failures / 60s) then lets one visitor lock everybody
+	// out. Cloudflare hands us the client IP; it is the only trustworthy source
+	// here, which is why the client's own X-Forwarded-* was dropped above.
+	if ip := req.Headers["cf-connecting-ip"]; ip != "" {
+		httpReq.Header.Set("X-Forwarded-For", ip)
+		httpReq.Header.Set("X-Real-IP", ip)
 	}
 
 	resp, err := t.httpClient.Do(httpReq)
 	if err != nil {
-		t.sendError(conn, req.ReqID, fmt.Sprintf("local server unreachable: %v", err))
+		// The backend may have moved under us — a server restarted with TLS
+		// switched on or off keeps the same port, and one relaunched with a
+		// different bind address (`--host localhost` vs `--host 127.0.0.1`) keeps
+		// it too while changing loopback family. Either way what we cached on the
+		// first request is now wrong for every request after, and without this the
+		// tunnel stays pinned to the stale answer for its whole life (a plain
+		// server answering every request with a TLS handshake error; or a dial
+		// refused at an address nothing listens on any more) until the user stops
+		// and re-exposes. Re-probe, and retry once only if an answer actually
+		// changed; when neither has, fall through to the 502 below so a
+		// genuinely-down backend still fails fast instead of paying for a
+		// pointless second attempt.
+		usedScheme, usedHost := httpReq.URL.Scheme, httpReq.URL.Host
+		t.forgetBackendScheme()
+		if freshScheme, freshAddr := t.backendTarget(); freshScheme != usedScheme || freshAddr != usedHost {
+			retryReq := httpReq.Clone(httpReq.Context())
+			retryReq.URL.Scheme = freshScheme
+			retryReq.URL.Host = freshAddr
+			if bodyBytes != nil {
+				retryReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				retryReq.ContentLength = int64(len(bodyBytes))
+				retryReq.GetBody = func() (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+				}
+			}
+			resp, err = t.httpClient.Do(retryReq)
+		}
+	}
+	if err != nil {
+		t.sendError(conn, req.ReqID, backendErrorMessage(err))
 		return
+	}
+	// The other direction of the same staleness: a TLS backend spoken to in
+	// cleartext does NOT fail at the transport layer, it answers politely — so
+	// err is nil and the retry above never fires. Every server phrases it
+	// differently (Go: 400 "Client sent an HTTP request to an HTTPS server";
+	// UniFi: 400 "This combination of host and port requires TLS"; webmin: 302 to
+	// https://<same host:port>), so matching those strings would be brittle and
+	// would miss the next app. Treat the response only as a HINT and let the
+	// probe decide — a plain-HTTP backend can never complete a TLS handshake, so
+	// a genuine 400/302 from a real HTTP server is left untouched.
+	if httpReq.URL.Scheme == "http" && looksLikeTLSWanted(resp, t.port) {
+		t.forgetBackendScheme()
+		if freshScheme, freshAddr := t.backendTarget(); freshScheme == "https" {
+			_ = resp.Body.Close()
+			retryReq := httpReq.Clone(httpReq.Context())
+			retryReq.URL.Scheme = "https"
+			retryReq.URL.Host = freshAddr
+			if bodyBytes != nil {
+				retryReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				retryReq.ContentLength = int64(len(bodyBytes))
+				retryReq.GetBody = func() (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+				}
+			}
+			r2, e2 := t.httpClient.Do(retryReq)
+			if e2 != nil {
+				t.sendError(conn, req.ReqID, backendErrorMessage(e2))
+				return
+			}
+			resp = r2
+		}
 	}
 	defer resp.Body.Close()
 
 	headers := map[string]string{}
+	var setCookies []string
+	var multiHeaders map[string][]string
 	for k, v := range resp.Header {
+		// Content-Length is a hop header everywhere else here (see the NOTE below)
+		// because the runtime recomputes it from the body it actually sends. A
+		// HEAD reply has no body that could contradict it, and reporting the size
+		// WITHOUT transferring it is the entire point of the method — stripping it
+		// left anything that probes a size first (caches, download managers,
+		// curl -I) with no size at all.
+		if strings.EqualFold(req.Method, "HEAD") && strings.EqualFold(k, "Content-Length") && len(v) > 0 {
+			headers[k] = v[0]
+			continue
+		}
 		if isHopHeader(k) || len(v) == 0 {
 			continue
 		}
+		// Set-Cookie is not the only header that legitimately repeats: Vary,
+		// Link, WWW-Authenticate, Content-Language and friends do too, and a
+		// map[string]string keeps exactly one of them. Losing a Vary dimension
+		// is the dangerous case — a cache then serves the wrong variant to the
+		// wrong client. Carry every repeated header alongside the flat map,
+		// which older relays keep reading as before.
+		if len(v) > 1 && !strings.EqualFold(k, "Set-Cookie") {
+			if multiHeaders == nil {
+				multiHeaders = map[string][]string{}
+			}
+			multiHeaders[k] = v
+		}
+		// Set-Cookie is the one response header that legitimately repeats —
+		// webmin/UniFi and many apps set several at login. A map[string]string
+		// can only hold one, so carry the full list separately; the relay
+		// re-emits each as its own Set-Cookie. (Collapsing them dropped the
+		// app's session cookie and broke staying logged in.)
+		if strings.EqualFold(k, "Set-Cookie") {
+			setCookies = append(setCookies, v...)
+			continue
+		}
 		headers[k] = v[0]
+	}
+
+	// NOTE: we deliberately do NOT forward the backend's Content-Length to give
+	// the visitor a length contract. It was tried: the Workers runtime builds a
+	// streamed response from a ReadableStream and drops/recomputes
+	// content-length, so the header only ever survives on single-chunk bodies —
+	// i.e. never on the large downloads where a truncated file actually matters.
+	// Combined with the edge repairing chunked framing (so erroring the stream
+	// is invisible too, verified on both HTTP/2 and HTTP/1.1), a body that ends
+	// early cannot currently be signalled to the visitor through this relay. The
+	// abort below still matters: it stops the agent treating a failed read as a
+	// clean finish, and logs it for the operator.
+
+	// The first tunnel_resp co-locates status+headers with a body chunk. Measure
+	// the non-body overhead of that head message (marshal the exact head fields
+	// with an empty body) so the first chunk's body can be shrunk to keep the whole
+	// message under maxTunnelMessageBytes. Normal responses have tiny headers, so
+	// firstChunkMaxRaw stays at tunnelChunkBytes and nothing changes; only a
+	// backend with unusually large headers pays with a smaller first body chunk.
+	firstChunkMaxRaw := tunnelChunkBytes
+	{
+		headProbe := map[string]any{
+			"req_id":  req.ReqID,
+			"body":    "",
+			"more":    true,
+			"status":  resp.StatusCode,
+			"headers": headers,
+		}
+		if len(setCookies) > 0 {
+			headProbe["set_cookies"] = setCookies
+		}
+		if len(multiHeaders) > 0 {
+			headProbe["multi_headers"] = multiHeaders
+		}
+		probe, _ := json.Marshal(headProbe)
+		// The DO cap applies to the OUTER wire message, where this inner JSON is
+		// carried as an escaped string field (its quotes become \"), so measure
+		// the outer message, not the inner. The base64 body added later needs no
+		// escaping (its alphabet excludes JSON metacharacters), so its wire cost
+		// is exactly base64Len(bytes).
+		outerProbe, _ := json.Marshal(protocol.Message{Type: protocol.TypeTunnelResp, Data: string(probe)})
+		overhead := len(outerProbe)
+		if overhead >= maxTunnelMessageBytes {
+			// The headers alone exceed the per-message cap: no body split can make
+			// this head message fit, and sending it would drop the control socket.
+			// Fail this one request cleanly (nothing is on the wire yet) instead.
+			fmt.Fprintf(os.Stderr,
+				"reminal expose: %s response headers too large to relay (%d bytes) — sending 502\n",
+				req.URL, overhead)
+			t.sendError(conn, req.ReqID, "reminal: response headers too large to relay")
+			return
+		}
+		// base64 of N raw bytes is 4*ceil(N/3). Find the largest raw body whose
+		// base64 fits the remaining budget beside the headers.
+		if budget := maxTunnelMessageBytes - overhead; budget < ((tunnelChunkBytes+2)/3)*4 {
+			firstChunkMaxRaw = (budget / 4) * 3
+			if firstChunkMaxRaw < 0 {
+				firstChunkMaxRaw = 0
+			}
+		}
 	}
 
 	// Stream the body as one or more tunnel_resp chunks. The FIRST chunk carries
@@ -527,21 +1032,86 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 		if !firstSent {
 			payload["status"] = resp.StatusCode
 			payload["headers"] = headers
+			if len(setCookies) > 0 {
+				payload["set_cookies"] = setCookies
+			}
+			if len(multiHeaders) > 0 {
+				payload["multi_headers"] = multiHeaders
+			}
 			firstSent = true
 		}
 		out, _ := json.Marshal(payload)
 		return t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelResp, Data: string(out)})
 	}
+	// sendAbort ends the response as a FAILURE. Once status+headers are on the
+	// wire we can no longer change the status, so the only honest signal left is
+	// to break the body stream: the relay errors the visitor's stream and their
+	// client reports a failed transfer, instead of a 200 that looks complete but
+	// is half a file.
+	sendAbort := func(chunk []byte, msg string) error {
+		payload := map[string]any{
+			"req_id": req.ReqID,
+			"body":   base64.StdEncoding.EncodeToString(chunk),
+			"more":   false,
+			"error":  msg,
+		}
+		out, _ := json.Marshal(payload)
+		return t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelResp, Data: string(out)})
+	}
+
 	// emit sends one chunk and tracks the abuse cap. Returns stop=true once the
 	// stream should end — either because this was the final chunk or the cap was
 	// reached (in which case the chunk goes out with more=false, truncating).
+	//
+	// hitCap records WHICH of those two happened. The caller only sees a fused
+	// `stop`, so without it a deliberate truncation is indistinguishable from a
+	// body that simply ended — and the truncation is the one case worth saying
+	// something about.
+	hitCap := false
 	emit := func(chunk []byte, final bool) (stop bool, err error) {
 		total += int64(len(chunk))
 		capped := total >= maxTunnelResponse
+		if capped {
+			hitCap = true
+		}
+		// The FIRST message carries status+headers, so a full body chunk beside
+		// large headers can exceed the DO per-message cap. Split a head-sized
+		// piece off (more=true, body continues); send sets firstSent, so this runs
+		// at most once and the remainder — now header-free and <= tunnelChunkBytes
+		// — always fits. For normal (small-header) responses firstChunkMaxRaw ==
+		// tunnelChunkBytes >= len(chunk), so this loop never runs.
+		for !firstSent && len(chunk) > firstChunkMaxRaw {
+			if e := send(chunk[:firstChunkMaxRaw], true); e != nil {
+				return true, e
+			}
+			chunk = chunk[firstChunkMaxRaw:]
+		}
 		if e := send(chunk, !final && !capped); e != nil {
 			return true, e
 		}
 		return final || capped, nil
+	}
+
+	// warnIfCapped tells the OPERATOR that a response was cut short. The visitor
+	// cannot be told: the Workers runtime drops content-length on a streamed
+	// response and the edge repairs chunked framing, so even the explicit
+	// error-on-final-chunk that sendAbort uses arrives as a clean 200 (measured:
+	// curl rc=0 on h1 and h2, and a strict client raises nothing, against rc=18
+	// for the same abort straight from the backend). The person running
+	// `reminal expose` is the only one who can act on it — by fetching the file
+	// another way, or splitting it — and until now nothing anywhere said a word.
+	//
+	// The cut lands at or just past maxTunnelResponse, never before it: emit only
+	// notices the total AFTER sending a chunk, so the last chunk is whatever had
+	// accumulated (measured 64.0–64.7 MB for a 64 MiB cap). Report the bytes
+	// actually sent rather than implying a byte-exact limit.
+	warnIfCapped := func() {
+		if !hitCap {
+			return
+		}
+		fmt.Fprintf(os.Stderr,
+			"reminal expose: %s exceeded the %d MB response limit — the visitor received a truncated file (%d bytes) and their client cannot tell\n",
+			req.URL, maxTunnelResponse/(1024*1024), total)
 	}
 
 	type bodyRead struct {
@@ -601,6 +1171,7 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 					// Keep the remainder, moved to the front of the same backing array.
 					pending = append(pending[:0], pending[tunnelChunkBytes:]...)
 					if err != nil || stop {
+						warnIfCapped()
 						return
 					}
 				}
@@ -609,13 +1180,19 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 				}
 			}
 			if br.err != nil {
-				// End of body (io.EOF) or a read error. Either way flush whatever's
-				// left as the final chunk — unless nothing has gone out yet and this
-				// is a real error, where a clean 502 is better than a bogus 200.
+				// End of body (io.EOF) → flush what's left as the final chunk.
+				// A real read error means the backend's body ended EARLY (upstream
+				// reset, crash, short write against its own Content-Length). If
+				// nothing has gone out yet a clean 502 is right; if status+headers
+				// are already committed we must break the stream instead, or the
+				// visitor receives a successful-looking 200 that is half a file —
+				// silent corruption of, say, a database dump they will only find
+				// out about when they try to restore it.
 				if br.err == io.EOF {
 					_, _ = emit(pending, true)
 				} else if firstSent {
-					_, _ = emit(pending, true)
+					fmt.Fprintf(os.Stderr, "reminal expose: upstream ended early on %s: %v — signalling a failed transfer\n", req.URL, br.err)
+					_ = sendAbort(pending, br.err.Error())
 				} else {
 					t.sendError(conn, req.ReqID, fmt.Sprintf("read response: %v", br.err))
 				}
@@ -627,6 +1204,7 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 				stop, err := emit(pending, false)
 				pending = pending[:0]
 				if err != nil || stop {
+					warnIfCapped()
 					return
 				}
 			}
@@ -634,37 +1212,96 @@ func (t *Tunnel) handleTunnelReq(conn *websocket.Conn, payload string) {
 	}
 }
 
-// backendScheme learns—once, then caches—whether the local server on t.port
-// speaks plain HTTP or HTTPS, so `reminal expose` transparently proxies either.
-// A completed TLS handshake ⇒ "https" (webmin, UniFi, Proxmox and friends serve
-// HTTPS-only, usually with a self-signed cert); anything else ⇒ "http". If the
-// backend is unreachable at probe time we deliberately DON'T cache the answer,
-// so a server started after `reminal expose` is detected correctly on a later
-// request instead of being pinned to the wrong scheme for the tunnel's life.
-func (t *Tunnel) backendScheme() string {
+// looksLikeTLSWanted reports whether a response smells like "you just spoke
+// plain HTTP to a TLS port". It is only a HINT — the caller confirms with a real
+// TLS probe before changing anything — so it never has to be certain, and a
+// genuine 400/redirect from a real HTTP server survives because that server
+// cannot complete a TLS handshake.
+//
+// Kept deliberately narrow so ordinary traffic doesn't pay for a probe: exactly
+// 400 (Go's "Client sent an HTTP request to an HTTPS server", UniFi's "This
+// combination of host and port requires TLS"), or a redirect pointing at https
+// on our own loopback port (webmin's MiniServ answers 302 to
+// https://<same host>:<same port>). A plain 404 does not trigger it.
+func looksLikeTLSWanted(resp *http.Response, port int) bool {
+	if resp.StatusCode == http.StatusBadRequest {
+		return true
+	}
+	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
+		return false
+	}
+	loc, err := resp.Location()
+	if err != nil || loc == nil || loc.Scheme != "https" {
+		return false
+	}
+	switch loc.Hostname() {
+	case "127.0.0.1", "localhost", "::1":
+	default:
+		return false
+	}
+	return loc.Port() == "" || loc.Port() == strconv.Itoa(port)
+}
+
+// forgetBackendScheme drops the cached http/https answer so the next
+// backendScheme() call re-probes. Called when a request fails in a way that
+// suggests the backend changed protocol under us — a server restarted with TLS
+// switched on or off keeps the same port, and without this the tunnel stays
+// pinned to the stale scheme for its whole life (every request failing with a
+// TLS error against a plain server, or vice versa) until the user re-exposes.
+func (t *Tunnel) forgetBackendScheme() {
+	t.schemeMu.Lock()
+	t.scheme = ""
+	t.addr = ""
+	t.schemeMu.Unlock()
+}
+
+// backendTarget reports the scheme and the loopback host:port to use for the
+// local backend, probing once and caching both answers together.
+//
+// The address is not always 127.0.0.1. An app can bind IPv6 loopback ONLY, and
+// such a server is completely invisible at 127.0.0.1 — the dial is refused as if
+// nothing were running, even though the user can reach it in their own browser.
+// `listen(port, "localhost")` produces exactly that whenever the host resolves
+// localhost to ::1 first, which is the default on macOS and on any /etc/hosts
+// carrying `::1 localhost`. So IPv4 is tried first (it is the overwhelmingly
+// common bind) and IPv6 loopback second.
+//
+// The fallback is close to free: a wrong-family loopback dial is refused
+// immediately (measured ~0ms) rather than waiting out schemeProbeTimeout, so the
+// IPv4 case pays nothing for it. Only a *filtered* loopback port — rare enough
+// to accept — makes the probe wait twice.
+func (t *Tunnel) backendTarget() (scheme, addr string) {
 	t.schemeMu.Lock()
 	defer t.schemeMu.Unlock()
-	if t.scheme != "" {
-		return t.scheme
+	if t.scheme != "" && t.addr != "" {
+		return t.scheme, t.addr
 	}
-	addr := fmt.Sprintf("127.0.0.1:%d", t.port)
-	// A successful TLS handshake is the unambiguous signal of an HTTPS backend.
-	// InsecureSkipVerify: we only care that the peer speaks TLS, not who it is.
-	d := &net.Dialer{Timeout: schemeProbeTimeout}
-	if c, err := tls.DialWithDialer(d, "tcp", addr, &tls.Config{InsecureSkipVerify: true}); err == nil {
-		_ = c.Close()
-		t.scheme = "https"
-		return t.scheme
+	v4 := fmt.Sprintf("127.0.0.1:%d", t.port)
+	for _, cand := range []string{v4, fmt.Sprintf("[::1]:%d", t.port)} {
+		// A successful TLS handshake is the unambiguous signal of an HTTPS backend.
+		// InsecureSkipVerify: we only care that the peer speaks TLS, not who it is.
+		d := &net.Dialer{Timeout: schemeProbeTimeout}
+		if c, err := tls.DialWithDialer(d, "tcp", cand, &tls.Config{InsecureSkipVerify: true}); err == nil {
+			_ = c.Close()
+			t.scheme, t.addr = "https", cand
+			return t.scheme, t.addr
+		}
+		// Not TLS. If a plain TCP connection still opens, it's a live HTTP server.
+		if c, err := net.DialTimeout("tcp", cand, schemeProbeTimeout); err == nil {
+			_ = c.Close()
+			t.scheme, t.addr = "http", cand
+			return t.scheme, t.addr
+		}
 	}
-	// Not TLS. If a plain TCP connection still opens, it's a live HTTP server.
-	if c, err := net.DialTimeout("tcp", addr, schemeProbeTimeout); err == nil {
-		_ = c.Close()
-		t.scheme = "http"
-		return t.scheme
-	}
-	// Backend down: use http for this attempt (the request will surface a clean
-	// 502) but leave the cache empty so we re-probe next time.
-	return "http"
+	// Backend down on both families: use plain http at IPv4 loopback for this
+	// attempt (the request will surface a clean 502 naming the address it tried)
+	// but leave the cache empty so we re-probe next time.
+	return "http", v4
+}
+
+func (t *Tunnel) backendScheme() string {
+	scheme, _ := t.backendTarget()
+	return scheme
 }
 
 // ---- port-forward WebSocket proxying ----
@@ -699,7 +1336,20 @@ func (t *Tunnel) handleTunnelWSOpen(conn *websocket.Conn, payload string) {
 	// exhaustion from a client that opens sockets without bound.
 	if _, replacing := t.wsStreams[req.StreamID]; !replacing && len(t.wsStreams) >= maxWSStreams {
 		t.wsMu.Unlock()
-		t.sendWSClose(conn, req.StreamID)
+		// Refusing with no code meant the relay sent the browser a bare 1000
+		// "normal closure" — a socket we turned away looking exactly like one
+		// that finished cleanly, with nothing to act on.
+		//
+		// Unreachable today: the relay refuses a 513th visitor socket with a 503
+		// BEFORE the upgrade is accepted, and it releases its count only after
+		// telling us to close, so its count is never below ours. But the two
+		// ceilings are equal by convention alone ("Matches the agent's
+		// maxWSStreams"); raise one without the other and this path goes live
+		// silently. 1011 rather than 1013 because 1011 is measured to survive
+		// the relay's sock.close(), and an untestable path is the wrong place to
+		// gamble on a code.
+		t.sendWSCloseCode(conn, req.StreamID, websocket.CloseInternalServerErr,
+			"reminal: too many connections")
 		return
 	}
 	// A stream id collision (shouldn't happen — relay uses UUIDs) would orphan the
@@ -733,17 +1383,25 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 	}()
 	ref, perr := url.Parse(rawURL)
 	if perr != nil {
-		t.closeWSStream(conn, streamID, st, true)
+		t.closeWSStreamCode(conn, streamID, st, true, websocket.CloseInternalServerErr,
+			"reminal: invalid WebSocket URL")
 		return
 	}
+	httpScheme, backendAddr := t.backendTarget()
 	scheme := "ws"
-	if t.backendScheme() == "https" {
+	if httpScheme == "https" {
 		scheme = "wss"
 	}
+	// RawPath for the same reason the HTTP path sets it: Path alone is the
+	// DECODED form, so a literal %2F in the visitor's URL would be handed to the
+	// backend as a real "/" — a different route, silently. Only %2F actually
+	// changes (url.URL re-encodes %20, %25 and non-ASCII from Path either way),
+	// which is exactly the character that alters which resource is addressed.
 	dialURL := (&url.URL{
 		Scheme:   scheme,
-		Host:     fmt.Sprintf("127.0.0.1:%d", t.port),
+		Host:     backendAddr,
 		Path:     ref.Path,
+		RawPath:  ref.EscapedPath(),
 		RawQuery: ref.RawQuery,
 	}).String()
 
@@ -753,7 +1411,18 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 	// negotiate them properly instead of us hand-rolling the header.
 	hdr := http.Header{}
 	var subprotocols []string
+	var wsHost string
 	for k, v := range reqHeaders {
+		if strings.EqualFold(k, "Host") {
+			// Forward the visitor's public host as the WS Host (before the
+			// reserved-header skip, which lists Host). gorilla maps a "Host" key
+			// in the request header onto req.Host, so the backend's upgrade sees
+			// a Host matching the Origin the browser sends — apps that enforce
+			// same-origin on the WebSocket (e.g. UniFi's live portal) otherwise
+			// reject the upgrade. The dial still targets 127.0.0.1 via dialURL.
+			wsHost = v
+			continue
+		}
 		if isHopHeader(k) || isWSReservedHeader(k) {
 			continue
 		}
@@ -767,6 +1436,9 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 		}
 		hdr.Set(k, v)
 	}
+	if wsHost != "" {
+		hdr.Set("Host", wsHost)
+	}
 
 	dialer := *websocket.DefaultDialer
 	dialer.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -777,7 +1449,42 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 		_ = resp.Body.Close()
 	}
 	if err != nil {
-		t.closeWSStream(conn, streamID, st, true)
+		// Same staleness the HTTP path guards against, and the WS path needs it
+		// independently: this dial picked ws/wss from the CACHED scheme, so a
+		// backend that switched TLS on or off leaves every upgrade failing. HTTP
+		// requests re-probe and recover on their own, but a client that only ever
+		// opens a WebSocket would stay broken for the tunnel's whole life. Only
+		// retry when the re-probe actually disagrees with what we just used, so a
+		// genuinely unreachable backend still fails fast.
+		usedWSScheme, usedAddr := scheme, backendAddr
+		t.forgetBackendScheme()
+		freshScheme, freshAddr := t.backendTarget()
+		freshWSScheme := "ws"
+		if freshScheme == "https" {
+			freshWSScheme = "wss"
+		}
+		// Retry when EITHER answer moved: a server restarted with TLS flipped, or
+		// one that came back bound to the other loopback family.
+		if freshWSScheme != usedWSScheme || freshAddr != usedAddr {
+			retryURL := (&url.URL{
+				Scheme:   freshWSScheme,
+				Host:     freshAddr,
+				Path:     ref.Path,
+				RawPath:  ref.EscapedPath(),
+				RawQuery: ref.RawQuery,
+			}).String()
+			backend, resp, err = dialer.Dial(retryURL, hdr)
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+		}
+	}
+	if err != nil {
+		// Without a code the relay falls back to 1000 "normal closure", so an
+		// upgrade that FAILED was indistinguishable from one that finished
+		// cleanly — the client saw success for a socket that never opened.
+		t.closeWSStreamCode(conn, streamID, st, true, websocket.CloseInternalServerErr,
+			wsCloseReason(err))
 		return
 	}
 	// Bound a single backend frame so it can't exceed the relay's per-message
@@ -786,6 +1493,18 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 	// closes just this backend socket — the shared control socket, and every
 	// other proxied stream on it, stays up. Matches the HTTP path's chunk ceiling.
 	backend.SetReadLimit(tunnelChunkBytes)
+
+	// Tell the relay which subprotocol the BACKEND actually chose. The relay
+	// holds the visitor's 101 until this arrives (only when the client offered
+	// one), so the handshake completes with the real pick instead of an echo of
+	// the client's first offer — which left the browser believing it spoke a
+	// protocol the backend had not selected.
+	if op, merr := json.Marshal(map[string]any{
+		"stream_id":   streamID,
+		"subprotocol": backend.Subprotocol(),
+	}); merr == nil {
+		_ = t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelWSOpened, Data: string(op)})
+	}
 
 	// Publish the backend, unless the stream was torn down while we were dialing
 	// (visitor hung up, or the control socket that delivered the open has since
@@ -828,7 +1547,8 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 					mt = websocket.BinaryMessage
 				}
 				if err := backend.WriteMessage(mt, f.data); err != nil {
-					t.closeWSStream(conn, streamID, st, true)
+					t.closeWSStreamCode(conn, streamID, st, true, websocket.CloseInternalServerErr,
+						"reminal: connection to local server failed")
 					return
 				}
 			}
@@ -840,7 +1560,41 @@ func (t *Tunnel) dialTunnelWSBackend(conn *websocket.Conn, st *wsStream, streamI
 		for {
 			mt, data, rerr := backend.ReadMessage()
 			if rerr != nil {
-				t.closeWSStream(conn, streamID, st, true)
+				// Relay the backend's close code + reason. Without it every
+				// proxied socket reached the browser as a bare 1000, so a
+				// client could not distinguish a policy close from a clean one.
+				// Default to a failure. A backend that vanished WITHOUT a close frame —
+				// crashed, restarted, dropped the socket — leaves these at zero, and
+				// the relay turns a zero code into 1000, telling the browser the app
+				// finished cleanly. A real close frame below overrides both.
+				code, reason := websocket.CloseInternalServerErr,
+					"reminal: local server closed the connection unexpectedly"
+				// Only a code the backend actually put on the wire may replace the
+				// default. gorilla reports an abrupt EOF as CloseError 1006 and a
+				// close frame carrying no code as 1005; neither is a code the app
+				// chose, and accepting them here reinstated the bare 1000 that the
+				// default above exists to prevent.
+				if ce, ok := rerr.(*websocket.CloseError); ok &&
+					ce.Code != websocket.CloseAbnormalClosure &&
+					ce.Code != websocket.CloseNoStatusReceived {
+					code, reason = ce.Code, ce.Text
+				}
+				// The backend sent a frame past the ceiling we put on its socket
+				// (tunnelChunkBytes), so it cannot be relayed inside the DO's
+				// per-message cap. Tearing the stream down is right; blaming the
+				// app was not. This is reachable with an ordinary-looking frame:
+				// the relay admits anything <= the cap, and a backend that echoes
+				// with even a few bytes of its own prefix returns one that is over
+				// it. Saying "closed the connection unexpectedly" sent people to
+				// debug a crash in their own server that never happened. Mirror
+				// the relay's wording for this same limit in the other direction.
+				// gorilla's ErrReadLimit is a plain sentinel, not a CloseError, so
+				// it never matched the branch above.
+				if errors.Is(rerr, websocket.ErrReadLimit) {
+					code, reason = websocket.CloseMessageTooBig,
+						"reminal: local server sent a message too big to relay"
+				}
+				t.closeWSStreamCode(conn, streamID, st, true, code, reason)
 				return
 			}
 			if err := t.sendWSData(conn, streamID, data, mt == websocket.BinaryMessage); err != nil {
@@ -882,7 +1636,8 @@ func (t *Tunnel) handleTunnelWSData(conn *websocket.Conn, payload string) {
 		// Backend is too far behind. Tear the stream down off the read loop: the
 		// teardown notifies the relay (a control-socket write under wsWriteWait),
 		// which must never block the shared loop that pumps every other stream.
-		go t.closeWSStream(conn, m.StreamID, st, true)
+		go t.closeWSStreamCode(conn, m.StreamID, st, true, websocket.CloseInternalServerErr,
+			"reminal: local server too slow to keep up")
 	}
 }
 
@@ -891,6 +1646,8 @@ func (t *Tunnel) handleTunnelWSData(conn *websocket.Conn, payload string) {
 func (t *Tunnel) handleTunnelWSClose(payload string) {
 	var m struct {
 		StreamID string `json:"stream_id"`
+		Code     int    `json:"code"`
+		Reason   string `json:"reason"`
 	}
 	if err := json.Unmarshal([]byte(payload), &m); err != nil || m.StreamID == "" {
 		return
@@ -899,7 +1656,9 @@ func (t *Tunnel) handleTunnelWSClose(payload string) {
 	st := t.wsStreams[m.StreamID]
 	t.wsMu.Unlock()
 	// Visitor side initiated the close, so don't echo one back (notify=false).
-	t.closeWSStream(nil, m.StreamID, st, false)
+	// Its code+reason still go to the backend as a real close frame, so the app
+	// sees why the browser left instead of a bare disconnect.
+	t.closeWSStreamCode(nil, m.StreamID, st, false, m.Code, m.Reason)
 }
 
 // closeWSStream stops both pumps, closes the backend socket, and (when notify is
@@ -909,8 +1668,20 @@ func (t *Tunnel) handleTunnelWSClose(payload string) {
 // this stream. Idempotent via closeOnce, so the reader, writer, and control
 // paths can all call it safely.
 func (t *Tunnel) closeWSStream(conn *websocket.Conn, streamID string, st *wsStream, notify bool) {
+	t.closeWSStreamCode(conn, streamID, st, notify, 0, "")
+}
+
+// closeWSStreamCode is closeWSStream carrying a close code + reason. When one
+// is present it goes to the backend as a real close frame before the socket is
+// dropped (so the app learns why the visitor left) and is relayed onward to the
+// visitor. 1005/1006 are status codes a peer never puts on the wire, so they
+// are treated as "no code" rather than forged into a frame.
+func (t *Tunnel) closeWSStreamCode(conn *websocket.Conn, streamID string, st *wsStream, notify bool, code int, reason string) {
 	if st == nil {
 		return
+	}
+	if code == websocket.CloseNoStatusReceived || code == websocket.CloseAbnormalClosure {
+		code, reason = 0, ""
 	}
 	t.wsMu.Lock()
 	if t.wsStreams[streamID] == st {
@@ -921,11 +1692,15 @@ func (t *Tunnel) closeWSStream(conn *websocket.Conn, streamID string, st *wsStre
 		close(st.done)
 		st.mu.Lock()
 		if st.conn != nil { // nil if torn down before the backend dial resolved
+			if code != 0 {
+				_ = st.conn.WriteControl(websocket.CloseMessage,
+					websocket.FormatCloseMessage(code, reason), time.Now().Add(wsWriteWait))
+			}
 			_ = st.conn.Close()
 		}
 		st.mu.Unlock()
 		if notify && conn != nil {
-			t.sendWSClose(conn, streamID)
+			t.sendWSCloseCode(conn, streamID, code, reason)
 		}
 	})
 }
@@ -951,8 +1726,18 @@ func (t *Tunnel) sendWSData(conn *websocket.Conn, streamID string, data []byte, 
 	return t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelWSData, Data: string(payload)})
 }
 
-func (t *Tunnel) sendWSClose(conn *websocket.Conn, streamID string) {
-	payload, _ := json.Marshal(map[string]any{"stream_id": streamID})
+// sendWSCloseCode reports a proxied socket's end, carrying the close code and
+// reason the BACKEND sent. Without them every proxied socket reached the
+// browser as a plain 1000 "normal closure", so a client could not tell
+// "policy violation" (1008) or "going away" (1001) from a clean finish and its
+// reconnect logic misfired. code 0 means no code was available.
+func (t *Tunnel) sendWSCloseCode(conn *websocket.Conn, streamID string, code int, reason string) {
+	m := map[string]any{"stream_id": streamID}
+	if code != 0 {
+		m["code"] = code
+		m["reason"] = reason
+	}
+	payload, _ := json.Marshal(m)
 	_ = t.writeMsg(conn, protocol.Message{Type: protocol.TypeTunnelWSClose, Data: string(payload)})
 }
 
@@ -964,6 +1749,45 @@ func isWSReservedHeader(name string) bool {
 		return true
 	}
 	return false
+}
+
+// backendErrorMessage describes why a request to the local server failed, in
+// terms of what the operator should go and check. Go phrases all of these as a
+// single opaque error, and calling every one of them "unreachable" was actively
+// misleading: a server that answers with HTTP the parser rejects is running
+// fine, and telling someone it is unreachable sends them to restart a healthy
+// service instead of looking at what it replied.
+func backendErrorMessage(err error) string {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return fmt.Sprintf("local server did not respond in time: %v", err)
+	}
+	var oe *net.OpError
+	if errors.As(err, &oe) {
+		if oe.Op == "dial" {
+			return fmt.Sprintf("local server unreachable: %v", err)
+		}
+		// Connected, then the socket broke under us (reset, broken pipe).
+		return fmt.Sprintf("connection to local server failed: %v", err)
+	}
+	// The connection succeeded and bytes came back — we just couldn't parse
+	// them as HTTP. The server is up; its response is the problem.
+	return fmt.Sprintf("local server sent a malformed HTTP response: %v", err)
+}
+
+// wsCloseReason explains a failed upgrade in the few bytes a close frame allows
+// (the protocol caps the reason at 123). Deliberately not backendErrorMessage:
+// gorilla reports a server that simply doesn't speak WebSocket at this path as
+// "bad handshake", which is not malformed HTTP and shouldn't be described as it.
+func wsCloseReason(err error) string {
+	var oe *net.OpError
+	if errors.As(err, &oe) && oe.Op == "dial" {
+		return "reminal: local server unreachable"
+	}
+	if errors.Is(err, websocket.ErrBadHandshake) {
+		return "reminal: local server rejected the WebSocket upgrade"
+	}
+	return "reminal: WebSocket upgrade to local server failed"
 }
 
 func (t *Tunnel) sendError(conn *websocket.Conn, reqID, msg string) {
@@ -981,6 +1805,52 @@ func (t *Tunnel) writeMsg(conn *websocket.Conn, m protocol.Message) error {
 	defer t.writeMu.Unlock()
 	_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 	return conn.WriteJSON(m)
+}
+
+// errPortRestartUnsupported is returned where a forward can't be hot-swapped
+// in place (Windows has no exec-in-place); the CLI turns it into a hint.
+var errPortRestartUnsupported = errors.New("hot-swapping a port forward is not supported on this platform — run `reminal stop <port>` then `reminal expose <port>` again")
+
+// execRestart replaces this process with the binary now on disk, carrying the
+// forward's identity (id, PIN, PIN hash, start time) in the environment so the
+// new image resumes the SAME session: the public URL stays valid and, since the
+// PIN hash is unchanged, the relay keeps the auth-cookie signing key and every
+// visitor stays logged in. The relay sees the control socket drop and the new
+// image re-register within a second; in-flight requests on the old image are
+// lost, as with any restart. Never returns on success.
+func (t *Tunnel) execRestart() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate self: %w", err)
+	}
+	// After an upgrade the binary at our path has been REPLACED, so on Linux
+	// /proc/self/exe now points at the unlinked old inode and reads as
+	// "/path/reminal (deleted)". Exec-ing that string fails and we'd silently
+	// stay on the old code — the precise outcome this restart exists to prevent.
+	// The path minus the marker is where the new binary lives; use that.
+	exe = strings.TrimSuffix(exe, " (deleted)")
+	if st, serr := os.Stat(exe); serr != nil || st.IsDir() {
+		return fmt.Errorf("binary to restart into is missing at %s: %v", exe, serr)
+	}
+	// Drop the relay connection first so the relay isn't left with a stale
+	// socket that the new image's registration has to evict.
+	t.connMu.Lock()
+	if t.conn != nil {
+		_ = t.conn.Close()
+	}
+	t.connMu.Unlock()
+	args := []string{exe, "--expose-headless", "--expose-port", strconv.Itoa(t.port)}
+	if t.public {
+		args = append(args, "--expose-public")
+	}
+	env := append(os.Environ(),
+		envTunResume+"=1",
+		envTunSessionID+"="+t.sessionID,
+		envTunPIN+"="+t.pin,
+		envTunPinHash+"="+t.pinHash,
+		envTunStartedAt+"="+strconv.FormatInt(t.startedAt.Unix(), 10),
+	)
+	return execTunnelBinary(exe, args, env)
 }
 
 func (t *Tunnel) writeHandshake() {
@@ -1010,6 +1880,28 @@ func (t *Tunnel) writeHandshake() {
 
 // isHopHeader returns true for headers that mustn't be forwarded across
 // proxies (RFC 7230 §6.1). Standard reverse-proxy hygiene.
+// isForwardingHeader reports whether a header describes the proxy hop. These are
+// ours to set: a visitor-supplied value must never reach the backend, or it can
+// forge its way into audit logs and past IP-based access rules.
+func isForwardingHeader(name string) bool {
+	switch strings.ToLower(name) {
+	case "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto",
+		"x-forwarded-port", "x-forwarded-scheme", "x-real-ip", "forwarded",
+		// Client-IP headers various apps trust the same way they trust
+		// X-Forwarded-For. The visitor doesn't get to set these either, or a
+		// crafted value spoofs their source IP to an app that reads one for an
+		// allowlist / rate-limit / audit log. true-client-ip matters most here:
+		// apps configured to sit behind Cloudflare (reminal's own context) often
+		// trust it, and it is an ordinary header name the edge doesn't guarantee
+		// to overwrite on non-Enterprise plans. cf-connecting-ip is deliberately
+		// NOT listed — the edge overwrites it, so it is authoritative, and the
+		// backend legitimately reads it (it is also our X-Forwarded-For source).
+		"true-client-ip", "x-client-ip", "x-cluster-client-ip":
+		return true
+	}
+	return false
+}
+
 func isHopHeader(name string) bool {
 	switch strings.ToLower(name) {
 	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",

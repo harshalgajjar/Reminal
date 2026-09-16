@@ -581,10 +581,20 @@ func main() {
 					public = true
 				default:
 					if !strings.HasPrefix(a, "-") && port == 0 {
-						if _, err := fmt.Sscanf(a, "%d", &port); err != nil || port <= 0 {
-							fmt.Fprintf(os.Stderr, "reminal expose: %q is not a valid port number\n", a)
+						// Parse the WHOLE token. Sscanf's %d stops at the first
+						// non-digit and still reports success, so "8080abc" used
+						// to silently expose port 8080 — a mistyped port quietly
+						// forwarding something other than what was typed. Range
+						// is checked here too: NewTunnel rejects it in the
+						// spawned child, whose stderr goes to /dev/null, so the
+						// user only saw "read handshake: EOF" with no mention of
+						// the port.
+						n, err := strconv.Atoi(a)
+						if err != nil || n <= 0 || n > 65535 {
+							fmt.Fprintf(os.Stderr, "reminal expose: %q is not a valid port number (expected 1-65535)\n", a)
 							os.Exit(2)
 						}
+						port = n
 					}
 				}
 			}
@@ -1479,7 +1489,15 @@ func runRestart(arg string) error {
 		return err
 	}
 	if a.IsPort() {
-		return fmt.Errorf("session %s is a port forward — restart is for shell agents only", a.ID)
+		// Hot-swap the forward in place (same id, PIN and public URL).
+		if hint := portRestartHint(a); hint != "" {
+			return fmt.Errorf("%s", hint)
+		}
+		if err := client.RestartPortForward(a.PID); err != nil {
+			return fmt.Errorf("restart port forward %s (port %d): %w", a.ID, a.Port, err)
+		}
+		fmt.Printf("  restarted %s (port %d)\n", a.ID, a.Port)
+		return nil
 	}
 	if _, err := sendControl(a.PID, "restart"); err != nil {
 		return fmt.Errorf("ask agent to restart: %w", err)
@@ -1492,6 +1510,18 @@ func runRestart(arg string) error {
 // command rolls the whole box onto the freshly-upgraded binary. Port forwards
 // are skipped (they have no PTY to preserve). Best-effort: a failure on one
 // session is reported but doesn't stop the rest.
+// portRestartHint returns a non-empty message when a port forward must NOT be
+// signalled to restart: a forward whose record carries no version predates
+// in-place hot-swap, and a signal to it means shutdown, not restart — so we'd
+// silently kill the URL. Tell the user to re-expose instead. A hot-swap-capable
+// forward (version set) returns "".
+func portRestartHint(a *session.Active) string {
+	if a.Version == "" {
+		return fmt.Sprintf("this forward predates in-place restart — run `reminal stop %d` then `reminal expose %d` to move it onto the new version", a.Port, a.Port)
+	}
+	return ""
+}
+
 func runRestartAll() error {
 	all, err := session.ReadAllActive()
 	if err != nil {
@@ -1535,7 +1565,22 @@ func runRestartAll() error {
 	for i := range all {
 		a := &all[i]
 		if a.IsPort() {
-			skipped++
+			// A forward hot-swaps in place (same id, PIN and public URL) so it
+			// picks up the new binary too — otherwise `upgrade` + `restart --all`
+			// left every running forward on the old code, and the user saw no
+			// change. Unsupported on Windows: say so rather than skip silently.
+			if hint := portRestartHint(a); hint != "" {
+				fmt.Fprintf(os.Stderr, "  %-24s port %d: %s\n", a.ID, a.Port, hint)
+				skipped++
+				continue
+			}
+			if err := client.RestartPortForward(a.PID); err != nil {
+				fmt.Fprintf(os.Stderr, "  %-24s port %d: %v\n", a.ID, a.Port, err)
+				skipped++
+				continue
+			}
+			fmt.Printf("  restarted %s (port %d)\n", a.ID, a.Port)
+			ok++
 			continue
 		}
 		if current != "" && a.ID == current {

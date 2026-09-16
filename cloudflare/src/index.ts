@@ -14,6 +14,20 @@ export interface Env {
   CRITICAL_MIN?: string;
 }
 
+// internalHeaders copies a request's headers with every x-reminal-* stripped.
+// Those headers are OURS to set on the hop into the Durable Object (routing
+// state like x-reminal-host-mode and x-reminal-public-host); a client must not
+// be able to forge them. Spoofing host-mode on a /p/<id>/ request, for
+// instance, would scope the PIN-gate cookie to "/" instead of "/p/<id>/" and
+// leak it across tunnels sharing the relay origin.
+function internalHeaders(src: Headers): Headers {
+  const h = new Headers(src);
+  for (const k of [...h.keys()]) {
+    if (k.toLowerCase().startsWith("x-reminal-")) h.delete(k);
+  }
+  return h;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -37,8 +51,11 @@ export default {
       const stub = env.SESSION.get(id);
       const doUrl = new URL(request.url);
       doUrl.pathname = `/p/${sessionId}${url.pathname === "/" ? "/" : url.pathname}`;
-      const hdrs = new Headers(request.headers);
+      const hdrs = internalHeaders(request.headers);
       hdrs.set("x-reminal-host-mode", "1");
+      // The Host header does not survive the DO fetch, so carry the real public
+      // host in a private header for the DO to forward to the agent's backend.
+      hdrs.set("x-reminal-public-host", hostHeader);
       return stub.fetch(new Request(new Request(doUrl.toString(), request), { headers: hdrs }));
     }
 
@@ -74,11 +91,37 @@ export default {
     if (portMatch) {
       const sessionId = portMatch[1].toUpperCase();
       const rest = portMatch[2] || "/";
+      // Canonicalise the id's case BEFORE anything gets scoped to this path.
+      // Routing here is case-insensitive, but cookie Path matching is not
+      // (RFC 6265 5.1.4): a visitor arriving on /p/<lowercase>/ was handed a PIN
+      // cookie scoped to /p/<UPPERCASE>/, so the cookie stopped applying to the
+      // URL they were actually on and they were asked for the PIN again on every
+      // fresh visit. Nothing reminal prints is lowercase (ids are generated from
+      // an uppercase alphabet), but a hand-typed or hand-derived link is.
+      //
+      // WebSockets are left alone: they cannot follow redirects, lowercase
+      // upgrades work today, and the DO uppercases the id for lookup anyway.
+      // 308 rather than 301/302 so a POST to /p/<lower>/__auth keeps its method
+      // and body. The Location is relative because the Host header, not
+      // url.hostname, carries the real tunnel host behind `wrangler dev`.
+      if (
+        portMatch[1] !== sessionId &&
+        (request.headers.get("upgrade") || "").toLowerCase() !== "websocket"
+      ) {
+        return new Response(null, {
+          status: 308,
+          headers: { Location: `/p/${sessionId}${rest}${url.search}` },
+        });
+      }
       const id = env.SESSION.idFromName(sessionId);
       const stub = env.SESSION.get(id);
       const doUrl = new URL(request.url);
       doUrl.pathname = `/p/${sessionId}${rest}`;
-      return stub.fetch(new Request(doUrl.toString(), request));
+      // The Host header does not survive the DO fetch, so carry the real public
+      // host in a private header for the DO to forward to the agent's backend.
+      const hdrs = internalHeaders(request.headers);
+      hdrs.set("x-reminal-public-host", hostHeader);
+      return stub.fetch(new Request(new Request(doUrl.toString(), request), { headers: hdrs }));
     }
 
     // Version beacon: the online, maintainer-controlled critical-upgrade switch.

@@ -20,4 +20,14 @@ export type TunnelMeta = {
   pinHash: string;
   public: boolean;
   signingKey: string; // hex-encoded 32 bytes
+  // Agent advertised "req_chunk" at registration: it can reassemble a request
+  // body split across tunnel_req + tunnel_req_body. Absent on every agent
+  // released before that support landed — those silently drop the follow-on
+  // chunks, so the relay must refuse an oversized upload instead of chunking it.
+  reqChunk?: boolean;
+  // Agent advertised "ws_subproto": it reports the backend's chosen WebSocket
+  // subprotocol (tunnel_ws_opened), so the relay can hold the visitor's 101 and
+  // echo the real pick. Absent on older agents, where the relay falls back to
+  // echoing the client's first offer rather than stalling the handshake.
+  wsSubproto?: boolean;
 };
