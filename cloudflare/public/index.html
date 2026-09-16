@@ -6726,7 +6726,15 @@
             const quoted = needsQuotes ? `'${path.replace(/'/g, `'\\''`)}'` : path;
             // Land the path in whatever the bar is driving — the focused
             // window if its keyboard is up, otherwise the shell.
-            typeToTarget(quoted);
+            //
+            // With a trailing space: uploading several files types one path per
+            // ack into the same line, and without a separator they ran together
+            // into one unusable word. A trailing space rather than a separator
+            // between them because each ack is handled on its own and knows
+            // nothing about the others -- and it costs a single upload nothing,
+            // since a shell ignores a trailing space and the next word the user
+            // types needed one anyway.
+            typeToTarget(quoted + ' ');
             // Best-effort: also stash in the phone's clipboard so the
             // user can paste it elsewhere (e.g. into the next message
             // in a different app).
