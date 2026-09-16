@@ -9769,19 +9769,28 @@
       }
       wireCloseButton(closeBtn, w.id);
       popBtn.addEventListener('click', (e) => { e.stopPropagation(); popOutPane(pane); });
+      // One owner of the toggle's state and its chrome, so the tap path and the
+      // restore path cannot drift apart.
+      function setKbdMode(on, raiseNow) {
+        pane.kbdMode = on;
+        kbdBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        kbdBtn.title = on ? 'Tap to type: on' : 'Tap to type: off';
+        // Arming by hand is itself the request to type, so raise the keyboard
+        // then. Disarming puts it away: pane taps preventDefault, which
+        // suppresses the browser's own tap-elsewhere blur, so nothing else would.
+        if (on && raiseNow) { focusPane(w.id); wkey.focus(); }
+        else if (!on && document.activeElement === wkey) wkey.blur();
+      }
       kbdBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        pane.kbdMode = !pane.kbdMode;
-        kbdBtn.setAttribute('aria-pressed', pane.kbdMode ? 'true' : 'false');
-        kbdBtn.title = pane.kbdMode ? 'Tap to type: on' : 'Tap to type: off';
+        setKbdMode(!pane.kbdMode, true);
         window.kbdlog('KBD TOGGLE ' + (pane.kbdMode ? 'on' : 'off') + ' ' + w.id);
-        // Arming is itself the request to type, so raise the keyboard now
-        // rather than making the user arm it and then tap again. Disarming puts
-        // it away: pane taps preventDefault, which suppresses the browser's own
-        // tap-elsewhere blur, so nothing else would.
-        if (pane.kbdMode) { focusPane(w.id); wkey.focus(); }
-        else if (document.activeElement === wkey) wkey.blur();
+        savePaneLayout();   // remembered like the window's position and size
       });
+      // Reopening a remembered layout restores the mode ARMED BUT SILENT: the
+      // next tap raises the keyboard, where raising it here would throw it up
+      // over a page the user has only just loaded and never asked to type into.
+      if (geom && geom.kbd) setKbdMode(true, false);
       infoBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         pane.infoShown = !pane.infoShown;
@@ -10181,11 +10190,17 @@
       if (suppressPaneSave || paneOnly) return; // a pane tab owns no layout
       const key = panesKey();
       if (!key) return;
-      const arr = [...panes.values()].map((p) => ({
-        id: p.w.id, app: p.w.app || '', title: p.w.title || '',
-        left: Math.round(p.el.offsetLeft), top: Math.round(p.el.offsetTop),
-        width: Math.round(p.el.offsetWidth),
-      }));
+      const arr = [...panes.values()].map((p) => {
+        const o = {
+          id: p.w.id, app: p.w.app || '', title: p.w.title || '',
+          left: Math.round(p.el.offsetLeft), top: Math.round(p.el.offsetTop),
+          width: Math.round(p.el.offsetWidth),
+        };
+        // Written only when armed, so layouts saved before this existed read
+        // back as off with no migration.
+        if (p.kbdMode) o.kbd = 1;
+        return o;
+      });
       try {
         if (arr.length) localStorage.setItem(key, JSON.stringify(arr));
         else localStorage.removeItem(key);
