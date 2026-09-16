@@ -6,9 +6,9 @@
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250224.0",
+    "@cloudflare/workers-types": "^5.20260916.1",
     "typescript": "^5.7.3",
-    "wrangler": "^4.102.0"
+    "wrangler": "^4.132.0"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2"
