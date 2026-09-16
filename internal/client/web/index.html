@@ -8108,6 +8108,36 @@
       const copyBtn = document.getElementById('sel-copy');
       const allBtn = document.getElementById('sel-all');
 
+      // Selecting text must not summon the soft keyboard: you selected text to
+      // COPY it, not to type, and on a phone the keyboard covers the output you
+      // were reading.
+      //
+      // Why it came up at all (traced with ?kbdlog): Android keeps focus on
+      // xterm's hidden textarea after you collapse the keyboard, so a long-press
+      // blurs a still-focused input and focus is handed back a moment later --
+      // and refocusing an input is what re-opens the keyboard. xterm itself is
+      // innocent; select() and clearSelection() fire no focus events at all.
+      //
+      // So drop focus before the selection starts, and only when the keyboard is
+      // already down: then there is nothing to hand back and nothing to re-open.
+      // With the keyboard up we leave focus alone, since collapsing it would be
+      // the same bug in reverse.
+      //
+      // Known and accepted: the keyboard can still flicker briefly, because the
+      // hand-back races this blur. Two attempts to close that race -- a timed
+      // no-refocus window, then one tied to the selection's lifetime -- did not
+      // remove it and only added state to a file that has plenty, so they were
+      // dropped in favour of the small fix that does the useful part.
+      const kbdIsOpen = () => {
+        const vv = window.visualViewport;
+        return !!vv && (window.innerHeight - vv.height) > 150;
+      };
+      function dropFocusIfKeyboardDown() {
+        if (kbdIsOpen()) return;          // keyboard is up: leave focus alone
+        const el = document.activeElement;
+        if (el && el.classList && el.classList.contains('xterm-helper-textarea')) el.blur();
+      }
+
       let active = false;                 // selection mode on
       let sel = null;                     // ordered {start:{col,row}, end:{col,row}} in ABSOLUTE buffer coords
 
@@ -8262,6 +8292,7 @@
 
       function beginHandleDrag(which, e) {
         e.preventDefault();
+        dropFocusIfKeyboardDown();      // dragging a grip is selection, not typing
         dragWhich = which;
         toolbar.classList.remove('visible');       // out of the way while dragging
         const el = which === 'start' ? hStart : hEnd;
@@ -8480,6 +8511,7 @@
         lpTimer = setTimeout(() => {
           lpTimer = null; extending = true; extendMoved = false;
           extendCommitted = false;
+          dropFocusIfKeyboardDown();     // before the selection can bounce focus
           enterSelection(lpStart.cell);
           dragWhich = 'end';                        // let the same finger extend the end
           suppressFocusClick = true;
