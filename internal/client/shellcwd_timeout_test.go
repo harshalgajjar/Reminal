@@ -13,10 +13,12 @@ import (
 )
 
 // TestShellCwdSurvivesAHangingLsof pins the incident this timeout exists for: a
-// spinning lsof used to block shellCwd forever, and because the lookup runs
-// during agent startup that stalled the readiness handshake — `reminal new`
-// failed with "didn't report ready within 15s" and left a dead session behind.
+// spinning lsof used to block the lookup forever, and because it runs during
+// agent startup that stalled the readiness handshake — `reminal new` failed
+// with "didn't report ready within 15s" and left a dead session behind.
 //
+// Aimed at lsofCwd rather than shellCwd: the syscall now answers first, so
+// shellCwd would never reach the fallback and the timeout would go untested.
 // A fake lsof that never exits stands in for the real one misbehaving.
 func TestShellCwdSurvivesAHangingLsof(t *testing.T) {
 	dir := t.TempDir()
@@ -28,7 +30,7 @@ func TestShellCwdSurvivesAHangingLsof(t *testing.T) {
 
 	done := make(chan string, 1)
 	start := time.Now()
-	go func() { done <- shellCwd(os.Getpid()) }()
+	go func() { done <- lsofCwd(os.Getpid()) }()
 
 	select {
 	case got := <-done:
@@ -39,6 +41,6 @@ func TestShellCwdSurvivesAHangingLsof(t *testing.T) {
 			t.Fatalf("a hung lsof should yield no cwd, got %q", got)
 		}
 	case <-time.After(shellCwdTimeout + 5*time.Second):
-		t.Fatal("shellCwd never returned — a hung lsof still blocks the agent's startup")
+		t.Fatal("lsofCwd never returned — a hung lsof still blocks the agent's startup")
 	}
 }
