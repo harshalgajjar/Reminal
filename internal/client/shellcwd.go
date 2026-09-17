@@ -34,8 +34,9 @@ const shellCwdTimeout = 2 * time.Second
 // the session was launched from.
 //
 //   - Linux: read /proc/<pid>/cwd — cheap, no subprocess.
-//   - macOS: shell out to lsof — there's no /proc, and proc_pidinfo needs
-//     cgo/libproc which the static (CGO_ENABLED=0) build doesn't have.
+//   - macOS: the proc_info syscall (see shellcwd_darwin.go) — there's no
+//     /proc, and proc_pidinfo() itself needs cgo/libproc, but the syscall it
+//     wraps does not. lsof remains a bounded fallback.
 //   - Windows: read the target's PEB (see shellcwd_windows.go) — preferring
 //     the most recently started DESCENDANT of the shell, which loosely mirrors
 //     the Unix "foreground process group" behavior so the Dir column tracks
@@ -54,18 +55,32 @@ func shellCwd(pid int) string {
 	case "windows":
 		return shellCwdWindows(pid)
 	case "darwin":
+		// The proc_info syscall answers directly — no subprocess, ~50µs against
+		// lsof's ~350ms, and nothing that can hang or outlive us. lsof stays as
+		// the fallback for the case where the syscall says nothing.
+		if p := procCwdDarwin(pid); p != "" {
+			return p
+		}
 		// `lsof -a -d cwd -p PID -Fn` prints field lines; the cwd path is the
 		// one prefixed with "n", e.g.:  p<pid>\nfcwd\nn/Users/me/project
-		ctx, cancel := context.WithTimeout(context.Background(), shellCwdTimeout)
-		defer cancel()
-		out, err := exec.CommandContext(ctx, "lsof", "-a", "-d", "cwd", "-p", strconv.Itoa(pid), "-Fn").Output()
-		if err != nil {
-			return "" // includes the timeout: caller keeps the previous value
-		}
-		for _, line := range strings.Split(string(out), "\n") {
-			if strings.HasPrefix(line, "n") {
-				return strings.TrimPrefix(line, "n")
-			}
+		return lsofCwd(pid)
+	}
+	return ""
+}
+
+// lsofCwd is the fallback for when the syscall says nothing. Kept separate so
+// its timeout stays under test: the syscall now answers first in practice, so a
+// test driving shellCwd would never reach this.
+func lsofCwd(pid int) string {
+	ctx, cancel := context.WithTimeout(context.Background(), shellCwdTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "lsof", "-a", "-d", "cwd", "-p", strconv.Itoa(pid), "-Fn").Output()
+	if err != nil {
+		return "" // includes the timeout: caller keeps the previous value
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "n") {
+			return strings.TrimPrefix(line, "n")
 		}
 	}
 	return ""
