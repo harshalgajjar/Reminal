@@ -68,7 +68,7 @@ setup_shell() {
         fi
         printf '\n%s\n%s\n%s\n' "$_begin" "$2" "$_end" >>"$_rc" 2>/dev/null || return 0
         RC_UPDATED=1
-        echo "  + reminal shell setup written to $_rc"
+        say "  shell  $_rc"
     }
 
     # OSC 7 cwd announcement: lets reminal's Dir column (and any modern
@@ -138,10 +138,22 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
+# Bold and dim only. Terminals remap the colour palette to suit their own
+# background, but a bright/bold colour still washes out on a light one -- and
+# the lines that would vanish first are the cost warnings, which are exactly the
+# ones that must be read. Weight survives every theme, so structure is carried
+# by weight and the separator, never by hue.
+if [ -t 1 ]; then
+    CB='\033[1m'; CD='\033[2m'; C0='\033[0m'
+else
+    CB=''; CD=''; C0=''
+fi
+say() { printf '%b\n' "$1"; }
+
 TARBALL="reminal_${VERSION}_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/$REPO/releases/download/v${VERSION}/${TARBALL}"
 
-echo "Installing reminal v${VERSION} (${OS}/${ARCH})..."
+say "${CD}Downloading reminal v${VERSION} (${OS}/${ARCH})…${C0}"
 
 # Stage in a temp dir; cleaned up on exit.
 TMPDIR=$(mktemp -d)
@@ -185,7 +197,7 @@ if [ "$OS" = "darwin" ] && [ -d "$TMPDIR/reminal.app" ]; then
     # Register with LaunchServices so Finder/Settings show the icon.
     _lsr="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
     [ -x "$_lsr" ] && "$_lsr" -f "$APP_DIR/reminal.app" >/dev/null 2>&1 || true
-    INSTALLED_DESC="${APP_DIR}/reminal.app (CLI: ${INSTALL_DIR}/reminal)"
+    APP_PATH="${APP_DIR}/reminal.app"
 else
     mv "$TMPDIR/reminal" "$INSTALL_DIR/reminal"
     chmod +x "$INSTALL_DIR/reminal"
@@ -193,11 +205,16 @@ else
     # downloads from browsers/Mail/etc. get the com.apple.quarantine xattr), but
     # strip it defensively in case a future install method re-introduces it.
     [ "$OS" = "darwin" ] && xattr -d com.apple.quarantine "$INSTALL_DIR/reminal" 2>/dev/null || true
-    INSTALLED_DESC="${INSTALL_DIR}/reminal"
+    APP_PATH=""
 fi
 
 echo
-echo "Installed reminal v${VERSION} to ${INSTALLED_DESC}"
+say "${CB}reminal v${VERSION} installed${C0}"
+# An `if`, not `[ … ] && …`: under `set -e` a false test makes the whole
+# compound non-zero and exits the script — which on Linux, where there is no
+# app bundle, would end the install right here.
+if [ -n "${APP_PATH:-}" ]; then say "  app    ${APP_PATH}"; fi
+say "  cli    ${INSTALL_DIR}/reminal"
 
 # macOS bundle post-install:
 if [ "$OS" = "darwin" ] && [ -d "$APP_DIR/reminal.app" ]; then
@@ -210,9 +227,6 @@ if [ "$OS" = "darwin" ] && [ -d "$APP_DIR/reminal.app" ]; then
     # Stale loose helper from a previous bare install (the bundle carries its own).
     rm -f "$INSTALL_DIR/reminal-capture" 2>/dev/null || true
     rm -f "$INSTALL_DIR/reminal-overlay" 2>/dev/null || true
-    echo
-    echo "To mirror + control windows, grant reminal its permissions once:"
-    echo "  reminal permissions"
 fi
 
 # Set up shell integration: PATH + tab-completion (best-effort).
@@ -224,6 +238,114 @@ if [ -n "$EXISTING" ] && [ "$EXISTING" != "$INSTALL_DIR/reminal" ]; then
     echo
     echo "Note: another reminal is already on your PATH at: $EXISTING"
     echo "      It will take precedence. To remove a brew install: brew uninstall reminal"
+fi
+
+# ---- One-time setup ---------------------------------------------------------
+# Walk the user through the steps rather than printing commands to remember
+# later. `curl | sh` leaves stdin pointing at the script, so questions are read
+# from /dev/tty; with no terminal at all (CI, image builds) we print the same
+# list instead of hanging on a read that can never return.
+#
+# Styling follows `reminal permissions`, which these steps hand off to: a bold
+# heading at column 0 and its detail indented two. Matching that grammar is what
+# makes the nested output read as hierarchy instead of two margins colliding --
+# and the step heading is coloured so the installer's voice stays distinct from
+# the command it just launched.
+SKIPPED=""
+skip() { SKIPPED="$SKIPPED  $1\n"; }
+
+if [ "$OS" = "darwin" ]; then TOTAL=4; else TOTAL=1; fi
+STEP=0
+# Heading flush left, detail indented two -- the exact shape `reminal
+# permissions` uses, so its own Step blocks nest under ours instead of sitting
+# two columns off it. A dim rule above each gives the separation that a blank
+# line alone did not.
+rule() { printf '%b\n' "${CD}────────────────────────────────────────────${C0}"; }
+next_step() {
+    STEP=$((STEP + 1))
+    printf '\n'
+    rule
+    printf '%b\n' "${CB}Setup $STEP/$TOTAL — $1${C0}"
+}
+ask() {
+    printf '\n  %b [Y/n] ' "${CB}$1${C0}" >/dev/tty
+    read -r _ans </dev/tty || _ans=""
+    printf '\n' >/dev/tty
+    # Close the block only when something follows it. A skipped step prints
+    # nothing, so a closing rule there would collide with the next step's
+    # opening one and read as a doubled divider.
+    case "$_ans" in
+        [nN]|[nN][oO]) return 1 ;;
+        *) rule; return 0 ;;
+    esac
+}
+
+# Opening it is the only honest test: /dev/tty exists as a device node even with
+# no controlling terminal (`docker run -i`, CI), where -r/-w both pass and every
+# read and write then fails with "No such device or address".
+#
+# In a SUBSHELL, because `:` is a POSIX special builtin and a redirection failure
+# on one of those exits a non-interactive shell outright -- which killed the
+# whole installer on exactly the piped `curl | sh` path this test exists for.
+if ( : >/dev/tty ) 2>/dev/null; then
+    say ""
+    if [ "$TOTAL" = 1 ]; then
+        say "${CB}One quick step${C0} — skip it and run it later."
+    else
+        say "${CB}A few one-time steps${C0} — skip any of them and run them later."
+    fi
+
+    if [ "$OS" = "darwin" ]; then
+        next_step "Screen permissions"
+        say "  Lets you mirror and control this Mac's windows from anywhere."
+        say "  macOS asks for Screen Recording and Accessibility, one at a time."
+        if ask "Grant now?"; then
+            "$INSTALL_DIR/reminal" permissions </dev/tty || true
+        else
+            skip "reminal permissions     mirror and control windows"
+        fi
+    fi
+
+    next_step "Coding agents"
+    say "  Lets the coding agents on this machine list your sessions, read"
+    say "  what is on them, and type into them."
+    if ask "Set up now?"; then
+        "$INSTALL_DIR/reminal" integrate </dev/tty || true
+    else
+        skip "reminal integrate       let coding agents drive your sessions"
+    fi
+
+    if [ "$OS" = "darwin" ]; then
+        next_step "Keep serving with the lid shut"
+        say "  Closing the lid normally sleeps this Mac and your sessions stop."
+        say "  Uses more battery, and asks for your admin password once."
+        if ask "Turn on?"; then
+            "$INSTALL_DIR/reminal" settings closed-lid on </dev/tty || true
+        else
+            skip "reminal settings        keep serving with the lid shut"
+        fi
+
+        next_step "Keep it from locking"
+        say "  A locked Mac ignores remote clicks and keystrokes, so window"
+        say "  control stops while you are away. Terminals work either way."
+        say "  Costs a lit screen."
+        if ask "Turn on?"; then
+            "$INSTALL_DIR/reminal" settings always-unlocked on </dev/tty || true
+        else
+            skip "reminal settings        stop it locking while you are away"
+        fi
+    fi
+else
+    # No terminal to ask on — same steps, printed.
+    say ""
+    say "One-time setup, when you are at a terminal:"
+    if [ "$OS" = "darwin" ]; then
+        say "  reminal permissions     mirror and control windows"
+    fi
+    say "  reminal integrate       let coding agents drive your sessions"
+    if [ "$OS" = "darwin" ]; then
+        say "  reminal settings        keep serving with the lid shut, and stop it locking"
+    fi
 fi
 
 # Tell the user how to actually run it.
@@ -250,3 +372,8 @@ case ":$PATH:" in
         fi
         ;;
 esac
+
+if [ -n "$SKIPPED" ]; then
+    printf '\n%b\n' "${CB}Skipped — run these any time:${C0}"
+    printf '%b' "$SKIPPED"
+fi
