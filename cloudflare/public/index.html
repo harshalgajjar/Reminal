@@ -2408,7 +2408,11 @@
     function renderHost() {
       const root = document.getElementById('host-list');
       if (!root) return;
-      const i = lastHostInfo;
+      // Numeric host fields are used only when they are finite numbers.
+      const i = lastHostInfo && Object.assign({}, lastHostInfo);
+      if (i) for (const k of ['mem_used', 'mem_total', 'cpu_pct', 'load1', 'load5', 'load15', 'cpus', 'uptime']) {
+        if (i[k] !== undefined && !(typeof i[k] === 'number' && isFinite(i[k]))) delete i[k];
+      }
       if (!i) {
         // We only reach the Host panel while connected (the button is hidden
         // otherwise), so distinguish "still loading" from "the host is too old
@@ -2451,7 +2455,7 @@
       // meters. They used to land between the version and the button that
       // upgrades it, splitting the one pair in this panel that belongs together.
       const foot = [];
-      if (i.load5 !== undefined) foot.push('load ' + i.load1.toFixed(2) + ' ' + i.load5.toFixed(2) + ' ' + i.load15.toFixed(2));
+      if (i.load1 !== undefined && i.load5 !== undefined && i.load15 !== undefined) foot.push('load ' + i.load1.toFixed(2) + ' ' + i.load5.toFixed(2) + ' ' + i.load15.toFixed(2));
       if (i.uptime) foot.push('up ' + fmtUptime(i.uptime));
       if (foot.length) html += '<div class="host-foot">' + foot.join('  ·  ') + '</div>';
       // Spawn a fresh headless shell on this same host and connect to it. Only
