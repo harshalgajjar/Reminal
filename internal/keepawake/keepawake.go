@@ -83,11 +83,32 @@ func Start() (stop func()) {
 		fmt.Fprintf(os.Stderr, "  reminal: keep-awake disabled (%v)\n", err)
 		return noop
 	}
+	return reaper(cmd)
+}
+
+// reaper waits on the inhibitor from the moment it starts, and returns a stop
+// func that kills it and waits for that reap to finish.
+//
+// Wait used to live only inside the stop func, which leaked: caffeinate is
+// started with `-w <our pid>` precisely so it can exit ON ITS OWN, and every
+// such exit with no stop() call left a defunct child for the life of the agent.
+// They accumulated in pairs (-i from Start, -d from StartDisplay) -- 752 of them
+// across eleven long-running sessions on one Mac, filling the process table.
+//
+// Exactly one Wait, in the goroutine: calling it twice returns an error and
+// would reintroduce the ambiguity about who reaps. stop() blocks on done so a
+// caller that wants the inhibitor gone can rely on it actually being gone.
+func reaper(cmd *exec.Cmd) func() {
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
 	return func() {
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
-		_ = cmd.Wait()
+		<-done
 	}
 }
 
@@ -127,12 +148,7 @@ func StartDisplay() (stop func()) {
 	if err := cmd.Start(); err != nil {
 		return noop
 	}
-	return func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		_ = cmd.Wait()
-	}
+	return reaper(cmd)
 }
 
 func command() *exec.Cmd {
