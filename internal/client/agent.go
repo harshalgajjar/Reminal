@@ -564,6 +564,12 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 }
 
 func (a *Agent) Run() error {
+	// First thing, before anything below spawns a child of its own: collect any
+	// child that died under a previous image of this process. A hot restart
+	// keeps the PID and inherits the whole process group, so on a machine that
+	// has been up for weeks this is where a long backlog finally goes away.
+	reapInherited()
+
 	// Correctness self-heal (idempotent): any real session should leave the
 	// always-on background daemon installed — the machine's presence + stats
 	// layer, and on macOS the one sh.reminal grant that performs all
