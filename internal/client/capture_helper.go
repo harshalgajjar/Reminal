@@ -223,6 +223,10 @@ func startWinHelper(id string, maxWidth, quality, fps int, codec string) (*winHe
 		if msg == "" {
 			msg = "capture helper exited immediately"
 		}
+		// Read the stderr first, then stop(): the caller gets an error and drops
+		// h on the floor, so this is the only chance to reap a helper that died
+		// on its own (permission denied / window gone).
+		h.stop()
 		return nil, errors.New(msg)
 	case <-time.After(helperStartupGrace):
 		return h, nil

@@ -1948,7 +1948,7 @@ func SpawnTunnel(port int, public bool) (*SpawnedSession, error) {
 		return nil, fmt.Errorf("start headless tunnel: %w", err)
 	}
 	afterStart()
-	_ = cmd.Process.Release()
+	reapDetached(cmd)
 
 	line, err := recv(spawnHandshakeTimeout)
 	if err != nil {
