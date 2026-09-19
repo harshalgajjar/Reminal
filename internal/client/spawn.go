@@ -99,9 +99,7 @@ func Spawn(name, cwd string) (*SpawnedSession, error) {
 	}
 	afterStart()
 
-	// Release the child so we don't keep a zombie around if Spawn's
-	// caller exits before the child does.
-	_ = cmd.Process.Release()
+	reapDetached(cmd)
 
 	// Read the JSON handshake with a deadline. Reading until newline is
 	// cheap and robust; a malformed payload (child wrote junk) shows up

@@ -219,7 +219,7 @@ func RunCopyBackground(path string, ttl time.Duration) error {
 		return fmt.Errorf("start background holder: %w", err)
 	}
 	afterStart()
-	_ = cmd.Process.Release()
+	reapDetached(cmd)
 
 	line, err := recv(spawnHandshakeTimeout)
 	if err != nil {
