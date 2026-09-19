@@ -18,6 +18,10 @@ import (
 
 const maxInjectBytes = 8 << 10
 
+// EnterSettle is how long to wait between the text and the Return that submits
+// it. See PrepareInjectKeysSplit for why they cannot travel together.
+const EnterSettle = 250 * time.Millisecond
+
 // PrepareInjectKeys turns an MCP/agent string into PTY bytes: \n becomes
 // Enter (\r). enter appends \r if the payload does not already end with one.
 func PrepareInjectKeys(s string, enter bool) ([]byte, error) {
@@ -33,6 +37,40 @@ func PrepareInjectKeys(s string, enter bool) ([]byte, error) {
 		return nil, fmt.Errorf("keys too long (max %d bytes)", maxInjectBytes)
 	}
 	return b, nil
+}
+
+// PrepareInjectKeysSplit is PrepareInjectKeys for callers that can deliver in
+// two parts: the text, then the Return on its own.
+//
+// A shell runs a line the moment it sees \r anywhere in the stream, so gluing
+// the Return to the text works there and always did. A full-screen app does not
+// read the stream that way. It classifies each chunk it reads, and a chunk
+// carrying a long run of characters is pasted content, not typing -- so a \r
+// riding along at the end is filed as a newline inside that paste and lands in
+// the composer instead of submitting it. That is why a long briefing sent to
+// another agent sits in its input box unsent while a short command runs fine:
+// the short one arrives small enough to read as typing.
+//
+// Sending the Return separately settles it. The text is a paste, the Return is
+// its own small chunk a moment later, and every reader -- shell or full-screen
+// app -- treats that as the key being pressed.
+//
+// tail is nil when the caller asked for no Return, or when the text already
+// ends in one (the Return is then part of what the caller wrote, and splitting
+// it off would change their bytes).
+func PrepareInjectKeysSplit(s string, enter bool) (body, tail []byte, err error) {
+	if enter && s != "" && !strings.HasSuffix(s, "\n") && !strings.HasSuffix(s, "\r") {
+		b, err := PrepareInjectKeys(s, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		return b, []byte{'\r'}, nil
+	}
+	b, err := PrepareInjectKeys(s, enter)
+	if err != nil {
+		return nil, nil, err
+	}
+	return b, nil, nil
 }
 
 func (a *Agent) injectKeys(data []byte) error {

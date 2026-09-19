@@ -325,6 +325,17 @@ func ambiguousSession(sessionSel string, hits []transcriptRef) error {
 	return fmt.Errorf("%s", b.String())
 }
 
+// typedReport says whether the Return was actually pressed. "Typed N byte(s)"
+// alone reads like delivery confirmation and is not: the text can be sitting in
+// the target's input box, unsent, which is exactly how a briefing to another
+// agent went missing while the sender believed it had arrived.
+func typedReport(n int, tail []byte, target string) string {
+	if tail == nil {
+		return fmt.Sprintf("Typed %d byte(s) into %s (no Return — the text is in the input box, not submitted).", n, target)
+	}
+	return fmt.Sprintf("Typed %d byte(s) into %s, then pressed Return.", n, target)
+}
+
 func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, error) {
 	sessionSel = strings.TrimSpace(sessionSel)
 	machineSel = strings.TrimSpace(machineSel)
@@ -332,9 +343,28 @@ func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, 
 	if sessionSel == "" {
 		return "", fmt.Errorf("session is required (id from list_sessions, or a join URL)")
 	}
-	data, err := client.PrepareInjectKeys(keys, enter)
+	// The Return travels as its own delivery a moment after the text — see
+	// client.PrepareInjectKeysSplit. It has to be split here rather than at the
+	// PTY, because the agent-side write for the PIN path is the same one that
+	// carries live keystrokes from a browser viewer, and pausing before a
+	// person's Enter would be a real regression.
+	body, tail, err := client.PrepareInjectKeysSplit(keys, enter)
 	if err != nil {
 		return "", err
+	}
+	// pressEnter delivers the Return over whichever transport just carried the
+	// text. A failure here is worth reporting: the text landed, so silently
+	// swallowing it would leave the caller believing a message was sent when it
+	// is actually sitting in the target's input box.
+	pressEnter := func(send func([]byte) error) error {
+		if tail == nil {
+			return nil
+		}
+		time.Sleep(client.EnterSettle)
+		if err := send(tail); err != nil {
+			return fmt.Errorf("typed the text but could not press Return: %w", err)
+		}
+		return nil
 	}
 
 	id, urlPin := parseConnectTarget(sessionSel)
@@ -345,15 +375,23 @@ func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, 
 		if id == "" {
 			id = strings.ToUpper(sessionSel)
 		}
-		if err := client.SendKeysPIN(id, pin, data); err != nil {
+		send := func(b []byte) error { return client.SendKeysPIN(id, pin, b) }
+		if err := send(body); err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Typed %d byte(s) into %s.", len(data), id), nil
+		if err := pressEnter(send); err != nil {
+			return "", err
+		}
+		return typedReport(len(body), tail, id), nil
 	}
 
 	if machineSel == "" || machineLooksLocal(machineSel) {
-		if err := injectLocalSession(sessionSel, data); err == nil {
-			return fmt.Sprintf("Typed %d byte(s) into %s.", len(data), sessionSel), nil
+		send := func(b []byte) error { return injectLocalSession(sessionSel, b) }
+		if err := send(body); err == nil {
+			if err := pressEnter(send); err != nil {
+				return "", err
+			}
+			return typedReport(len(body), tail, sessionSel), nil
 		} else if !errors.Is(err, errNotLocal) {
 			return "", err
 		}
@@ -367,7 +405,20 @@ func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, 
 	case 0:
 		return "", fmt.Errorf("no session matching %q — pass pin to type into an unowned reminal, or run list_sessions", sessionSel)
 	case 1:
-		return sendOneKeys(refs[0], data)
+		out, err := sendOneKeys(refs[0], body)
+		if err != nil {
+			return "", err
+		}
+		if err := pressEnter(func(b []byte) error { _, e := sendOneKeys(refs[0], b); return e }); err != nil {
+			return "", err
+		}
+		// sendOneKeys names the machine, which is worth keeping; say what
+		// happened to the Return alongside it.
+		out = strings.TrimSuffix(out, ".")
+		if tail == nil {
+			return out + " (no Return — the text is in the input box, not submitted).", nil
+		}
+		return out + ", then pressed Return.", nil
 	default:
 		return "", ambiguousSession(sessionSel, refs)
 	}
