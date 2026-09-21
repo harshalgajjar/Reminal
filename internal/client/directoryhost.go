@@ -186,6 +186,41 @@ func (tb *tokenBucket) allow(now time.Time) bool {
 	return true
 }
 
+// applyLocalOpen answers a query that named one exposed port: its public link
+// and the PIN its gate asks for. Ports only — a shell session's PIN stays out of
+// the directory channel, which is the promise protocol.DirSession makes.
+//
+// A --public tunnel has no gate, and the PIN recorded for it is simply never
+// asked for; the extra fragment on the link is ignored, so there is nothing to
+// special-case here.
+func applyLocalOpen(resp *protocol.DirResponse, sessionID string) {
+	if resp == nil {
+		return
+	}
+	id := strings.ToUpper(strings.TrimSpace(sessionID))
+	all, err := session.ReadAllActive()
+	if err != nil {
+		resp.OpenError = "cannot read the session registry"
+		return
+	}
+	for _, a := range all {
+		if a.ID != id {
+			continue
+		}
+		if !a.IsPort() {
+			resp.OpenError = "session " + id + " is not an exposed port"
+			return
+		}
+		if a.OpenURL == "" {
+			resp.OpenError = "session " + id + " has no public link"
+			return
+		}
+		resp.OpenURL, resp.OpenPIN = a.OpenURL, a.PIN
+		return
+	}
+	resp.OpenError = "no session " + id + " on this machine"
+}
+
 func killLocalSession(id string) error {
 	id = strings.ToUpper(strings.TrimSpace(id))
 	all, err := session.ReadAllActive()

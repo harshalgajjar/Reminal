@@ -1238,8 +1238,10 @@
     .machine-session.is-current { background: rgba(56,139,253,0.10); }
     .machine-session.is-current .ms-label { color: #79c0ff; font-weight: 500; }
     .machine-session.is-current .ms-meta { color: #58a6ff; }
-    .machine-session.is-port { cursor: default; opacity: 0.75; }
-    .machine-session.is-port:hover { background: transparent; }
+    /* A port row opens the forwarded app, so it keeps the pointer and hover of
+       any other action. Slightly dimmer than a shell: still a secondary thing. */
+    .machine-session.is-port { opacity: 0.85; }
+    .machine-session.is-port .ms-label { color: #7ee787; }
     /* Two-line layout so the title / cwd isn't crushed onto one line alongside
        the id and action buttons: the label wraps (up to 2 lines) with its
        metadata beneath it, the same shape as the Recents rows. */
@@ -4350,6 +4352,13 @@
                 const enc = await encrypt(box, JSON.stringify({ id: opts.kill, req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_kill', data: enc }));
                 state = 'kill';
+              } else if (opts.open) {
+                // An open lookup rides dir_query with a payload; the host answers
+                // the same dir_resp with open_url/open_pin for that one port. Asked
+                // per click, so the PIN never lands in the cached session list.
+                const enc = await encrypt(box, JSON.stringify({ open_id: opts.open }));
+                sock.send(JSON.stringify({ type: 'dir_query', data: enc }));
+                state = 'query';
               } else {
                 sock.send(JSON.stringify({ type: 'dir_query' }));
                 state = 'query';
@@ -5070,7 +5079,8 @@
           actions.appendChild(ren);
         } else {
           row.classList.add('is-port');
-          row.title = 'Port forward';
+          row.title = 'Open :' + (s.port || '?') + ' in a new tab';
+          row.addEventListener('click', (ev) => { ev.stopPropagation(); openPortOnMachine(b64, s.id, s.port); });
         }
         // Kill applies to every reminal instance (shells and port forwards).
         const kill = document.createElement('button');
@@ -5445,6 +5455,34 @@
 
     // Kill a live session ON an owned machine — terminates it (shell + anything
     // running in it). Confirmed, since it's irreversible.
+    // Open an exposed port's app in a new tab, already past its PIN gate.
+    //
+    // The link and its PIN are fetched per click rather than read from the
+    // session list, which is cached in IndexedDB — a PIN carried in that list
+    // would be written to disk in every browser that opened this panel. Only an
+    // owner can ask: dir_query is served on the machine channel alone.
+    //
+    // The tab is opened BEFORE the await, while the click is still on the stack.
+    // A window.open() after it reads as unprompted and gets swallowed.
+    async function openPortOnMachine(b64, id, port) {
+      const tab = window.open('', '_blank');
+      try {
+        const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { open: id });
+        if (r.open_error) throw new Error(r.open_error);
+        if (!r.open_url) throw new Error('this host is too old to open ports from here');
+        // The PIN rides the fragment, which never leaves the browser: the gate
+        // fills it in, submits, and drops it from history. A --public port has
+        // no gate and simply ignores the fragment.
+        const url = r.open_url + (r.open_pin ? '#p=' + encodeURIComponent(r.open_pin) : '');
+        if (!tab) { setStatus('Allow pop-ups to open :' + (port || '?') + ' from here', 'error'); return; }
+        tab.location = url;
+        setStatus('Opened :' + (port || '?'), 'info');
+      } catch (e) {
+        if (tab) { try { tab.close(); } catch (_) {} }
+        setStatus('Could not open :' + (port || '?') + ' (' + (e.message || 'error') + ')', 'error');
+      }
+    }
+
     async function killSessionOnMachine(b64, id, label) {
       if (!confirm('Kill session ' + id + (label ? ' (' + label + ')' : '') + ' on this machine?\n\n' +
           'The shell and anything running in it stop immediately. This is irreversible.')) return;
