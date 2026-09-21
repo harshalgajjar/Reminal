@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/reminal/reminal/internal/session"
 )
@@ -61,11 +62,31 @@ func runHook(args []string) error {
 	return session.WriteHookState(id, state)
 }
 
+// stdinWait bounds how long we wait for the harness to finish writing the
+// event payload. Generous for a local pipe, but finite: a hook that never
+// returns freezes the agent that ran it.
+const stdinWait = 2 * time.Second
+
 // readCappedStdin reads the harness's JSON event payload, bounded so a hook can
 // never hang or balloon on a slow or oversized pipe.
 func readCappedStdin() []byte {
-	b, _ := io.ReadAll(io.LimitReader(os.Stdin, 1<<16))
-	return b
+	done := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(io.LimitReader(os.Stdin, 1<<16))
+		done <- b
+	}()
+	select {
+	case b := <-done:
+		return b
+	case <-time.After(stdinWait):
+		// The harness handed us a pipe it never closed. io.ReadAll waits for EOF,
+		// so we would block forever — and harnesses run hooks SYNCHRONOUSLY, so
+		// blocking here freezes the agent itself. Give up and classify on what we
+		// know instead: an unread payload just means classifyNotify falls through
+		// to the turn-state rule, which is the same thing it does for a payload it
+		// cannot parse. Never make the harness wait on us.
+		return nil
+	}
 }
 
 // classifyNotify maps a harness "notification" payload to an attention state.
