@@ -420,6 +420,22 @@ type DirResponse struct {
 	RestartOK    bool   `json:"restart_ok,omitempty"`
 	RestartError string `json:"restart_error,omitempty"`
 	RestartCount int    `json:"restart_count,omitempty"`
+	// Open* answer a query that named ONE exposed port (dirQueryReq.OpenID):
+	// its public link and the PIN its gate asks for, so an owner can open a
+	// forwarded app in one click instead of finding the URL and typing the PIN.
+	//
+	// This is deliberately a per-click lookup rather than a field on every
+	// DirSession. The session list is cached in the viewer's IndexedDB, so a PIN
+	// carried in the listing would be written to disk in every browser that ever
+	// opened the machines panel. Answering only when asked keeps the PIN out of
+	// that cache, and keeps the promise DirSession makes about the listing.
+	//
+	// Owner-only by construction: dir_query is in dirChannelOnly, so a session's
+	// PIN guests can never reach this. Anything that starts answering directory
+	// queries on a session channel must not answer this one.
+	OpenURL   string `json:"open_url,omitempty"`
+	OpenPIN   string `json:"open_pin,omitempty"`
+	OpenError string `json:"open_error,omitempty"`
 	// Battery* describe the machine's power state when it answered. A machine
 	// with no battery — desktop, VM, server — and any host too old to report
 	// omit all three, and the UI then shows no battery at all: absence is the

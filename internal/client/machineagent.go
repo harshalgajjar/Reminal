@@ -249,6 +249,9 @@ func (a *Agent) handleDirQuery(conn *websocket.Conn, data string) {
 	if q.KeysID != "" && q.Keys != "" {
 		applyLocalKeys(&resp, q.KeysID, q.Keys)
 	}
+	if q.OpenID != "" {
+		applyLocalOpen(&resp, q.OpenID)
+	}
 	// Gated on its own bucket, not the query's: reading the directory is cheap
 	// and frequent, restarting every shell on the machine is neither.
 	if q.Restart {

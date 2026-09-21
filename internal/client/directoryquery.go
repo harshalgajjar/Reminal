@@ -55,6 +55,11 @@ type dirQueryReq struct {
 	// forwarding change — and dir_query is already reserved to the machine
 	// channel (dirChannelOnly), so it is owner-only by construction.
 	Restart bool `json:"restart,omitempty"`
+	// OpenID names one exposed port whose public link and gate PIN the caller
+	// wants back (DirResponse.OpenURL/OpenPIN). Asked per click rather than
+	// carried by every listing, so the PIN never reaches the viewer's cache —
+	// see protocol.DirResponse.OpenURL.
+	OpenID string `json:"open_id,omitempty"`
 }
 
 func (r dirQueryReq) empty() bool {
@@ -62,6 +67,7 @@ func (r dirQueryReq) empty() bool {
 		strings.TrimSpace(r.Transcript) == "" &&
 		strings.TrimSpace(r.KeysID) == "" &&
 		strings.TrimSpace(r.Keys) == "" &&
+		strings.TrimSpace(r.OpenID) == "" &&
 		!r.Restart
 }
 
