@@ -270,7 +270,7 @@
     /* Once connected, the session/PIN inputs are dead weight — collapse
        them to reclaim screen real estate (a big deal on phones). The
        Connect button stays visible (it doubles as Disconnect when live). */
-    body.connected #session-form input:not(.apps-search) { display: none; }
+    body.connected #session-form input:not(.panel-search) { display: none; }
     /* Share button only makes sense after a successful connect. */
     #share-btn { display: none; }
     body.connected #share-btn { display: inline-flex; }
@@ -1508,14 +1508,37 @@
     }
     .windows-hint .copy-cmd:hover { background: #30363d; color: #e6edf3; }
     .windows-note { padding: 12px; color: #8b949e; font-size: 12px; line-height: 1.5; }
-    /* Search box atop the Apps launcher (the app list can be long). */
-    .apps-search {
+    /* Search box atop a long panel list — Apps, Windows, and Machines. */
+    .panel-search {
       width: calc(100% - 12px); margin: 6px; padding: 7px 9px; box-sizing: border-box;
       background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
       color: #e6edf3; font-size: 12.5px; outline: none;
+      -webkit-appearance: none; appearance: none;
+      /* Inherited by the ::-webkit-search-cancel-button pseudo-element below. */
+      --x-glyph: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 4l8 8M12 4l-8 8' stroke='%23000' stroke-width='2.2' stroke-linecap='round'/></svg>");
     }
-    .apps-search:focus { border-color: #388bfd; }
-    .apps-rows { max-height: 46vh; overflow-y: auto; }
+    .panel-search:focus { border-color: #388bfd; }
+    /* The stock type=search clear button is a blue-gradient bubble that belongs
+       to no part of this UI. Replace it with a plain gray ✕: the glyph is a mask
+       so `background` is the actual colour, which lets it brighten on hover
+       instead of staying a fixed-colour image. */
+    .panel-search::-webkit-search-cancel-button {
+      -webkit-appearance: none; appearance: none;
+      height: 11px; width: 11px; cursor: pointer; background: #6e7681;
+      -webkit-mask: var(--x-glyph) center / contain no-repeat;
+      mask: var(--x-glyph) center / contain no-repeat;
+    }
+    .panel-search::-webkit-search-cancel-button:hover { background: #adbac7; }
+    .panel-rows { max-height: 46vh; overflow-y: auto; }
+    /* Hidden by a search that didn't match. Separate from every other reason a
+       row can be invisible (collapsed card, pending revoke) so the filter can be
+       cleared without having to know what those were. */
+    .filter-hide { display: none !important; }
+    /* A collapsed machine card still reveals the sessions a search matched —
+       otherwise typing a session name appears to find nothing. */
+    .machine-box.filter-open .machine-sessions.collapsed { display: block; }
+    /* Nothing to search yet: no machines, no recents, no query. */
+    .panel-search.is-idle { display: none; }
   </style>
 </head>
 <body>
@@ -1525,8 +1548,10 @@
       <details id="recents">
         <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg>Machines<span class="caret">▾</span></summary>
         <div class="recents-list">
+          <input id="machines-search" class="panel-search is-idle" type="search" placeholder="Search machines &amp; sessions…" autocomplete="off" spellcheck="false">
           <div id="machines-list"></div>
           <div id="recents-list"></div>
+          <div id="machines-nomatch" class="windows-note filter-hide">Nothing matches that.</div>
         </div>
       </details>
       <details id="windows" title="View & control a window on the host">
@@ -4442,6 +4467,90 @@
     function mIcon(name) {
       return '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (MICONS[name] || '') + '</svg>';
     }
+    // ---- Machines panel search -----------------------------------------------
+    // Pure client-side text filtering over what is already painted. The box has
+    // to live OUTSIDE #machines-list, because the panel refreshes itself on a
+    // timer and renderMachines rebuilds that root from scratch — a search input
+    // inside it would lose focus and its value mid-type. So the filter is a pass
+    // over the rendered DOM, re-applied after every render instead of being
+    // baked into one.
+    const machinesSearch = document.getElementById('machines-search');
+
+    // Text of a row's named parts, joined by spaces. NOT row.textContent: that
+    // concatenates adjacent nodes with no separator, so a label running into its
+    // metadata invents substrings that are in neither ("web frontend" + its id
+    // "BSJPFEVG" reads as "...frontendBSJPFEVG", which matches a search for
+    // "db"). Joining the fields keeps every match a match the user can see.
+    function rowHaystack(row, sels) {
+      const parts = [];
+      for (const sel of sels) {
+        for (const el of row.querySelectorAll(sel)) parts.push(el.textContent || '');
+      }
+      return parts.join(' ').toLowerCase();
+    }
+
+    function applyMachinesFilter() {
+      const listRoot = document.getElementById('machines-list');
+      const recRoot = document.getElementById('recents-list');
+      const noMatch = document.getElementById('machines-nomatch');
+      const f = (machinesSearch ? machinesSearch.value : '').trim().toLowerCase();
+      let hits = 0;
+      if (listRoot) {
+        for (const box of listRoot.querySelectorAll('.machine-box')) {
+          const name = (box.querySelector('.machine-name') || {}).textContent || '';
+          const nameHit = !f || name.toLowerCase().includes(f);
+          // A machine matched by its own name keeps all of its sessions.
+          // Otherwise only the sessions that match stay, so searching for one
+          // session doesn't drag its siblings along with it.
+          let sessionHits = 0;
+          for (const row of box.querySelectorAll('.machine-session')) {
+            const hit = nameHit || rowHaystack(row, ['.ms-label', '.ms-meta']).includes(f);
+            row.classList.toggle('filter-hide', !hit);
+            if (hit && !nameHit) sessionHits++;
+          }
+          const keep = nameHit || sessionHits > 0;
+          box.classList.toggle('filter-hide', !keep);
+          // Reveal a collapsed card's matches rather than reporting a hit the
+          // user cannot see; plain browsing leaves the collapse alone.
+          box.classList.toggle('filter-open', !!f && keep && sessionHits > 0);
+          if (keep) hits++;
+        }
+      }
+      if (recRoot) {
+        let recHits = 0;
+        for (const row of recRoot.querySelectorAll('.recents-row')) {
+          const hit = !f || rowHaystack(row, ['.name', '.meta']).includes(f);
+          row.classList.toggle('filter-hide', !hit);
+          if (hit) recHits++;
+        }
+        // The "Recent sessions" heading is noise with everything under it gone.
+        const label = recRoot.querySelector('.section-label');
+        if (label) label.classList.toggle('filter-hide', !!f && recHits === 0);
+        hits += recHits;
+      }
+      const anything = !!(listRoot && listRoot.querySelector('.machine-box')) ||
+                       !!(recRoot && recRoot.querySelector('.recents-row'));
+      // Hide the box itself until there is something to search, so a browser
+      // with no machines and no history doesn't lead with an empty filter.
+      if (machinesSearch) machinesSearch.classList.toggle('is-idle', !anything && !f);
+      if (noMatch) noMatch.classList.toggle('filter-hide', !(f && hits === 0));
+    }
+
+    if (machinesSearch) {
+      machinesSearch.addEventListener('input', applyMachinesFilter);
+      // Machine cards, their session lists and Recents are each repainted by a
+      // different function, several of them on background timers and with early
+      // returns. Rather than hunt every one of those exits for a re-filter call
+      // (and miss one the next time a path is added), watch the panel: any row
+      // appearing or disappearing re-runs the filter. The filter itself only
+      // toggles classes, never children, so it cannot retrigger this.
+      const panel = machinesSearch.parentElement;
+      if (panel && window.MutationObserver) {
+        new MutationObserver(applyMachinesFilter)
+          .observe(panel, { childList: true, subtree: true });
+      }
+    }
+
     async function renderMachines() {
       const root = document.getElementById('machines-list');
       if (!root) return;
@@ -9458,6 +9567,48 @@
       if (pill) pane.notesSlot.appendChild(pill);
     }
 
+    // buildFilterList paints a panel as a search box over a list of rows, and
+    // redraws the rows on every keystroke. Apps, Windows and (in its own way)
+    // Machines all want exactly this; the only things that differ are what a row
+    // looks like and what text it matches on, so those are the two callbacks.
+    //
+    // opts: placeholder, items, haystack(item) → text to match, row(item) → the
+    // element to show, empty (text when a query matches nothing), focus (take
+    // the caret on open — for a panel you open in order to type).
+    function buildFilterList(root, opts) {
+      const search = document.createElement('input');
+      search.className = 'panel-search';
+      // type=search, not text: it brings the browser's own clear (✕) affordance,
+      // which is the expected way out of a filter on both desktop and phone.
+      search.type = 'search';
+      search.placeholder = opts.placeholder;
+      search.autocomplete = 'off';
+      search.spellcheck = false;
+      const rows = document.createElement('div');
+      rows.className = 'panel-rows';
+      root.appendChild(search);
+      root.appendChild(rows);
+      const draw = () => {
+        rows.innerHTML = '';
+        const f = search.value.trim().toLowerCase();
+        const items = f
+          ? opts.items.filter(it => opts.haystack(it).toLowerCase().includes(f))
+          : opts.items;
+        if (items.length === 0) {
+          const n = document.createElement('div');
+          n.className = 'windows-note';
+          n.textContent = opts.empty;
+          rows.appendChild(n);
+          return;
+        }
+        for (const it of items) rows.appendChild(opts.row(it));
+      };
+      search.addEventListener('input', draw);
+      draw();
+      if (opts.focus) setTimeout(() => search.focus(), 0);
+      return search;
+    }
+
     function renderWindows() {
       winListRoot.innerHTML = '';
       if (winHint) {
@@ -9470,37 +9621,44 @@
         winListRoot.appendChild(n);
         return;
       }
-      for (const w of winList) {
-        // Whole-desktop pseudo-entries ("display:<id>") are opened from the
-        // Host panel's "View full desktop" button, not this per-window list.
-        if ((w.id || '').startsWith('display:')) continue;
-        const row = document.createElement('div');
-        row.className = 'recents-row';
-        row.title = 'Open and control this window';
-        row.appendChild(appListIcon(w));
-        const label = document.createElement('div');
-        label.className = 'label';
-        const nameEl = document.createElement('div');
-        nameEl.className = 'name';
-        nameEl.textContent = w.app || 'Window';
-        const metaEl = document.createElement('div');
-        metaEl.className = 'meta';
-        metaEl.textContent = (w.title || '(untitled)') + ' · ' + w.w + '×' + w.h;
-        // Notes are the machine owner's business: shown only to a viewer that
-        // has proved ownership, never to someone holding just the session PIN.
-        if (iOwnThisMachine) {
-          const pill = buildNotesPill(w.id, (list) => openNotesPopover(pill, list, w.id));
-          if (pill) { pill.classList.add('notes-pill-row'); nameEl.appendChild(pill); }
-        }
-        label.appendChild(nameEl);
-        label.appendChild(metaEl);
-        row.appendChild(label);
-        row.addEventListener('click', () => {
-          winDetails.open = false;
-          openWinView(w);
-        });
-        winListRoot.appendChild(row);
-      }
+      // Whole-desktop pseudo-entries ("display:<id>") are opened from the Host
+      // panel's "View full desktop" button, not this per-window list.
+      const listable = winList.filter(w => !(w.id || '').startsWith('display:'));
+      buildFilterList(winListRoot, {
+        placeholder: 'Search windows…',
+        items: listable,
+        empty: 'No window matches that.',
+        // App name and title — the two things anyone remembers a window by.
+        haystack: w => (w.app || '') + ' ' + (w.title || ''),
+        row: w => {
+          const row = document.createElement('div');
+          row.className = 'recents-row';
+          row.title = 'Open and control this window';
+          row.appendChild(appListIcon(w));
+          const label = document.createElement('div');
+          label.className = 'label';
+          const nameEl = document.createElement('div');
+          nameEl.className = 'name';
+          nameEl.textContent = w.app || 'Window';
+          const metaEl = document.createElement('div');
+          metaEl.className = 'meta';
+          metaEl.textContent = (w.title || '(untitled)') + ' · ' + w.w + '×' + w.h;
+          // Notes are the machine owner's business: shown only to a viewer that
+          // has proved ownership, never to someone holding just the session PIN.
+          if (iOwnThisMachine) {
+            const pill = buildNotesPill(w.id, (list) => openNotesPopover(pill, list, w.id));
+            if (pill) { pill.classList.add('notes-pill-row'); nameEl.appendChild(pill); }
+          }
+          label.appendChild(nameEl);
+          label.appendChild(metaEl);
+          row.appendChild(label);
+          row.addEventListener('click', () => {
+            winDetails.open = false;
+            openWinView(w);
+          });
+          return row;
+        },
+      });
     }
 
     // ---- Apps launcher: list installed apps, launch one on the host ----------
@@ -9533,20 +9691,14 @@
         appsListRoot.appendChild(n);
         return;
       }
-      // The app list can be long, so filter it with a search box.
-      const search = document.createElement('input');
-      search.className = 'apps-search';
-      search.placeholder = 'Search apps…';
-      search.autocomplete = 'off'; search.spellcheck = false;
-      const rows = document.createElement('div');
-      rows.className = 'apps-rows';
-      appsListRoot.appendChild(search);
-      appsListRoot.appendChild(rows);
-      const draw = () => {
-        rows.innerHTML = '';
-        const f = search.value.trim().toLowerCase();
-        const items = f ? appList.filter(a => (a.name || '').toLowerCase().includes(f)) : appList;
-        for (const a of items) {
+      buildFilterList(appsListRoot, {
+        placeholder: 'Search apps…',
+        items: appList,
+        // The launcher is something you open in order to type, so take focus.
+        focus: true,
+        empty: 'No app matches that.',
+        haystack: a => a.name || '',
+        row: a => {
           const row = document.createElement('div');
           row.className = 'recents-row';
           row.title = 'Launch on the host';
@@ -9557,12 +9709,9 @@
           label.appendChild(nameEl);
           row.appendChild(label);
           row.addEventListener('click', () => launchApp(a));
-          rows.appendChild(row);
-        }
-      };
-      search.addEventListener('input', draw);
-      draw();
-      setTimeout(() => search.focus(), 0);
+          return row;
+        },
+      });
     }
 
     function appListIcon(item) {
