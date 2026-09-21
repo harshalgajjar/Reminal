@@ -270,7 +270,7 @@
     /* Once connected, the session/PIN inputs are dead weight — collapse
        them to reclaim screen real estate (a big deal on phones). The
        Connect button stays visible (it doubles as Disconnect when live). */
-    body.connected #session-form input:not(.apps-search):not(.panel-search) { display: none; }
+    body.connected #session-form input:not(.panel-search) { display: none; }
     /* Share button only makes sense after a successful connect. */
     #share-btn { display: none; }
     body.connected #share-btn { display: inline-flex; }
@@ -1509,13 +1509,27 @@
     .windows-hint .copy-cmd:hover { background: #30363d; color: #e6edf3; }
     .windows-note { padding: 12px; color: #8b949e; font-size: 12px; line-height: 1.5; }
     /* Search box atop a long panel list — Apps, Windows, and Machines. */
-    .apps-search, .panel-search {
+    .panel-search {
       width: calc(100% - 12px); margin: 6px; padding: 7px 9px; box-sizing: border-box;
       background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
       color: #e6edf3; font-size: 12.5px; outline: none;
+      -webkit-appearance: none; appearance: none;
+      /* Inherited by the ::-webkit-search-cancel-button pseudo-element below. */
+      --x-glyph: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M4 4l8 8M12 4l-8 8' stroke='%23000' stroke-width='2.2' stroke-linecap='round'/></svg>");
     }
-    .apps-search:focus, .panel-search:focus { border-color: #388bfd; }
-    .apps-rows { max-height: 46vh; overflow-y: auto; }
+    .panel-search:focus { border-color: #388bfd; }
+    /* The stock type=search clear button is a blue-gradient bubble that belongs
+       to no part of this UI. Replace it with a plain gray ✕: the glyph is a mask
+       so `background` is the actual colour, which lets it brighten on hover
+       instead of staying a fixed-colour image. */
+    .panel-search::-webkit-search-cancel-button {
+      -webkit-appearance: none; appearance: none;
+      height: 11px; width: 11px; cursor: pointer; background: #6e7681;
+      -webkit-mask: var(--x-glyph) center / contain no-repeat;
+      mask: var(--x-glyph) center / contain no-repeat;
+    }
+    .panel-search::-webkit-search-cancel-button:hover { background: #adbac7; }
+    .panel-rows { max-height: 46vh; overflow-y: auto; }
     /* Hidden by a search that didn't match. Separate from every other reason a
        row can be invisible (collapsed card, pending revoke) so the filter can be
        cleared without having to know what those were. */
@@ -9553,6 +9567,48 @@
       if (pill) pane.notesSlot.appendChild(pill);
     }
 
+    // buildFilterList paints a panel as a search box over a list of rows, and
+    // redraws the rows on every keystroke. Apps, Windows and (in its own way)
+    // Machines all want exactly this; the only things that differ are what a row
+    // looks like and what text it matches on, so those are the two callbacks.
+    //
+    // opts: placeholder, items, haystack(item) → text to match, row(item) → the
+    // element to show, empty (text when a query matches nothing), focus (take
+    // the caret on open — for a panel you open in order to type).
+    function buildFilterList(root, opts) {
+      const search = document.createElement('input');
+      search.className = 'panel-search';
+      // type=search, not text: it brings the browser's own clear (✕) affordance,
+      // which is the expected way out of a filter on both desktop and phone.
+      search.type = 'search';
+      search.placeholder = opts.placeholder;
+      search.autocomplete = 'off';
+      search.spellcheck = false;
+      const rows = document.createElement('div');
+      rows.className = 'panel-rows';
+      root.appendChild(search);
+      root.appendChild(rows);
+      const draw = () => {
+        rows.innerHTML = '';
+        const f = search.value.trim().toLowerCase();
+        const items = f
+          ? opts.items.filter(it => opts.haystack(it).toLowerCase().includes(f))
+          : opts.items;
+        if (items.length === 0) {
+          const n = document.createElement('div');
+          n.className = 'windows-note';
+          n.textContent = opts.empty;
+          rows.appendChild(n);
+          return;
+        }
+        for (const it of items) rows.appendChild(opts.row(it));
+      };
+      search.addEventListener('input', draw);
+      draw();
+      if (opts.focus) setTimeout(() => search.focus(), 0);
+      return search;
+    }
+
     function renderWindows() {
       winListRoot.innerHTML = '';
       if (winHint) {
@@ -9568,30 +9624,13 @@
       // Whole-desktop pseudo-entries ("display:<id>") are opened from the Host
       // panel's "View full desktop" button, not this per-window list.
       const listable = winList.filter(w => !(w.id || '').startsWith('display:'));
-      // A busy machine has a lot of windows open, so filter them by app name or
-      // title — the two things you actually remember a window by.
-      const search = document.createElement('input');
-      search.className = 'panel-search';
-      search.type = 'search';
-      search.placeholder = 'Search windows…';
-      search.autocomplete = 'off'; search.spellcheck = false;
-      const rows = document.createElement('div');
-      rows.className = 'apps-rows';
-      winListRoot.appendChild(search);
-      winListRoot.appendChild(rows);
-      const drawWins = () => {
-        rows.innerHTML = '';
-        const f = search.value.trim().toLowerCase();
-        const items = f
-          ? listable.filter(w => ((w.app || '') + ' ' + (w.title || '')).toLowerCase().includes(f))
-          : listable;
-        if (items.length === 0) {
-          const n = document.createElement('div'); n.className = 'windows-note';
-          n.textContent = 'No window matches that.';
-          rows.appendChild(n);
-          return;
-        }
-        for (const w of items) {
+      buildFilterList(winListRoot, {
+        placeholder: 'Search windows…',
+        items: listable,
+        empty: 'No window matches that.',
+        // App name and title — the two things anyone remembers a window by.
+        haystack: w => (w.app || '') + ' ' + (w.title || ''),
+        row: w => {
           const row = document.createElement('div');
           row.className = 'recents-row';
           row.title = 'Open and control this window';
@@ -9617,11 +9656,9 @@
             winDetails.open = false;
             openWinView(w);
           });
-          rows.appendChild(row);
-        }
-      };
-      search.addEventListener('input', drawWins);
-      drawWins();
+          return row;
+        },
+      });
     }
 
     // ---- Apps launcher: list installed apps, launch one on the host ----------
@@ -9654,20 +9691,14 @@
         appsListRoot.appendChild(n);
         return;
       }
-      // The app list can be long, so filter it with a search box.
-      const search = document.createElement('input');
-      search.className = 'apps-search';
-      search.placeholder = 'Search apps…';
-      search.autocomplete = 'off'; search.spellcheck = false;
-      const rows = document.createElement('div');
-      rows.className = 'apps-rows';
-      appsListRoot.appendChild(search);
-      appsListRoot.appendChild(rows);
-      const draw = () => {
-        rows.innerHTML = '';
-        const f = search.value.trim().toLowerCase();
-        const items = f ? appList.filter(a => (a.name || '').toLowerCase().includes(f)) : appList;
-        for (const a of items) {
+      buildFilterList(appsListRoot, {
+        placeholder: 'Search apps…',
+        items: appList,
+        // The launcher is something you open in order to type, so take focus.
+        focus: true,
+        empty: 'No app matches that.',
+        haystack: a => a.name || '',
+        row: a => {
           const row = document.createElement('div');
           row.className = 'recents-row';
           row.title = 'Launch on the host';
@@ -9678,12 +9709,9 @@
           label.appendChild(nameEl);
           row.appendChild(label);
           row.addEventListener('click', () => launchApp(a));
-          rows.appendChild(row);
-        }
-      };
-      search.addEventListener('input', draw);
-      draw();
-      setTimeout(() => search.focus(), 0);
+          return row;
+        },
+      });
     }
 
     function appListIcon(item) {
