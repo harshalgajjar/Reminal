@@ -1,6 +1,11 @@
 package client
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/reminal/reminal/internal/session"
+)
 
 func TestClassifyAttn(t *testing.T) {
 	tests := []struct {
@@ -66,6 +71,54 @@ func TestAttentionProbeTail(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := attentionProbeTail(tt.render, tt.n); got != tt.want {
 				t.Errorf("attentionProbeTail() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveAttn(t *testing.T) {
+	now := time.Now()
+	hook := func(state string, agoSec int) *session.HookState {
+		return &session.HookState{State: state, TS: now.Add(-time.Duration(agoSec) * time.Second)}
+	}
+	cases := []struct {
+		name       string
+		screen     string
+		hs         *session.HookState
+		lastOutput time.Time
+		want       string
+	}{
+		// No hook at all: the screen is the only word.
+		{"no hook falls back to screen", "working", nil, now, "working"},
+		{"no hook, bare shell", "", nil, now, ""},
+
+		// A fresh hook is authoritative.
+		{"fresh working hook", "done", hook("working", 1), now, "working"},
+		{"fresh input hook is honoured", "done", hook("input", 1), now.Add(-30 * time.Second), "input"},
+
+		// THE BUG: answering an in-chat question resumes the turn with no hook
+		// event, so "input" goes stale while the agent works. Output long after
+		// the hook disproves the "stopped" claim.
+		{"stale input + output after = resumed (screen knows)", "working", hook("input", 300), now, "working"},
+		{"stale input + output after, screen blind (Windows)", "", hook("input", 300), now, "working"},
+		{"stale done + output after = resumed", "working", hook("done", 300), now, "working"},
+
+		// A genuinely waiting agent emits nothing, so lastActivity stays behind
+		// the hook and "needs you" must survive — however long you take.
+		{"waiting agent keeps needs-you (no output since)", "done", hook("input", 600), now.Add(-601 * time.Second), "input"},
+		{"idle done stays done", "done", hook("done", 600), now.Add(-601 * time.Second), "done"},
+
+		// Output inside the grace is the prompt being painted, not a resume.
+		{"output within grace is not a resume", "done", hook("input", 2), now.Add(-1 * time.Second), "input"},
+
+		// A visible prompt still corrects a "done" hook (the question case).
+		{"screen prompt beats done hook", "input", hook("done", 1), now.Add(-30 * time.Second), "input"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, _ := resolveAttn(c.screen, c.hs, c.lastOutput)
+			if got != c.want {
+				t.Errorf("resolveAttn(screen=%q) = %q, want %q", c.screen, got, c.want)
 			}
 		})
 	}

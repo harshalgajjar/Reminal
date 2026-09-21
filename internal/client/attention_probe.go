@@ -40,6 +40,11 @@ const (
 	// spinners/elapsed-time counters repaint faster than this, so an actively
 	// working agent stays "working"; a blocked or finished one goes settled.
 	attnSettleMs = 1200
+	// attnHookGrace is how long after a hook fires we still attribute terminal
+	// output to that hook's own event — the agent painting the prompt it just
+	// announced. Past it, continued output means the agent resumed and the
+	// resting state it reported is stale (see the hook block in runAttention).
+	attnHookGrace = 3 * time.Second
 )
 
 // startAttention launches the attention detector for this session. The detector
@@ -137,20 +142,7 @@ func (a *Agent) runAttention(logPath string) {
 		// integrated harness reporting via `reminal hook`); otherwise fall back to
 		// the screen inference. The hook is precise; the screen is universal.
 		screenState := classifyAttn(agentActive, tail, settledMs)
-		state := screenState
-		source := "screen"
-		if hs := session.ReadHookState(a.sessionID); hs != nil {
-			state, source = hs.State, "hook"
-		}
-		// A prompt visible on screen wins over a "done" hook. Claude Code fires
-		// Stop (→ done) when it yields for an AskUserQuestion or ends a turn on a
-		// question — there's no distinct "I'm asking you" event — so the hook
-		// alone reads "done" while you're actually being asked to choose. The
-		// settled on-screen prompt (numbered options / y-n / "press enter") is
-		// the ground truth that you need to act, so let it correct the hook.
-		if state == "done" && screenState == "input" {
-			state, source = "input", "hook+screen"
-		}
+		state, source := resolveAttn(screenState, session.ReadHookState(a.sessionID), last)
 		a.setAttnState(state)
 
 		if enc != nil {
@@ -186,6 +178,49 @@ func (a *Agent) setAttnState(state string) {
 	// samples the machine and must not stall the detector tick. No-op when
 	// there's no viewer.
 	go a.pushHostInfo()
+}
+
+// resolveAttn decides the state a session reports, combining the screen verdict
+// with the harness's own hook report. The hook is precise about WHAT happened;
+// the screen and the output stream are the evidence of what is happening NOW,
+// and they correct the hook where it cannot see:
+//
+//   - A resting hook state (input/done) claims the agent STOPPED. Terminal
+//     output arriving well after that hook fired disproves it — the agent
+//     resumed and the hook never said so. That is the gap no harness covers:
+//     answering an in-chat question (AskUserQuestion, a tool permission)
+//     continues the SAME turn without firing UserPromptSubmit, so "input" would
+//     otherwise stick until Stop or the 15-minute TTL, showing "needs you" over
+//     a session that is busily working. Output-after-hook needs no screen
+//     inspection, so it is the one invalidator that also works on Windows, where
+//     the foreground detector is blind. It is safe because an agent that is
+//     genuinely waiting emits nothing — its prompt is painted and sits still, so
+//     lastActivity freezes; attnHookGrace covers that prompt being drawn.
+//
+//   - A prompt visible on a settled screen beats a "done" hook. Claude Code
+//     fires Stop (→ done) when it yields for a question, since it has no
+//     distinct "I'm asking you" event — so the hook alone reads "done" while
+//     you are in fact being asked to choose.
+//
+// source is for the probe log only; it names which signal decided.
+func resolveAttn(screenState string, hs *session.HookState, lastActivity time.Time) (state, source string) {
+	state, source = screenState, "screen"
+	if hs != nil {
+		state, source = hs.State, "hook"
+		if (hs.State == "input" || hs.State == "done") && lastActivity.After(hs.TS.Add(attnHookGrace)) {
+			state, source = screenState, "screen(resumed)"
+			if state == "" {
+				// No screen verdict (a bare-shell read, or Windows where the
+				// foreground cannot be seen). Output is still arriving, so the one
+				// thing we know is that something is running.
+				state, source = "working", "output(resumed)"
+			}
+		}
+	}
+	if state == "done" && screenState == "input" {
+		state, source = "input", "hook+screen"
+	}
+	return state, source
 }
 
 // classifyAttn maps the raw signals to an attention state:
