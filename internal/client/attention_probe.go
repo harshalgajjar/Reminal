@@ -246,26 +246,52 @@ func classifyAttn(agentActive bool, tail string, settledMs int64) string {
 // attnPromptCues are lowercase substrings that mark a screen asking the user to
 // act — tool/permission approvals and interactive questions across harnesses.
 // Kept deliberately small and data-like so a harness UI change is a one-line fix.
+// Every cue has to be PROMPT-SHAPED, not a word a prompt might use: a bare
+// "confirm" matched an agent's own prose ("this just confirms the build is
+// green"), and a bare "approve" matched a sentence about approvals — so a
+// session that had plainly finished sat there reading "needs you".
 var attnPromptCues = []string{
-	"(y/n)", "[y/n]", "y/n)", "yes/no",
-	"do you want", "would you like", "allow this", "approve",
-	"proceed?", "continue?", "confirm", "press enter", "press any key",
+	"(y/n)", "[y/n]", "y/n)", "yes/no", "(y)",
+	"do you want to", "would you like to", "allow this", "approve?", "approve this",
+	"needs your permission", "permission to use", "permission to run",
+	"proceed?", "continue?", "confirm?", "press enter", "press any key",
 	"waiting for your", "1. yes", "1) yes", "❯ 1.", "> 1.",
 	// Claude Code's interactive choosers (AskUserQuestion, permission prompts)
 	// carry these footer hints under a numbered/❯ option list. NOT "esc to
 	// interrupt" — that's the WORKING spinner's footer, not a prompt.
 	"enter to select", "esc to cancel",
+	// cursor-agent's approval prompt. It has no lifecycle hooks, so the screen
+	// is the ONLY signal it gives, and none of the cues above appear on it.
+	// NOT "run everything": that is also the label of its yolo mode, printed
+	// in the footer of every screen.
+	"run this command?", "run (once)", "not in allowlist", "(esc or n)",
 }
 
+// attnLooksLikePrompt reads the screen as TEXT: the render carries its
+// styling, and Claude Code's trust dialog arrives as
+// "\x1b[38;5;246mEsc\x1b[m \x1b[38;5;246mto\x1b[m…", which no cue could ever
+// match — the dialog read as a finished turn. Whitespace goes too, because
+// some harnesses draw the spaces between words as cursor moves, leaving
+// "Entertoconfirm·Esctocancel" on the rendered screen.
 func attnLooksLikePrompt(tail string) bool {
-	low := strings.ToLower(tail)
-	for _, cue := range attnPromptCues {
+	low := attnFlat(stripANSI(tail))
+	for _, cue := range attnPromptCuesFlat {
 		if strings.Contains(low, cue) {
 			return true
 		}
 	}
 	return false
 }
+
+func attnFlat(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), "")) }
+
+var attnPromptCuesFlat = func() []string {
+	out := make([]string, len(attnPromptCues))
+	for i, c := range attnPromptCues {
+		out[i] = attnFlat(c)
+	}
+	return out
+}()
 
 // attentionProbeTail returns the last n non-blank rows of a rendered screen,
 // each right-trimmed (so trailing-space padding never counts as a change) and

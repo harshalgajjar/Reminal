@@ -1967,6 +1967,18 @@ func (a *Agent) initScreen() {
 	}
 	applied := a.sizeBook.lastApplied()
 	cols, rows := resolveSeedGeometry(applied.cols, applied.rows, ptySize)
+	// A session started in the background has no size at all until someone
+	// opens it: no host terminal gave it one and no viewer has. Programs that
+	// size themselves to the terminal then draw NOTHING — Codex and the
+	// Antigravity CLI sit on a blank screen until a viewer arrives, while
+	// Claude Code and cursor-agent fall back to 80x24 of their own accord. It
+	// starts at the size the emulator here is seeded with, so what it draws is
+	// what a viewer is later shown.
+	if ptySize != nil {
+		if c, r, err := ptySize(); err == nil && (c == 0 || r == 0) {
+			_ = a.term.Resize(cols, rows)
+		}
+	}
 	a.screenMu.Lock()
 	a.screen = vt.NewEmulator(int(cols), int(rows))
 	if a.scrollbackLines > 0 {

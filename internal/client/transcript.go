@@ -74,6 +74,12 @@ func ReadAgentTranscript(pid int, timeout ...time.Duration) (string, bool, error
 
 func (a *Agent) handleTranscriptControl() (string, error) {
 	text, truncated := clipTranscript(a.plaintextTranscript(), maxTranscriptBytes)
+	if scr := a.programScreenText(); scr != "" {
+		// A full-screen program paints with cursor moves, not lines: its
+		// output stream, stripped of the moves, is fragments run together.
+		// What it is showing is the screen itself.
+		text, truncated = clipTranscript(text+"\n\n--- the screen now ---\n"+scr, maxTranscriptBytes)
+	}
 	body, err := json.Marshal(struct {
 		Text      string `json:"text"`
 		Truncated bool   `json:"truncated"`
@@ -101,6 +107,20 @@ func (a *Agent) handleSearchControl(pattern string) (string, error) {
 		return "", err
 	}
 	return string(body), nil
+}
+
+// programScreenText is what a full-screen program has on the screen now, or
+// "" when the session is on its normal screen and its output reads as text.
+func (a *Agent) programScreenText() string {
+	if a == nil {
+		return ""
+	}
+	a.screenMu.Lock()
+	defer a.screenMu.Unlock()
+	if a.screen == nil || !a.screen.IsAltScreen() {
+		return ""
+	}
+	return strings.TrimRight(attentionProbeTail(stripANSI(a.screen.Render()), 1<<20), "\n")
 }
 
 // plaintextTranscript decrypts the live buffer and strips terminal chrome so
