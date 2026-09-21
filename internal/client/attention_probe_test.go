@@ -123,3 +123,38 @@ func TestResolveAttn(t *testing.T) {
 		})
 	}
 }
+
+// The screen is read as TEXT. A harness that colours its dialog, or draws the
+// spaces between words as cursor moves, is still asking you something — and a
+// session sitting on a question that reads as "done" is the whole problem the
+// needs-you state exists to solve.
+func TestPromptsAreSeenThroughStylingAndSpacing(t *testing.T) {
+	styled := "   Yes, I trust this folder\n\n \x1b[38;5;246mEnter\x1b[m \x1b[38;5;246mto\x1b[m " +
+		"\x1b[38;5;246mconfirm\x1b[m \x1b[38;5;246m·\x1b[m \x1b[38;5;246mEsc\x1b[m \x1b[38;5;246mto\x1b[m \x1b[38;5;246mcancel\x1b[m"
+	if !attnLooksLikePrompt(styled) {
+		t.Error("a dialog drawn in colour was not seen as a prompt")
+	}
+	spaceless := "ClaudeCode'llbeabletoread,edit,andexecutefileshere.\n❯No,exit\nYes,Itrustthisfolder\nEntertoconfirm·Esctocancel"
+	if !attnLooksLikePrompt(spaceless) {
+		t.Error("a dialog drawn without spaces was not seen as a prompt")
+	}
+	// cursor-agent has no lifecycle hooks, so its approval is only ever seen
+	// on the screen.
+	cursorApproval := "Run this command?\nNot in allowlist: echo\n→ Run (once) (y)\n  Skip & tell the agent what to do instead (esc or n)"
+	if !attnLooksLikePrompt(cursorApproval) {
+		t.Error("cursor-agent's approval was not seen as a prompt")
+	}
+	if got := classifyAttn(true, cursorApproval, attnSettleMs+1); got != "input" {
+		t.Errorf("cursor-agent's approval classified as %q, want input", got)
+	}
+	for _, notAPrompt := range []string{
+		"· Booping… (2s · esc to interrupt)",
+		"I will run this command in a moment and report back",
+		"this just confirms the build is green; no approval needed",
+		"Donethechangesareinandthetestspass.\n❯\n────\n⏵⏵bypasspermissionson",
+	} {
+		if attnLooksLikePrompt(notAPrompt) {
+			t.Errorf("read as a prompt: %q", notAPrompt)
+		}
+	}
+}
