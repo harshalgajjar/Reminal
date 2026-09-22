@@ -7,8 +7,8 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"regexp"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -167,13 +167,31 @@ var dirChannelOnly = map[protocol.MessageType]bool{
 // everything EXCEPT the directory actions reserved to the machine channel
 // (dirChannelOnly): those reach the machine's whole session registry and must
 // never be exposed to a session's PIN guests.
-// machineCaps lists the requests this build answers on the machine channel,
+// machinePlumbing are messages the machine channel accepts that are not
+// things to ask it for: the handshake, keepalives, the socket's own comings
+// and goings, and the halves of a WebRTC negotiation. They are left out of
+// what a machine advertises — a caller deciding what it can do here should
+// not be reading the transport, nor keying on names that belong to it.
+var machinePlumbing = map[protocol.MessageType]bool{
+	protocol.TypeOwnerInit:    true,
+	protocol.TypePing:         true,
+	protocol.TypePong:         true,
+	protocol.TypeConnected:    true,
+	protocol.TypeClosed:       true,
+	protocol.TypeWebRTCHello:  true,
+	protocol.TypeWebRTCAnswer: true,
+	protocol.TypeWebRTCICE:    true,
+	protocol.TypeWindowAck:    true,
+}
+
+// machineCaps lists what this build can be asked for on the machine channel,
 // for DirResponse.Caps. Read from machineAccepts rather than written out, so
-// it describes the build itself and cannot drift from it.
+// a request type added later is advertised without anyone remembering to,
+// and one this build does not serve can never be claimed.
 func machineCaps() []string {
 	out := make([]string, 0, len(machineAccepts))
 	for t, ok := range machineAccepts {
-		if ok {
+		if ok && !machinePlumbing[t] {
 			out = append(out, string(t))
 		}
 	}
@@ -181,25 +199,50 @@ func machineCaps() []string {
 	return out
 }
 
+// plainType is a message type as it may be repeated back to a caller: short,
+// and only the characters a type is made of. The type came off the wire, and
+// what is said about it is shown to a person — so it is checked rather than
+// echoed, however much the channel it arrived on is trusted.
+var plainType = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+
+// unsupportedRefusal is what to answer a machine-channel message this build
+// has no handler for: an ack marked unsupported, or nothing at all when the
+// message was not asking for an answer in the first place.
+func unsupportedRefusal(t protocol.MessageType, reqID string) (dirAck, bool) {
+	if reqID == "" {
+		return dirAck{}, false // not a request: nobody is waiting on a reply
+	}
+	what := "that request"
+	if plainType.MatchString(string(t)) {
+		what = string(t)
+	}
+	return dirAck{ReqID: reqID, Unsupported: true, Error: "this reminal does not answer " + what}, true
+}
+
 // refuseUnsupported answers a machine-channel request this build has no
 // handler for, instead of dropping it: the caller hears "not this build"
-// at once, with the same message type it asked on, and can say so to the
-// person rather than timing out.
+// at once, on the same message type it asked on, and can say so to the
+// person rather than waiting out a timeout.
+//
+// Its own small allowance, not the directory's: a client that asks for
+// nothing but unknown things must not be able to spend the budget real
+// queries need — and must not silence this either, which would put the
+// timeout back.
 func (a *Agent) refuseUnsupported(conn *websocket.Conn, msg protocol.Message) {
-	if !a.machine || !strings.HasPrefix(string(msg.Type), "dir_") || !a.allowDir(dirActQuery) {
+	if !a.machine || !a.allowDir(dirActRefuse) {
 		return
 	}
 	var req struct {
 		ReqID string `json:"req_id"`
 	}
 	if !a.decryptDir(msg.Data, &req) {
+		return // not for us to read: the relay can see a message go by, not author one
+	}
+	ack, say := unsupportedRefusal(msg.Type, req.ReqID)
+	if !say {
 		return
 	}
-	a.sendWindowMsg(conn, msg.Type, dirAck{
-		ReqID:       req.ReqID,
-		Unsupported: true,
-		Error:       "this reminal does not answer " + string(msg.Type),
-	})
+	a.sendWindowMsg(conn, msg.Type, ack)
 }
 
 func (a *Agent) servesOnThisChannel(t protocol.MessageType) bool {
@@ -213,7 +256,7 @@ func (a *Agent) servesOnThisChannel(t protocol.MessageType) bool {
 // reachable by every enrolled owner device at once, and some actions fork a
 // process, so a runaway client must not be able to turn that into a storm.
 type dirLimits struct {
-	hshake, query, spawn, rename, restart *tokenBucket
+	hshake, query, spawn, rename, restart, refuse *tokenBucket
 }
 
 func newDirLimits() *dirLimits {
@@ -225,6 +268,9 @@ func newDirLimits() *dirLimits {
 		// A restart moves every shell on the machine — as heavy as a spawn,
 		// and just as unwelcome in a loop. Same tight bucket.
 		restart: newTokenBucket(4, 1),
+		// Saying "not this build" costs a decrypt and a short line. Its own
+		// allowance so it neither starves the others nor is starved by them.
+		refuse: newTokenBucket(8, 4),
 	}
 }
 
@@ -235,6 +281,7 @@ const (
 	dirActSpawn
 	dirActRename
 	dirActRestart
+	dirActRefuse
 )
 
 // allowOwnerHandshake gates owner handshakes: the machine channel's wider
@@ -260,6 +307,8 @@ func (a *Agent) allowDir(act dirAction) bool {
 		return a.dirLimits.spawn.allow(now)
 	case dirActRestart:
 		return a.dirLimits.restart.allow(now)
+	case dirActRefuse:
+		return a.dirLimits.refuse.allow(now)
 	default:
 		return a.dirLimits.rename.allow(now)
 	}

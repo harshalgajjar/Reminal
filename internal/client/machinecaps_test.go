@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // A machine says what it can be asked for, so a caller need not ask and wait
@@ -22,9 +22,10 @@ func TestMachineCapsDescribeThisBuild(t *testing.T) {
 	for _, c := range caps {
 		have[c] = true
 	}
-	// Everything the agent accepts is advertised, and nothing else is.
+	// Everything the agent accepts and can be asked for is advertised, and
+	// nothing else is — see TestCapsLeaveOutThePlumbing for the exception.
 	for tp, ok := range machineAccepts {
-		if ok && !have[string(tp)] {
+		if ok && !machinePlumbing[tp] && !have[string(tp)] {
 			t.Errorf("%s is accepted but not advertised", tp)
 		}
 	}
@@ -80,5 +81,59 @@ func TestUnsupportedAckSaysWhatItIs(t *testing.T) {
 	}
 	if ok, _ := got["ok"].(bool); ok {
 		t.Fatal("an unsupported request must not read as done")
+	}
+}
+
+// What a machine advertises is what it can be ASKED for. The transport under
+// it — the handshake, keepalives, the socket's comings and goings, WebRTC
+// negotiation — is not a capability, and a caller must not start keying on
+// names that belong to the plumbing.
+func TestCapsLeaveOutThePlumbing(t *testing.T) {
+	have := map[string]bool{}
+	for _, c := range machineCaps() {
+		have[c] = true
+	}
+	for tp := range machinePlumbing {
+		if have[string(tp)] {
+			t.Errorf("%s is transport, not a capability", tp)
+		}
+	}
+	for _, want := range []string{"dir_query", "dir_kill", "new_session", "window_list", "host_info"} {
+		if !have[want] {
+			t.Errorf("%s is something a caller asks for and should be advertised", want)
+		}
+	}
+}
+
+// A request nobody is waiting on gets no answer; one that is gets a refusal
+// naming what was asked — but only when the name is one a type could have,
+// since it came off the wire and ends up in front of a person.
+func TestUnsupportedRefusalIsSaidCarefully(t *testing.T) {
+	if _, say := unsupportedRefusal("dir_something", ""); say {
+		t.Error("answered a message that carried no request id")
+	}
+	ack, say := unsupportedRefusal("dir_something", "r1")
+	if !say || !ack.Unsupported || ack.ReqID != "r1" {
+		t.Fatalf("ack = %+v (say=%v)", ack, say)
+	}
+	if !strings.Contains(ack.Error, "dir_something") {
+		t.Errorf("the refusal does not say what was asked: %q", ack.Error)
+	}
+	for _, nasty := range []string{
+		"dir_\x1b[2Jcleared",
+		strings.Repeat("dir_x", 40),
+		"DIR_SHOUTING",
+		"dir_with spaces",
+	} {
+		ack, say := unsupportedRefusal(protocol.MessageType(nasty), "r2")
+		if !say {
+			t.Fatalf("%q got no answer at all", nasty)
+		}
+		if strings.Contains(ack.Error, nasty) {
+			t.Errorf("a type off the wire was repeated back verbatim: %q", ack.Error)
+		}
+		if !strings.Contains(ack.Error, "that request") {
+			t.Errorf("want the plain wording for %q, got %q", nasty, ack.Error)
+		}
 	}
 }
