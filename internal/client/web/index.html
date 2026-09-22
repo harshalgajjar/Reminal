@@ -2544,32 +2544,23 @@
     function isStandaloneApp() {
       return (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
     }
-    function isAndroidDevice() { return /Android/i.test(navigator.userAgent); }
     // How to turn notifications on from wherever this page is running. An
     // installed app has no address bar, so the browser-tab steps (the lock
     // icon) are impossible there; each platform keeps the switch somewhere
     // else.
     function alertAllowSteps() {
       const host = escHTML(location.host);
-      if (isStandaloneApp() && isAndroidDevice()) {
-        return '<ol><li>Long-press the reminal icon on your home screen</li>'
-          + '<li>Open <b>App info</b>, then <b>Notifications</b></li>'
-          + '<li>Turn on <b>Allow notifications</b></li></ol>'
-          + '<div class="al-alt">Still blocked? In Chrome, open <b>Settings</b>, then <b>Site settings</b>, then <b>Notifications</b>, and allow <b>' + host + '</b>.</div>';
-      }
+      const tab = '<li>Tap the site icon at the left of the address bar, then <b>Permissions</b></li>'
+        + '<li>Tap <b>Reset</b>, then turn <b>Notifications</b> on</li>';
       if (isStandaloneApp() && isIOSDevice()) {
         return '<ol><li>Open the <b>Settings</b> app</li>'
           + '<li>Go to <b>Notifications</b>, then <b>reminal</b></li>'
           + '<li>Turn on <b>Allow Notifications</b></li></ol>';
       }
-      if (isStandaloneApp()) {
-        return '<ol><li>Open <b>' + host + '</b> in your browser</li>'
-          + '<li>Click <span class="al-glyph">' + aIcon('lock', 14) + '</span> at the left of the address bar</li>'
-          + '<li>Set <b>Notifications</b> to <b>Allow</b></li></ol>';
-      }
-      return '<ol><li>Tap <span class="al-glyph">' + aIcon('lock', 14) + '</span> at the left of the address bar</li>'
-        + '<li>Open <b>Permissions</b>, then <b>Notifications</b></li>'
-        + '<li>Choose <b>Allow</b></li></ol>';
+      // An installed app has no address bar: the reset happens in a browser
+      // tab on the same site, and the app picks it up.
+      if (isStandaloneApp()) return '<ol><li>Open <b>' + host + '</b> in your browser</li>' + tab + '<li>Come back here</li></ol>';
+      return '<ol>' + tab + '</ol>';
     }
     function b64urlToU8(s) {
       const pad = '='.repeat((4 - s.length % 4) % 4);
@@ -2678,7 +2669,7 @@
       if (!prefs || !pushSupported() || alertCatchUp.has(b64)) return;
       const key = alertWantKey(prefs, rec);
       if (rec.alertsSynced === key || (key === 'off' && (rec.alertsSynced === undefined || rec.alertsSynced === 'off'))) return;
-      if (key !== 'off' && Notification.permission !== 'granted') return;
+      if (key !== 'off' && !alertPermGranted(await readAlertPermission())) return;
       alertCatchUp.add(b64);
       try {
         const sub = alerts.sub || await pushSubscription(false);
@@ -2702,12 +2693,31 @@
 
     // ---- permission ----
     let stopPermWatch = null;
+    // Every source of the answer, because inside an installed app they can
+    // disagree: Android hands the decision to the app's own notification
+    // switch, and Notification.permission has been seen to say "denied"
+    // there while the push service itself allows it. Any one of them saying
+    // "granted" is enough to try; the subscribe call is the real test.
+    async function readAlertPermission() {
+      const p = { notification: 'Notification' in window ? Notification.permission : 'unsupported', query: '?', push: '?',
+                  where: isStandaloneApp() ? 'installed app' : 'browser tab' };
+      try { p.query = (await navigator.permissions.query({ name: 'notifications' })).state; } catch (_) {}
+      try { const reg = await pushRegistration(); p.push = await reg.pushManager.permissionState({ userVisibleOnly: true }); } catch (_) {}
+      return p;
+    }
+    function alertPermGranted(p) { return p.notification === 'granted' || p.query === 'granted' || p.push === 'granted'; }
+    function alertPermDenied(p) { return p.notification === 'denied' || p.query === 'denied' || p.push === 'denied'; }
+
     function watchPermission(onGranted) {
       if (stopPermWatch) stopPermWatch();
-      let st = null;
-      const check = () => {
-        if (Notification.permission !== 'granted') return;
-        if (stopPermWatch) stopPermWatch();
+      let st = null, busy = false;
+      const check = async () => {
+        if (busy) return;
+        busy = true;
+        const p = await readAlertPermission();
+        busy = false;
+        if (!alertPermGranted(p) || !stopPermWatch) return;
+        stopPermWatch();
         onGranted();
       };
       const iv = setInterval(check, 1000);
@@ -2735,16 +2745,28 @@
         alerts.view = 'asking'; alerts.msg = ''; paintAlerts();
         try { await asked; } catch (_) {}
       }
-      if (Notification.permission === 'granted') return alertsFinishTurnOn();
+      const p = await readAlertPermission();
+      alerts.perm = p;
+      if (alertPermGranted(p)) return alertsFinishTurnOn();
       // Chrome often answers with its quiet prompt (a crossed-out bell in the
       // address bar) and reports "no answer" at once; a blocked site answers
       // "denied". Either way, wait for the change and carry on by ourselves.
-      alerts.view = Notification.permission === 'denied' ? 'blocked' : 'quiet';
+      alerts.view = alertPermDenied(p) ? 'blocked' : 'quiet';
       paintAlerts();
-      watchPermission(alertsFinishTurnOn);
+      watchPermission(() => alertsFinishTurnOn());
     }
 
-    async function alertsFinishTurnOn() {
+    // "Try again": ask once more inside this tap, then go straight to
+    // subscribing — the push service is the final word, and when it refuses,
+    // its own reason is shown instead of our guess.
+    async function alertsTryAgain() {
+      if (alerts.busy) return;
+      try { Notification.requestPermission(); } catch (_) {}
+      if (stopPermWatch) stopPermWatch();
+      await alertsFinishTurnOn(true);
+    }
+
+    async function alertsFinishTurnOn(retry) {
       alerts.busy = true; alerts.view = 'working'; alerts.msg = ''; paintAlerts();
       try {
         alerts.sub = await pushSubscription(true);
@@ -2761,8 +2783,16 @@
           alertsSay('', 'Alerts are on. Your machines pick them up as soon as they are online.');
         }
       } catch (e) {
-        alerts.busy = false; alerts.view = 'off';
-        alertsSay('err', alertErrText(e));
+        alerts.busy = false;
+        if (retry) {
+          alerts.perm = await readAlertPermission();
+          alerts.view = alertPermDenied(alerts.perm) ? 'blocked' : 'quiet';
+          watchPermission(() => alertsFinishTurnOn());
+          alertsSay('err', 'Your browser said: ' + ((e && (e.name ? e.name + ': ' : '') + e.message) || String(e)));
+        } else {
+          alerts.view = 'off';
+          alertsSay('err', alertErrText(e));
+        }
       }
       alerts.busy = false; paintAlerts();
     }
@@ -2785,7 +2815,8 @@
       const prefs = await loadAlertPrefs();
       if (!pushSupported()) { alerts.view = 'unsupported'; return paintAlerts(); }
       try { alerts.sub = await pushSubscription(false); } catch (_) { alerts.sub = null; }
-      if (prefs.enabled && alerts.sub && Notification.permission === 'granted') {
+      alerts.perm = await readAlertPermission();
+      if (prefs.enabled && alerts.sub && alertPermGranted(alerts.perm)) {
         alerts.view = 'on'; alerts.detail = focusB64 || '';
         paintAlerts();
         await syncAllAlerts();
@@ -2948,7 +2979,9 @@
             + alertAllowSteps()
             + waiting('This continues by itself once you allow it') + '</div></div>';
         }
-        h += '<div class="al-foot"><button class="al-btn" id="al-cancel"><span>Not now</span></button></div>';
+        h += alertMsgHTML();
+        h += '<div class="al-foot"><button class="al-btn primary" id="al-retry"' + (a.busy ? ' disabled' : '') + '>' + aIcon('bell', 15) + '<span>Try again</span></button>'
+          + '<button class="al-btn" id="al-cancel"><span>Not now</span></button></div>';
       } else {
         h += '<div class="al-sec">Default rules</div>' + alertRulesHTML(prefs.rules, false, 'note');
         h += '<div class="al-sec">Machines</div><div class="al-list">';
@@ -2977,6 +3010,7 @@
       bind('alx', closeAlerts);
       bind('al-back', () => { alerts.detail = ''; alerts.msg = ''; paintAlerts(); });
       bind('al-on', alertsTurnOn);
+      bind('al-retry', alertsTryAgain);
       bind('al-cancel', () => { if (stopPermWatch) stopPermWatch(); alerts.view = 'off'; paintAlerts(); });
       bind('al-test', () => alertsSendTest(null));
       bind('al-test-one', () => alertsSendTest(machine));
@@ -8260,16 +8294,13 @@
           });
         } catch (_) {}
       };
-      if (Notification.permission === 'granted') {
-        fire();
-      } else if (Notification.permission !== 'denied') {
-        // Lazy permission request — only ask when there's actually a
-        // notification to deliver, so first-load isn't gated by a permission
-        // dialog the user might dismiss without thinking.
-        Notification.requestPermission().then((p) => {
-          if (p === 'granted') fire();
-        });
-      }
+      // Only when already allowed. This used to ask right here, with no tap
+      // behind it — and Chrome answers un-tapped requests with its quiet
+      // prompt (or nothing), counts each one as ignored, and after a few
+      // blocks the whole site. That is how live.reminal.app ended up blocked
+      // for Alerts before anyone pressed its button. Asking now happens only
+      // from the Alerts sheet, inside a tap.
+      if (Notification.permission === 'granted') fire();
     }
 
     // Filename extension → MIME for files the browser can render inline.
