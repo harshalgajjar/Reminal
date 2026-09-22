@@ -102,6 +102,11 @@ func mcpListSessions() (string, error) {
 		return "", err
 	}
 	current := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
+	if current == "" {
+		// A harness that scrubbed the environment of its MCP server: the
+		// process tree still says which session this is (session.Enclosing).
+		current = strings.ToUpper(session.Enclosing())
+	}
 	rows := make([]mcpMachineRow, 0, len(fleet))
 	online, sessions := 0, 0
 	for _, m := range fleet {
