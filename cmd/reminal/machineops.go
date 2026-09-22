@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/client"
-	"github.com/reminal/reminal/internal/config"
+	"reminal/internal/client"
+	"reminal/internal/config"
 )
 
 // machineOpTimeout bounds a remote directory-channel op (dial + owner handshake

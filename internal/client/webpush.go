@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/config"
+	"reminal/internal/config"
 )
 
 // Phone alerts ride Web Push, and the message is sealed HERE, on the machine,
@@ -135,6 +135,11 @@ type pushMessage struct {
 	// lock screen instead of stacking under it.
 	Tag string `json:"tag,omitempty"`
 	URL string `json:"url,omitempty"`
+	// At is when the machine saw the change (unix ms). Push services do not
+	// promise order, so the phone uses it to keep a late "unplugged" from
+	// replacing the "connected" that happened after it, and to say when an
+	// alert that arrives late actually happened.
+	At int64 `json:"at,omitempty"`
 }
 
 // errPushGone means the push service no longer knows this subscription (the

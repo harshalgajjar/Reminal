@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/reminal/reminal/internal/client"
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/client"
+	"reminal/internal/protocol"
 )
 
 // runMachines lists every machine this device owns and the live sessions running

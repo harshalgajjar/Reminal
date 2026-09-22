@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/vt"
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // TestSnapshotDedupWiredIntoReconnectPath drives the REAL Ink resize+repaint capture

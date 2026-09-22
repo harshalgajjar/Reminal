@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/vt"
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // TestRecordDoesNotBlockOnTerminalQueries guards the v0.11.0 regression where

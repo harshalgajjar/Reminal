@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 // CompleteSessions prints completion candidates for the verbs that take a

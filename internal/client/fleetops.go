@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/reminal/reminal/internal/crypto"
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/crypto"
+	"reminal/internal/protocol"
 )
 
 // UpgradeTimeout bounds one machine's upgrade end to end. Generous: it covers

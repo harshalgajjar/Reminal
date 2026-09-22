@@ -6,7 +6,7 @@ package relay
 import (
 	"testing"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // The relay once maintained two hand-written forward whitelists that drifted:

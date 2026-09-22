@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // windowNote is one annotation. Mirrors the overlay helper's model; `Status` is

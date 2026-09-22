@@ -6,7 +6,7 @@ package client
 import (
 	"time"
 
-	"github.com/reminal/reminal/internal/pty"
+	"reminal/internal/pty"
 )
 
 // ResumeState is what the new process reconstructs from env vars after

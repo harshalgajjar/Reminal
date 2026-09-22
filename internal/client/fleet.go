@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 // FleetMachine is one machine this device owns, plus the live sessions it

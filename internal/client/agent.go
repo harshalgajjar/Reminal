@@ -26,12 +26,12 @@ import (
 	"github.com/charmbracelet/x/vt"
 	"github.com/gorilla/websocket"
 	"github.com/mdp/qrterminal/v3"
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/crypto"
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/pty"
-	"github.com/reminal/reminal/internal/session"
 	xterm "golang.org/x/term"
+	"reminal/internal/config"
+	"reminal/internal/crypto"
+	"reminal/internal/protocol"
+	"reminal/internal/pty"
+	"reminal/internal/session"
 )
 
 // scrollbackBytes caps the in-memory replay buffer. 2 MiB is enough for a

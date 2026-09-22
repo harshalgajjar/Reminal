@@ -42,8 +42,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/reminal/reminal/internal/pty"
 	xterm "golang.org/x/term"
+	"reminal/internal/pty"
 )
 
 // Env keys shared with the Unix restart (same names, so tooling that knows

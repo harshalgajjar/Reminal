@@ -11,9 +11,9 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/session"
 	"golang.org/x/term"
+	"reminal/internal/config"
+	"reminal/internal/session"
 )
 
 // settingRow is one toggle on the settings page. apply, if set, pushes the new

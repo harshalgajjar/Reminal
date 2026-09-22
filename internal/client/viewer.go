@@ -24,11 +24,11 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/crypto"
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
 	"golang.org/x/term"
+	"reminal/internal/config"
+	"reminal/internal/crypto"
+	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 // escapeKey is the byte that disconnects the viewer when typed at the

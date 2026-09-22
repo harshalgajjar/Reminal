@@ -6,7 +6,7 @@ package main
 import (
 	"testing"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 func TestSessionLabel(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/session"
 	"golang.org/x/term"
+	"reminal/internal/session"
 )
 
 // errPickCancelled is returned by pickSession when the user backs out (Esc or

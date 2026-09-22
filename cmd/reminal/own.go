@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/reminal/reminal/internal/client"
+	"reminal/internal/client"
 )
 
 // runOwn prints this device's public owner id and the exact command to paste on

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 // writeRec persists a live (PID == us, so pidAlive) session record into the

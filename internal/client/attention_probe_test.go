@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 func TestClassifyAttn(t *testing.T) {

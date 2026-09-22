@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 // attention_probe.go detects a session's "attention state" — is the foreground

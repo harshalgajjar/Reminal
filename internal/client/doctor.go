@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
 	"golang.org/x/term"
+	"reminal/internal/config"
+	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 // Doctor runs a series of environment checks and prints a color-coded report.

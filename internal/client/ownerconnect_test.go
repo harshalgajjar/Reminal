@@ -9,7 +9,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 func TestIsOwner(t *testing.T) {

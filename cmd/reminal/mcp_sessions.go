@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/client"
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/client"
+	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 type mcpSessionRow struct {

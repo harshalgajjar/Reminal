@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/reminal/reminal/internal/client"
+	"reminal/internal/client"
 )
 
 func snap(pct int, state string, mins int, at time.Time, stale bool) *client.BatterySnapshot {

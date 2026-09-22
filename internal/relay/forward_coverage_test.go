@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // Message types that deliberately do NOT cross the session forward switch, and

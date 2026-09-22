@@ -10,7 +10,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // The transcript is built independently in two languages: Go's

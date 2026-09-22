@@ -18,13 +18,33 @@ self.addEventListener('push', (e) => {
   // A same-origin path only: the message came from a machine, and a machine
   // should not be able to send this browser somewhere else on a tap.
   const url = (typeof d.url === 'string' && d.url.startsWith('/') && !d.url.startsWith('//')) ? d.url : '/';
-  e.waitUntil(self.registration.showNotification(title, {
-    body,
-    // Same machine + same kind replaces the last one instead of stacking.
-    tag: (title + ':' + String(d.tag || 'alert')).slice(0, 120),
-    renotify: true,
-    data: { url },
-  }));
+  // Same machine + same kind replaces the last one instead of stacking.
+  const tag = (title + ':' + String(d.tag || 'alert')).slice(0, 120);
+  // When the machine saw it. Push services do not promise order or speed.
+  const at = Number.isFinite(d.at) ? d.at : 0;
+  e.waitUntil((async () => {
+    let text = body;
+    // Arrived late (the phone was asleep, the network was down): say when it
+    // actually happened, so "unplugged" an hour on is not read as news.
+    if (at && Date.now() - at > 60000) {
+      text += ' · at ' + new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    let t = tag, quiet = false;
+    // A late "unplugged" must not replace the "connected" that came after
+    // it. It still has to show (a push that shows nothing is punished by the
+    // browser), so it shows beside the newer one, quietly.
+    try {
+      const prev = await self.registration.getNotifications({ tag });
+      if (at && prev.some((n) => n.data && n.data.at > at)) { t = tag + ':' + at; quiet = true; }
+    } catch (_) {}
+    await self.registration.showNotification(title, {
+      body: text,
+      tag: t,
+      renotify: !quiet,
+      silent: quiet,
+      data: { url, at },
+    });
+  })());
 });
 
 self.addEventListener('notificationclick', (e) => {

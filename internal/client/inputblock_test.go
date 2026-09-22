@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 func noticeAgent(t *testing.T) *Agent {

@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // randomID returns a 16-hex-char correlation ID for a chunked transfer

@@ -24,8 +24,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/reminal/reminal/internal/keepawake"
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/keepawake"
+	"reminal/internal/protocol"
 )
 
 // Window mirroring lets a viewer list the host's on-screen windows, stream a

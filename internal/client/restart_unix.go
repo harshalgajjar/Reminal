@@ -49,8 +49,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/reminal/reminal/internal/pty"
 	xterm "golang.org/x/term"
+	"reminal/internal/pty"
 )
 
 // Env vars used to thread state across the Exec boundary. Scrollback

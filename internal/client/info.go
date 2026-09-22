@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/mdp/qrterminal/v3"
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 // ShowActiveInfo reprints the join details for the session the user is

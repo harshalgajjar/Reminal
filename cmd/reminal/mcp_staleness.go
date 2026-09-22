@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/reminal/reminal/internal/updater"
+	"reminal/internal/updater"
 )
 
 // The tool schema a client sees is fetched once — when it spawns `reminal mcp`

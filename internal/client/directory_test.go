@@ -20,11 +20,11 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/crypto"
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/relay"
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/config"
+	"reminal/internal/crypto"
+	"reminal/internal/protocol"
+	"reminal/internal/relay"
+	"reminal/internal/session"
 )
 
 // TestDirectoryRevokeSelfEndToEnd drives dir_revoke_self over a real relay and

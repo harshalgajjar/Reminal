@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/reminal/reminal/internal/proc"
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/proc"
+	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 // The directory host is a machine's presence responder for `reminal machines`.

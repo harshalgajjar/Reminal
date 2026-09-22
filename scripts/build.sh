@@ -79,8 +79,8 @@ fi
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS=(-s -w -X "main.version=${VERSION}" -X "main.buildDate=${BUILD_DATE}" -X "main.commit=${COMMIT}")
-[[ -n "$DEFAULT_RELAY" ]] && LDFLAGS+=(-X "github.com/reminal/reminal/internal/config.DefaultCloudRelay=${DEFAULT_RELAY%/}")
-[[ -n "$DEFAULT_WEB" ]] && LDFLAGS+=(-X "github.com/reminal/reminal/internal/config.DefaultCloudWeb=${DEFAULT_WEB%/}")
+[[ -n "$DEFAULT_RELAY" ]] && LDFLAGS+=(-X "reminal/internal/config.DefaultCloudRelay=${DEFAULT_RELAY%/}")
+[[ -n "$DEFAULT_WEB" ]] && LDFLAGS+=(-X "reminal/internal/config.DefaultCloudWeb=${DEFAULT_WEB%/}")
 
 echo "Building reminal ${VERSION}..."
 if [[ -n "$DEFAULT_RELAY" || -n "$DEFAULT_WEB" ]]; then

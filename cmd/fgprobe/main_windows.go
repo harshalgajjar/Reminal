@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/pty"
+	"reminal/internal/pty"
 )
 
 func main() {

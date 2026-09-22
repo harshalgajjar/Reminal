@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // Authorising a privileged action cannot rely on the session key or on which

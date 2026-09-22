@@ -26,8 +26,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/config"
 	"golang.org/x/term"
+	"reminal/internal/config"
 )
 
 const (

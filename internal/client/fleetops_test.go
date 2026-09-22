@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 // TestRestartOnMachineRoundTrip drives a remote restart against a real relay and

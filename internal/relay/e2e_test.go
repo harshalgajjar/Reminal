@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/reminal/reminal/internal/crypto"
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/crypto"
+	"reminal/internal/protocol"
 )
 
 // TestEndToEndHandshakeNoPIN drives the REAL relay handler with a fake agent

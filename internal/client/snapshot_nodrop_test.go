@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/vt"
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // TestSnapshotNeverDropsScrollback guards the regression where the snapshot silently

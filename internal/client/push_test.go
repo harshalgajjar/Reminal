@@ -184,7 +184,7 @@ func TestEvaluatePushBattery(t *testing.T) {
 	st := &pushState{}
 	now := time.Unix(1_000_000, 0)
 	step := func(p int, state string) int {
-		now = now.Add(pushTick)
+		now = now.Add(10 * time.Second)
 		return len(evaluatePush(r, st, pushSample{At: now, Bat: &Battery{Pct: pct(p), State: state}}, "b"))
 	}
 	if step(30, "discharging") != 0 {
@@ -209,7 +209,7 @@ func TestEvaluatePushChargerSettles(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	var msgs []pushMessage
 	step := func(state string) {
-		now = now.Add(pushTick)
+		now = now.Add(10 * time.Second)
 		msgs = append(msgs, evaluatePush(r, st, pushSample{At: now, Bat: &Battery{Pct: pct(60), State: state}}, "b")...)
 	}
 	step("charging") // first reading: learns the state, says nothing
@@ -236,7 +236,7 @@ func TestEvaluatePushChargerTrackedWhileOff(t *testing.T) {
 	st := &pushState{}
 	now := time.Unix(1_000_000, 0)
 	step := func(r pushRules, state string) int {
-		now = now.Add(pushTick)
+		now = now.Add(10 * time.Second)
 		return len(evaluatePush(r, st, pushSample{At: now, Bat: &Battery{Pct: pct(60), State: state}}, "b"))
 	}
 	off, on := pushRules{}, pushRules{Charger: true}
@@ -334,7 +334,7 @@ func TestEvaluatePushBatteryTime(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	var got []pushMessage
 	step := func(p, mins int, state string) {
-		now = now.Add(pushTick)
+		now = now.Add(10 * time.Second)
 		got = append(got, evaluatePush(r, st, pushSample{At: now, Bat: &Battery{Pct: pct(p), State: state, Mins: mins}}, "b")...)
 	}
 	step(50, 0, "discharging") // OS not estimating yet: says nothing
@@ -369,5 +369,23 @@ func TestDurText(t *testing.T) {
 		if got := durText(mins); got != want {
 			t.Errorf("durText(%d) = %q, want %q", mins, got, want)
 		}
+	}
+}
+
+// Power is re-read seconds after a change, not a tick later, so the settle is
+// a duration: a change seen twice within it is still a wobble.
+func TestEvaluatePushChargerSettlesByTime(t *testing.T) {
+	r := pushRules{Charger: true}
+	st := &pushState{}
+	t0 := time.Unix(1_000_000, 0)
+	at := func(ms int, state string) int {
+		return len(evaluatePush(r, st, pushSample{At: t0.Add(time.Duration(ms) * time.Millisecond), Bat: &Battery{Pct: pct(60), State: state}}, "b"))
+	}
+	at(0, "charging")
+	if at(1000, "discharging")+at(2000, "discharging") != 0 {
+		t.Fatal("announced before the change had held")
+	}
+	if at(1000+int(pushChargerSettle/time.Millisecond), "discharging") != 1 {
+		t.Fatal("did not announce once the change held")
 	}
 }

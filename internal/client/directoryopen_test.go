@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 // The open lookup exists so the machines panel can open a forwarded app in one

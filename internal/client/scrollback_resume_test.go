@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // isolateReminalHome points reminalDir() at a temp dir on both Unix (HOME)

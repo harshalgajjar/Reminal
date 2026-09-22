@@ -6,7 +6,7 @@ package client
 import (
 	"encoding/json"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // pushReq is a phone-alert request riding dir_query. It needs no message type

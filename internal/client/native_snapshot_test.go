@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/vt"
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // nsWrap word-wraps a logical line to width (space-delimited, like an inline TUI).

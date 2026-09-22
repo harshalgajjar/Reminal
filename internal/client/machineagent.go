@@ -13,11 +13,11 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/crypto"
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
-	"github.com/reminal/reminal/internal/updater"
+	"reminal/internal/config"
+	"reminal/internal/crypto"
+	"reminal/internal/protocol"
+	"reminal/internal/session"
+	"reminal/internal/updater"
 )
 
 // The machine-mode Agent: this machine's owner channel, served by the daemon.

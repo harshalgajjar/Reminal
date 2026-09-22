@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // Battery history lives on the machine doing the LOOKING, not the one being

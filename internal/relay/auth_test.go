@@ -6,7 +6,7 @@ package relay
 import (
 	"testing"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // authMsg is a tiny helper to build an auth Message.

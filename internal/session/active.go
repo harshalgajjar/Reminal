@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/reminal/reminal/internal/proc"
+	"reminal/internal/proc"
 )
 
 // Active is the on-disk record of a currently running agent. Each agent

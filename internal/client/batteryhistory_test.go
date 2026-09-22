@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 func intp(v int) *int { return &v }

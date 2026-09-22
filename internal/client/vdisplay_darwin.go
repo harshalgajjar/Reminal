@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/proc"
+	"reminal/internal/config"
+	"reminal/internal/proc"
 )
 
 // Closed-lid ("leave & forget") mode, display half. A Mac that goes fully

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/vt"
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // TestResizeSegmentsDropRepaintsKeepInterleaved is the regression test for the flaw
