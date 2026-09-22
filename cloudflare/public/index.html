@@ -2562,6 +2562,17 @@
       if (isStandaloneApp()) return '<ol><li>Open <b>' + host + '</b> in your browser</li>' + tab + '<li>Come back here</li></ol>';
       return '<ol>' + tab + '</ol>';
     }
+    // Alerts arrived in 3.14.0. A reply with no version at all comes from a
+    // machine older still; a non-numeric version is a development build,
+    // which is assumed current.
+    function alertHostTooOld(r) {
+      const v = r && r.stats && r.stats.version;
+      if (!v) return true;
+      const m = String(v).replace(/^v/, '').match(/^(\d+)\.(\d+)\.(\d+)/);
+      if (!m) return false;
+      const [maj, min] = [+m[1], +m[2]];
+      return maj < 3 || (maj === 3 && min < 14);
+    }
     function b64urlToU8(s) {
       const pad = '='.repeat((4 - s.length % 4) % 4);
       return base64ToU8((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
@@ -5166,9 +5177,15 @@
               const pt = await decrypt(box, msg.data || '');
               const r = JSON.parse(new TextDecoder().decode(pt));
               // Every viewer on the channel hears every answer. A push request
-              // waits for the one carrying its own id — an older host echoes
-              // none, and then the first answer with a push field is it.
-              if (opts.push && (!r.push || (r.push.req_id && r.push.req_id !== att.reqId))) return;
+              // waits for the one carrying its own id. A machine too old to
+              // know about alerts answers with a plain reply and nothing more
+              // is coming — so a plain reply from such a machine IS the answer
+              // (the caller reports "needs an update"), while a plain reply
+              // from a new one is somebody else's and is skipped.
+              if (opts.push) {
+                if (!r.push) { if (alertHostTooOld(r)) return done(null, r); return; }
+                if (r.push.req_id && r.push.req_id !== att.reqId) return;
+              }
               return done(null, r);
             }
             if (state === 'spawn') {
