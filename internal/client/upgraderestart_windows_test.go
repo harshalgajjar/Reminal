@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"testing"
 
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 // TestRestartOtherSessionsSkipsForwardOnWindows: Windows cannot hot-swap a

@@ -20,14 +20,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/client"
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/keepawake"
-	"github.com/reminal/reminal/internal/proc"
-	"github.com/reminal/reminal/internal/pty"
-	"github.com/reminal/reminal/internal/session"
-	"github.com/reminal/reminal/internal/updater"
 	"golang.org/x/term"
+	"reminal/internal/client"
+	"reminal/internal/config"
+	"reminal/internal/keepawake"
+	"reminal/internal/proc"
+	"reminal/internal/pty"
+	"reminal/internal/session"
+	"reminal/internal/updater"
 )
 
 // version, buildDate, and commit are stamped at build time via

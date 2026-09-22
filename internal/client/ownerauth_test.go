@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // signAction builds the proof a viewer would send.

@@ -6,7 +6,7 @@ package main
 import (
 	"testing"
 
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 func TestClassifyNotify(t *testing.T) {

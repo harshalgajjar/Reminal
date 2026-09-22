@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/reminal/reminal/internal/client"
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/client"
+	"reminal/internal/protocol"
 )
 
 func TestMCPToolListIncludesSessionTools(t *testing.T) {

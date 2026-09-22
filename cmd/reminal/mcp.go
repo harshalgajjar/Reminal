@@ -46,7 +46,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/reminal/reminal/internal/client"
+	"reminal/internal/client"
 )
 
 const mcpProtocolFallback = "2024-11-05"

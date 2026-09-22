@@ -35,8 +35,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/reminal/reminal/internal/crypto"
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/crypto"
+	"reminal/internal/protocol"
 )
 
 // rendezvousConfirmLabel is the fixed plaintext the paste side encrypts

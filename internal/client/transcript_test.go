@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 func TestStripANSIDropsPaintKeepsText(t *testing.T) {

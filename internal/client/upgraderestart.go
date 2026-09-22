@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 func plural(n int) string {

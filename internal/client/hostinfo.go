@@ -12,8 +12,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/updater"
+	"reminal/internal/protocol"
+	"reminal/internal/updater"
 )
 
 // handleHostInfo replies to a viewer's TypeHostInfo request with the machine's

@@ -10,7 +10,7 @@ import (
 
 	"github.com/charmbracelet/x/vt"
 
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // TestSnapshotFitsRelayCap guards the invariant that the ENCRYPTED reconnect

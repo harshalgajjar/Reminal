@@ -16,9 +16,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/crypto"
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/config"
+	"reminal/internal/crypto"
+	"reminal/internal/protocol"
 )
 
 // ErrDirUnreachable means the machine's directory channel isn't being served —

@@ -24,9 +24,9 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/mdp/qrterminal/v3"
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/config"
+	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 // tunnelChunkBytes bounds ONE tunnel_resp message's raw body. Cloudflare DOs

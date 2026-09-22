@@ -6,7 +6,7 @@ package client
 import (
 	"testing"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // TestWindowCloseChannelGate pins that a window_close request is actually served

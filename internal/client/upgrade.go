@@ -13,8 +13,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/updater"
+	"reminal/internal/protocol"
+	"reminal/internal/updater"
 )
 
 // handleChangelog answers a viewer's request for the release notes from this

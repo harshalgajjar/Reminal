@@ -1,4 +1,4 @@
-module github.com/reminal/reminal
+module reminal
 
 go 1.26.0
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // Battery rides on the EXISTING TypeDirResp payload as new optional fields —

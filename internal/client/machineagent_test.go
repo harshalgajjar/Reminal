@@ -7,9 +7,9 @@ import (
 	"crypto/ed25519"
 	"testing"
 
-	"github.com/reminal/reminal/internal/crypto"
-	"github.com/reminal/reminal/internal/protocol"
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/crypto"
+	"reminal/internal/protocol"
+	"reminal/internal/session"
 )
 
 // The machine channel is found by every owner device by derivation, so its

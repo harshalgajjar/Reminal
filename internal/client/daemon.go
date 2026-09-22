@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/reminal/reminal/internal/proc"
+	"reminal/internal/proc"
 )
 
 // RunDaemon runs this machine's directory host in the foreground until it gets

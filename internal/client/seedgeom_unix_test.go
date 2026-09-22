@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	creackpty "github.com/creack/pty"
-	ipty "github.com/reminal/reminal/internal/pty"
+	ipty "reminal/internal/pty"
 )
 
 // End-to-end guard: initScreen on a resumed agent (viewer size unknown) must

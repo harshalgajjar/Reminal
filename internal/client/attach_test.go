@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 // shortTempHome is a ~/.reminal home short enough that a unix socket path under

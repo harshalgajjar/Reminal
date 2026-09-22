@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 // TestLocalDirectoryReadsRegistry verifies that LocalDirectory surfaces the

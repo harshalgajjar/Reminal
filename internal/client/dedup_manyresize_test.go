@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/vt"
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // inkMimicFrame word-wraps the transcript to width and returns the visual rows, with a

@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/vt"
-	"github.com/reminal/reminal/internal/crypto"
+	"reminal/internal/crypto"
 )
 
 // clearingAgent builds a bare snapshot-capable agent, like the resize-segment tests.

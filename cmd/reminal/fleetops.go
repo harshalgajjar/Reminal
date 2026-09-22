@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/reminal/reminal/internal/client"
-	"github.com/reminal/reminal/internal/updater"
+	"reminal/internal/client"
+	"reminal/internal/updater"
 )
 
 // restartOpTimeout bounds a remote restart: dial + owner handshake + the host

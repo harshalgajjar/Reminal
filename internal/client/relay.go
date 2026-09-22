@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"path"
 
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/relay"
+	"reminal/internal/config"
+	"reminal/internal/relay"
 )
 
 //go:embed web/index.html web/sw.js web/manifest.webmanifest web/icons

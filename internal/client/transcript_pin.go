@@ -10,7 +10,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // transcriptPINQuiet is how long the replay stream must fall silent before we

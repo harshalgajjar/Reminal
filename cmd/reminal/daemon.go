@@ -4,7 +4,7 @@
 package main
 
 import (
-	"github.com/reminal/reminal/internal/client"
+	"reminal/internal/client"
 )
 
 // runDaemon backs the hidden `reminal daemon` command. Bare, it runs the

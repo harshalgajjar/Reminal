@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/proc"
+	"reminal/internal/proc"
 )
 
 // sweepStaleSockets removes ~/.reminal socket files whose owners are gone.

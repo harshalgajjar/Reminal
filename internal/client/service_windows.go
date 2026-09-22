@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/sys/windows/registry"
 
-	"github.com/reminal/reminal/internal/proc"
+	"reminal/internal/proc"
 )
 
 // Windows background host: a per-user Run-key entry that launches

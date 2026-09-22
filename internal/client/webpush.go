@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/config"
+	"reminal/internal/config"
 )
 
 // Phone alerts ride Web Push, and the message is sealed HERE, on the machine,

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/protocol"
 )
 
 // memConn is an in-memory frameConn: frames sent on one end appear on the

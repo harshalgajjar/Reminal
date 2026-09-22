@@ -22,8 +22,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/reminal/reminal/internal/config"
-	"github.com/reminal/reminal/internal/protocol"
+	"reminal/internal/config"
+	"reminal/internal/protocol"
 )
 
 // DefaultCopyTTL bounds how long a standalone `reminal copy` waits for a

@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/reminal/reminal/internal/session"
+	"reminal/internal/session"
 )
 
 func runHook(args []string) error {
