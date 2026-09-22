@@ -1,0 +1,144 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{background:#04060a;}
+  #stage{position:relative;width:1120px;height:650px;overflow:hidden;
+    font-family:-apple-system,'SF Pro Display',Helvetica,Arial,sans-serif;
+    background:radial-gradient(1000px 720px at 50% 30%,#141d2b 0%,#0a1019 54%,#05070c 100%);}
+  .dots{position:absolute;inset:0;background-image:radial-gradient(rgba(120,150,190,.05) 1px,transparent 1px);background-size:26px 26px;opacity:.5;}
+
+  .head{position:absolute;left:0;right:0;top:30px;text-align:center;z-index:20;}
+  .head .t{font-size:31px;font-weight:800;color:#eef3fb;letter-spacing:-.5px;}
+  .head .t .a{color:#5b9dff;}
+  .head .s{margin-top:9px;font-size:15px;color:#8090a6;font-weight:500;}
+
+  /* machine cards */
+  .card{position:absolute;left:92px;width:420px;border-radius:14px;background:#0b1019;border:1px solid #24304a;
+    box-shadow:0 30px 60px rgba(0,0,0,.55),0 0 0 1px rgba(91,157,255,.08);padding:18px 20px 20px;}
+  .card .top{display:flex;align-items:center;gap:10px;margin-bottom:16px;}
+  .card .led{width:8px;height:8px;border-radius:50%;background:#45d69a;box-shadow:0 0 9px rgba(69,214,154,.8);}
+  .card .nm{font-size:15px;font-weight:800;color:#e7edf6;letter-spacing:-.2px;}
+  .card .os{font-size:11.5px;color:#63718c;font-family:ui-monospace,'SF Mono',Menlo,monospace;}
+  .card .glyph{margin-left:auto;color:#5b6b86;display:flex;}
+  .metric{display:flex;align-items:center;gap:12px;}
+  .metric .ic{width:34px;height:34px;border-radius:9px;background:#121a2a;color:#7f93b3;display:flex;align-items:center;justify-content:center;flex:none;}
+  .metric .body{flex:1;min-width:0;}
+  .metric .lbl{display:flex;justify-content:space-between;font-size:12.5px;color:#8b97ad;margin-bottom:7px;}
+  .metric .lbl b{color:#e7edf6;font-weight:800;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px;}
+  .bar{height:8px;border-radius:5px;background:#18223a;overflow:hidden;}
+  .bar i{display:block;height:100%;border-radius:5px;background:#5b9dff;}
+  .note{margin-top:10px;font-size:12px;color:#63718c;font-family:ui-monospace,'SF Mono',Menlo,monospace;}
+  .note .hot{color:#ff8a7a;font-weight:700;}
+  .note .warn{color:#f2c14e;font-weight:700;}
+
+  /* beams from each machine to the device */
+  #beams{position:absolute;inset:0;z-index:5;pointer-events:none;}
+
+  /* the device */
+  .phone{position:absolute;left:716px;top:168px;width:270px;height:404px;border-radius:40px;background:#05080e;
+    border:1px solid #2a3650;box-shadow:0 40px 80px rgba(0,0,0,.65),inset 0 0 0 6px #0b1019;z-index:10;overflow:hidden;}
+  .screen{position:absolute;inset:8px;border-radius:33px;overflow:hidden;background:#0d1117;}
+  .status{height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 22px;font-size:11.5px;font-weight:700;color:#c9d1d9;}
+  .island{position:absolute;left:50%;top:9px;transform:translateX(-50%);width:74px;height:18px;border-radius:10px;background:#000;}
+  .sheet{position:absolute;left:10px;right:10px;top:40px;}
+  .sheet img{width:100%;display:block;border-radius:12px;}
+  .dim{position:absolute;inset:0;background:rgba(1,4,9,.0);}
+
+  .notif{position:absolute;left:10px;right:10px;border-radius:18px;padding:11px 12px 12px;
+    background:rgba(38,46,62,.94);border:1px solid rgba(255,255,255,.08);box-shadow:0 12px 26px rgba(0,0,0,.5);z-index:3;}
+  .notif .row{display:flex;align-items:center;gap:7px;margin-bottom:5px;}
+  .notif .app{width:18px;height:18px;border-radius:5px;background:#0d1117;display:flex;align-items:center;justify-content:center;
+    font:700 8.5px Menlo,monospace;color:#58a6ff;border:1px solid #30363d;}
+  .notif .src{font-size:10.5px;color:#9aa6ba;font-weight:600;}
+  .notif .when{margin-left:auto;font-size:10px;color:#7d889c;}
+  .notif .ttl{font-size:12.5px;font-weight:800;color:#f2f5fa;}
+  .notif .msg{font-size:12px;color:#d3dae6;line-height:1.35;margin-top:1px;}
+</style></head>
+<body>
+<div id="stage">
+  <div class="dots"></div>
+
+  <div class="head">
+    <div class="t">Know when a machine <span class="a">needs you.</span></div>
+    <div class="s">CPU, battery and charger alerts from every machine you own, on any device, even with reminal closed.</div>
+  </div>
+
+  <svg id="beams" viewBox="0 0 1120 650">
+    <path id="p0" d="M512 250 C 610 250, 640 240, 716 240" stroke="#2b3a55" stroke-width="1.5" stroke-dasharray="3 6" fill="none"/>
+    <path id="p1" d="M512 452 C 610 452, 640 318, 716 318" stroke="#2b3a55" stroke-width="1.5" stroke-dasharray="3 6" fill="none"/>
+    <circle id="d0" r="5" fill="#5b9dff" opacity="0"/>
+    <circle id="d1" r="5" fill="#5b9dff" opacity="0"/>
+  </svg>
+
+  <div class="card" style="top:168px">
+    <div class="top"><span class="led"></span><span class="nm">build-server</span><span class="os">Linux</span>
+      <span class="glyph"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></span></div>
+    <div class="metric"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg></span>
+      <div class="body"><div class="lbl"><span>CPU</span><b id="cpuv">34%</b></div><div class="bar"><i id="cpub" style="width:34%"></i></div></div></div>
+    <div class="note" id="cpun">compiling release build</div>
+  </div>
+
+  <div class="card" style="top:372px">
+    <div class="top"><span class="led"></span><span class="nm">travel-laptop</span><span class="os">macOS</span>
+      <span class="glyph"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2 19h20"/></svg></span></div>
+    <div class="metric"><span class="ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/></svg></span>
+      <div class="body"><div class="lbl"><span>Battery</span><b id="batv">24%</b></div><div class="bar"><i id="batb" style="width:24%;background:#45d69a"></i></div></div></div>
+    <div class="note" id="batn">on battery · about 1 h left</div>
+  </div>
+
+  <div class="phone"><div class="screen">
+    <div class="island"></div>
+    <div class="status"><span>9:41</span><span></span></div>
+    <div class="sheet"><img src="alerts-sheet.png" alt=""></div>
+    <div class="dim" id="dim"></div>
+    <div class="notif" id="n0" style="top:40px;opacity:0">
+      <div class="row"><span class="app">re</span><span class="src">reminal</span><span class="when">now</span></div>
+      <div class="ttl">build-server</div><div class="msg">CPU at 97% for 5 minutes</div>
+    </div>
+    <div class="notif" id="n1" style="top:40px;opacity:0">
+      <div class="row"><span class="app">re</span><span class="src">reminal</span><span class="when">now</span></div>
+      <div class="ttl">travel-laptop</div><div class="msg">Battery at 18% · about 45 min left</div>
+    </div>
+  </div></div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const p0=$('p0'), p1=$('p1'), L0=p0.getTotalLength(), L1=p1.getTotalLength();
+const ease=x=>x<0?0:x>1?1:1-Math.pow(1-x,3);
+function dotAt(el,path,len,f){
+  if(f<=0||f>=1){el.setAttribute('opacity',0);return;}
+  const pt=path.getPointAtLength(len*f); el.setAttribute('cx',pt.x); el.setAttribute('cy',pt.y); el.setAttribute('opacity',1);
+}
+function drop(el,f,top){
+  el.style.opacity=Math.min(1,f*1.6);
+  el.style.transform='translateY('+((1-ease(f))*-22)+'px)';
+  el.style.top=top+'px';
+}
+// Only the small live parts move: the two meters, a travelling dot per alert,
+// and a notification dropping onto the device. Nearly every frame is the same.
+window.TOTAL=56;
+window.render=function(t){
+  // build-server: CPU climbs, then holds hot
+  const cpu=Math.round(34+63*ease(t/14));
+  $('cpuv').textContent=cpu+'%'; $('cpub').style.width=cpu+'%';
+  $('cpub').style.background=cpu>=90?'#ff8a7a':'#5b9dff';
+  $('cpun').innerHTML=t>=14?'<span class="hot">above 90% for 5 min</span>':'compiling release build';
+  dotAt($('d0'),p0,L0,(t-14)/4);
+  // travel-laptop: drains through 20%
+  const bf=ease((t-18)/12), bat=Math.round(24-6*bf), mins=Math.round(60-15*bf);
+  $('batv').textContent=bat+'%'; $('batb').style.width=bat+'%';
+  $('batb').style.background=bat<=20?'#f2c14e':'#45d69a';
+  $('batn').innerHTML='on battery · about '+(mins>=60?'1 h':mins+' min')+' left'+(bat<=20?' · <span class="warn">below 20%</span>':'');
+  dotAt($('d1'),p1,L1,(t-30)/4);
+  // notifications: first drops at 18, second at 34 and pushes the first down
+  const f0=(t-18)/4, f1=(t-34)/4;
+  if(f1>0){ drop($('n1'),Math.min(1,f1),40); $('n0').style.top=(40+ease(Math.min(1,f1))*86)+'px'; }
+  else { $('n1').style.opacity=0; }
+  if(f0>0){ $('n0').style.opacity=Math.min(1,f0*1.6); $('n0').style.transform='translateY('+((1-ease(Math.min(1,f0)))*-22)+'px)'; if(f1<=0) $('n0').style.top='40px'; }
+  else { $('n0').style.opacity=0; }
+  $('dim').style.background='rgba(1,4,9,'+(0.35*ease(f0))+')';
+};
+window.render(0);
+</script>
+</body></html>
