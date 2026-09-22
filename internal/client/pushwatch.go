@@ -18,11 +18,17 @@ import (
 // most when nobody is looking — and costs nothing on a machine with no
 // subscribers, because it only samples when some phone asked for something.
 
-// pushTick is how often the watcher samples CPU. Power is not left to this
-// tick: a plug or unplug wakes the watcher straight away (see
-// watchPowerChanges), so "charger unplugged" arrives while the person is still
-// standing at the desk.
-const pushTick = 10 * time.Second
+// pushTick is how often the watcher samples. Every alert should land within
+// seconds of its rule tripping, so this is short; the CPU reading behind it
+// is a stream on macOS (pushCPU), not a fresh `top` each time. Power does not
+// even wait for the tick: a plug or unplug wakes the watcher straight away
+// (see watchPowerChanges).
+const pushTick = 2 * time.Second
+
+// pushBatteryRefresh is how old the battery reading may get between power
+// changes. On macOS a reading is a pmset fork, and every change that matters
+// already arrives through watchPowerChanges, so this is only the backstop.
+const pushBatteryRefresh = 10 * time.Second
 
 // pushCPUCooldown is the least time between two CPU alerts to one phone. A
 // build that pins the CPU for an hour should say so once, not six times.
@@ -213,6 +219,8 @@ func runPushWatcher(stop <-chan struct{}) {
 	// hold, instead of leaving it for the next tick.
 	recheck := time.NewTimer(time.Hour)
 	recheck.Stop()
+	var batAt time.Time
+	var bat *Battery
 	for {
 		fresh := false
 		select {
@@ -241,13 +249,12 @@ func runPushWatcher(stop <-chan struct{}) {
 			continue
 		}
 		s := pushSample{At: time.Now()}
-		if fresh {
-			s.Bat = FreshBattery()
-		} else {
-			s.Bat = CurrentBattery()
+		if fresh || s.At.Sub(batAt) >= pushBatteryRefresh {
+			bat, batAt = FreshBattery(), s.At
 		}
+		s.Bat = bat
 		if wantCPU && !fresh {
-			s.CPU, s.CPUOK = cpuPercent()
+			s.CPU, s.CPUOK = pushCPU()
 		}
 		host := pushHostLabel()
 		live := map[string]bool{}

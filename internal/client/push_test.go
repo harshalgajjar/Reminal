@@ -184,7 +184,7 @@ func TestEvaluatePushBattery(t *testing.T) {
 	st := &pushState{}
 	now := time.Unix(1_000_000, 0)
 	step := func(p int, state string) int {
-		now = now.Add(pushTick)
+		now = now.Add(10 * time.Second)
 		return len(evaluatePush(r, st, pushSample{At: now, Bat: &Battery{Pct: pct(p), State: state}}, "b"))
 	}
 	if step(30, "discharging") != 0 {
@@ -209,7 +209,7 @@ func TestEvaluatePushChargerSettles(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	var msgs []pushMessage
 	step := func(state string) {
-		now = now.Add(pushTick)
+		now = now.Add(10 * time.Second)
 		msgs = append(msgs, evaluatePush(r, st, pushSample{At: now, Bat: &Battery{Pct: pct(60), State: state}}, "b")...)
 	}
 	step("charging") // first reading: learns the state, says nothing
@@ -236,7 +236,7 @@ func TestEvaluatePushChargerTrackedWhileOff(t *testing.T) {
 	st := &pushState{}
 	now := time.Unix(1_000_000, 0)
 	step := func(r pushRules, state string) int {
-		now = now.Add(pushTick)
+		now = now.Add(10 * time.Second)
 		return len(evaluatePush(r, st, pushSample{At: now, Bat: &Battery{Pct: pct(60), State: state}}, "b"))
 	}
 	off, on := pushRules{}, pushRules{Charger: true}
@@ -334,7 +334,7 @@ func TestEvaluatePushBatteryTime(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	var got []pushMessage
 	step := func(p, mins int, state string) {
-		now = now.Add(pushTick)
+		now = now.Add(10 * time.Second)
 		got = append(got, evaluatePush(r, st, pushSample{At: now, Bat: &Battery{Pct: pct(p), State: state, Mins: mins}}, "b")...)
 	}
 	step(50, 0, "discharging") // OS not estimating yet: says nothing
