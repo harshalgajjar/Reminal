@@ -28,6 +28,13 @@ func RunRelay(port string) error {
 		srv.HandleSessionWS(w, r, r.PathValue("session"), r.PathValue("role"))
 	})
 	mux.HandleFunc("/ws", srv.HandleWS)
+	// `reminal copy` / `reminal paste`: the same blind pairing the Worker
+	// does, so handing a file over works against a self-hosted relay too —
+	// without it, copy failed there with a bare "bad handshake".
+	rv := relay.NewRendezvous()
+	mux.HandleFunc("GET /rv/{code}/{role}", func(w http.ResponseWriter, r *http.Request) {
+		rv.HandleWS(w, r, r.PathValue("code"), r.PathValue("role"))
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		data, err := webIndex.ReadFile("web/index.html")
 		if err != nil {
