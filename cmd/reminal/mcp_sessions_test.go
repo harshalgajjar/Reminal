@@ -108,3 +108,33 @@ func contains(xs []string, want string) bool {
 	}
 	return false
 }
+
+// A send_keys report is what an agent trusts to decide whether its message
+// went. A bare Return (keys="" enter=true — how a message stuck in an input box
+// is submitted) and keys ending in a newline both press Return, and must not
+// be reported as text left unsubmitted, or the agent keeps pressing Return.
+func TestSendKeysReportsEveryReturn(t *testing.T) {
+	for _, tc := range []struct {
+		keys    string
+		enter   bool
+		pressed bool
+	}{
+		{"hello", false, false},
+		{"hello", true, true},
+		{"", true, true},
+		{"ls\n", false, true},
+		{"ls\n", true, true},
+	} {
+		body, tail, err := client.PrepareInjectKeysSplit(tc.keys, tc.enter)
+		if err != nil {
+			t.Fatalf("%q/%v: %v", tc.keys, tc.enter, err)
+		}
+		if got := returnPressed(body, tail); got != tc.pressed {
+			t.Errorf("keys=%q enter=%v: returnPressed=%v, want %v", tc.keys, tc.enter, got, tc.pressed)
+		}
+		report := typedReport(len(body), returnPressed(body, tail), "S")
+		if tc.pressed != strings.Contains(report, "pressed Return") || tc.pressed != strings.Contains(report, "read_transcript") {
+			t.Errorf("keys=%q enter=%v: report %q", tc.keys, tc.enter, report)
+		}
+	}
+}

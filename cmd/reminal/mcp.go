@@ -70,6 +70,7 @@ Sessions — every machine this device owns (this box and any you have owner-con
   2. search_sessions with a regex to find which session mentioned something. It matches name/path/title/id on every machine, and live terminal scrollback on this machine (and on remotes that have been upgraded).
   3. read_transcript to pull one session's current scrollback as plain text (ANSI stripped; long buffers return the newest tail).
   4. send_keys to type into a session. Owned sessions need only the id; any other reminal needs session id + PIN (or a join URL). Set enter=true to press Return after the text.
+     ALWAYS confirm the text was accepted: read_transcript afterwards and check it was submitted, not left sitting in the input box waiting for a Return. A busy agent or a slow redraw can swallow the Return. If the text is still in the input box, press Return with send_keys keys="" enter=true, then read again. Never report a message as sent until you have seen it land.
 If the user just arrived from another reminal, list or search, then read that transcript before asking them to recap. To run a command in a reminal, send_keys then read_transcript.
 
 Notes — a small floating badge ON a window, not text buried in a terminal they may not be looking at. Use when what you want to say is ABOUT a particular window. Do not use notes for ordinary conversation.
@@ -558,7 +559,9 @@ func mcpToolList() []map[string]any {
 			"description": "Type keystrokes into a reminal session's live terminal (the PTY). " +
 				"Owned sessions: pass session id from list_sessions. Any other reminal: pass session + pin " +
 				"(or a join URL). Newlines become Enter. Set enter=true to press Return. " +
-				"Does not return command output — follow with read_transcript if you own the session.",
+				"Does not return command output — follow with read_transcript if you own the session. " +
+				"Always confirm with read_transcript that the text was accepted and is not still sitting in " +
+				"the input box waiting for a Return; if it is, send keys=\"\" with enter=true, and check again.",
 			"inputSchema": obj(map[string]any{
 				"session": str("Session id, or a join URL like https://live.reminal.app/?s=ID#p=PIN."),
 				"keys":    str("Characters to type. Use \\n for Enter. Ctrl-C is the U+0003 character."),
