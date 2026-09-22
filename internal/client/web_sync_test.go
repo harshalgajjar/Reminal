@@ -17,8 +17,14 @@ import (
 // no build step syncing them, so an edit to one and not the other silently makes
 // the two front-ends diverge. This guard fails the moment they drift.
 func TestWebIndexCopiesInSync(t *testing.T) {
-	const embedded = "web/index.html"
-	const worker = "../../cloudflare/public/index.html"
+	for _, name := range []string{"index.html", "sw.js"} {
+		t.Run(name, func(t *testing.T) { checkWebCopyInSync(t, name) })
+	}
+}
+
+func checkWebCopyInSync(t *testing.T, name string) {
+	embedded := "web/" + name
+	worker := "../../cloudflare/public/" + name
 
 	a, err := os.ReadFile(embedded)
 	if err != nil {

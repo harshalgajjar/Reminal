@@ -3,6 +3,8 @@
 
 package protocol
 
+import "encoding/json"
+
 type Role string
 
 const (
@@ -436,6 +438,12 @@ type DirResponse struct {
 	OpenURL   string `json:"open_url,omitempty"`
 	OpenPIN   string `json:"open_pin,omitempty"`
 	OpenError string `json:"open_error,omitempty"`
+	// Push answers a query that carried a phone-alert request (subscribe,
+	// update rules, unsubscribe, read back, send a test): the phone's current
+	// standing with this machine. Owner-only by the same construction as Open*.
+	// Absent from hosts too old to send alerts, which the page reads as
+	// "this machine can't notify you yet".
+	Push *DirPush `json:"push,omitempty"`
 	// Battery* describe the machine's power state when it answered. A machine
 	// with no battery — desktop, VM, server — and any host too old to report
 	// omit all three, and the UI then shows no battery at all: absence is the
@@ -457,4 +465,15 @@ type DirResponse struct {
 	// while discharging, to full while charging. 0 means the OS declined to
 	// estimate, which it does for a minute or two after any power change.
 	BatteryMins int `json:"battery_mins,omitempty"`
+}
+
+// DirPush is one phone's standing with one machine's alerts. Rules is the
+// machine's own JSON shape, carried opaquely so this package does not need to
+// know the rule set to relay it.
+type DirPush struct {
+	ReqID      string          `json:"req_id,omitempty"`
+	Subscribed bool            `json:"subscribed"`
+	Rules      json.RawMessage `json:"rules,omitempty"`
+	TestSent   bool            `json:"test_sent,omitempty"`
+	Error      string          `json:"error,omitempty"`
 }

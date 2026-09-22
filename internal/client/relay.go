@@ -13,7 +13,7 @@ import (
 	"github.com/reminal/reminal/internal/relay"
 )
 
-//go:embed web/index.html
+//go:embed web/index.html web/sw.js
 var webIndex embed.FS
 
 func RunRelay(port string) error {
@@ -34,6 +34,19 @@ func RunRelay(port string) error {
 	rv := relay.NewRendezvous()
 	mux.HandleFunc("GET /rv/{code}/{role}", func(w http.ResponseWriter, r *http.Request) {
 		rv.HandleWS(w, r, r.PathValue("code"), r.PathValue("role"))
+	})
+	// The phone-alert service worker. Served so the page can register it here
+	// too; subscribing still needs a relay with push keys (the hosted one), and
+	// the page says so rather than failing silently.
+	mux.HandleFunc("GET /sw.js", func(w http.ResponseWriter, r *http.Request) {
+		data, err := webIndex.ReadFile("web/sw.js")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store, must-revalidate")
+		_, _ = w.Write(data)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		data, err := webIndex.ReadFile("web/index.html")

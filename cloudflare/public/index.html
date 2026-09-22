@@ -931,6 +931,126 @@
     .cl-here::before, .cl-here::after { content: ""; height: 1px; background: #30363d; flex: 1; }
     .cl-foot { position: sticky; bottom: 0; background: #161b22; border-top: 1px solid #21262d; padding: 11px 16px; }
     .cl-empty { padding: 26px 16px; text-align: center; color: #8b949e; font-size: 12.5px; line-height: 1.6; }
+    /* ---- Alerts ------------------------------------------------------
+       Same palette and rhythm as the rest of the viewer: #161b22 surfaces,
+       #21262d hairlines, 16px sheet gutters, 44px touch rows, 28px icon tiles. */
+    .al-sheet { width: min(420px, calc(100vw - 24px)); }
+    .al-head { position: sticky; top: 0; z-index: 1; background: #161b22; border-bottom: 1px solid #21262d;
+               padding: 12px 12px 12px 16px; display: flex; align-items: center; gap: 12px; }
+    .al-head-text { flex: 1; min-width: 0; }
+    .al-title { font-size: 14px; font-weight: 640; color: #e6edf3; line-height: 1.3; }
+    .al-subtitle { font-size: 11.5px; color: #8b949e; line-height: 1.4; margin-top: 1px; }
+    .al-subtitle.on { color: #3fb950; }
+    .al-x { display: inline-flex; align-items: center; justify-content: center; flex: none;
+            width: 28px; height: 28px; padding: 0; border-radius: 6px; cursor: pointer;
+            background: transparent; border: 1px solid transparent; color: #8b949e; }
+    .al-x:hover { background: #21262d; border-color: #30363d; color: #e6edf3; }
+    .al-sec { font-size: 11px; font-weight: 600; color: #8b949e; text-transform: uppercase; letter-spacing: .06em;
+              padding: 14px 16px 6px; }
+    .al-list { padding: 0 8px; }
+    .al-row { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 8px; border-radius: 8px; }
+    .al-row + .al-row { border-top: 1px solid #21262d; border-top-left-radius: 0; border-top-right-radius: 0; }
+    .al-row.focus { background: rgba(56,139,253,.10); box-shadow: inset 0 0 0 1px rgba(56,139,253,.35); }
+    .al-tile { flex: none; width: 28px; height: 28px; border-radius: 7px; display: inline-flex; align-items: center;
+               justify-content: center; background: #21262d; color: #8b949e; }
+    .al-tile.on { background: rgba(56,139,253,.14); color: #58a6ff; }
+    .al-text { flex: 1; min-width: 0; font-size: 13px; color: #c9d1d9; line-height: 1.5; }
+    .al-text b { color: #e6edf3; font-weight: 600; }
+    .al-name { font-size: 13px; font-weight: 600; color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .al-state { font-size: 11.5px; color: #8b949e; line-height: 1.4; margin-top: 1px; display: flex; align-items: center; gap: 5px; }
+    .al-state.on { color: #3fb950; }
+    .al-state.warn { color: #d29922; }
+    .al-state.err { color: #f85149; }
+    .al-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #6e7681; margin: 0 10px 0 10px; }
+    .al-dot.on { background: #3fb950; box-shadow: 0 0 0 2px rgba(63,185,80,.18); }
+    .al-dot.warn { background: #d29922; }
+    .al-chip { -webkit-appearance: none; appearance: none; font: inherit; font-size: 12.5px; font-weight: 600;
+               color: #e6edf3; background: #21262d url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>") no-repeat right 6px center / 11px 11px;
+               border: 1px solid #30363d; border-radius: 999px; padding: 1px 21px 1px 9px; margin: 0;
+               line-height: 1.5; cursor: pointer; vertical-align: baseline; }
+    .al-chip:hover { border-color: #3d444d; background-color: #262c34; }
+    .al-chip:focus-visible { outline: 2px solid #1f6feb; outline-offset: 1px; }
+    .al-chip:disabled { opacity: .5; cursor: default; }
+    .al-switch { flex: none; position: relative; width: 36px; height: 20px; padding: 0; border-radius: 999px; cursor: pointer;
+                 background: #30363d; border: 1px solid #3d444d; transition: background .15s ease, border-color .15s ease; }
+    .al-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+                        background: #8b949e; transition: transform .15s ease, background .15s ease; }
+    .al-switch[aria-checked="true"] { background: #238636; border-color: #2ea043; }
+    .al-switch[aria-checked="true"]::after { transform: translateX(16px); background: #fff; }
+    .al-switch:hover { background: #3d444d; }
+    .al-switch[aria-checked="true"]:hover { background: #2ea043; }
+    .al-switch:disabled { opacity: .5; cursor: default; }
+    .al-switch:focus-visible { outline: 2px solid #1f6feb; outline-offset: 2px; }
+    @media (prefers-reduced-motion: reduce) { .al-switch, .al-switch::after { transition: none; } }
+    .al-foot { position: sticky; bottom: 0; background: #161b22; border-top: 1px solid #21262d; margin-top: 12px;
+               padding: 12px 16px; display: flex; gap: 8px; }
+    .al-btn { flex: 1 1 0; min-width: 0; height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+              font: inherit; font-size: 13px; font-weight: 600; border-radius: 6px; padding: 0 12px; cursor: pointer;
+              background: #21262d; border: 1px solid #30363d; color: #c9d1d9; white-space: nowrap; }
+    .al-btn:hover { background: #2a313a; border-color: #3d444d; color: #e6edf3; }
+    .al-btn.primary { background: #238636; border-color: #2ea043; color: #fff; }
+    .al-btn.primary:hover { background: #2ea043; }
+    .al-btn.quiet { background: transparent; border-color: transparent; color: #f85149; }
+    .al-btn.quiet:hover { background: rgba(248,81,73,.10); border-color: rgba(248,81,73,.35); }
+    .al-btn:disabled { opacity: .55; cursor: default; }
+    .al-btn svg { flex: none; }
+    .al-btn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    /* A rule reads as one sentence; when it wraps, chips break cleanly onto the
+       next line with even spacing instead of riding the text baseline. */
+    .al-sentence { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 5px; }
+    .al-hero { padding: 22px 20px 4px; text-align: center; }
+    .al-hero-icon { width: 44px; height: 44px; border-radius: 50%; margin: 0 auto 12px; display: flex; align-items: center;
+                    justify-content: center; background: rgba(56,139,253,.14); color: #58a6ff; }
+    .al-hero-title { font-size: 15px; font-weight: 640; color: #e6edf3; }
+    .al-hero-sub { font-size: 12.5px; color: #8b949e; line-height: 1.55; margin: 5px auto 0; max-width: 300px; }
+    .al-feats { padding: 12px 8px 0; }
+    .al-callout { margin: 14px 16px 0; padding: 12px; border-radius: 8px; display: flex; gap: 10px; align-items: flex-start;
+                  background: rgba(56,139,253,.08); border: 1px solid rgba(56,139,253,.30); }
+    .al-callout.err { background: rgba(248,81,73,.08); border-color: rgba(248,81,73,.32); }
+    .al-callout-icon { flex: none; color: #58a6ff; display: inline-flex; margin-top: 1px; }
+    .al-callout.err .al-callout-icon { color: #f85149; }
+    .al-callout-body { flex: 1; min-width: 0; font-size: 12.5px; color: #c9d1d9; line-height: 1.55; }
+    .al-callout-title { font-weight: 600; color: #e6edf3; margin-bottom: 2px; }
+    .al-callout ol { margin: 4px 0 0; padding-left: 18px; }
+    .al-callout li { margin: 2px 0; }
+    .al-glyph { display: inline-flex; vertical-align: -2px; color: #e6edf3; margin: 0 1px; }
+    .al-wait { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11.5px; color: #8b949e; }
+    .al-spin { width: 12px; height: 12px; border: 1.6px solid rgba(139,148,158,.35); border-top-color: #c9d1d9;
+               border-radius: 50%; animation: upspin .7s linear infinite; flex: none; }
+    .al-btn.primary .al-spin { border-color: rgba(255,255,255,.35); border-top-color: #fff; }
+    @media (prefers-reduced-motion: reduce) { .al-spin { animation: none; } }
+    .al-msg { padding: 10px 16px 0; font-size: 12px; line-height: 1.5; color: #8b949e; display: flex; gap: 6px; align-items: flex-start; }
+    .al-msg:empty { display: none; }
+    .al-msg.ok { color: #3fb950; }
+    .al-msg.err { color: #f85149; }
+    .al-msg svg { flex: none; margin-top: 2px; }
+    .al-empty { padding: 14px 16px; font-size: 12.5px; color: #8b949e; text-align: center; }
+    /* The alerts bell shares the search row: same height, same border, so the
+       two read as one control strip rather than a button bolted on. */
+    .ms-bar { display: flex; align-items: stretch; gap: 6px; margin: 6px; }
+    .ms-bar .panel-search { margin: 0; width: auto; flex: 1 1 auto; min-width: 0; }
+    .ms-bar:has(.panel-search.is-idle) { display: none; }
+    .al-barbtn { flex: none; width: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+                 background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #8b949e; cursor: pointer; }
+    .al-barbtn:hover { background: #161b22; border-color: #3d444d; color: #e6edf3; }
+    .al-barbtn.on { color: #58a6ff; background: rgba(56,139,253,.10); border-color: rgba(56,139,253,.40); }
+    .al-barbtn.on:hover { background: rgba(56,139,253,.16); }
+    .al-barbtn:focus-visible { outline: 2px solid #1f6feb; outline-offset: 1px; }
+    .al-ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .al-mrow { cursor: pointer; }
+    .al-mrow:hover { background: #1c222b; }
+    .al-mrow:focus-visible { outline: 2px solid #1f6feb; outline-offset: -2px; }
+    .al-chev { flex: none; color: #6e7681; display: inline-flex; margin-left: -4px; }
+    .al-list.ro .al-tile, .al-list.ro .al-text, .al-list.ro .al-switch { opacity: .55; }
+    .al-list.ro .al-chip:disabled, .al-list.ro .al-switch:disabled { opacity: 1; }
+    .al-seg { display: flex; margin: 0 16px; padding: 2px; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; }
+    .al-seg button { flex: 1 1 0; height: 30px; padding: 0; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
+                     background: transparent; border: 0; border-radius: 6px; color: #8b949e; }
+    .al-seg button:hover { color: #e6edf3; background: transparent; }
+    .al-seg button[aria-checked="true"] { background: #21262d; color: #e6edf3; box-shadow: 0 0 0 1px #30363d; }
+    .al-seg button:focus-visible { outline: 2px solid #1f6feb; outline-offset: 1px; }
+    .al-note { flex-basis: 100%; font-size: 11.5px; color: #8b949e; line-height: 1.4; margin-top: -2px; }
+    .al-hint { padding: 8px 16px 2px; font-size: 11.5px; color: #8b949e; line-height: 1.45; }
     .recents-list {
       position: absolute;
       top: 100%;
@@ -1550,7 +1670,7 @@
       <details id="recents">
         <summary><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg>Machines<span class="caret">▾</span></summary>
         <div class="recents-list">
-          <input id="machines-search" class="panel-search is-idle" type="search" placeholder="Search machines &amp; sessions…" autocomplete="off" spellcheck="false">
+          <div class="ms-bar"><input id="machines-search" class="panel-search is-idle" type="search" placeholder="Search machines &amp; sessions…" autocomplete="off" spellcheck="false"><button id="alerts-bar-btn" class="al-barbtn" type="button" title="Alerts" aria-label="Alerts"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></button></div>
           <div id="machines-list"></div>
           <div id="recents-list"></div>
           <div id="machines-nomatch" class="windows-note filter-hide">Nothing matches that.</div>
@@ -1685,6 +1805,8 @@
 
   <div class="cl-back" id="clback" hidden></div>
   <div class="cl-sheet" id="clsheet" role="dialog" aria-modal="true" aria-label="What's new" hidden></div>
+  <div class="cl-back" id="alback" hidden></div>
+  <div class="cl-sheet al-sheet" id="alsheet" role="dialog" aria-modal="true" aria-label="Alerts" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js"></script>
@@ -2378,6 +2500,552 @@
       };
     }
 
+    // ---- Alerts ---------------------------------------------------------
+    // A machine you own can push to this device when its CPU leaves a range,
+    // its battery runs low, or its charger is plugged in or out. The machine
+    // does the watching (its daemon runs whether or not anyone is looking) and
+    // seals each alert to this browser's own push keys before it leaves, so the
+    // relay forwards what it cannot read. This page subscribes once, keeps a set
+    // of DEFAULT rules plus optional per-machine custom rules, and hands each
+    // machine its own over the owner-only directory channel. A machine that is
+    // offline when something changes catches up the next time it is seen.
+    const DEFAULT_ALERT_RULES = { cpu: true, cpu_pct: 90, cpu_low: 0, cpu_mins: 5, battery: true, bat_pct: 20, bat_time: false, bat_mins: 60, charger: false };
+    // Every threshold in steps of 10, end to end. CPU's two ends only have to
+    // stay in order (alertRulesHTML narrows each list by the other's value).
+    const tens = (lo, hi) => Array.from({ length: (hi - lo) / 10 + 1 }, (_, i) => lo + i * 10);
+    const ALERT_CHOICES = {
+      cpu_pct: tens(10, 100),
+      cpu_low: tens(0, 90),
+      cpu_mins: [1, 2, 5, 10, 15, 30, 60],
+      bat_pct: tens(10, 90),
+      bat_mins: [30, 60, 90, 120, 150, 180, 210, 240, 270, 300],
+    };
+    // 30 → "30 min", 60 → "1 h", 90 → "1.5 h".
+    const alertHours = (v) => v < 60 ? v + ' min' : (v / 60) + ' h';
+    const alerts = { open: false, view: 'loading', detail: '', sub: null, rows: {}, busy: false, msg: '', msgKind: '' };
+    let alertPrefsCache = null;
+
+    function aIcon(name, size) {
+      const s = size || 16;
+      return '<svg viewBox="0 0 24 24" width="' + s + '" height="' + s + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (MICONS[name] || '') + '</svg>';
+    }
+    function pushSupported() {
+      return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window && window.isSecureContext;
+    }
+    function isIOSDevice() {
+      return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    }
+    function isStandaloneApp() {
+      return (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+    }
+    function b64urlToU8(s) {
+      const pad = '='.repeat((4 - s.length % 4) % 4);
+      return base64ToU8((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
+    }
+    function normAlertRules(r) { return Object.assign({}, DEFAULT_ALERT_RULES, r || {}); }
+
+    async function loadAlertPrefs() {
+      let p = null;
+      try { const db = await openOwnDB(); p = await idbGet(db, 'alert-prefs'); } catch (_) {}
+      p = p || {};
+      alertPrefsCache = { enabled: !!p.enabled, rules: normAlertRules(p.rules) };
+      return alertPrefsCache;
+    }
+    async function saveAlertPrefs(p) {
+      alertPrefsCache = p;
+      try { const db = await openOwnDB(); await idbPut(db, 'alert-prefs', p); } catch (_) {}
+    }
+
+    async function pushRegistration() {
+      await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      return navigator.serviceWorker.ready;
+    }
+    // This browser's push subscription, or null. create=true subscribes; the
+    // caller has already been granted permission.
+    async function pushSubscription(create) {
+      const reg = await pushRegistration();
+      let s = await reg.pushManager.getSubscription();
+      if (!s && create) {
+        const r = await fetch('/push/key', { cache: 'no-store' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.key) throw new Error(j.error || 'This relay cannot send alerts');
+        s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64urlToU8(j.key) });
+      }
+      if (!s) return null;
+      const j = s.toJSON();
+      return { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth };
+    }
+    async function pushCall(b64, op, sub, rules) {
+      const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { push: { op, sub, rules }, timeout: op === 'test' ? 30000 : 10000 });
+      if (!r || !r.push) throw new Error('needs-upgrade');
+      if (r.push.error) throw new Error(r.push.error);
+      return r.push;
+    }
+
+    // The rules a machine runs: its own when customised, the defaults otherwise.
+    function alertRulesFor(prefs, rec) { return rec && rec.alertRules ? normAlertRules(rec.alertRules) : prefs.rules; }
+    // What a machine SHOULD be told, as a comparable key: its rules when it
+    // should alert, 'off' when it should not.
+    function alertWantKey(prefs, rec) {
+      return prefs.enabled && !rec.alertsOff ? JSON.stringify(alertRulesFor(prefs, rec)) : 'off';
+    }
+    function alertMachineOn(prefs, rec) {
+      return !!prefs && prefs.enabled && !rec.alertsOff && rec.alertsSynced === alertWantKey(prefs, rec);
+    }
+    async function sortedAlertMachines() {
+      const store = await loadOwnedMachines();
+      const keys = Object.keys(store).filter(k => !store[k].pendingRevoke)
+        .sort((a, b) => (store[b].lastSeen || 0) - (store[a].lastSeen || 0));
+      return { store, keys };
+    }
+
+    // Bring one machine in line with what it should be told. Returns the row
+    // state it ended in.
+    async function syncAlertMachine(b64, prefs, sub) {
+      const store = await loadOwnedMachines();
+      const rec = store[b64];
+      if (!rec) return 'off';
+      const key = alertWantKey(prefs, rec);
+      const want = key !== 'off';
+      // Never told anything and should stay quiet: nothing to undo.
+      if (!want && (rec.alertsSynced === undefined || rec.alertsSynced === 'off')) return setAlertRow(b64, 'off');
+      if (rec.alertsSynced === key) return setAlertRow(b64, want ? 'on' : 'off');
+      if (!sub) return setAlertRow(b64, 'off');
+      setAlertRow(b64, 'saving');
+      try {
+        if (want) await pushCall(b64, 'set', sub, alertRulesFor(prefs, rec));
+        else await pushCall(b64, 'remove', sub);
+        await withOwnedMachines(m => { if (!m[b64]) return false; m[b64].alertsSynced = key; });
+        return setAlertRow(b64, want ? 'on' : 'off');
+      } catch (e) {
+        const m = (e && e.message) || '';
+        if (m === 'needs-upgrade') return setAlertRow(b64, 'upgrade');
+        if (m === 'timeout' || m === 'unreachable') return setAlertRow(b64, want ? 'pending-on' : 'pending-off');
+        return setAlertRow(b64, 'error', m);
+      }
+    }
+    function setAlertRow(b64, state, detail) {
+      alerts.rows[b64] = { state, detail: detail || '' };
+      if (alerts.open) paintAlerts();
+      return state;
+    }
+    async function syncAllAlerts() {
+      const prefs = alertPrefsCache || await loadAlertPrefs();
+      const { keys } = await sortedAlertMachines();
+      const results = await Promise.all(keys.map(k => syncAlertMachine(k, prefs, alerts.sub)));
+      refreshAlertBadges();
+      return keys.filter((k, i) => results[i] === 'on');
+    }
+
+    // Called when the Machines panel sees a machine answer: finish any change
+    // it missed while offline. Quiet — no sheet needed.
+    const alertCatchUp = new Set();
+    async function maybeCatchUpAlerts(b64, rec) {
+      const prefs = alertPrefsCache;
+      if (!prefs || !pushSupported() || alertCatchUp.has(b64)) return;
+      const key = alertWantKey(prefs, rec);
+      if (rec.alertsSynced === key || (key === 'off' && (rec.alertsSynced === undefined || rec.alertsSynced === 'off'))) return;
+      if (key !== 'off' && Notification.permission !== 'granted') return;
+      alertCatchUp.add(b64);
+      try {
+        const sub = alerts.sub || await pushSubscription(false);
+        if (sub) { alerts.sub = sub; await syncAlertMachine(b64, prefs, sub); refreshAlertBadges(); }
+      } catch (_) {} finally { alertCatchUp.delete(b64); }
+    }
+
+    // The bell beside the Machines search: lit while any machine is on.
+    async function refreshAlertBadges() {
+      const prefs = alertPrefsCache || await loadAlertPrefs();
+      const { store, keys } = await sortedAlertMachines();
+      const on = keys.filter(k => alertMachineOn(prefs, store[k])).length;
+      const btn = document.getElementById('alerts-bar-btn');
+      if (btn) {
+        const lit = !!prefs.enabled && on > 0;
+        btn.classList.toggle('on', lit);
+        btn.title = lit ? 'Alerts · on for ' + on + (on === 1 ? ' machine' : ' machines') : 'Alerts';
+        btn.setAttribute('aria-label', btn.title);
+      }
+    }
+
+    // ---- permission ----
+    let stopPermWatch = null;
+    function watchPermission(onGranted) {
+      if (stopPermWatch) stopPermWatch();
+      let st = null;
+      const check = () => {
+        if (Notification.permission !== 'granted') return;
+        if (stopPermWatch) stopPermWatch();
+        onGranted();
+      };
+      const iv = setInterval(check, 1000);
+      document.addEventListener('visibilitychange', check);
+      window.addEventListener('focus', check);
+      if (navigator.permissions && navigator.permissions.query) {
+        navigator.permissions.query({ name: 'notifications' }).then(s => { st = s; s.onchange = check; }).catch(() => {});
+      }
+      stopPermWatch = () => {
+        clearInterval(iv);
+        document.removeEventListener('visibilitychange', check);
+        window.removeEventListener('focus', check);
+        if (st) st.onchange = null;
+        stopPermWatch = null;
+      };
+    }
+
+    async function alertsTurnOn() {
+      if (alerts.busy) return;
+      // Asked synchronously inside the tap: browsers only prompt in direct
+      // response to a user gesture.
+      if (Notification.permission === 'default') {
+        let asked = null;
+        try { asked = Notification.requestPermission(); } catch (_) {}
+        alerts.view = 'asking'; alerts.msg = ''; paintAlerts();
+        try { await asked; } catch (_) {}
+      }
+      if (Notification.permission === 'granted') return alertsFinishTurnOn();
+      // Chrome often answers with its quiet prompt (a crossed-out bell in the
+      // address bar) and reports "no answer" at once; a blocked site answers
+      // "denied". Either way, wait for the change and carry on by ourselves.
+      alerts.view = Notification.permission === 'denied' ? 'blocked' : 'quiet';
+      paintAlerts();
+      watchPermission(alertsFinishTurnOn);
+    }
+
+    async function alertsFinishTurnOn() {
+      alerts.busy = true; alerts.view = 'working'; alerts.msg = ''; paintAlerts();
+      try {
+        alerts.sub = await pushSubscription(true);
+        const prefs = Object.assign({}, alertPrefsCache || await loadAlertPrefs(), { enabled: true });
+        await saveAlertPrefs(prefs);
+        alerts.view = 'on'; alerts.busy = false; paintAlerts();
+        const onKeys = await syncAllAlerts();
+        if (onKeys.length) {
+          // A real alert straight away, so the first one is not a surprise
+          // hours later — and proof the whole path works.
+          try { await pushCall(onKeys[0], 'test', alerts.sub); alertsSay('ok', 'You’re set — a test alert is on its way.'); }
+          catch (e) { alertsSay('err', 'Alerts are on, but the test did not go through: ' + alertErrText(e)); }
+        } else {
+          alertsSay('', 'Alerts are on. Your machines pick them up as soon as they are online.');
+        }
+      } catch (e) {
+        alerts.busy = false; alerts.view = 'off';
+        alertsSay('err', alertErrText(e));
+      }
+      alerts.busy = false; paintAlerts();
+    }
+    function alertErrText(e) {
+      const m = (e && e.message) || String(e);
+      if (m === 'timeout' || m === 'unreachable') return 'Could not reach the machine.';
+      if (m === 'needs-upgrade') return 'That machine needs a reminal update first.';
+      return m;
+    }
+    function alertsSay(kind, text) { alerts.msgKind = kind; alerts.msg = text; paintAlerts(); }
+
+    // ---- sheet ----
+    async function openAlerts(focusB64) {
+      const back = document.getElementById('alback'), sheet = document.getElementById('alsheet');
+      if (!back || !sheet) return;
+      Object.assign(alerts, { open: true, view: 'loading', detail: '', rows: {}, busy: false, msg: '', msgKind: '' });
+      back.hidden = false; sheet.hidden = false;
+      back.classList.add('open'); sheet.classList.add('open');
+      paintAlerts();
+      const prefs = await loadAlertPrefs();
+      if (!pushSupported()) { alerts.view = 'unsupported'; return paintAlerts(); }
+      try { alerts.sub = await pushSubscription(false); } catch (_) { alerts.sub = null; }
+      if (prefs.enabled && alerts.sub && Notification.permission === 'granted') {
+        alerts.view = 'on'; alerts.detail = focusB64 || '';
+        paintAlerts();
+        await syncAllAlerts();
+      } else {
+        alerts.view = 'off';
+        paintAlerts();
+      }
+    }
+    function closeAlerts() {
+      const back = document.getElementById('alback'), sheet = document.getElementById('alsheet');
+      if (!back || !sheet) return;
+      alerts.open = false;
+      if (stopPermWatch) stopPermWatch();
+      back.classList.remove('open'); sheet.classList.remove('open');
+      back.hidden = true; sheet.hidden = true;
+      refreshAlertBadges();
+    }
+
+    function alertChip(k, v, fmt, disabled, allowed) {
+      const base = allowed || ALERT_CHOICES[k];
+      const opts = base.includes(v) ? base : base.concat([v]).sort((a, b) => a - b);
+      return '<select class="al-chip" data-k="' + k + '" aria-label="' + k.replace('_', ' ') + '"' + (disabled ? ' disabled' : '') + '>'
+        + opts.map(o => '<option value="' + o + '"' + (o === v ? ' selected' : '') + '>' + fmt(o) + '</option>').join('')
+        + '</select>';
+    }
+    function alertSwitch(attrs, on, label, disabled) {
+      return '<button class="al-switch" role="switch" aria-checked="' + (on ? 'true' : 'false') + '" aria-label="' + escHTML(label) + '" '
+        + attrs + (disabled ? ' disabled' : '') + '></button>';
+    }
+    // The three rule rows, for the defaults or for one machine. Read-only when
+    // a machine is following the defaults.
+    // time: 'note' on the defaults (the rule only reaches machines that
+    // estimate time left), true on a machine that does, false to leave it out.
+    function alertRulesHTML(r, ro, time) {
+      const lows = ALERT_CHOICES.cpu_low.filter(v => v < r.cpu_pct);
+      const highs = ALERT_CHOICES.cpu_pct.filter(v => v > r.cpu_low);
+      return '<div class="al-list' + (ro ? ' ro' : '') + '">'
+        + '<div class="al-row"><span class="al-tile' + (r.cpu ? ' on' : '') + '">' + aIcon('cpu') + '</span><div class="al-text al-sentence">'
+        + '<span><b>CPU</b> leaves</span>' + alertChip('cpu_low', r.cpu_low, v => v + '%', ro, lows) + '<span>–</span>'
+        + alertChip('cpu_pct', r.cpu_pct, v => v + '%', ro, highs) + '<span>for</span>' + alertChip('cpu_mins', r.cpu_mins, v => v + ' min', ro)
+        + '</div>' + alertSwitch('data-rule="cpu"', r.cpu, 'CPU alerts', ro) + '</div>'
+        + '<div class="al-row"><span class="al-tile' + (r.battery ? ' on' : '') + '">' + aIcon('battery') + '</span><div class="al-text al-sentence">'
+        + '<span><b>Battery</b> below</span>' + alertChip('bat_pct', r.bat_pct, v => v + '%', ro)
+        + '</div>' + alertSwitch('data-rule="battery"', r.battery, 'Battery alerts', ro) + '</div>'
+        + (time ? '<div class="al-row"><span class="al-tile' + (r.bat_time ? ' on' : '') + '">' + aIcon('clock') + '</span><div class="al-text al-sentence">'
+          + '<span><b>Battery</b> left under</span>' + alertChip('bat_mins', r.bat_mins, alertHours, ro)
+          + (time === 'note' ? '<span class="al-note">On machines that estimate time left</span>' : '')
+          + '</div>' + alertSwitch('data-rule="bat_time"', r.bat_time, 'Battery time alerts', ro) + '</div>' : '')
+        + '<div class="al-row"><span class="al-tile' + (r.charger ? ' on' : '') + '">' + aIcon('plug') + '</span><div class="al-text">'
+        + '<b>Charger</b> plugged in or out</div>' + alertSwitch('data-rule="charger"', r.charger, 'Charger alerts', ro) + '</div></div>';
+    }
+    const ALERT_ROW_TEXT = {
+      on: ['on', 'On'], off: ['', 'Off'], saving: ['', 'Saving…'], tested: ['on', 'Test sent'],
+      'pending-on': ['warn', 'Offline — turns on when it’s back'],
+      'pending-off': ['warn', 'Offline — turns off when it’s back'],
+      upgrade: ['warn', 'Needs a reminal update'], error: ['err', 'Could not update'],
+    };
+    function alertRowStatus(prefs, rec, k) {
+      const row = alerts.rows[k] || { state: alertMachineOn(prefs, rec) ? 'on' : (rec.alertsOff ? 'off' : 'saving') };
+      const [cls, label] = ALERT_ROW_TEXT[row.state] || ['', ''];
+      let text = row.state === 'error' && row.detail ? row.detail : label;
+      if ((row.state === 'on' || row.state === 'tested') && rec.alertRules) text += ' · custom rules';
+      return { cls, text, state: row.state };
+    }
+    function alertMsgHTML(extra) {
+      if (!alerts.msg) return '';
+      const k = alerts.msgKind;
+      return '<div class="al-msg ' + k + '"' + (extra || '') + '>' + (k === 'ok' ? aIcon('check', 14) : k === 'err' ? aIcon('info', 14) : '')
+        + '<span>' + escHTML(alerts.msg) + '</span></div>';
+    }
+
+    async function paintAlerts() {
+      const sheet = document.getElementById('alsheet');
+      if (!sheet || sheet.hidden) return;
+      const a = alerts;
+      const prefs = alertPrefsCache || { enabled: false, rules: normAlertRules() };
+      const { store, keys } = await sortedAlertMachines();
+      if (a.detail && !store[a.detail]) a.detail = '';
+      const close = '<button class="al-x" id="alx" aria-label="Close">' + aIcon('x', 16) + '</button>';
+
+      // One machine's settings.
+      if (a.view === 'on' && a.detail) {
+        const k = a.detail, rec = store[k];
+        const st = alertRowStatus(prefs, rec, k);
+        const custom = !!rec.alertRules;
+        const on = !rec.alertsOff;
+        let h = '<div class="al-head"><button class="al-x" id="al-back" aria-label="Back">' + aIcon('left', 16) + '</button>'
+          + '<div class="al-head-text"><div class="al-title al-ell">' + escHTML(machineLabel(rec, k)) + '</div>'
+          + '<div class="al-subtitle ' + st.cls + '">' + escHTML(st.text) + '</div></div>' + close + '</div>'
+          + '<div class="al-list" style="padding-top:8px"><div class="al-row"><span class="al-tile' + (on ? ' on' : '') + '">' + aIcon('bell') + '</span>'
+          + '<div class="al-text"><b>Alerts for this machine</b></div>' + alertSwitch('data-machine="' + escHTML(k) + '"', on, 'Alerts for this machine') + '</div></div>';
+        if (on) {
+          h += '<div class="al-sec">Rules</div>'
+            + '<div class="al-seg" role="radiogroup" aria-label="Rules">'
+            + '<button role="radio" aria-checked="' + !custom + '" data-mode="default">Default</button>'
+            + '<button role="radio" aria-checked="' + custom + '" data-mode="custom">Custom</button></div>'
+            + '<div class="al-hint">' + (custom ? 'Only this machine uses these.' : 'Following your default rules. Choose Custom to change them for this machine only.') + '</div>'
+            + alertRulesHTML(alertRulesFor(prefs, rec), !custom, !!rec.battEst);
+        }
+        h += alertMsgHTML();
+        h += '<div class="al-foot"><button class="al-btn" id="al-test-one"' + (a.busy || st.state !== 'on' ? ' disabled' : '') + '>'
+          + aIcon('send', 15) + '<span>Send a test</span></button></div>';
+        sheet.innerHTML = h;
+        wireAlertsSheet(sheet, k);
+        return;
+      }
+
+      const onCount = keys.filter(k => { const s = alertRowStatus(prefs, store[k], k).state; return s === 'on' || s === 'tested'; }).length;
+      let sub = 'Off', subOn = false;
+      if (a.view === 'on') {
+        const waitingN = keys.filter(k => a.rows[k] && a.rows[k].state === 'pending-on').length;
+        const total = keys.length + (keys.length === 1 ? ' machine' : ' machines');
+        sub = onCount ? 'On for ' + onCount + ' of ' + total : waitingN ? 'On · waiting for ' + (waitingN === 1 ? 'your machine' : waitingN + ' machines') : 'On';
+        subOn = onCount > 0;
+      }
+      let h = '<div class="al-head"><div class="al-head-text"><div class="al-title">Alerts</div>'
+            + '<div class="al-subtitle' + (subOn ? ' on' : '') + '">' + escHTML(sub) + '</div></div>' + close + '</div>';
+
+      const feats = '<div class="al-feats al-list">'
+        + '<div class="al-row"><span class="al-tile">' + aIcon('cpu') + '</span><div class="al-text">CPU stays out of its normal range</div></div>'
+        + '<div class="al-row"><span class="al-tile">' + aIcon('battery') + '</span><div class="al-text">Battery runs low</div></div>'
+        + '<div class="al-row"><span class="al-tile">' + aIcon('plug') + '</span><div class="al-text">Charger is plugged in or out</div></div></div>';
+      const hero = '<div class="al-hero"><div class="al-hero-icon">' + aIcon('bell', 22) + '</div>'
+        + '<div class="al-hero-title">Alerts from your machines</div>'
+        + '<div class="al-hero-sub">A notification on this device when one of your machines needs attention — even when reminal isn’t open.</div></div>';
+      const waiting = (t) => '<div class="al-wait"><span class="al-spin"></span>' + t + '</div>';
+
+      if (a.view === 'loading') {
+        h += '<div class="al-empty"><div class="al-wait" style="justify-content:center;margin:0"><span class="al-spin"></span>Checking…</div></div>';
+      } else if (a.view === 'unsupported') {
+        h += hero;
+        h += isIOSDevice()
+          ? '<div class="al-callout"><span class="al-callout-icon">' + aIcon('info') + '</span><div class="al-callout-body">'
+            + '<div class="al-callout-title">Add reminal to your Home Screen first</div>'
+            + 'On iPhone and iPad, alerts work in the Home Screen app. Tap <span class="al-glyph">' + aIcon('share', 14) + '</span> Share, choose '
+            + '<b>Add to Home Screen</b>, then open reminal from there.</div></div>'
+          : '<div class="al-callout err"><span class="al-callout-icon">' + aIcon('info') + '</span><div class="al-callout-body">'
+            + 'This browser can’t receive notifications. Chrome, Edge, Firefox and Safari can.</div></div>';
+        h += '<div style="height:16px"></div>';
+      } else if (a.view === 'off' || a.view === 'asking' || a.view === 'working') {
+        const busy = a.view !== 'off';
+        h += hero + feats
+          + '<div class="al-foot"><button class="al-btn primary" id="al-on"' + (busy ? ' disabled' : '') + '>'
+          + (busy ? '<span class="al-spin"></span><span>' + (a.view === 'asking' ? 'Waiting for permission…' : 'Turning on…') + '</span>'
+                  : aIcon('bell', 15) + '<span>Turn on for all my machines</span>')
+          + '</button></div>';
+        h += alertMsgHTML(' style="padding-bottom:14px"');
+      } else if (a.view === 'quiet' || a.view === 'blocked') {
+        h += hero;
+        if (a.view === 'quiet') {
+          h += '<div class="al-callout"><span class="al-callout-icon">' + aIcon('belloff') + '</span><div class="al-callout-body">'
+            + '<div class="al-callout-title">Your browser is waiting for an answer</div>'
+            + (isStandaloneApp()
+                ? 'Allow notifications for reminal in your device’s settings, then come back here.'
+                : 'Instead of a popup, it put <span class="al-glyph">' + aIcon('belloff', 14) + '</span> in the address bar. Tap it and choose <b>Allow</b>.')
+            + waiting('This continues by itself once you allow it') + '</div></div>';
+        } else {
+          h += '<div class="al-callout err"><span class="al-callout-icon">' + aIcon('lock') + '</span><div class="al-callout-body">'
+            + '<div class="al-callout-title">Notifications are blocked for this site</div><ol>'
+            + '<li>Tap <span class="al-glyph">' + aIcon('lock', 14) + '</span> at the left of the address bar</li>'
+            + '<li>Open <b>Permissions</b>, then <b>Notifications</b></li>'
+            + '<li>Choose <b>Allow</b></li></ol>'
+            + waiting('This continues by itself once you allow it') + '</div></div>';
+        }
+        h += '<div class="al-foot"><button class="al-btn" id="al-cancel"><span>Not now</span></button></div>';
+      } else {
+        h += '<div class="al-sec">Default rules</div>' + alertRulesHTML(prefs.rules, false, 'note');
+        h += '<div class="al-sec">Machines</div><div class="al-list">';
+        if (!keys.length) h += '<div class="al-empty">No machines yet — owner-connect to one and it shows up here.</div>';
+        for (const k of keys) {
+          const rec = store[k];
+          const st = alertRowStatus(prefs, rec, k);
+          h += '<div class="al-row al-mrow" data-open="' + escHTML(k) + '" role="button" tabindex="0">'
+            + '<span class="al-dot ' + (st.cls === 'on' ? 'on' : st.cls === 'warn' ? 'warn' : '') + '"></span>'
+            + '<div class="al-text"><div class="al-name">' + escHTML(machineLabel(rec, k)) + '</div>'
+            + '<div class="al-state ' + st.cls + '">' + escHTML(st.text) + '</div></div>'
+            + alertSwitch('data-machine="' + escHTML(k) + '"', !rec.alertsOff, 'Alerts for ' + machineLabel(rec, k))
+            + '<span class="al-chev">' + aIcon('right', 16) + '</span></div>';
+        }
+        h += '</div>' + alertMsgHTML();
+        h += '<div class="al-foot"><button class="al-btn" id="al-test"' + (a.busy ? ' disabled' : '') + '>' + aIcon('send', 15) + '<span>Send a test</span></button>'
+          + '<button class="al-btn quiet" id="al-off"' + (a.busy ? ' disabled' : '') + '>' + aIcon('belloff', 15) + '<span>Turn all off</span></button></div>';
+      }
+      sheet.innerHTML = h;
+      wireAlertsSheet(sheet, '');
+    }
+
+    let alertsSaveTimer = 0;
+    function wireAlertsSheet(sheet, machine) {
+      const bind = (id, fn) => { const el = sheet.querySelector('#' + id); if (el) el.onclick = fn; };
+      bind('alx', closeAlerts);
+      bind('al-back', () => { alerts.detail = ''; alerts.msg = ''; paintAlerts(); });
+      bind('al-on', alertsTurnOn);
+      bind('al-cancel', () => { if (stopPermWatch) stopPermWatch(); alerts.view = 'off'; paintAlerts(); });
+      bind('al-test', () => alertsSendTest(null));
+      bind('al-test-one', () => alertsSendTest(machine));
+      bind('al-off', alertsTurnOffAll);
+
+      // Rules save themselves after a short pause, so stepping a chip twice is
+      // one update per machine, not two. In a machine's view they edit that
+      // machine's own rules; on the main view, the defaults.
+      const changed = async (mutate) => {
+        if (machine) {
+          await withOwnedMachines(m => {
+            if (!m[machine]) return false;
+            const r = normAlertRules(m[machine].alertRules || alertPrefsCache.rules);
+            mutate(r);
+            m[machine].alertRules = r;
+          });
+        } else {
+          const prefs = Object.assign({}, alertPrefsCache, { rules: normAlertRules(alertPrefsCache.rules) });
+          mutate(prefs.rules);
+          await saveAlertPrefs(prefs);
+        }
+        alerts.msg = '';
+        paintAlerts();
+        clearTimeout(alertsSaveTimer);
+        alertsSaveTimer = setTimeout(syncAllAlerts, 500);
+      };
+      for (const sel of sheet.querySelectorAll('.al-chip')) {
+        sel.onchange = () => changed(r => { r[sel.dataset.k] = parseInt(sel.value, 10); });
+      }
+      for (const sw of sheet.querySelectorAll('.al-switch[data-rule]')) {
+        sw.onclick = () => changed(r => { r[sw.dataset.rule] = !r[sw.dataset.rule]; });
+      }
+      for (const btn of sheet.querySelectorAll('.al-seg button')) {
+        btn.onclick = async () => {
+          const custom = btn.dataset.mode === 'custom';
+          await withOwnedMachines(m => {
+            if (!m[machine]) return false;
+            // Custom starts from what the machine runs today, so the switch
+            // itself changes nothing until a rule is edited.
+            if (custom && !m[machine].alertRules) m[machine].alertRules = normAlertRules(alertPrefsCache.rules);
+            else if (!custom) delete m[machine].alertRules;
+          });
+          paintAlerts();
+          syncAlertMachine(machine, alertPrefsCache, alerts.sub).then(refreshAlertBadges);
+        };
+      }
+      for (const sw of sheet.querySelectorAll('.al-switch[data-machine]')) {
+        sw.onclick = async (ev) => {
+          ev.stopPropagation(); // the row behind it opens the machine
+          const k = sw.dataset.machine;
+          await withOwnedMachines(m => { if (!m[k]) return false; m[k].alertsOff = !m[k].alertsOff; });
+          paintAlerts();
+          await syncAlertMachine(k, alertPrefsCache, alerts.sub);
+          refreshAlertBadges();
+        };
+      }
+      for (const row of sheet.querySelectorAll('.al-mrow')) {
+        const open = () => { alerts.detail = row.dataset.open; alerts.msg = ''; paintAlerts(); };
+        row.onclick = open;
+        row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+      }
+    }
+
+    // One machine (its settings view) or every machine that is on.
+    async function alertsSendTest(only) {
+      const { keys } = await sortedAlertMachines();
+      const on = (only ? [only] : keys).filter(k => alerts.rows[k] && alerts.rows[k].state === 'on');
+      if (!on.length) return alertsSay('err', 'No machine is ready to send one — turn one on above, or wait until it is online.');
+      alerts.busy = true; alertsSay('', '');
+      const res = await Promise.allSettled(on.map(k => pushCall(k, 'test', alerts.sub)));
+      res.forEach((r, i) => setAlertRow(on[i], r.status === 'fulfilled' ? 'tested' : 'error', r.status === 'fulfilled' ? '' : alertErrText(r.reason)));
+      const ok = res.filter(r => r.status === 'fulfilled').length;
+      alerts.busy = false;
+      alertsSay(ok ? 'ok' : 'err', ok ? (ok === 1 ? 'Test sent — it should arrive in a few seconds.' : ok + ' tests sent — one from each machine.') : 'The test did not go through.');
+      setTimeout(() => { for (const k of on) if (alerts.rows[k] && alerts.rows[k].state === 'tested') setAlertRow(k, 'on'); }, 5000);
+    }
+
+    async function alertsTurnOffAll() {
+      alerts.busy = true;
+      const prefs = Object.assign({}, alertPrefsCache, { enabled: false });
+      await saveAlertPrefs(prefs);
+      paintAlerts();
+      await syncAllAlerts();
+      alerts.busy = false;
+      alerts.view = 'off';
+      alertsSay('', 'Alerts are off. Machines that were offline turn off when they are back.');
+    }
+
+    (function wireAlerts() {
+      const back = document.getElementById('alback');
+      if (back) back.addEventListener('click', closeAlerts);
+      addEventListener('keydown', (e) => {
+        const sheet = document.getElementById('alsheet');
+        if (e.key === 'Escape' && sheet && !sheet.hidden) { e.stopPropagation(); closeAlerts(); }
+      });
+      const btn = document.getElementById('alerts-bar-btn');
+      if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); openAlerts(''); });
+      loadAlertPrefs().then(refreshAlertBadges);
+    })();
+
     (function wireChangelogDismiss() {
       const back = document.getElementById('clback');
       if (back) back.addEventListener('click', closeChangelog);
@@ -2406,7 +3074,9 @@
     //
     // Returns null when this browser holds no device key, which is exactly the
     // case where the action is not offered.
-    async function signOwnerAction(action) {
+    // sid defaults to the connected session; a machine-channel request passes
+    // the directory id, which is what that channel's host verifies against.
+    async function signOwnerAction(action, sid) {
       const dk = await loadDeviceKeyPair();
       if (!dk) return null;
       const nonce = crypto.getRandomValues(new Uint8Array(24));
@@ -2416,7 +3086,7 @@
       // bits vary for any plausible clock, but the full width is written so
       // the two transcripts are byte-identical.
       new DataView(ts.buffer).setBigUint64(0, BigInt(unix), false);
-      const tr = await ownerTranscript('reminal-owner-action-v1:', sessionId,
+      const tr = await ownerTranscript('reminal-owner-action-v1:', sid || sessionId,
         [new TextEncoder().encode(action), nonce, ts]);
       const sig = new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, dk.privateKey, tr));
       return { device_pub: u8ToBase64(dk.pubRaw), device_sig: u8ToBase64(sig),
@@ -4402,6 +5072,17 @@
                 const enc = await encrypt(box, JSON.stringify({ id: opts.kill, req_id: att.reqId }));
                 sock.send(JSON.stringify({ type: 'dir_kill', data: enc }));
                 state = 'kill';
+              } else if (opts.push) {
+                // Phone alerts ride dir_query too. The proof names which owner
+                // device asked (every owner shares the channel key) and is bound
+                // to the op and endpoint, matching pushAction on the host.
+                const p = opts.push;
+                const proof = await signOwnerAction('push:' + p.op + ':' + p.sub.endpoint, dirID);
+                if (!proof) return done(new Error('this device has no owner key'));
+                att.reqId = Math.random().toString(36).slice(2);
+                const enc = await encrypt(box, JSON.stringify({ push: { op: p.op, sub: p.sub, rules: p.rules || undefined, proof, req_id: att.reqId } }));
+                sock.send(JSON.stringify({ type: 'dir_query', data: enc }));
+                state = 'query';
               } else if (opts.open) {
                 // An open lookup rides dir_query with a payload; the host answers
                 // the same dir_resp with open_url/open_pin for that one port. Asked
@@ -4418,7 +5099,12 @@
             if (state === 'query') {
               if (msg.type !== 'dir_resp') return;
               const pt = await decrypt(box, msg.data || '');
-              return done(null, JSON.parse(new TextDecoder().decode(pt)));
+              const r = JSON.parse(new TextDecoder().decode(pt));
+              // Every viewer on the channel hears every answer. A push request
+              // waits for the one carrying its own id — an older host echoes
+              // none, and then the first answer with a push field is it.
+              if (opts.push && (!r.push || (r.push.req_id && r.push.req_id !== att.reqId))) return;
+              return done(null, r);
             }
             if (state === 'spawn') {
               if (msg.type !== 'new_session') return;
@@ -4488,6 +5174,18 @@
       copy:  '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
       edit:  '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19.5 3 20.5l1-4z"/>',
       x:     '<path d="M18 6 6 18M6 6l12 12"/>',
+      bell:  '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+      belloff: '<path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"/><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/><path d="m2 2 20 20"/>',
+      cpu:   '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
+      battery: '<rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/><path d="M6 11v2"/>',
+      plug:  '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8z"/>',
+      send:  '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+      lock:  '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+      share: '<path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/>',
+      info:  '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/>',
+      check: '<path d="M20 6 9 17l-5-5"/>',
+      left:  '<path d="M15 6l-6 6 6 6"/>',
+      clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     };
     function mIcon(name) {
       return '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (MICONS[name] || '') + '</svg>';
@@ -4569,7 +5267,9 @@
       // (and miss one the next time a path is added), watch the panel: any row
       // appearing or disappearing re-runs the filter. The filter itself only
       // toggles classes, never children, so it cannot retrigger this.
-      const panel = machinesSearch.parentElement;
+      // The panel, not the box's parent: the box shares a row with the alerts
+      // bell, and that row never changes.
+      const panel = machinesSearch.closest('.recents-list');
       if (panel && window.MutationObserver) {
         new MutationObserver(applyMachinesFilter)
           .observe(panel, { childList: true, subtree: true });
@@ -4696,6 +5396,7 @@
         const remembered = battRemembered(rec);
         if (remembered) paintBattery(box, remembered, true);
       }
+      refreshAlertBadges();
       // Fire the fills in the background — each box updates itself as its query
       // resolves, so one offline machine never blocks the others (or the panel).
       // Machines pending removal are handled by retryPendingRevokes, not filled.
@@ -5076,6 +5777,7 @@
       machineFail.set(b64, 0);
       dot.className = 'machine-dot online';
       dot.title = 'online';
+      maybeCatchUpAlerts(b64, rec); // finish an alert change it missed while offline
       // Auto-name an unnamed machine from its reported hostname. Persist WITHOUT
       // re-rendering: we're mid-fill inside renderMachines's Promise.all, and a
       // renderMachines() here would tear down and rebuild every box (flicker) and
@@ -5113,7 +5815,7 @@
       else if (agg === 'working') { dot.className = 'machine-dot attn-working'; dot.title = 'working'; }
       // Remember this snapshot so the NEXT time the panel opens it paints these
       // sessions instantly from cache while the fresh query runs in the background.
-      await withOwnedMachines(m => { if (!m[b64]) return false; m[b64].sessions = list; if (resp.hostname) m[b64].host = resp.hostname; if (batt) m[b64].batt = batt; });
+      await withOwnedMachines(m => { if (!m[b64]) return false; m[b64].sessions = list; if (resp.hostname) m[b64].host = resp.hostname; if (batt) { m[b64].batt = batt; if (batt.mins > 0) m[b64].battEst = true; } });
     }
 
     // Render a machine's session list into its card. Shared by the instant cached

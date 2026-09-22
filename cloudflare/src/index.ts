@@ -1,9 +1,10 @@
 import { SessionRoom } from "./session";
 import { RendezvousRoom } from "./rendezvous";
+import { handlePush, handlePushKey, type PushEnv } from "./push";
 
 export { SessionRoom, RendezvousRoom };
 
-export interface Env {
+export interface Env extends PushEnv {
   SESSION: DurableObjectNamespace;
   RENDEZVOUS: DurableObjectNamespace;
   ASSETS: Fetcher;
@@ -123,6 +124,12 @@ export default {
       hdrs.set("x-reminal-public-host", hostHeader);
       return stub.fetch(new Request(new Request(doUrl.toString(), request), { headers: hdrs }));
     }
+
+    // Phone alerts: machines hand over end-to-end sealed alerts to be signed
+    // and forwarded (see push.ts). Relay host only — never a tunnel host,
+    // which returned above.
+    if (url.pathname === "/push/key") return handlePushKey(env);
+    if (url.pathname === "/push") return handlePush(request, env);
 
     // Version beacon: the online, maintainer-controlled critical-upgrade switch.
     // Clients fetch this during their ≤24h version check; if their version is
