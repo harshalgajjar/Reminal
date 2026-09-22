@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
 )
 
 // Whether the agent in this session can work at all. A harness whose login
