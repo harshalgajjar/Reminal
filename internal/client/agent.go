@@ -192,6 +192,12 @@ type Agent struct {
 	metaMu       sync.Mutex
 	title        string
 	lastActivity time.Time
+	// bracketedPaste is whether the foreground program asked for pasted text
+	// to arrive wrapped in markers (DECSET 2004); pasteCarry holds the tail of
+	// the last PTY chunk so a mode sequence split across two reads is still
+	// seen. See inject.go.
+	bracketedPaste atomic.Bool
+	pasteCarry     []byte
 	// attnState is the detected attention state of the foreground agent —
 	// "working", "input" (awaiting the user), "done", or "" (no agent / bare
 	// shell). Written by the attention detector goroutine, read by activeRecord
@@ -2498,6 +2504,9 @@ func (a *Agent) pumpPTY() {
 			if a.localActive {
 				_, _ = os.Stdout.Write(a.hostMirror.forward(buf[:n]))
 			}
+			// Watched on the way past: whether the program wants pasted text
+			// marked as pasted (see inject.go).
+			a.sniffBracketedPaste(buf[:n])
 			a.record(buf[:n])
 		}
 		if err != nil {

@@ -4,6 +4,7 @@
 package client
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"fmt"
@@ -80,7 +81,7 @@ func (a *Agent) injectKeys(data []byte) error {
 	if a == nil || a.term == nil {
 		return fmt.Errorf("no pty")
 	}
-	_, err := a.term.Write(data)
+	_, err := a.term.Write(a.wrapPaste(data))
 	return err
 }
 
@@ -203,4 +204,68 @@ func applyLocalKeys(resp *protocol.DirResponse, sessionID, b64 string) {
 		return
 	}
 	resp.KeysOK = true
+}
+
+// Bracketed paste (DECSET 2004): the foreground program asking that pasted text
+// arrive wrapped in markers, so it can insert the block whole instead of
+// interpreting it as hundreds of keystrokes.
+var (
+	pasteOn    = []byte("\x1b[?2004h")
+	pasteOff   = []byte("\x1b[?2004l")
+	pasteStart = []byte("\x1b[200~")
+	pasteEnd   = []byte("\x1b[201~")
+)
+
+// sniffBracketedPaste watches the PTY for the program turning the mode on and
+// off. Read from the output stream rather than the emulator because the
+// emulator does not surface it, and a carry covers a sequence split across two
+// reads.
+func (a *Agent) sniffBracketedPaste(chunk []byte) {
+	const carry = 8
+	buf := chunk
+	if len(a.pasteCarry) > 0 {
+		buf = append(append([]byte(nil), a.pasteCarry...), chunk...)
+	}
+	if i, j := bytes.LastIndex(buf, pasteOn), bytes.LastIndex(buf, pasteOff); i >= 0 || j >= 0 {
+		a.bracketedPaste.Store(i > j)
+	}
+	if len(chunk) > carry {
+		a.pasteCarry = append(a.pasteCarry[:0], chunk[len(chunk)-carry:]...)
+	} else {
+		a.pasteCarry = append(a.pasteCarry[:0], chunk...)
+	}
+}
+
+// wrapPaste marks text as pasted when the program asked for that.
+//
+// Without it a long injected message reaches an agent TUI as a burst of
+// individual keypresses, and one of them redrew its input a character at a
+// time — the message arrived down the screen, one letter per line. With the
+// markers the program inserts the block in one go, which is what a human
+// pasting does. Control-only payloads (a bare Enter, a ^C) are keystrokes, not
+// paste, and are never wrapped.
+// pasteMinLen is the shortest payload treated as pasted text. A single "y" or
+// "1" answering a menu is a KEYPRESS — a single-key menu ignores pasted text
+// by design, so wrapping it would re-break exactly the approval path that the
+// split Enter fixed. Anything a human would actually paste is longer.
+const pasteMinLen = 8
+
+func (a *Agent) wrapPaste(data []byte) []byte {
+	if !a.bracketedPaste.Load() || len(data) < pasteMinLen {
+		return data
+	}
+	printable := false
+	for _, c := range data {
+		if c >= 0x20 && c != 0x7f {
+			printable = true
+			break
+		}
+	}
+	if !printable {
+		return data
+	}
+	out := make([]byte, 0, len(data)+len(pasteStart)+len(pasteEnd))
+	out = append(out, pasteStart...)
+	out = append(out, data...)
+	return append(out, pasteEnd...)
 }
