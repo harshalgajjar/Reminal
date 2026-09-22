@@ -1878,11 +1878,20 @@
       //
       // Without this the button spins forever after a perfectly successful
       // upgrade, which is the one outcome that must not look like a hang.
-      if (upgradeState && upgradeState.stage === 'restart' && !upgradeState.error) {
+      //
+      // Only a host_info from AFTER the reconnect may end it. The Host panel
+      // polls host_info every 1.5s, and a poll answered while the host was
+      // still restarting its other sessions — slow on Windows, where each one
+      // spawns a successor — reported the old version and wiped the state
+      // below, so a successful upgrade ended with no "Up to date" at all.
+      if (upgradeState && upgradeState.stage === 'restart' && !upgradeState.error
+          && (upgradeState.reconnected || (info.version && info.version !== upgradeState.version))) {
         const was = upgradeState.version;
         if (info.version && was && info.version !== was) {
+          // A warning (a session that would not restart) rode in on the last
+          // step before the reconnect; it is still true after it.
           upgradeState = { stage: 'done', pct: 100, version: info.version,
-                           detail: 'Now on v' + info.version };
+                           detail: 'Now on v' + info.version, warning: upgradeState.warning };
           changelog = null; // the notes we cached are about versions we now have
         } else {
           // It came back on the same version, or on a build too old to report
@@ -1890,6 +1899,11 @@
           // the button be pressable again.
           upgradeState = null;
         }
+        // The What's new sheet carries the same button; without this it kept
+        // painting "Restarting…" forever after the host panel said done.
+        const sheet = document.getElementById('clsheet');
+        if (sheet && !sheet.hidden && !changelog) requestUpdateCheck();
+        paintChangelog();
       }
       // A host upgrade done OUTSIDE this viewer — a CLI `reminal upgrade`, the
       // always-on daemon restarting itself, or another device — moves the
@@ -2207,9 +2221,16 @@
       // carries the detail. It shares a row with "What's new", so a sentence
       // in the button — a status, an error — wrapped to four lines and the
       // whole row ballooned with it.
-      if (failed)      { label = 'Retry upgrade';
+      // A "restart"-stage failure comes AFTER the binary was replaced, so the
+      // reassurance that nothing changed would be false there — and a retry
+      // would only answer "already on the latest version".
+      const installed = failed && u.stage === 'restart';
+      if (installed)   { label = 'Retry upgrade';
+                         sub = escHTML(u.error) + ' \u2014 the new version is installed; <code>reminal restart --all</code> on the host moves what is left.'; }
+      else if (failed) { label = 'Retry upgrade';
                          sub = escHTML(u.error) + ' \u2014 nothing was replaced, every session is untouched.'; }
-      else if (done)   { label = '\u2713 Up to date'; sub = u.detail ? escHTML(u.detail) : ''; }
+      else if (done)   { label = '\u2713 Up to date';
+                         sub = [u.detail, u.warning].filter(Boolean).map(escHTML).join(' \u00b7 '); }
       else if (busy)   { label = 'Upgrading\u2026'; sub = escHTML(u.detail || ''); }
       else             { label = 'Upgrade to v' + escHTML(update);
                          sub = hostRestartClause() + ' Shells are kept.'; }
@@ -2337,10 +2358,12 @@
         // tag: an unreleased build, or one whose release was pulled.
         if (cur && !haveCurrent) h += '<div class="cl-here">you are here \u00b7 v' + escHTML(cur) + '</div>';
         h += '</div>';
-        // Nothing newer means nothing to press: the sheet is open to be
-        // read, not to start an upgrade that would be a no-op.
-        if (behind) h += '<div class="cl-foot">' + (upgradeButtonHTML(lastHostInfo || {}) || '') + '</div>';
       }
+      // Nothing newer means nothing to press: the sheet is open to be read,
+      // not to start an upgrade that would be a no-op. But an upgrade that is
+      // running, finished or failed keeps its button — "done" clears the notes
+      // it was started from, and dropping the foot with them hid the outcome.
+      if (behind || upgradeState) h += '<div class="cl-foot">' + (upgradeButtonHTML(lastHostInfo || {}) || '') + '</div>';
       sheet.innerHTML = h;
       const x = sheet.querySelector('#clx');
       if (x) x.onclick = closeChangelog;
@@ -5685,6 +5708,9 @@
         // user knows we're live again. Press-Enter hint matches the
         // Go viewer's behaviour so the prompt redraws.
         reconnectMessagePending = false;
+        // An upgrade's restart ends in exactly this reconnect; onHostInfo
+        // waits for it before judging the version that comes back.
+        if (upgradeState && upgradeState.stage === 'restart') upgradeState.reconnected = true;
         term.write('\r\n\x1b[2m[reminal] Reconnected to ' + sessionId + ' — press Enter to refresh the prompt.\x1b[0m\r\n');
       }
       sendResume();
