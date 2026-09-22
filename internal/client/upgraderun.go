@@ -97,6 +97,11 @@ type upgradeStage struct {
 	Detail  string `json:"detail,omitempty"`
 	Version string `json:"version,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// Warning is a problem that did NOT stop the upgrade — the binary is
+	// replaced and the host is moving on, but something (a session that would
+	// not restart) needs the user. Distinct from Error, which means the
+	// upgrade stopped.
+	Warning string `json:"warning,omitempty"`
 }
 
 // broadcastUpgrade records a step and sends it to everyone watching on this

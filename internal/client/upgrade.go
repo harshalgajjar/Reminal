@@ -119,8 +119,10 @@ func (a *Agent) handleUpgrade(conn *websocket.Conn, data string) {
 	step := func(s upgradeStage) { stepf(s, false) }
 	fail := func(stage, msg string) {
 		// Every failure path leaves the host on its current version with every
-		// session untouched, and says so — the thing a user needs to know
-		// after a failed upgrade is whether they are in a half-state.
+		// session untouched — the thing a user needs to know after a failed
+		// upgrade is whether they are in a half-state. The one exception is a
+		// "restart"-stage failure, which lands after the binary is replaced;
+		// the viewer keys its wording off the stage, so keep that stage honest.
 		stepf(upgradeStage{Stage: stage, Error: msg, Version: a.version}, true)
 	}
 
@@ -210,9 +212,15 @@ func (a *Agent) handleUpgrade(conn *websocket.Conn, data string) {
 	// own agent re-execs the process running this handler, so anything after
 	// it would never run. `reminal restart --all` has the same ordering rule
 	// for the same reason.
+	//
+	// A session that will not restart is NOT a failed upgrade: the binary is
+	// already replaced, and the sessions that did restart are on it. Stopping
+	// here used to report "failed" and — worse — skip this session's own
+	// restart below, leaving the viewer that pressed the button on the old
+	// version. Carry it as a warning and finish the job.
+	var warning string
 	if err := restartOtherSessions(); err != nil {
-		fail("restart", err.Error())
-		return
+		warning = err.Error()
 	}
 	// The last line for the viewers on THIS session, who are still connected
 	// because this agent restarts last. It goes to them directly rather than
@@ -222,7 +230,7 @@ func (a *Agent) handleUpgrade(conn *websocket.Conn, data string) {
 	// They reconnect to the same session ID and re-read host_info, which is how
 	// they learn the new version.
 	step(upgradeStage{Stage: "restart", Pct: 97, Version: a.version,
-		Detail: "Restarting this session — reconnecting shortly"})
+		Detail: "Restarting this session — reconnecting shortly", Warning: warning})
 	time.Sleep(upgradeFlushPause) // let the frame flush before we exec
 	if a.machine && a.daemonHost {
 		if daemonServiceManaged() {

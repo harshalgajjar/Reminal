@@ -24,7 +24,11 @@ func TestBatteryLabel(t *testing.T) {
 	// runs in the first three hours of one — which the guard below handles.
 	today := now.Add(-3 * time.Hour)
 	if today.Day() != now.Day() {
-		today = now.Add(-2 * time.Minute) // just after midnight: still today
+		// Early in the day: halfway between midnight and now is always both
+		// in the past and today. A fixed "-2 minutes" crossed midnight itself
+		// in the first two minutes of a day, and CI caught it at 00:01.
+		midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		today = midnight.Add(now.Sub(midnight) / 2)
 	}
 	yest := now.AddDate(0, 0, -1)
 

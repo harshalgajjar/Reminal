@@ -4,6 +4,7 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -94,13 +95,19 @@ func restartOtherSessions() error {
 			// Forwards hot-swap in place (same id/PIN/URL) so an upgrade reaches
 			// them too. Skip a forward whose record has no version: it predates
 			// hot-swap and would read the signal as shutdown. It stays on the old
-			// code until the user re-exposes — better than killing its URL. On
-			// Windows RestartPortForward errors and the forward is counted as
-			// left behind, which the message below reports.
+			// code until the user re-exposes — better than killing its URL.
 			if a.Version == "" {
 				continue
 			}
 			if err := RestartPortForward(a.PID); err != nil {
+				// Windows cannot hot-swap a forward at all. That is the same
+				// outcome as the versionless case above — the forward keeps
+				// serving on the old code — not a failure: counting it as one
+				// made every upgrade on a Windows box with a live `expose`
+				// report "failed" after the binary had already been replaced.
+				if errors.Is(err, errPortRestartUnsupported) {
+					continue
+				}
 				failed++
 			}
 			continue
