@@ -66,6 +66,9 @@ func RunDaemon(version string) error {
 	// overwrite each other. Served on every platform: the badge is macOS-only
 	// today, but mirroring notes to a phone is not.
 	go ServeNotes(stop)
+	// Phone alerts (CPU, battery, charger) for every owner phone that asked.
+	// Idle — no sampling at all — until one has.
+	go runPushWatcher(stop)
 	runDirectoryHost(stop, true, version)
 	return nil
 }

@@ -58,3 +58,9 @@ run_worker_first = true
 # deploy` — clients pick it up on their next ≤24h check and upgrade automatically
 # (no `--force`). Leave "" for normal (prompt-only) releases.
 CRITICAL_MIN = ""
+# Public half of the push signing key (VAPID). Browsers subscribe with it and
+# push services check each alert's signature against it; the private half is
+# the VAPID_PRIVATE_JWK secret (`wrangler secret put VAPID_PRIVATE_JWK`).
+# Changing this pair invalidates every browser's alert subscription, so treat
+# it like the signing cert: generate once, keep.
+VAPID_PUBLIC = "BLCthPsa5_VDrbVEMtDk6NUXowUbqY8n2hetWbpzjg-hR6-FC-nWC85emykddL6mqTx3P1jfaewicVW5237_YC4"

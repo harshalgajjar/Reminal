@@ -103,6 +103,18 @@ That single pane works because you *own* the machines. Enroll a device once — 
 
 ---
 
+## Know when a machine needs you
+
+Tap the bell in the **Machines panel** and every machine you own can notify this device, even with reminal closed: when its CPU stays outside a range you pick, when its battery drops below a level or below an amount of time left, or when its charger is plugged in or out. Set one set of rules for all your machines, or custom rules for any one of them. It works in Chrome, Edge, Firefox and Safari; on iPhone and iPad, add reminal to your Home Screen first.
+
+Each machine watches itself and seals every alert to your browser's own keys before it leaves, so the relay forwards a notification it can't read and keeps no list of your devices.
+
+<div align="center">
+<img src="docs/alerts.gif" alt="Two machines you own — build-server with its CPU climbing to 97%, and travel-laptop with its battery draining to 18% — each sending an alert to a phone, where the notifications 'CPU at 97% for 5 minutes' and 'Battery at 18% · about 45 min left' drop in over reminal's Alerts settings" width="900">
+</div>
+
+---
+
 ## Your agents can see each other
 
 ```bash

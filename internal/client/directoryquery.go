@@ -60,6 +60,8 @@ type dirQueryReq struct {
 	// carried by every listing, so the PIN never reaches the viewer's cache —
 	// see protocol.DirResponse.OpenURL.
 	OpenID string `json:"open_id,omitempty"`
+	// Push is a phone-alert request from an owner's browser (see pushdir.go).
+	Push *pushReq `json:"push,omitempty"`
 }
 
 func (r dirQueryReq) empty() bool {
@@ -68,6 +70,7 @@ func (r dirQueryReq) empty() bool {
 		strings.TrimSpace(r.KeysID) == "" &&
 		strings.TrimSpace(r.Keys) == "" &&
 		strings.TrimSpace(r.OpenID) == "" &&
+		r.Push == nil &&
 		!r.Restart
 }
 
