@@ -371,3 +371,21 @@ func TestDurText(t *testing.T) {
 		}
 	}
 }
+
+// Power is re-read seconds after a change, not a tick later, so the settle is
+// a duration: a change seen twice within it is still a wobble.
+func TestEvaluatePushChargerSettlesByTime(t *testing.T) {
+	r := pushRules{Charger: true}
+	st := &pushState{}
+	t0 := time.Unix(1_000_000, 0)
+	at := func(ms int, state string) int {
+		return len(evaluatePush(r, st, pushSample{At: t0.Add(time.Duration(ms) * time.Millisecond), Bat: &Battery{Pct: pct(60), State: state}}, "b"))
+	}
+	at(0, "charging")
+	if at(1000, "discharging")+at(2000, "discharging") != 0 {
+		t.Fatal("announced before the change had held")
+	}
+	if at(1000+int(pushChargerSettle/time.Millisecond), "discharging") != 1 {
+		t.Fatal("did not announce once the change held")
+	}
+}

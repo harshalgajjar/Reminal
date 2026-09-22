@@ -54,6 +54,17 @@ func CurrentBattery() *Battery {
 	return batCopy()
 }
 
+// FreshBattery reads power now, skipping the cache, and refreshes the cache
+// with what it read. For the moment right after a plug or unplug, when a
+// reading up to batteryTTL old would still show the previous state.
+func FreshBattery() *Battery {
+	batMu.Lock()
+	defer batMu.Unlock()
+	batVal = readBattery()
+	batRead = time.Now()
+	return batCopy()
+}
+
 // batCopy hands out a copy rather than the cached value itself: the cache is
 // shared by every caller for batteryTTL, and one of them mutating the struct
 // (or the Pct it points at) would poison the reading for all the others.

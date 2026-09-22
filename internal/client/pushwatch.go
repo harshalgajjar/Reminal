@@ -18,17 +18,21 @@ import (
 // most when nobody is looking — and costs nothing on a machine with no
 // subscribers, because it only samples when some phone asked for something.
 
-// pushTick is how often the watcher samples. Short enough that "charger
-// unplugged" arrives while the person is still standing at the desk.
+// pushTick is how often the watcher samples CPU. Power is not left to this
+// tick: a plug or unplug wakes the watcher straight away (see
+// watchPowerChanges), so "charger unplugged" arrives while the person is still
+// standing at the desk.
 const pushTick = 10 * time.Second
 
 // pushCPUCooldown is the least time between two CPU alerts to one phone. A
 // build that pins the CPU for an hour should say so once, not six times.
 const pushCPUCooldown = 30 * time.Minute
 
-// pushChargerSettle is how many consecutive samples a power change must hold
-// before it is announced, so a wobbly cable is one alert, not a burst.
-const pushChargerSettle = 2
+// pushChargerSettle is how long a power change must hold before it is
+// announced, so a wobbly cable is one alert, not a burst. Short, because the
+// watcher re-reads power this long after any change instead of waiting for
+// the next tick.
+const pushChargerSettle = 3 * time.Second
 
 // pushSample is one reading of the machine.
 type pushSample struct {
@@ -46,9 +50,9 @@ type pushState struct {
 	batDisarmed  bool // fired; re-arms on charging or a clear recovery
 	timeDisarmed bool // same, for the time-left rule
 
-	plugged     *bool // last settled "on AC" state; nil until first reading
-	pendingPlug bool
-	pendingN    int
+	plugged      *bool // last settled "on AC" state; nil until first reading
+	pendingPlug  bool
+	pendingSince time.Time // when the unsettled change was first seen; zero if none
 }
 
 // pushBand tracks one "outside the range" condition: how long it has held,
@@ -143,15 +147,14 @@ func evaluatePush(rules pushRules, st *pushState, s pushSample, host string) []p
 			v := onAC
 			st.plugged = &v
 		case onAC == *st.plugged:
-			st.pendingN = 0
+			st.pendingSince = time.Time{}
 		default:
-			if st.pendingN == 0 || st.pendingPlug != onAC {
-				st.pendingPlug, st.pendingN = onAC, 0
+			if st.pendingSince.IsZero() || st.pendingPlug != onAC {
+				st.pendingPlug, st.pendingSince = onAC, s.At
 			}
-			st.pendingN++
-			if st.pendingN >= pushChargerSettle {
+			if s.At.Sub(st.pendingSince) >= pushChargerSettle {
 				v := onAC
-				st.plugged, st.pendingN = &v, 0
+				st.plugged, st.pendingSince = &v, time.Time{}
 				if rules.Charger {
 					body := fmt.Sprintf("Charger unplugged — on battery at %d%%", pct)
 					if b.Mins > 0 {
@@ -204,11 +207,23 @@ func runPushWatcher(stop <-chan struct{}) {
 	states := map[string]*pushState{}
 	t := time.NewTicker(pushTick)
 	defer t.Stop()
+	power := make(chan struct{}, 1)
+	go watchPowerChanges(stop, power)
+	// recheck confirms a power change once it has had pushChargerSettle to
+	// hold, instead of leaving it for the next tick.
+	recheck := time.NewTimer(time.Hour)
+	recheck.Stop()
 	for {
+		fresh := false
 		select {
 		case <-stop:
 			return
 		case <-t.C:
+		case <-power:
+			fresh = true
+			recheck.Reset(pushChargerSettle + 200*time.Millisecond)
+		case <-recheck.C:
+			fresh = true
 		}
 		pushStoreMu.Lock()
 		subs, err := loadPushSubs()
@@ -225,8 +240,13 @@ func runPushWatcher(stop <-chan struct{}) {
 		if !wantAny {
 			continue
 		}
-		s := pushSample{At: time.Now(), Bat: CurrentBattery()}
-		if wantCPU {
+		s := pushSample{At: time.Now()}
+		if fresh {
+			s.Bat = FreshBattery()
+		} else {
+			s.Bat = CurrentBattery()
+		}
+		if wantCPU && !fresh {
 			s.CPU, s.CPUOK = cpuPercent()
 		}
 		host := pushHostLabel()
@@ -240,6 +260,7 @@ func runPushWatcher(stop <-chan struct{}) {
 				states[ep] = st
 			}
 			for _, m := range evaluatePush(e.Rules.clamp(), st, s, host) {
+				m.At = s.At.UnixMilli()
 				go deliverPush(e, m)
 			}
 		}
