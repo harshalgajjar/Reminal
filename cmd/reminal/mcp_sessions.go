@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -334,11 +335,24 @@ func ambiguousSession(sessionSel string, hits []transcriptRef) error {
 // alone reads like delivery confirmation and is not: the text can be sitting in
 // the target's input box, unsent, which is exactly how a briefing to another
 // agent went missing while the sender believed it had arrived.
-func typedReport(n int, tail []byte, target string) string {
-	if tail == nil {
+func typedReport(n int, pressed bool, target string) string {
+	if !pressed {
 		return fmt.Sprintf("Typed %d byte(s) into %s (no Return — the text is in the input box, not submitted).", n, target)
 	}
-	return fmt.Sprintf("Typed %d byte(s) into %s, then pressed Return.", n, target)
+	return fmt.Sprintf("Typed %d byte(s) into %s, then pressed Return. %s", n, target, confirmLanded)
+}
+
+// confirmLanded rides on every report of a pressed Return. The Return reaching
+// the PTY is not the message being accepted: a busy agent or a slow redraw can
+// swallow it and leave the text in the input box, so the caller has to look.
+const confirmLanded = "Confirm with read_transcript that it was submitted and is not still in the input box."
+
+// returnPressed is whether a send_keys delivery ended in a Return — either the
+// separate one in tail, or one inside body itself: a bare Return (keys="" with
+// enter=true, the way to submit text left in the input box) or keys ending in
+// a newline.
+func returnPressed(body, tail []byte) bool {
+	return tail != nil || bytes.HasSuffix(body, []byte{'\r'})
 }
 
 func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, error) {
@@ -387,7 +401,7 @@ func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, 
 		if err := pressEnter(send); err != nil {
 			return "", err
 		}
-		return typedReport(len(body), tail, id), nil
+		return typedReport(len(body), returnPressed(body, tail), id), nil
 	}
 
 	if machineSel == "" || machineLooksLocal(machineSel) {
@@ -396,7 +410,7 @@ func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, 
 			if err := pressEnter(send); err != nil {
 				return "", err
 			}
-			return typedReport(len(body), tail, sessionSel), nil
+			return typedReport(len(body), returnPressed(body, tail), sessionSel), nil
 		} else if !errors.Is(err, errNotLocal) {
 			return "", err
 		}
@@ -420,10 +434,10 @@ func mcpSendKeys(sessionSel, machineSel, keys, pin string, enter bool) (string, 
 		// sendOneKeys names the machine, which is worth keeping; say what
 		// happened to the Return alongside it.
 		out = strings.TrimSuffix(out, ".")
-		if tail == nil {
+		if !returnPressed(body, tail) {
 			return out + " (no Return — the text is in the input box, not submitted).", nil
 		}
-		return out + ", then pressed Return.", nil
+		return out + ", then pressed Return. " + confirmLanded, nil
 	default:
 		return "", ambiguousSession(sessionSel, refs)
 	}
