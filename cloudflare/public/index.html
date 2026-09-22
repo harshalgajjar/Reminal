@@ -1017,6 +1017,8 @@
     .al-callout-title { font-weight: 600; color: #e6edf3; margin-bottom: 2px; }
     .al-callout ol { margin: 4px 0 0; padding-left: 18px; }
     .al-callout li { margin: 2px 0; }
+    .al-alt { margin-top: 8px; font-size: 11.5px; color: #8b949e; line-height: 1.5; }
+    .al-alt b { color: #c9d1d9; font-weight: 600; }
     .al-glyph { display: inline-flex; vertical-align: -2px; color: #e6edf3; margin: 0 1px; }
     .al-wait { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 11.5px; color: #8b949e; }
     .al-spin { width: 12px; height: 12px; border: 1.6px solid rgba(139,148,158,.35); border-top-color: #c9d1d9;
@@ -2542,6 +2544,33 @@
     function isStandaloneApp() {
       return (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
     }
+    function isAndroidDevice() { return /Android/i.test(navigator.userAgent); }
+    // How to turn notifications on from wherever this page is running. An
+    // installed app has no address bar, so the browser-tab steps (the lock
+    // icon) are impossible there; each platform keeps the switch somewhere
+    // else.
+    function alertAllowSteps() {
+      const host = escHTML(location.host);
+      if (isStandaloneApp() && isAndroidDevice()) {
+        return '<ol><li>Long-press the reminal icon on your home screen</li>'
+          + '<li>Open <b>App info</b>, then <b>Notifications</b></li>'
+          + '<li>Turn on <b>Allow notifications</b></li></ol>'
+          + '<div class="al-alt">Still blocked? In Chrome, open <b>Settings</b>, then <b>Site settings</b>, then <b>Notifications</b>, and allow <b>' + host + '</b>.</div>';
+      }
+      if (isStandaloneApp() && isIOSDevice()) {
+        return '<ol><li>Open the <b>Settings</b> app</li>'
+          + '<li>Go to <b>Notifications</b>, then <b>reminal</b></li>'
+          + '<li>Turn on <b>Allow Notifications</b></li></ol>';
+      }
+      if (isStandaloneApp()) {
+        return '<ol><li>Open <b>' + host + '</b> in your browser</li>'
+          + '<li>Click <span class="al-glyph">' + aIcon('lock', 14) + '</span> at the left of the address bar</li>'
+          + '<li>Set <b>Notifications</b> to <b>Allow</b></li></ol>';
+      }
+      return '<ol><li>Tap <span class="al-glyph">' + aIcon('lock', 14) + '</span> at the left of the address bar</li>'
+        + '<li>Open <b>Permissions</b>, then <b>Notifications</b></li>'
+        + '<li>Choose <b>Allow</b></li></ol>';
+    }
     function b64urlToU8(s) {
       const pad = '='.repeat((4 - s.length % 4) % 4);
       return base64ToU8((s + pad).replace(/-/g, '+').replace(/_/g, '/'));
@@ -2910,15 +2939,13 @@
           h += '<div class="al-callout"><span class="al-callout-icon">' + aIcon('belloff') + '</span><div class="al-callout-body">'
             + '<div class="al-callout-title">Your browser is waiting for an answer</div>'
             + (isStandaloneApp()
-                ? 'Long-press the reminal icon on your home screen, open <b>App info</b>, then <b>Notifications</b>, and turn them on. Then come back here.'
+                ? alertAllowSteps()
                 : 'Instead of a popup, it put <span class="al-glyph">' + aIcon('belloff', 14) + '</span> in the address bar. Tap it and choose <b>Allow</b>.')
             + waiting('This continues by itself once you allow it') + '</div></div>';
         } else {
           h += '<div class="al-callout err"><span class="al-callout-icon">' + aIcon('lock') + '</span><div class="al-callout-body">'
-            + '<div class="al-callout-title">Notifications are blocked for this site</div><ol>'
-            + '<li>Tap <span class="al-glyph">' + aIcon('lock', 14) + '</span> at the left of the address bar</li>'
-            + '<li>Open <b>Permissions</b>, then <b>Notifications</b></li>'
-            + '<li>Choose <b>Allow</b></li></ol>'
+            + '<div class="al-callout-title">Notifications are blocked ' + (isStandaloneApp() ? 'for reminal' : 'for this site') + '</div>'
+            + alertAllowSteps()
             + waiting('This continues by itself once you allow it') + '</div></div>';
         }
         h += '<div class="al-foot"><button class="al-btn" id="al-cancel"><span>Not now</span></button></div>';
