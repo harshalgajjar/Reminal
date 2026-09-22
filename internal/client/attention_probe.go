@@ -98,6 +98,10 @@ func (a *Agent) runAttention(logPath string) {
 		a.screenMu.Unlock()
 
 		now := time.Now()
+		// Whether the agent here can work at all — its login. Read from the
+		// same screen, before the attention state, because a logged-out agent
+		// takes a message, ends its turn and looks done.
+		a.noteHarnessHealth(render)
 		tail := attentionProbeTail(render, attnTailRows)
 		if tail != lastTail {
 			lastTail = tail
@@ -143,6 +147,9 @@ func (a *Agent) runAttention(logPath string) {
 		// the screen inference. The hook is precise; the screen is universal.
 		screenState := classifyAttn(agentActive, tail, settledMs)
 		state, source := resolveAttn(screenState, session.ReadHookState(a.sessionID), last)
+		if a.harnessDown() {
+			state, source = harnessLoggedOut, "screen(login)"
+		}
 		a.setAttnState(state)
 
 		if enc != nil {

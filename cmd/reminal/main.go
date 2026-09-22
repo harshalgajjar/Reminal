@@ -1818,6 +1818,8 @@ func runList(args []string) error {
 		switch {
 		case a.IsPort():
 			state, stateColor = fmt.Sprintf("→ :%d", a.Port), cCurrent
+		case a.Attn == "logged-out":
+			state, stateColor = "logged out", cAmber
 		case a.Attn == "input":
 			state, stateColor = "needs you", cAmber
 		case a.Attn == "working":
@@ -2026,7 +2028,7 @@ func attnColor(role string, light bool) string {
 // the plain indent used, so it adds no width.
 func attnMarker(attn string, light bool) string {
 	switch attn {
-	case "input":
+	case "input", "logged-out":
 		return sgr(attnColor("needs", light), "●") + " "
 	case "working":
 		return sgr(attnColor("working", light), "●") + " "

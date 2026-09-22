@@ -197,6 +197,9 @@ type Agent struct {
 	// shell). Written by the attention detector goroutine, read by activeRecord
 	// so `reminal list` shows which session needs you without attaching.
 	attnState string
+	// harness is whether the agent in this session can work at all — its
+	// login; guarded by metaMu (harnesshealth.go).
+	harness harnessHealth
 	// metaDirty is set by pumpPTY when title or lastActivity changed since
 	// the last on-disk flush; the meta-flush loop clears it when it writes.
 	// Keeps idle sessions from churning the active record.

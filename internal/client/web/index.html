@@ -1219,6 +1219,7 @@
       letter-spacing: 0.01em; white-space: nowrap; padding: 2px 8px; border-radius: 999px;
     }
     .machine-session .ms-state.attn-input   { color: #e3b341; background: rgba(227,179,65,0.14); }
+    .machine-session .ms-state.attn-logged-out { color: #e3b341; background: rgba(227,179,65,0.14); }
     .machine-session .ms-state.attn-working { color: #4fc4d6; background: rgba(79,196,214,0.12); }
     .machine-session .ms-state.attn-done    { color: #57ab6a; background: rgba(87,171,106,0.12); }
     /* Attention chip in the session switchers (Recents dropdown + mobile dock),
@@ -1232,6 +1233,7 @@
       white-space: nowrap; padding: 1px 7px; border-radius: 999px;
     }
     .attn-chip.attn-input   { color: #e3b341; background: rgba(227,179,65,0.14); }
+    .attn-chip.attn-logged-out { color: #e3b341; background: rgba(227,179,65,0.14); }
     .attn-chip.attn-working { color: #4fc4d6; background: rgba(79,196,214,0.12); }
     .attn-chip.attn-done    { color: #57ab6a; background: rgba(87,171,106,0.12); }
     .machine-session:hover { background: #161b22; }
@@ -4974,7 +4976,8 @@
       // awaiting you wins, else anything working, else stay green (idle / all
       // done, which also just means "online"). Offline/checking set above.
       const agg = machineAttn(list);
-      if (agg === 'input') { dot.className = 'machine-dot attn-input'; dot.title = 'needs you'; }
+      if (agg === 'logged-out') { dot.className = 'machine-dot attn-input'; dot.title = 'its agent is logged out'; }
+      else if (agg === 'input') { dot.className = 'machine-dot attn-input'; dot.title = 'needs you'; }
       else if (agg === 'working') { dot.className = 'machine-dot attn-working'; dot.title = 'working'; }
       // Remember this snapshot so the NEXT time the panel opens it paints these
       // sessions instantly from cache while the fresh query runs in the background.
@@ -5095,7 +5098,7 @@
     }
 
     // Attention state → the word shown in the session's state chip.
-    const ATTN_LABELS = { input: 'needs you', working: 'working', done: 'done' };
+    const ATTN_LABELS = { input: 'needs you', working: 'working', done: 'done', 'logged-out': 'logged out' };
 
     // attnChipEl builds the little state pill shown beside a session name in the
     // Recents dropdown and the mobile dock, or null for an idle/unknown state.
@@ -5353,18 +5356,21 @@
       fleetTick();
     }
 
-    // machineAttn rolls a machine's sessions up to one dot state: 'input' if any
-    // session needs you, else 'working' if any is working, else '' (idle / all
-    // done → the plain online-green dot). Port forwards don't count. Reads
-    // through attnOf so a live push colours the dot too.
+    // machineAttn rolls a machine's sessions up to one dot state: 'logged-out'
+    // if an agent there cannot work at all, else 'input' if any session needs
+    // you, else 'working' if any is working, else '' (idle / all done → the
+    // plain online-green dot). Port forwards don't count. Reads through attnOf
+    // so a live push colours the dot too.
     function machineAttn(list) {
-      let working = false;
+      let working = false, needs = false;
       for (const s of (list || [])) {
         if (s.kind === 'port') continue;
         const a = attnOf(s.id, s.attn);
-        if (a === 'input') return 'input';
+        if (a === 'logged-out') return 'logged-out';
+        if (a === 'input') needs = true;
         if (a === 'working') working = true;
       }
+      if (needs) return 'input';
       return working ? 'working' : '';
     }
     function sessionLabelWeb(s) {
