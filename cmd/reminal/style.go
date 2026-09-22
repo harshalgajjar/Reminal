@@ -51,6 +51,15 @@ func visLen(s string) int { return utf8.RuneCountInString(stripSGR(s)) }
 // (session names/titles arrive from another machine over the directory channel),
 // so a malicious or compromised owned machine can't inject terminal escape
 // sequences into your terminal when you run `reminal machines`.
+// isC1OrBidi: the C1 controls (U+0080-U+009F — U+009B is CSI to a terminal
+// that honours C1 in UTF-8, so stripping ESC alone is not enough) and the
+// characters that change which way text reads, which can make a name read as
+// something other than what it is.
+func isC1OrBidi(r rune) bool {
+	return (r >= 0x80 && r <= 0x9f) || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) ||
+		r == 0x200e || r == 0x200f || r == 0x061c
+}
+
 func cleanTerm(s string) string {
 	if s == "" {
 		return s
@@ -58,8 +67,8 @@ func cleanTerm(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		if r == 0x1b || r < 0x20 || r == 0x7f {
-			continue // ESC, C0 controls, DEL
+		if r == 0x1b || r < 0x20 || r == 0x7f || isC1OrBidi(r) {
+			continue // ESC, C0 controls, DEL, C1 controls, direction overrides
 		}
 		b.WriteRune(r)
 	}
