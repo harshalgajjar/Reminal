@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path"
 
 	"github.com/reminal/reminal/internal/config"
 	"github.com/reminal/reminal/internal/relay"
 )
 
-//go:embed web/index.html web/sw.js
+//go:embed web/index.html web/sw.js web/manifest.webmanifest web/icons
 var webIndex embed.FS
 
 func RunRelay(port string) error {
@@ -46,6 +47,26 @@ func RunRelay(port string) error {
 		}
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store, must-revalidate")
+		_, _ = w.Write(data)
+	})
+	// The app manifest and its icons: what lets a browser install the viewer
+	// as an app rather than a bookmark.
+	mux.HandleFunc("GET /manifest.webmanifest", func(w http.ResponseWriter, r *http.Request) {
+		data, err := webIndex.ReadFile("web/manifest.webmanifest")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/manifest+json")
+		_, _ = w.Write(data)
+	})
+	mux.HandleFunc("GET /icons/{name}", func(w http.ResponseWriter, r *http.Request) {
+		data, err := webIndex.ReadFile("web/icons/" + path.Base(r.PathValue("name")))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(data)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

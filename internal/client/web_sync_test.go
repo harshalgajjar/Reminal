@@ -17,7 +17,9 @@ import (
 // no build step syncing them, so an edit to one and not the other silently makes
 // the two front-ends diverge. This guard fails the moment they drift.
 func TestWebIndexCopiesInSync(t *testing.T) {
-	for _, name := range []string{"index.html", "sw.js"} {
+	for _, name := range []string{"index.html", "sw.js", "manifest.webmanifest",
+		"icons/icon-192.png", "icons/icon-512.png", "icons/icon-maskable-192.png",
+		"icons/icon-maskable-512.png", "icons/apple-touch-icon.png"} {
 		t.Run(name, func(t *testing.T) { checkWebCopyInSync(t, name) })
 	}
 }
