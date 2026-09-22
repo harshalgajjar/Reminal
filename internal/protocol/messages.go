@@ -411,6 +411,13 @@ type MachineStats struct {
 type DirResponse struct {
 	Hostname string       `json:"hostname,omitempty"`
 	Sessions []DirSession `json:"sessions"`
+	// Caps are the requests this build answers on the machine channel, so a
+	// caller can tell what a machine can do before asking it. Builds differ —
+	// an older one lacks what was added since, and a build may carry more than
+	// this one — and until now the only way to find out was to ask and wait
+	// for a silence. Derived from what the agent actually accepts, so it can
+	// never claim something it would not answer.
+	Caps []string `json:"caps,omitempty"`
 	// KeysOK/KeysError are set when the query asked to inject keystrokes into
 	// one session. Omitted by older hosts (they still return the session list).
 	KeysOK    bool   `json:"keys_ok,omitempty"`

@@ -7,6 +7,8 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -165,6 +167,41 @@ var dirChannelOnly = map[protocol.MessageType]bool{
 // everything EXCEPT the directory actions reserved to the machine channel
 // (dirChannelOnly): those reach the machine's whole session registry and must
 // never be exposed to a session's PIN guests.
+// machineCaps lists the requests this build answers on the machine channel,
+// for DirResponse.Caps. Read from machineAccepts rather than written out, so
+// it describes the build itself and cannot drift from it.
+func machineCaps() []string {
+	out := make([]string, 0, len(machineAccepts))
+	for t, ok := range machineAccepts {
+		if ok {
+			out = append(out, string(t))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// refuseUnsupported answers a machine-channel request this build has no
+// handler for, instead of dropping it: the caller hears "not this build"
+// at once, with the same message type it asked on, and can say so to the
+// person rather than timing out.
+func (a *Agent) refuseUnsupported(conn *websocket.Conn, msg protocol.Message) {
+	if !a.machine || !strings.HasPrefix(string(msg.Type), "dir_") || !a.allowDir(dirActQuery) {
+		return
+	}
+	var req struct {
+		ReqID string `json:"req_id"`
+	}
+	if !a.decryptDir(msg.Data, &req) {
+		return
+	}
+	a.sendWindowMsg(conn, msg.Type, dirAck{
+		ReqID:       req.ReqID,
+		Unsupported: true,
+		Error:       "this reminal does not answer " + string(msg.Type),
+	})
+}
+
 func (a *Agent) servesOnThisChannel(t protocol.MessageType) bool {
 	if a.machine {
 		return machineAccepts[t]
@@ -236,6 +273,7 @@ func (a *Agent) handleDirQuery(conn *websocket.Conn, data string) {
 		return
 	}
 	resp := LocalDirectory()
+	resp.Caps = machineCaps()
 	if resp.Stats != nil {
 		resp.Stats.Version, resp.Stats.Update = a.version, updater.Available(a.version)
 	}
@@ -272,6 +310,11 @@ type dirAck struct {
 	ReqID string `json:"req_id,omitempty"`
 	OK    bool   `json:"ok,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Unsupported marks a request this build does not answer, as opposed to
+	// one that was tried and failed. Without it such a request got no reply
+	// at all, and the caller could only wait out its timeout and guess
+	// between "cannot", "will not" and "is not there".
+	Unsupported bool `json:"unsupported,omitempty"`
 }
 
 // decryptDir opens a directory request under the channel key. Anything that
