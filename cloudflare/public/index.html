@@ -2591,7 +2591,12 @@
       try { const db = await openOwnDB(); await idbPut(db, 'alert-prefs', p); } catch (_) {}
     }
 
+    // Reuse the registration once there is one. register() re-downloads
+    // sw.js to check for an update, and this is called on every permission
+    // check — a Worker request each time for a file that has not changed.
     async function pushRegistration() {
+      const have = await navigator.serviceWorker.getRegistration('/');
+      if (have && have.active) return have;
       await navigator.serviceWorker.register('/sw.js', { scope: '/' });
       return navigator.serviceWorker.ready;
     }
@@ -2636,10 +2641,15 @@
 
     // Bring one machine in line with what it should be told. Returns the row
     // state it ended in.
-    async function syncAlertMachine(b64, prefs, sub) {
+    // opts.retryOld: ask a machine that last said "needs an update" again.
+    // Only opening the sheet does that; everything in the background leaves
+    // such a machine alone — each ask is a relay round trip, and an old
+    // machine gives the same answer every time.
+    async function syncAlertMachine(b64, prefs, sub, opts) {
       const store = await loadOwnedMachines();
       const rec = store[b64];
       if (!rec) return 'off';
+      if (rec.alertsNeedsUpdate && !(opts && opts.retryOld)) return setAlertRow(b64, 'upgrade');
       const key = alertWantKey(prefs, rec);
       const want = key !== 'off';
       // Never told anything and should stay quiet: nothing to undo.
@@ -2650,11 +2660,14 @@
       try {
         if (want) await pushCall(b64, 'set', sub, alertRulesFor(prefs, rec));
         else await pushCall(b64, 'remove', sub);
-        await withOwnedMachines(m => { if (!m[b64]) return false; m[b64].alertsSynced = key; });
+        await withOwnedMachines(m => { if (!m[b64]) return false; m[b64].alertsSynced = key; delete m[b64].alertsNeedsUpdate; });
         return setAlertRow(b64, want ? 'on' : 'off');
       } catch (e) {
         const m = (e && e.message) || '';
-        if (m === 'needs-upgrade') return setAlertRow(b64, 'upgrade');
+        if (m === 'needs-upgrade') {
+          await withOwnedMachines(mm => { if (!mm[b64]) return false; mm[b64].alertsNeedsUpdate = true; });
+          return setAlertRow(b64, 'upgrade');
+        }
         if (m === 'timeout' || m === 'unreachable') return setAlertRow(b64, want ? 'pending-on' : 'pending-off');
         return setAlertRow(b64, 'error', m);
       }
@@ -2664,23 +2677,36 @@
       if (alerts.open) paintAlerts();
       return state;
     }
-    async function syncAllAlerts() {
+    async function syncAllAlerts(opts) {
       const prefs = alertPrefsCache || await loadAlertPrefs();
       const { keys } = await sortedAlertMachines();
-      const results = await Promise.all(keys.map(k => syncAlertMachine(k, prefs, alerts.sub)));
+      const results = await Promise.all(keys.map(k => syncAlertMachine(k, prefs, alerts.sub, opts)));
       refreshAlertBadges();
       return keys.filter((k, i) => results[i] === 'on');
     }
 
     // Called when the Machines panel sees a machine answer: finish any change
     // it missed while offline. Quiet — no sheet needed.
+    // Every check below is local and free; only a machine that passes them
+    // all costs a relay round trip, and at most once per ALERT_RETRY_MS.
     const alertCatchUp = new Set();
-    async function maybeCatchUpAlerts(b64, rec) {
+    const alertLastTry = new Map();
+    const ALERT_RETRY_MS = 5 * 60 * 1000;
+    async function maybeCatchUpAlerts(b64, rec, resp) {
       const prefs = alertPrefsCache;
       if (!prefs || !pushSupported() || alertCatchUp.has(b64)) return;
       const key = alertWantKey(prefs, rec);
       if (rec.alertsSynced === key || (key === 'off' && (rec.alertsSynced === undefined || rec.alertsSynced === 'off'))) return;
+      if (rec.alertsNeedsUpdate) {
+        // The refresh that called us already carries the machine's version,
+        // so an upgrade is noticed for free — and until then, nothing is sent.
+        if (!resp || alertHostTooOld(resp)) return;
+        await withOwnedMachines(m => { if (m[b64]) delete m[b64].alertsNeedsUpdate; });
+      }
+      const last = alertLastTry.get(b64) || 0;
+      if (Date.now() - last < ALERT_RETRY_MS) return;
       if (key !== 'off' && !alertPermGranted(await readAlertPermission())) return;
+      alertLastTry.set(b64, Date.now());
       alertCatchUp.add(b64);
       try {
         const sub = alerts.sub || await pushSubscription(false);
@@ -2830,7 +2856,7 @@
       if (prefs.enabled && alerts.sub && alertPermGranted(alerts.perm)) {
         alerts.view = 'on'; alerts.detail = focusB64 || '';
         paintAlerts();
-        await syncAllAlerts();
+        await syncAllAlerts({ retryOld: true });
       } else {
         alerts.view = 'off';
         paintAlerts();
@@ -5859,7 +5885,7 @@
       machineFail.set(b64, 0);
       dot.className = 'machine-dot online';
       dot.title = 'online';
-      maybeCatchUpAlerts(b64, rec); // finish an alert change it missed while offline
+      maybeCatchUpAlerts(b64, rec, resp); // finish an alert change it missed while offline
       // Auto-name an unnamed machine from its reported hostname. Persist WITHOUT
       // re-rendering: we're mid-fill inside renderMachines's Promise.all, and a
       // renderMachines() here would tear down and rebuild every box (flicker) and
