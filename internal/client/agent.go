@@ -2799,7 +2799,11 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 		}
 
 		if !a.servesOnThisChannel(msg.Type) {
-			continue // wrong channel for this message — see servesOnThisChannel
+			// Wrong channel for this message — see servesOnThisChannel — or a
+			// request this build has no handler for, which is worth saying
+			// rather than leaving the caller to time out.
+			a.refuseUnsupported(conn, msg)
+			continue
 		}
 		switch msg.Type {
 		case protocol.TypeDirQuery:
