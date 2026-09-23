@@ -188,7 +188,7 @@ func releaseFeed(ctx context.Context) ([]Release, error) {
 	}
 	feedMu.Unlock()
 
-	fresh, err := fetchReleases(ctx)
+	fresh, err := channel.Releases(ctx)
 
 	feedMu.Lock()
 	defer feedMu.Unlock()
@@ -198,21 +198,28 @@ func releaseFeed(ctx context.Context) ([]Release, error) {
 	}
 	feedVal, feedRead, feedErr = fresh, time.Now(), nil
 	if len(fresh) > 0 {
-		recordLatest("v" + fresh[0].Version)
+		recordLatest(ctx, "v"+fresh[0].Version)
 	}
 	return append([]Release(nil), feedVal...), nil
 }
 
 // recordLatest is the single writer of the on-disk "latest release" cache.
 // Available reads it for host_info; the startup prompt reads it to decide
-// whether to ask. The criticality beacon rides along, because a check that
-// reached the network is the moment to ask about it.
-func recordLatest(tag string) {
+// whether to ask. The channel's forced-upgrade floor rides along, because a
+// check that reached the network is the moment to ask about it. A release
+// with no build for this platform is recorded without one, which check
+// reports as exactly that rather than as being up to date.
+func recordLatest(ctx context.Context, tag string) {
+	b, err := channel.Build(ctx, tag, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		b = Build{}
+	}
 	writeCache(cacheEntry{
 		CheckedAt:   time.Now(),
 		LatestTag:   tag,
-		AssetURL:    assetURLFor(tag, runtime.GOOS, runtime.GOARCH),
-		CriticalMin: fetchCriticalMin(httpTimeoutBackground),
+		AssetURL:    b.URL,
+		SHA256:      b.SHA256,
+		CriticalMin: channel.CriticalMin(),
 	})
 	// Otherwise the memo keeps reporting the previous answer for up to
 	// availableTTL after the cache changed underneath it.

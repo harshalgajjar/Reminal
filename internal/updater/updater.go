@@ -47,6 +47,12 @@ type cacheEntry struct {
 	CheckedAt time.Time `json:"checked_at"`
 	LatestTag string    `json:"latest_tag"`
 	AssetURL  string    `json:"asset_url"`
+	// SHA256 is the digest the channel published for AssetURL, "" when it
+	// publishes none.
+	SHA256 string `json:"sha256,omitempty"`
+	// Channel is whose answer this is. An entry from another channel is no
+	// answer at all for this one (see readCache).
+	Channel string `json:"channel,omitempty"`
 	// CriticalMin is the maintainer-set version below which an upgrade is FORCED
 	// (a security/critical fix), fetched online from the relay's /version beacon
 	// so a fix can be pushed out without users doing anything. Empty = nothing
@@ -66,7 +72,7 @@ func CheckAndPromptOnStart(currentVersion string) {
 		return
 	}
 
-	latestTag, assetURL, critical, err := check(currentVersion, httpTimeoutBackground)
+	latestTag, build, critical, err := check(currentVersion, httpTimeoutBackground)
 	if errors.Is(err, errNoAssetForPlatform) {
 		return // nothing installable; stay quiet rather than nag about it
 	}
@@ -74,15 +80,15 @@ func CheckAndPromptOnStart(currentVersion string) {
 		return
 	}
 
-	// Critical (e.g. security) update: the maintainer flagged it online via the
-	// relay's /version beacon, so we don't wait for a Y/n — install it now, even
-	// non-interactively. Users never have to run `--force`. The binary still
-	// comes from the signed GitHub release, so a bad beacon can at worst push
-	// everyone onto the latest real release.
+	// Critical (e.g. security) update: the maintainer flagged it online for
+	// this channel, so we don't wait for a Y/n — install it now, even
+	// non-interactively. Users never have to run `--force`. The build still
+	// comes from this channel's own releases and is checked like any other, so
+	// a bad floor can at worst push everyone onto the channel's latest release.
 	if critical {
 		fmt.Fprintf(os.Stderr, "\n\x1b[1;31m⚠ Critical update %s — installing now (current v%s)\x1b[0m\n",
 			latestTag, currentVersion)
-		if err := apply(assetURL); err != nil {
+		if err := apply(build); err != nil {
 			fmt.Fprintf(os.Stderr, "Critical upgrade failed: %v — run `reminal upgrade` manually.\n", err)
 			return
 		}
@@ -102,7 +108,7 @@ func CheckAndPromptOnStart(currentVersion string) {
 		return
 	}
 
-	if err := apply(assetURL); err != nil {
+	if err := apply(build); err != nil {
 		fmt.Fprintf(os.Stderr, "Upgrade failed: %v\n", err)
 		return
 	}
@@ -124,7 +130,7 @@ var errNoAssetForPlatform = errors.New("no build for this platform in the latest
 func Upgrade(currentVersion string) (updated bool, err error) {
 	// Bypass the cache so explicit `reminal upgrade` always hits the network.
 	clearCache()
-	latestTag, assetURL, _, err := check(currentVersion, httpTimeoutInteractive)
+	latestTag, build, _, err := check(currentVersion, httpTimeoutInteractive)
 	if errors.Is(err, errNoAssetForPlatform) {
 		fmt.Printf("A newer release exists, but it has no %s/%s build yet — it may still be\n"+
 			"publishing, or that build failed. Staying on v%s; try again shortly.\n",
@@ -139,7 +145,7 @@ func Upgrade(currentVersion string) (updated bool, err error) {
 		return false, nil
 	}
 	fmt.Printf("Upgrading from v%s to %s...\n", currentVersion, latestTag)
-	if err := apply(assetURL); err != nil {
+	if err := apply(build); err != nil {
 		return false, err
 	}
 	fmt.Printf("Upgraded to %s. Restart reminal to use the new version.\n", latestTag)
@@ -152,7 +158,7 @@ func Upgrade(currentVersion string) (updated bool, err error) {
 // Same checks, same apply, results returned instead of printed.
 func UpgradeQuiet(currentVersion string) (updated bool, err error) {
 	clearCache() // an explicit request always hits the network
-	latestTag, assetURL, _, err := check(currentVersion, httpTimeoutInteractive)
+	latestTag, build, _, err := check(currentVersion, httpTimeoutInteractive)
 	if errors.Is(err, errNoAssetForPlatform) {
 		return false, fmt.Errorf("the latest release has no %s/%s build yet — it may still be publishing", runtime.GOOS, runtime.GOARCH)
 	}
@@ -162,7 +168,7 @@ func UpgradeQuiet(currentVersion string) (updated bool, err error) {
 	if latestTag == "" {
 		return false, nil // already current
 	}
-	if err := apply(assetURL); err != nil {
+	if err := apply(build); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -189,18 +195,18 @@ func shouldCheck(currentVersion string) bool {
 	return true
 }
 
-// check returns the latest release tag and the asset download URL for this
-// OS/arch, or ("", "", nil) if the running version is already current.
-// Result is cached at ~/.reminal/version-check.json for cacheTTL. The
+// check returns the latest release tag of this binary's channel and its
+// build for this OS/arch, or ("", Build{}, false, nil) if the running version
+// is already current. The result is cached per channel for cacheTTL. The
 // timeout caps how long the network fetch can take — short for background
 // on-start checks, long for explicit `reminal upgrade`.
-func check(currentVersion string, timeout time.Duration) (latestTag, assetURL string, critical bool, err error) {
+func check(currentVersion string, timeout time.Duration) (latestTag string, build Build, critical bool, err error) {
 	if entry, ok := readCache(); ok && time.Since(entry.CheckedAt) < cacheTTL {
 		critical = entry.CriticalMin != "" && newer(currentVersion, entry.CriticalMin)
 		if critical || newer(currentVersion, entry.LatestTag) {
-			return entry.LatestTag, entry.AssetURL, critical, nil
+			return entry.LatestTag, Build{URL: entry.AssetURL, SHA256: entry.SHA256}, critical, nil
 		}
-		return "", "", false, nil
+		return "", Build{}, false, nil
 	}
 
 	// The same release feed the Host panel reads, so the startup prompt and
@@ -212,29 +218,29 @@ func check(currentVersion string, timeout time.Duration) (latestTag, assetURL st
 	// so it never trips the 60/hour rate limit and keeps working on a busy day.
 	// If the redirect is unreachable, fall back to reminal's own notes feed,
 	// which is also rate-limit-free.
-	tag, err := fetchLatestTag(ctx)
+	tag, err := channel.Latest(ctx)
 	if err != nil || tag == "" {
 		rs, ferr := releaseFeed(ctx)
 		if ferr != nil {
-			return "", "", false, err
+			return "", Build{}, false, err
 		}
 		if len(rs) == 0 {
-			return "", "", false, nil
+			return "", Build{}, false, nil
 		}
 		tag = "v" + rs[0].Version
 	}
 	// Records the newest as this machine's cached latest (what Available and the
-	// startup prompt read), with the download URL and criticality beacon along.
-	recordLatest(tag)
+	// startup prompt read), with the build and the forced-upgrade floor along.
+	recordLatest(ctx, tag)
 	entry, _ := readCache()
 	critical = entry.CriticalMin != "" && newer(currentVersion, entry.CriticalMin)
 	if !critical && !newer(currentVersion, entry.LatestTag) {
-		return "", "", false, nil
+		return "", Build{}, false, nil
 	}
 	if entry.AssetURL == "" {
-		return "", "", false, errNoAssetForPlatform
+		return "", Build{}, false, errNoAssetForPlatform
 	}
-	return entry.LatestTag, entry.AssetURL, critical, nil
+	return entry.LatestTag, Build{URL: entry.AssetURL, SHA256: entry.SHA256}, critical, nil
 }
 
 // fetchCriticalMin reads the relay's /version beacon and returns its
@@ -317,9 +323,11 @@ func assetURLFor(tag, goos, goarch string) string {
 		repo, tag, ver, goos, goarch)
 }
 
-// apply downloads the tarball at url, extracts the reminal binary, and
-// atomically swaps the running binary with the new one.
-func apply(url string) error {
+// apply downloads a build of this binary's channel, checks it, and swaps it in
+// for the running one. Nothing is replaced until the whole build is on disk,
+// matches the digest its channel published, and — run once — says it follows
+// this same channel.
+func apply(b Build) error {
 	bin, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate self: %w", err)
@@ -329,22 +337,12 @@ func apply(url string) error {
 		bin = real
 	}
 
-	// 10-minute ceiling. Big enough that even a slow phone-hotspot
-	// download of a ~10 MB binary completes; small enough that a
-	// hung connection doesn't tie up the user's terminal until they
-	// notice and Ctrl-C. GitHub's CDN is well-behaved, so the
-	// common case is sub-30s.
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Get(url)
+	f, err := fetchBuild(b)
 	if err != nil {
-		return fmt.Errorf("download: %w", err)
+		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download: %s (url: %s)", resp.Status, url)
-	}
-
-	gz, err := gzip.NewReader(resp.Body)
+	defer discardBuild(f)
+	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("gzip: %w", err)
 	}
@@ -356,7 +354,7 @@ func apply(url string) error {
 	// the bundle's Designated Requirement — stays intact. (Replacing just the
 	// inner binary would break the seal.)
 	if root := bundleRoot(bin); root != "" {
-		return applyBundle(tr, root)
+		return applyBundleChecked(tr, root, sameChannel)
 	}
 
 	// State-based (NOT version-based) migration: a loose macOS binary — a pre-bundle
@@ -367,15 +365,30 @@ func apply(url string) error {
 	// disabling the always-on capture daemon. Keyed on "am I a bare binary?", so it
 	// self-repairs on any bare→bundle transition regardless of the version numbers.
 	if runtime.GOOS == "darwin" {
-		return migrateBareToBundle(tr, bin)
+		return migrateBareToBundleChecked(tr, bin, sameChannel)
 	}
 
-	// The (linux, or legacy darwin) archives carry the reminal binary AND the
-	// reminal-capture native window-capture helper. Install both, each atomically.
-	// The helper is a best-effort sidecar: a failure to place it doesn't fail the
-	// upgrade (the window mirror just falls back to screencapture).
+	return installLoose(tr, bin, sameChannel)
+}
+
+// installLoose installs a loose build — the reminal binary and its helpers —
+// over bin, asking accept about the new reminal before anything is moved.
+func installLoose(tr *tar.Reader, bin string, accept func(bin string) error) error {
+	// The (linux, windows, or legacy darwin) archives carry the reminal binary
+	// and, beside it, the native window-capture and overlay helpers. Every file
+	// is written out first; only once the new reminal has said which channel it
+	// follows is anything put in place, so a refused build leaves the install
+	// exactly as it was. The helpers are best-effort sidecars: failing to place
+	// one doesn't fail the upgrade (the window mirror falls back to
+	// screencapture).
 	dir := filepath.Dir(bin)
-	installedBin := false
+	var staged []stagedFile
+	defer func() {
+		for _, sf := range staged {
+			_ = os.Remove(sf.tmp)
+		}
+	}()
+	mainTmp := ""
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -386,20 +399,40 @@ func apply(url string) error {
 		}
 		switch filepath.Base(hdr.Name) {
 		case "reminal", "reminal.exe":
-			if err := installFileAtomic(bin, tr, dir); err != nil {
+			tmp, err := stageFile(tr, dir, runtime.GOOS == "windows")
+			if err != nil {
 				return err
 			}
-			installedBin = true
-		case "reminal-capture":
-			_ = installFileAtomic(filepath.Join(dir, "reminal-capture"), tr, dir)
-		case "reminal-overlay":
-			_ = installFileAtomic(filepath.Join(dir, "reminal-overlay"), tr, dir)
+			staged = append(staged, stagedFile{tmp: tmp, dest: bin, main: true})
+			mainTmp = tmp
+		case "reminal-capture", "reminal-overlay":
+			if tmp, err := stageFile(tr, dir, false); err == nil {
+				staged = append(staged, stagedFile{tmp: tmp, dest: filepath.Join(dir, filepath.Base(hdr.Name))})
+			}
 		}
 	}
-	if !installedBin {
+	if mainTmp == "" {
 		return errors.New("reminal binary not found in archive")
 	}
+	if accept != nil {
+		if err := accept(mainTmp); err != nil {
+			return err
+		}
+	}
+	for _, sf := range staged {
+		err := commitFile(sf.tmp, sf.dest, dir)
+		if err != nil && sf.main {
+			return err
+		}
+	}
 	return nil
+}
+
+// stagedFile is one file of a build, written out beside where it goes and
+// waiting for the build to be accepted.
+type stagedFile struct {
+	tmp, dest string
+	main      bool
 }
 
 // EnsureBundleInstalled is the darwin self-heal for `reminal upgrade` run from an
@@ -431,22 +464,24 @@ func EnsureBundleInstalled(currentVersion string) (bundleCLI string, healed bool
 		return "", false // already a bundle — the common, cheap path
 	}
 	// Loose darwin release binary → re-materialize the bundle from this exact
-	// version's asset.
-	url := assetURLFor("v"+strings.TrimPrefix(currentVersion, "v"), runtime.GOOS, runtime.GOARCH)
-	resp, err := (&http.Client{Timeout: 10 * time.Minute}).Get(url)
+	// version's build, from this binary's own channel.
+	ctx, cancel := context.WithTimeout(context.Background(), httpTimeoutInteractive)
+	b, err := channel.Build(ctx, "v"+strings.TrimPrefix(currentVersion, "v"), runtime.GOOS, runtime.GOARCH)
+	cancel()
 	if err != nil {
 		return "", false
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	f, err := fetchBuild(b)
+	if err != nil {
 		return "", false
 	}
-	gz, err := gzip.NewReader(resp.Body)
+	defer discardBuild(f)
+	gz, err := gzip.NewReader(f)
 	if err != nil {
 		return "", false
 	}
 	defer gz.Close()
-	if err := migrateBareToBundle(tar.NewReader(gz), bin); err != nil {
+	if err := migrateBareToBundleChecked(tar.NewReader(gz), bin, sameChannel); err != nil {
 		return "", false
 	}
 	return filepath.Join(appDir(), "reminal.app", "Contents", "MacOS", "reminal"), true
@@ -474,6 +509,13 @@ func bundleRoot(bin string) string {
 // process keeps its old binary inode until it hot-restarts from the same bundle
 // path, so this is safe to do live. Rolls back the swap on failure.
 func applyBundle(tr *tar.Reader, appRoot string) error {
+	return applyBundleChecked(tr, appRoot, nil)
+}
+
+// applyBundleChecked is applyBundle with a say over the staged bundle: accept,
+// given the path of the new bundle's reminal, is asked before the swap, and a
+// refusal leaves the installed bundle untouched. nil accepts anything.
+func applyBundleChecked(tr *tar.Reader, appRoot string, accept func(bin string) error) error {
 	parent := filepath.Dir(appRoot)
 	staging, err := os.MkdirTemp(parent, ".reminal-app.new-*")
 	if err != nil {
@@ -545,6 +587,11 @@ func applyBundle(tr *tar.Reader, appRoot string) error {
 		return errors.New("reminal.app not found in archive")
 	}
 	newApp := filepath.Join(staging, root)
+	if accept != nil {
+		if err := accept(filepath.Join(newApp, "Contents", "MacOS", "reminal")); err != nil {
+			return err
+		}
+	}
 
 	// Swap: move the old bundle aside (if one exists — a bare→bundle migration
 	// installs fresh into ~/Applications with nothing to replace), move the new one
@@ -578,14 +625,19 @@ func applyBundle(tr *tar.Reader, appRoot string) error {
 // LaunchServices. The daemon is (re)installed separately by the caller's idempotent
 // correctness check. Idempotent: safe to run on any version→bundle transition.
 func migrateBareToBundle(tr *tar.Reader, bareBin string) error {
+	return migrateBareToBundleChecked(tr, bareBin, nil)
+}
+
+// migrateBareToBundleChecked is migrateBareToBundle with the staged bundle
+// checked before anything is moved (see applyBundleChecked).
+func migrateBareToBundleChecked(tr *tar.Reader, bareBin string, accept func(bin string) error) error {
 	appRoot := filepath.Join(appDir(), "reminal.app")
 	if err := os.MkdirAll(filepath.Dir(appRoot), 0o755); err != nil {
 		return fmt.Errorf("create app dir: %w", err)
 	}
-	if err := applyBundle(tr, appRoot); err != nil {
+	if err := applyBundleChecked(tr, appRoot, accept); err != nil {
 		if strings.Contains(err.Error(), "not found in archive") {
-			return fmt.Errorf("%w — re-run the install script: "+
-				"curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | sh", err, repo)
+			return fmt.Errorf("%w — reinstall: %s", err, channel.Reinstall)
 		}
 		return err
 	}
@@ -637,26 +689,50 @@ func lsregister(app string) {
 // currently-running binary (the kernel keeps the old inode alive for running
 // processes). dir must be dest's directory so the rename stays on one FS.
 func installFileAtomic(dest string, r io.Reader, dir string) error {
-	tmp, err := os.CreateTemp(dir, ".reminal.new-*")
+	tmpName, err := stageFile(r, dir, false)
 	if err != nil {
-		return fmt.Errorf("create temp file in %s: %w", dir, err)
+		return err
 	}
-	tmpName := tmp.Name()
 	defer func() {
 		if _, err := os.Stat(tmpName); err == nil {
 			_ = os.Remove(tmpName)
 		}
 	}()
-	if _, err := io.Copy(tmp, r); err != nil {
+	return commitFile(tmpName, dest, dir)
+}
+
+// stageFile writes r to a new executable file in dir — the destination's
+// directory, so the later rename stays on one filesystem — and returns its
+// path. runnable gives it the name Windows needs to execute it, for a build
+// that is asked a question before it is installed.
+func stageFile(r io.Reader, dir string, runnable bool) (string, error) {
+	pattern := ".reminal.new-*"
+	if runnable && runtime.GOOS == "windows" {
+		pattern += ".exe"
+	}
+	tmp, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		return "", fmt.Errorf("create temp file in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	if _, err := io.Copy(tmp, r); err != nil { //nolint:gosec // a release build
 		_ = tmp.Close()
-		return fmt.Errorf("write temp file: %w", err)
+		_ = os.Remove(tmpName)
+		return "", fmt.Errorf("write temp file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		_ = os.Remove(tmpName)
+		return "", err
 	}
 	if err := os.Chmod(tmpName, 0o755); err != nil {
-		return err
+		_ = os.Remove(tmpName)
+		return "", err
 	}
+	return tmpName, nil
+}
+
+// commitFile renames a staged file over dest.
+func commitFile(tmpName, dest, dir string) error {
 	if err := os.Rename(tmpName, dest); err != nil {
 		// Windows can't replace a RUNNING executable in place — but it can
 		// RENAME one. Shuffle the live file aside and slot the new one in.
@@ -760,7 +836,7 @@ func cachePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".reminal", "version-check.json"), nil
+	return filepath.Join(home, ".reminal", channel.CacheFile), nil
 }
 
 func readCache() (cacheEntry, bool) {
@@ -776,10 +852,17 @@ func readCache() (cacheEntry, bool) {
 	if err := json.Unmarshal(data, &e); err != nil {
 		return cacheEntry{}, false
 	}
+	// Another channel's answer — a newer version that is not this channel's
+	// to install — is treated as no answer. Entries written before channels
+	// were recorded can only be the public releases'.
+	if e.Channel != channel.Name && !(e.Channel == "" && channel.Name == mainChannel().Name) {
+		return cacheEntry{}, false
+	}
 	return e, true
 }
 
 func writeCache(e cacheEntry) {
+	e.Channel = channel.Name
 	path, err := cachePath()
 	if err != nil {
 		return

@@ -102,6 +102,11 @@ func stubFeed(t *testing.T, tags ...string) *int {
 	oldFeed, oldLatest := releasesURL, latestReleaseURL
 	releasesURL, latestReleaseURL = feed.URL, redir.URL
 	t.Cleanup(func() { releasesURL, latestReleaseURL = oldFeed, oldLatest })
+	// These are the public releases' feed; follow that channel whichever one
+	// this build does.
+	oldChannel := channel
+	channel = mainChannel()
+	t.Cleanup(func() { channel = oldChannel })
 	t.Setenv("REMINAL_WEB", "") // no criticality beacon to reach in a test
 	resetFeed()
 	t.Cleanup(resetFeed)
