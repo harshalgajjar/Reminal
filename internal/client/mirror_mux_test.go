@@ -604,3 +604,29 @@ func TestCaptureMuxWaitsForRetiredHelperBeforeStartingAnother(t *testing.T) {
 		t.Fatalf("successor started %s before the retired helper had gone", time.Duration(firstExit-secondStart))
 	}
 }
+
+// The grace belongs to the last stream that ended. A countdown armed by an
+// earlier one must not cut it short: a pane opened and closed moments before
+// the old deadline would otherwise see the helper go seconds later, and the
+// next pane pays the cold start the grace exists to avoid.
+func TestCaptureMuxGraceBelongsToTheLastStream(t *testing.T) {
+	helper := fakeHelper(t, "serve")
+	m := &captureMux{idleAfter: 1200 * time.Millisecond}
+
+	first := liveStream(t, m, helper, "111")
+	first.close() // arms a countdown
+
+	time.Sleep(m.idleAfter / 3) // well inside it, another pane comes and goes
+	second := liveStream(t, m, helper, "222")
+	second.close()
+	lastEnded := time.Now()
+
+	waitFor(t, 15*time.Second, "helper to be retired", func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.stdin == nil
+	})
+	if lived := time.Since(lastEnded); lived < m.idleAfter*3/4 {
+		t.Fatalf("helper retired %s after the last stream ended, want about %s — an older countdown cut the grace short", lived, m.idleAfter)
+	}
+}

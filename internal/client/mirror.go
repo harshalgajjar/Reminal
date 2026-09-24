@@ -314,6 +314,11 @@ type captureMux struct {
 	// dead is the running helper's exit signal, kept so retirement can hand it
 	// to the successor to wait on.
 	dead <-chan struct{}
+	// idleDeadline is when the CURRENT idle period is up. Every stream that
+	// ends pushes it out, so a timer armed by an earlier one finds it in the
+	// future and waits again instead of retiring a helper that has been busy
+	// since.
+	idleDeadline time.Time
 }
 
 // idleHelperGrace is how long the capture helper is kept alive after its last
@@ -323,7 +328,10 @@ type captureMux struct {
 // it failed to tear down goes on capturing a window nobody is watching: the
 // screen-recording indicator stays lit and a laptop's battery pays for it
 // until someone restarts the machine. Retiring an idle helper puts a bound on
-// that: whatever it was still holding ends with it. The grace period is long
+// that: whatever it was still holding ends with it — once every mirror on the
+// machine has stopped. A leak beside a mirror somebody is genuinely watching
+// outlives the grace, so this is a backstop for the teardown in the helper,
+// not a substitute for it. The grace period is long
 // enough that flipping between windows, or a pane reopening, reuses the
 // running helper rather than paying to start one.
 const idleHelperGrace = 30 * time.Second
@@ -446,12 +454,13 @@ func (m *captureMux) armIdleRetire() {
 		m.mu.Unlock()
 		return
 	}
-	gen := m.idleGen
 	after := m.idleAfter
-	m.mu.Unlock()
 	if after <= 0 {
 		after = idleHelperGrace
 	}
+	m.idleDeadline = time.Now().Add(after)
+	gen := m.idleGen
+	m.mu.Unlock()
 	time.AfterFunc(after, func() { m.retireIfIdle(gen) })
 }
 
@@ -487,10 +496,22 @@ const retiredExitWait = 2 * time.Second
 // this helper has already been replaced.
 func (m *captureMux) retireIfIdle(gen uint64) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.idleGen != gen || m.stdin == nil || len(m.conns) > 0 {
+		m.mu.Unlock()
 		return
 	}
+	// Streams that came and went since this timer was armed pushed the
+	// deadline out, and the grace belongs to the last of them: a pane opened
+	// and closed a second before this fires must buy a full grace period, not
+	// inherit the tail of an old one. Otherwise the helper goes moments after
+	// someone stopped using it and the next pane pays a cold start — the exact
+	// cost the grace exists to avoid.
+	if left := time.Until(m.idleDeadline); left > 0 {
+		m.mu.Unlock()
+		time.AfterFunc(left, func() { m.retireIfIdle(gen) })
+		return
+	}
+	defer m.mu.Unlock()
 	_ = m.stdin.Close()
 	m.stdin = nil
 	m.idleGen++

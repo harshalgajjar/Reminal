@@ -387,6 +387,15 @@ func writeFramed(_ payload: Data, flag: UInt8?) {
 // the difference between "unusable on cellular P2P" and "trivial". The encoder
 // runs on dedicated silicon, so CPU cost is at or below the JPEG path.
 final class H264Encoder {
+    // The compression session holds VideoToolbox resources that are not the
+    // encoder object's to leave behind: a stream that ends — normally, or
+    // because its window went away — must give them back, or they are held
+    // until the process exits. The helper now outlives individual streams by
+    // design, so "until the process exits" is no longer soon.
+    deinit {
+        VTCompressionSessionInvalidate(session)
+    }
+
     private var session: VTCompressionSession
     private let lock = NSLock()
     private var forceNextKey = true // first frame must be an IDR regardless
@@ -1018,11 +1027,14 @@ final class MuxStream {
         // renegotiation restart). A dead stream's emit() already drops frames,
         // and fail/shutdown cancel the tick itself.
         fo.startIdleRefresh(filter: filter, config: config, queue: queue)
-        // Setting a stream up is not instantaneous, and shutdown() / fail() can
-        // land anywhere inside it — from the encoder's own fatal callback, off
-        // this queue. One landing before the two properties above are assigned
-        // finds them nil and tears down nothing, leaving ScreenCaptureKit
-        // capturing a window for
+        // Setting a stream up is not instantaneous, and fail() can land
+        // anywhere inside it: the encoder's fatal callback and startCapture's
+        // completion both run off this queue. Landing before the properties
+        // above are assigned, it finds them nil and tears down nothing;
+        // landing after them but before this line, its stopIdleRefresh()
+        // cancels a timer that startIdleRefresh has not created yet, and the
+        // one created a moment later ticks on forever. Either way
+        // ScreenCaptureKit goes on capturing a window for
         // an audience that has already gone: frames are dropped by emit(), so
         // nothing downstream ever notices, and a laptop pays for it until the
         // machine is restarted. Whoever set the stream up checks once more,
