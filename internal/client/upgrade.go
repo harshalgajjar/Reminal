@@ -94,6 +94,18 @@ func (a *Agent) handleUpgrade(conn *websocket.Conn, data string) {
 		})
 		return
 	}
+	a.replaceAndRestart(conn, "Fetching the latest release", func() (bool, error) {
+		return updater.UpgradeQuiet(a.version)
+	})
+}
+
+// replaceAndRestart is what an upgrade and a switch share once the owner has
+// been proven: one install per machine at a time, every step narrated to
+// everyone watching, the binary replaced by replace, then the background
+// service and every session restarted onto it — this one last. replace reports
+// whether it replaced anything; nothing replaced ends the run without a
+// restart.
+func (a *Agent) replaceAndRestart(conn *websocket.Conn, fetching string, replace func() (bool, error)) {
 	// Watch first, decide second. Whoever asks is replayed the transcript so
 	// far, so a second viewer sees the same steps from the beginning instead
 	// of an error or a progress bar already half-finished.
@@ -150,9 +162,9 @@ func (a *Agent) handleUpgrade(conn *websocket.Conn, data string) {
 		return
 	}
 
-	step(upgradeStage{Stage: "download", Pct: 5, Detail: "Fetching the latest release", Version: a.version})
+	step(upgradeStage{Stage: "download", Pct: 5, Detail: fetching, Version: a.version})
 
-	updated, err := updater.UpgradeQuiet(a.version)
+	updated, err := replace()
 	if err != nil {
 		fail("download", err.Error())
 		return

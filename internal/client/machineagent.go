@@ -126,6 +126,7 @@ var machineAccepts = map[protocol.MessageType]bool{
 	protocol.TypeHostInfo:      true,
 	protocol.TypeChangelog:     true,
 	protocol.TypeUpgrade:       true,
+	protocol.TypeSwitchChannel: true,
 	protocol.TypeWindowList:    true,
 	protocol.TypeWindowNoteAct: true,
 	protocol.TypeWindowCtl:     true,
@@ -158,6 +159,8 @@ var dirChannelOnly = map[protocol.MessageType]bool{
 	protocol.TypeDirRename:     true,
 	protocol.TypeDirRevokeSelf: true,
 	protocol.TypeDirKill:       true,
+	// Replaces the binary under every session here: never a PIN guest's to ask.
+	protocol.TypeSwitchChannel: true,
 }
 
 // servesOnThisChannel reports whether an incoming message of type t should be

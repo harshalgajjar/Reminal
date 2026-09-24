@@ -160,3 +160,79 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		}
 	}
 }
+
+// A lead relaying what it saw on a report's screen quotes the notice word
+// for word, mid-sentence. That is not the lead being logged out — read as one,
+// it marked a working lead logged out and held its mail (seen on the demo org,
+// 2026-09-24; both screens below are as they were).
+func TestAQuotedLoginNoticeIsNotTheAgents(t *testing.T) {
+	lead := `● This confirms it: frontend2's Claude Code session shows "Login expired · Please run /login" — it
+  needs an actual person to complete a login/auth flow, which isn't something I can do on its behalf.
+  Needs your attention: frontend2 (n_8eaa75, on ubuntu-linux-22-04-02-desktop, ~/design) is logged out
+  of Claude Code. It's sitting at a prompt asking for /login. Since that requires re-authenticating
+  with a real account/credential, I can't push that through myself — could you log into that terminal?
+  Work queued for frontend2 will stay held until then.
+✻ Baked for 11s · done 7:08 AM
+──────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+                                                              ✔ Update installed · Restart to update`
+	if harnessProblemIn(attentionProbeTail(lead, harnessRows)) {
+		t.Fatal("a lead quoting its report's login notice was read as the lead logged out")
+	}
+	// A quote that wraps so the notice begins a row is still a quote.
+	wrapped := "● This confirms it: frontend2's session shows\n  \"Login expired · Please run /login\" — it needs a person.\n" +
+		"────────────────\n❯\n────────────────\n  ⏵⏵ auto mode on (shift+tab to cycle)"
+	if harnessProblemIn(attentionProbeTail(wrapped, harnessRows)) {
+		t.Fatal("a wrapped quote of the notice was read as the agent logged out")
+	}
+
+	report := `● Login expired · Please run /login
+✻ Churned for 0s · done 7:08 AM
+──────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+                                                                          Not logged in · Run /login
+                                                              ✔ Update installed · Restart to update`
+	if !harnessProblemIn(attentionProbeTail(report, harnessRows)) {
+		t.Fatal("the report that really is logged out was not seen as one")
+	}
+	// Either place alone is enough: the conversation line, or the status line.
+	if !harnessProblemIn("● Login expired · Please run /login\n❯") {
+		t.Fatal("Claude Code's own notice on a line of its own was missed")
+	}
+	if !harnessProblemIn("❯\n  ⏵⏵ bypass permissions on (shift+tab to cycle)          Not logged in · Run /login") {
+		t.Fatal("the status line's notice was missed")
+	}
+}
+
+// Another program's login, printed by one of the agent's tools, is not the
+// agent's. Such a line sits in the conversation above the prompt; a CLI's own
+// notice sits on its bottom rows.
+func TestAToolsLoginMessageIsNotTheAgents(t *testing.T) {
+	working := `● Checking the deploy.
+
+● Bash(netlify status)
+  ⎿  Not logged in. Please log in to see site status.
+
+● I'll ask you to log in to Netlify, then check again.
+
+────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents`
+	if harnessProblemIn(attentionProbeTail(working, harnessRows)) {
+		t.Fatal("a tool's output about another service's login was read as the agent logged out")
+	}
+	// A CLI saying it of itself, on its own bottom rows, still counts.
+	for _, own := range []string{
+		"some output\nmore output\n> \n Waiting for auth… (esc to cancel)",
+		"answer\n\nPlease log in to continue\n> ",
+	} {
+		if !harnessProblemIn(attentionProbeTail(own, harnessRows)) {
+			t.Fatalf("a CLI's own login notice was missed:\n%s", own)
+		}
+	}
+}

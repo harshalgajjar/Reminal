@@ -38,3 +38,9 @@ binding = "ASSETS"
 # /install.sh (which matches no asset). Run the Worker first; it falls through
 # to env.ASSETS itself.
 run_worker_first = true
+
+# Files served at /downloads/<key> — builds kept off the public releases page.
+# Private bucket; the Worker is the only way in (see serveDownload).
+[[r2_buckets]]
+binding = "DOWNLOADS"
+bucket_name = "reminal-downloads"

@@ -40,6 +40,9 @@ const (
 	// spinners/elapsed-time counters repaint faster than this, so an actively
 	// working agent stays "working"; a blocked or finished one goes settled.
 	attnSettleMs = 1200
+	// attnResizeGrace is how long after a resize a changing screen is the
+	// program redrawing for it rather than working.
+	attnResizeGrace = 1500 * time.Millisecond
 	// attnHookGrace is how long after a hook fires we still attribute terminal
 	// output to that hook's own event — the agent painting the prompt it just
 	// announced. Past it, continued output means the agent resumed and the
@@ -95,6 +98,7 @@ func (a *Agent) runAttention(logPath string) {
 		}
 		alt := scr.IsAltScreen()
 		render := scr.Render()
+		resizedAt := a.resizedAt
 		a.screenMu.Unlock()
 
 		now := time.Now()
@@ -105,7 +109,12 @@ func (a *Agent) runAttention(logPath string) {
 		tail := attentionProbeTail(render, attnTailRows)
 		if tail != lastTail {
 			lastTail = tail
-			lastChange = now
+			// Not a redraw the resize asked for: opening a finished session's
+			// terminal on a phone resized it, and the session read as
+			// "working" for a beat.
+			if now.Sub(resizedAt) > attnResizeGrace {
+				lastChange = now
+			}
 		}
 		settledMs := now.Sub(lastChange).Milliseconds()
 

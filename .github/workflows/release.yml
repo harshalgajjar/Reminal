@@ -15,6 +15,10 @@ jobs:
   # workflow only — so the checks are stated here too, and the build waits on
   # them.
   test:
+    # The public releases are made in the public repository and nowhere else: a
+    # copy of this workflow in any other repository — a fork, a private one —
+    # would build its own code under these names.
+    if: github.repository == 'harshalgajjar/Reminal'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -305,7 +309,7 @@ jobs:
   # saying so.
   verify:
     needs: release
-    if: always()
+    if: always() && github.repository == 'harshalgajjar/Reminal'
     runs-on: ubuntu-latest
     steps:
       - name: Every platform must have published a build

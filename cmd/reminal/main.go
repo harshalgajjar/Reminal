@@ -126,7 +126,16 @@ func main() {
 			}
 			return
 		case "version", "-v", "--version":
-			if len(os.Args) > 2 && (os.Args[2] == "--verbose" || os.Args[2] == "-v") {
+			if len(os.Args) > 2 && os.Args[2] == "--json" {
+				// What an upgrade asks a downloaded build before installing it
+				// — which releases it follows — and a stable shape for scripts.
+				out, _ := json.Marshal(map[string]string{
+					"version": version, "channel": updater.ChannelName(),
+					"commit": commit, "built": buildDate,
+					"os": runtime.GOOS, "arch": runtime.GOARCH,
+				})
+				fmt.Println(string(out))
+			} else if len(os.Args) > 2 && (os.Args[2] == "--verbose" || os.Args[2] == "-v") {
 				printVersionInfo()
 			} else {
 				fmt.Println(version)
@@ -663,6 +672,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, "usage: reminal add owner <id> [--label <name>] [-y]")
 			os.Exit(1)
 			return
+		case "issues":
+			if err := runIssues(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "owners":
 			if err := runOwners(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -979,6 +994,7 @@ func selfHealBundle() {
 // Triggered by `reminal version --verbose`.
 func printVersionInfo() {
 	fmt.Printf("reminal %s\n", version)
+	fmt.Printf("  channel: %s\n", updater.ChannelName())
 	fmt.Printf("  built:   %s\n", buildDate)
 	fmt.Printf("  commit:  %s\n", commit)
 	fmt.Printf("  go:      %s\n", runtime.Version())

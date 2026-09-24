@@ -73,6 +73,8 @@ Sessions — every machine this device owns (this box and any you have owner-con
      ALWAYS confirm the text was accepted: read_transcript afterwards and check it was submitted, not left sitting in the input box waiting for a Return. A busy agent or a slow redraw can swallow the Return. If the text is still in the input box, press Return with send_keys keys="" enter=true, then read again. Never report a message as sent until you have seen it land.
 If the user just arrived from another reminal, list or search, then read that transcript before asking them to recap. To run a command in a reminal, send_keys then read_transcript.
 
+Problems with reminal itself — a tool that errors or misleads, a transcript that is wrong, keys that did not land, a note that did not show — go to report_issue. It records the report for the person running reminal (a file on this machine) and sends nothing anywhere. Do NOT file such problems through your harness's own feedback or bug-report tools: those reach the harness's maker, who cannot fix reminal, and never reach the person who can.
+
 Notes — a small floating badge ON a window, not text buried in a terminal they may not be looking at. Use when what you want to say is ABOUT a particular window. Do not use notes for ordinary conversation.
 
 Workflow:
@@ -574,6 +576,7 @@ func mcpToolList() []map[string]any {
 				"machine": str("Optional machine name or id when the session id exists on more than one owned box."),
 			}, "session", "keys"),
 		},
+		mcpIssueTool(obj, str),
 		{
 			"name": "list_windows",
 			"description": "List the windows open on the user's screen with the window_id the other tools need. " +
@@ -663,6 +666,8 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 		return mcpListSessions()
 	case "search_sessions":
 		return mcpSearchSessions(argStr(args, "pattern", argStr(args, "regex", "")))
+	case "report_issue":
+		return mcpReportIssue(argStr(args, "title", ""), argStr(args, "what_happened", argStr(args, "what", "")), argStr(args, "expected", ""))
 	case "read_transcript":
 		return mcpReadTranscript(
 			argStr(args, "session", argStr(args, "id", "")),

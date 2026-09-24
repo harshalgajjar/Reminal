@@ -131,6 +131,11 @@ type Agent struct {
 	// flaw that sank the v2.3.0 position-only band (it swallowed everything between
 	// two resizes, including a fresh agent's entire history). Guarded by screenMu.
 	resizeSegs []resizeSeg
+	// resizedAt is when the screen last changed size. A resize makes every
+	// program redraw, and a redraw is output: for attnResizeGrace after it
+	// the attention probe does not read a changing screen as "working".
+	// Guarded by screenMu.
+	resizedAt time.Time
 	// inputBlockWho/At throttle the "your input is going nowhere" notice to one
 	// per obstruction per minute (see noteInputBlocked). Guarded by winMu.
 	inputBlockWho string
@@ -2117,6 +2122,7 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	a.screenMu.Lock()
 	// Arm before the emulator changes size so a racing PTY read cannot
 	// apply the shim to the pre-anchor screen.
+	a.resizedAt = time.Now()
 	a.armResizeClearGuardLocked()
 	// Fingerprint the frame the app is ABOUT to repaint: capture the pre-resize
 	// screen's words (width-invariant — re-wrapping moves line breaks, not words)
@@ -2921,6 +2927,9 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			// cannot run on the reader goroutine. The owner proof travels in
 			// Data and is checked inside, before anything happens.
 			go a.handleUpgrade(conn, msg.Data)
+		case protocol.TypeSwitchChannel:
+			// As an upgrade: long-running, ends in a re-exec, owner-proven inside.
+			go a.handleSwitchChannel(conn, msg.Data)
 		case protocol.TypeAppList:
 			a.enqueueWinOp(func() { a.handleAppList(conn) })
 		case protocol.TypeAppOpen:
