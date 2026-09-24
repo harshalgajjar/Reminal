@@ -188,3 +188,51 @@ func sameChannel(path string) error {
 	}
 	return nil
 }
+
+// SwitchChannel moves this install onto another channel: the newest release
+// the manifest at manifestURL describes, which must say it is channel want.
+// The build is checked as every install is — its digest, then, run once, which
+// channel it follows — but against want rather than this build's own channel;
+// and it must be signed exactly as this install is, so that a switch can only
+// ever land on one of ours, and a macOS grant made for this app survives it.
+//
+// The caller has already proven the request comes from an owner of this
+// machine, for this manifest and this channel. Returns the version installed.
+// Nothing is replaced unless every check passes.
+func SwitchChannel(manifestURL, want string) (string, error) {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return "", fmt.Errorf("no channel named to switch to")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), httpTimeoutInteractive)
+	defer cancel()
+	m, err := FetchManifest(ctx, manifestURL)
+	if err != nil {
+		return "", err
+	}
+	if m.Channel != want {
+		return "", fmt.Errorf("the manifest describes %q releases, not %q — nothing was installed", m.Channel, want)
+	}
+	rs := m.Releases()
+	if len(rs) == 0 {
+		return "", fmt.Errorf("there are no %q releases yet", want)
+	}
+	b, err := m.Build("v"+rs[0].Version, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return "", err
+	}
+	accept := func(bin string) error {
+		got, err := buildChannel(bin)
+		if err != nil {
+			return fmt.Errorf("could not ask the downloaded build which releases it follows (%v) — nothing was installed", err)
+		}
+		if got != want {
+			return fmt.Errorf("the downloaded build follows %q releases, not %q — nothing was installed", got, want)
+		}
+		return sameSigner(bin)
+	}
+	if err := applyWith(b, accept); err != nil {
+		return "", err
+	}
+	return rs[0].Version, nil
+}

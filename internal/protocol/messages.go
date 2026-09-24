@@ -282,6 +282,14 @@ const (
 	// itself. Same argument as TypeNewSession.
 	TypeUpgrade MessageType = "upgrade"
 
+	// TypeSwitchChannel asks a machine to move onto another channel's newest
+	// build, and restart every session onto it the way an upgrade does.
+	// Viewer→machine channel only: Data = encrypted JSON {"channel":…,
+	// "manifest":<URL>,"proof":<owner proof over both>}. Progress comes back as
+	// TypeUpgrade steps. Advertised in a machine's caps, so a caller can tell a
+	// machine able to switch from one that must be updated first.
+	TypeSwitchChannel MessageType = "switch_channel"
+
 	// ---- WebRTC signaling (peer-to-peer frame transport) ----
 	// Window frames are high-volume; when a viewer and agent can open a
 	// WebRTC DataChannel, frames (and their acks) flow directly peer-to-peer

@@ -327,7 +327,11 @@ func assetURLFor(tag, goos, goarch string) string {
 // for the running one. Nothing is replaced until the whole build is on disk,
 // matches the digest its channel published, and — run once — says it follows
 // this same channel.
-func apply(b Build) error {
+func apply(b Build) error { return applyWith(b, sameChannel) }
+
+// applyWith is apply, with the say over the new build given to accept: asked,
+// with the path of the new reminal, before anything is replaced.
+func applyWith(b Build, accept func(bin string) error) error {
 	bin, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locate self: %w", err)
@@ -354,7 +358,7 @@ func apply(b Build) error {
 	// the bundle's Designated Requirement — stays intact. (Replacing just the
 	// inner binary would break the seal.)
 	if root := bundleRoot(bin); root != "" {
-		return applyBundleChecked(tr, root, sameChannel)
+		return applyBundleChecked(tr, root, accept)
 	}
 
 	// State-based (NOT version-based) migration: a loose macOS binary — a pre-bundle
@@ -365,10 +369,10 @@ func apply(b Build) error {
 	// disabling the always-on capture daemon. Keyed on "am I a bare binary?", so it
 	// self-repairs on any bare→bundle transition regardless of the version numbers.
 	if runtime.GOOS == "darwin" {
-		return migrateBareToBundleChecked(tr, bin, sameChannel)
+		return migrateBareToBundleChecked(tr, bin, accept)
 	}
 
-	return installLoose(tr, bin, sameChannel)
+	return installLoose(tr, bin, accept)
 }
 
 // installLoose installs a loose build — the reminal binary and its helpers —
