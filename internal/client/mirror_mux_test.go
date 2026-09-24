@@ -329,3 +329,136 @@ func TestCaptureMuxFallsBackOnPreServeHelper(t *testing.T) {
 		t.Fatal("second serve() never declined")
 	}
 }
+
+// A serve helper leaves once its last stream ends, so that anything it failed
+// to tear down inside ScreenCaptureKit dies with it rather than capturing the
+// screen for hours with nobody watching. The daemon must take that in its
+// stride: the NEXT window someone mirrors gets a fresh helper, not an error
+// about the screen-sharing service, and not frames from a process that is
+// already gone.
+// A capture helper is long-lived on purpose — one process serves every
+// session's mirror — but it must not be immortal. ScreenCaptureKit runs inside
+// it, and a stream it failed to tear down keeps capturing a window nobody is
+// watching, which on a laptop is hours of battery and a screen-recording
+// indicator with no explanation. Once the last stream ends the daemon retires
+// it, and the next window someone mirrors gets a fresh one.
+func TestCaptureMuxRetiresIdleHelperAndStartsAnother(t *testing.T) {
+	helper := fakeHelper(t, "serve")
+	m := &captureMux{idleAfter: 150 * time.Millisecond}
+
+	first := liveStream(t, m, helper, "111")
+	m.mu.Lock()
+	running := m.stdin != nil
+	m.mu.Unlock()
+	if !running {
+		t.Fatal("helper not running while a stream is live")
+	}
+	first.close()
+
+	waitFor(t, 5*time.Second, "helper to be retired", func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.stdin == nil
+	})
+
+	// The helper is gone; mirroring a window must still just work.
+	second := liveStream(t, m, helper, "222")
+	defer second.close()
+	for _, b := range second.frames {
+		if !strings.HasPrefix(b, "FRAME") || b != second.frames[0] {
+			t.Fatalf("second stream got %q (first %q), want one live stream's frames", b, second.frames[0])
+		}
+	}
+}
+
+// Retirement must never touch a helper that is still streaming: a window left
+// open on a phone would go black for no reason.
+func TestCaptureMuxKeepsHelperWhileStreaming(t *testing.T) {
+	helper := fakeHelper(t, "serve")
+	m := &captureMux{idleAfter: 100 * time.Millisecond}
+
+	keep := liveStream(t, m, helper, "111")
+	defer keep.close()
+	// End a SECOND stream, which is what arms retirement — with one still live.
+	other := liveStream(t, m, helper, "222")
+	other.close()
+
+	time.Sleep(600 * time.Millisecond) // several times the idle grace
+	m.mu.Lock()
+	retired := m.stdin == nil
+	m.mu.Unlock()
+	if retired {
+		t.Fatal("helper retired while a stream was still live")
+	}
+	if got := keep.readMore(t, 1); len(got) == 0 {
+		t.Fatal("live stream stopped receiving frames")
+	}
+}
+
+// liveStream opens a capture and waits until it is actually streaming.
+type testStream struct {
+	client net.Conn
+	bodies chan string
+	frames []string
+}
+
+func liveStream(t *testing.T, m *captureMux, helper, id string) *testStream {
+	t.Helper()
+	client, server := net.Pipe()
+	go m.serve(server, helper, id, "400", "45", "5", "")
+	ts := &testStream{client: client, bodies: make(chan string, 256)}
+	go func() {
+		defer close(ts.bodies)
+		r := bufio.NewReader(client)
+		var lenBuf [4]byte
+		for {
+			if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+				return
+			}
+			body := make([]byte, binary.BigEndian.Uint32(lenBuf[:]))
+			if _, err := io.ReadFull(r, body); err != nil {
+				return
+			}
+			ts.bodies <- string(body)
+		}
+	}()
+	ts.frames = ts.readMore(t, 2)
+	if len(ts.frames) < 2 {
+		t.Fatalf("stream %s never went live", id)
+	}
+	return ts
+}
+
+// readMore waits for n more frames, or fails the test.
+func (ts *testStream) readMore(t *testing.T, n int) []string {
+	t.Helper()
+	var got []string
+	deadline := time.After(15 * time.Second)
+	for len(got) < n {
+		select {
+		case b, ok := <-ts.bodies:
+			if !ok {
+				return got
+			}
+			got = append(got, b)
+		case <-deadline:
+			return got
+		}
+	}
+	return got
+}
+
+func (ts *testStream) close() { _ = ts.client.Close() }
+
+// waitFor polls until cond holds, or fails the test with what it was waiting on.
+func waitFor(t *testing.T, limit time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
