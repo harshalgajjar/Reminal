@@ -57,6 +57,16 @@ var harnessLoginLines = []string{
 	"waitingforauth", "pleasesetanauthmethod", "loginexpired", "notloggedin",
 }
 
+// harnessLineRows is where those notices count: the last few rows with
+// anything on them — a CLI's own status line and what sits right above its
+// prompt. Higher up is the conversation, where an agent's tools print what
+// other programs said: a `netlify status` answering "Not logged in. Please
+// log in to see site status." is the site's login, not the agent's, and it
+// once held the agent's mail and told its supervisor it could not work. The
+// sign-in screens and Claude Code's own notice are specific enough to be read
+// anywhere in the tail.
+const harnessLineRows = 3
+
 // harnessShortRow is how long (whitespace removed) such a row may be.
 const harnessShortRow = 48
 
@@ -95,13 +105,19 @@ func harnessTail(render string, n int) string {
 // harnessProblemIn reports whether the bottom of a screen says the agent is
 // logged out.
 func harnessProblemIn(tail string) bool {
+	var rows []string
 	for _, row := range strings.Split(tail, "\n") {
-		flat := strings.ToLower(strings.Join(strings.Fields(row), ""))
-		if flat == "" {
-			continue
+		if flat := strings.ToLower(strings.Join(strings.Fields(row), "")); flat != "" {
+			rows = append(rows, flat)
 		}
-		if harnessLoginNotice.MatchString(flat) || harnessLoginScreen.MatchString(flat) {
+	}
+	for i, flat := range rows {
+		bottom := i >= len(rows)-harnessLineRows
+		if harnessLoginScreen.MatchString(flat) || harnessNoticeRow(flat, bottom) {
 			return true
+		}
+		if !bottom {
+			continue // the conversation, not the CLI's own status
 		}
 		lead := strings.TrimLeftFunc(flat, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
 		if len(lead) <= harnessShortRow {
@@ -113,6 +129,25 @@ func harnessProblemIn(tail string) bool {
 		}
 	}
 	return false
+}
+
+// harnessNoticeRow reports whether a row is Claude Code saying it is logged
+// out. It says so in two places: on a line of its own in the conversation
+// ("● Login expired · Please run /login"), and at the right-hand end of its
+// status line ("⏵⏵ … Not logged in · Run /login"). An agent quoting the notice
+// — a lead telling its owner what it saw on a report's screen — puts it in the
+// middle of a sentence, and that is not this agent being logged out: reading
+// it as one once marked a working lead logged out and held its mail.
+func harnessNoticeRow(flat string, bottom bool) bool {
+	core := strings.TrimFunc(flat, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })
+	loc := harnessLoginNotice.FindStringIndex(core)
+	if loc == nil {
+		return false
+	}
+	if loc[0] == 0 && loc[1] == len(core) {
+		return true // a line of its own
+	}
+	return bottom && loc[1] == len(core) // the end of the status line
 }
 
 // noteHarnessHealth is called with each attention tick's screen.
