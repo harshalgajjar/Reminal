@@ -12,8 +12,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -34,12 +36,19 @@ func fakeHelper(t *testing.T, mode string) string {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake helper wrapper is a shell script")
 	}
+	return fakeHelperLogged(t, mode, "")
+}
+
+// fakeHelperLogged is fakeHelper with a log the helper appends its own comings
+// and goings to, so a test can check that two generations never overlap.
+func fakeHelperLogged(t *testing.T, mode, logPath string) string {
+	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "fake-capture")
-	script := fmt.Sprintf("#!/bin/sh\nGO_FAKE_CAPTURE_HELPER=%s exec %q -test.run='^TestFakeCaptureHelperMain$' -- \"$@\"\n", mode, exe)
+	script := fmt.Sprintf("#!/bin/sh\nGO_FAKE_CAPTURE_HELPER=%s GO_FAKE_CAPTURE_LOG=%q exec %q -test.run='^TestFakeCaptureHelperMain$' -- \"$@\"\n", mode, logPath, exe)
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +85,19 @@ func TestFakeCaptureHelperMain(t *testing.T) {
 		copy(b[4:], body)
 		return b
 	}
+	note := func(what string) {
+		path := os.Getenv("GO_FAKE_CAPTURE_LOG")
+		if path == "" {
+			return
+		}
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return
+		}
+		fmt.Fprintf(f, "%s %d %d\n", what, os.Getpid(), time.Now().UnixNano())
+		_ = f.Close()
+	}
+	note("start")
 	send(0, []byte("READY")) // the hello the daemon probes on
 	stops := make(map[string]chan struct{})
 	var mu sync.Mutex
@@ -124,7 +146,14 @@ func TestFakeCaptureHelperMain(t *testing.T) {
 			send(id, frame("KEY"+f[1]))
 		}
 	}
-	os.Exit(0) // stdin EOF — daemon gone
+	// stdin EOF — the daemon is done with us. "linger" takes its time about
+	// leaving, which is how a test can tell whether the daemon waits for a
+	// retired helper before starting its successor.
+	if mode == "linger" {
+		time.Sleep(400 * time.Millisecond)
+	}
+	note("exit")
+	os.Exit(0)
 }
 
 // readFrames collects inner frames off a session conn until it closes,
@@ -383,14 +412,14 @@ func TestCaptureMuxKeepsHelperWhileStreaming(t *testing.T) {
 	other := liveStream(t, m, helper, "222")
 	other.close()
 
-	time.Sleep(600 * time.Millisecond) // several times the idle grace
+	time.Sleep(6 * m.idleAfter) // well past the grace
 	m.mu.Lock()
 	retired := m.stdin == nil
 	m.mu.Unlock()
 	if retired {
 		t.Fatal("helper retired while a stream was still live")
 	}
-	if got := keep.readMore(t, 1); len(got) == 0 {
+	if !keep.flowing(t) {
 		t.Fatal("live stream stopped receiving frames")
 	}
 }
@@ -400,6 +429,22 @@ type testStream struct {
 	client net.Conn
 	bodies chan string
 	frames []string
+	count  int64 // every frame that arrived, including any the test did not read
+}
+
+// flowing reports whether more frames arrived while we watched — proof the
+// stream is still live, without depending on the test reading them in time.
+func (ts *testStream) flowing(t *testing.T) bool {
+	t.Helper()
+	before := atomic.LoadInt64(&ts.count)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt64(&ts.count) > before {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
 
 func liveStream(t *testing.T, m *captureMux, helper, id string) *testStream {
@@ -419,7 +464,14 @@ func liveStream(t *testing.T, m *captureMux, helper, id string) *testStream {
 			if _, err := io.ReadFull(r, body); err != nil {
 				return
 			}
-			ts.bodies <- string(body)
+			atomic.AddInt64(&ts.count, 1)
+			// Never block the mux: a test that stops reading for a moment would
+			// overflow the stream's queue and end it, which looks exactly like
+			// the bug these tests are here to catch.
+			select {
+			case ts.bodies <- string(body):
+			default:
+			}
 		}
 	}()
 	ts.frames = ts.readMore(t, 2)
@@ -461,4 +513,120 @@ func waitFor(t *testing.T, limit time.Duration, what string, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+// The interleaving that actually risks a black pane: the last stream ends and
+// retirement is armed, then someone reopens a pane inside the grace period.
+// The helper now serving that pane must not be retired by the countdown the
+// previous stream left behind.
+func TestCaptureMuxKeepsHelperWhenStreamArrivesDuringGrace(t *testing.T) {
+	helper := fakeHelper(t, "serve")
+	m := &captureMux{idleAfter: 500 * time.Millisecond}
+
+	first := liveStream(t, m, helper, "111")
+	first.close() // no streams left: the countdown starts
+
+	// Inside the grace, a new pane opens.
+	time.Sleep(100 * time.Millisecond)
+	second := liveStream(t, m, helper, "222")
+	defer second.close()
+
+	// Past the moment the countdown would fire, this stream must still be live
+	// and its helper still there.
+	time.Sleep(4 * m.idleAfter)
+	m.mu.Lock()
+	retired := m.stdin == nil
+	m.mu.Unlock()
+	if retired {
+		t.Fatal("helper retired although a stream had started during the grace period")
+	}
+	if !second.flowing(t) {
+		t.Fatal("stream that started during the grace period stopped receiving frames")
+	}
+}
+
+// Two capture helpers must never be alive at once, even for an instant:
+// replayd keys a stream's application connection by code-signing identity, so
+// a second process starting a stream cuts the first one's off. Retiring an
+// idle helper introduced a way for exactly that to happen — the successor
+// starting while its predecessor was still on its way out — so the successor
+// waits for it to be gone.
+func TestCaptureMuxWaitsForRetiredHelperBeforeStartingAnother(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "generations.log")
+	helper := fakeHelperLogged(t, "linger", logPath)
+	m := &captureMux{idleAfter: 100 * time.Millisecond}
+
+	first := liveStream(t, m, helper, "111")
+	first.close()
+	waitFor(t, 5*time.Second, "helper to be retired", func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.stdin == nil
+	})
+	// Straight into a new capture, which is the risky moment: the retired
+	// helper is still leaving.
+	second := liveStream(t, m, helper, "222")
+	defer second.close()
+
+	// Read the generations: the second helper must not have started before the
+	// first had finished leaving.
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("reading %s: %v", logPath, err)
+	}
+	type ev struct {
+		what string
+		pid  string
+		at   int64
+	}
+	var evs []ev
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			continue
+		}
+		at, _ := strconv.ParseInt(f[2], 10, 64)
+		evs = append(evs, ev{f[0], f[1], at})
+	}
+	var firstExit, secondStart int64
+	for _, e := range evs {
+		if e.what == "exit" && firstExit == 0 {
+			firstExit = e.at
+		}
+		if e.what == "start" && e.pid != evs[0].pid && secondStart == 0 {
+			secondStart = e.at
+		}
+	}
+	if firstExit == 0 || secondStart == 0 {
+		t.Fatalf("want a retired helper and a successor, got %v", evs)
+	}
+	if secondStart < firstExit {
+		t.Fatalf("successor started %s before the retired helper had gone", time.Duration(firstExit-secondStart))
+	}
+}
+
+// The grace belongs to the last stream that ended. A countdown armed by an
+// earlier one must not cut it short: a pane opened and closed moments before
+// the old deadline would otherwise see the helper go seconds later, and the
+// next pane pays the cold start the grace exists to avoid.
+func TestCaptureMuxGraceBelongsToTheLastStream(t *testing.T) {
+	helper := fakeHelper(t, "serve")
+	m := &captureMux{idleAfter: 1200 * time.Millisecond}
+
+	first := liveStream(t, m, helper, "111")
+	first.close() // arms a countdown
+
+	time.Sleep(m.idleAfter / 3) // well inside it, another pane comes and goes
+	second := liveStream(t, m, helper, "222")
+	second.close()
+	lastEnded := time.Now()
+
+	waitFor(t, 15*time.Second, "helper to be retired", func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.stdin == nil
+	})
+	if lived := time.Since(lastEnded); lived < m.idleAfter*3/4 {
+		t.Fatalf("helper retired %s after the last stream ended, want about %s — an older countdown cut the grace short", lived, m.idleAfter)
+	}
 }
