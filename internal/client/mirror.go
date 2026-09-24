@@ -299,7 +299,25 @@ type captureMux struct {
 	conns       map[uint32]*muxConn // sid → the session conn its frames go to
 	nextSID     uint32
 	unsupported bool // helper binary predates serve mode — use the legacy path
+	// idleGen counts helper generations, so a retirement timer started for one
+	// helper cannot retire its successor.
+	idleGen uint64
+	// idleAfter is how long a helper with no streams left is kept; zero means
+	// idleHelperGrace. Tests shorten it.
+	idleAfter time.Duration
 }
+
+// idleHelperGrace is how long the capture helper is kept alive after its last
+// stream ends. A helper is deliberately long-lived — one process multiplexes
+// every session's mirror — but "long-lived" must not mean "forever, whatever
+// it is still doing". ScreenCaptureKit runs inside that process, and a stream
+// it failed to tear down goes on capturing a window nobody is watching: the
+// screen-recording indicator stays lit and a laptop's battery pays for it
+// until someone restarts the machine. Retiring an idle helper puts a bound on
+// that: whatever it was still holding ends with it. The grace period is long
+// enough that flipping between windows, or a pane reopening, reuses the
+// running helper rather than paying to start one.
+const idleHelperGrace = 30 * time.Second
 
 // muxConn fans one stream's frames from the shared demux loop out to its
 // session conn. The bounded queue and dedicated writer exist so one slow or
@@ -401,7 +419,45 @@ func (m *captureMux) serve(conn net.Conn, helper, id, w, q, fps, codec string) b
 	m.mu.Unlock()
 	mc.stopDraining()
 	m.command(fmt.Sprintf("stop %d", sid)) // helper ignores an already-ended sid
+	m.armIdleRetire()
 	return true
+}
+
+// armIdleRetire starts the countdown to retiring an idle helper. Called after
+// a stream ends; a no-op while other streams are still running.
+//
+// The daemon does this rather than the helper exiting by itself, and that is
+// the whole point: the decision is made under the same lock that hands a new
+// capture its stream, so a capture can never be handed to a helper that has
+// already decided to leave. (It was: the session got a stream that never
+// delivered a frame, and the pane stayed black until someone reopened it.)
+func (m *captureMux) armIdleRetire() {
+	m.mu.Lock()
+	if len(m.conns) > 0 || m.stdin == nil {
+		m.mu.Unlock()
+		return
+	}
+	gen := m.idleGen
+	after := m.idleAfter
+	m.mu.Unlock()
+	if after <= 0 {
+		after = idleHelperGrace
+	}
+	time.AfterFunc(after, func() { m.retireIfIdle(gen) })
+}
+
+// retireIfIdle closes the helper's command channel — its cue to exit, and with
+// it anything it still holds — unless a stream arrived in the meantime, or
+// this helper has already been replaced.
+func (m *captureMux) retireIfIdle(gen uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.idleGen != gen || m.stdin == nil || len(m.conns) > 0 {
+		return
+	}
+	_ = m.stdin.Close()
+	m.stdin = nil
+	m.idleGen++
 }
 
 // command sends one line to the helper. A dead helper (stdin nilled by the
@@ -442,6 +498,7 @@ func (m *captureMux) startLocked(helper string) bool {
 	select {
 	case <-ready:
 		m.stdin = stdin
+		m.idleGen++ // a pending retirement belongs to the helper this replaces
 		if m.conns == nil {
 			m.conns = make(map[uint32]*muxConn)
 		}

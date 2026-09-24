@@ -982,7 +982,13 @@ final class MuxStream {
             return
         }
         s.startCapture { [weak self] error in
-            if let error { self?.fail("startCapture: \(error.localizedDescription)") }
+            if let error {
+                self?.fail("startCapture: \(error.localizedDescription)")
+            } else if self?.isDead ?? true {
+                // Asked to stop while the capture was still starting: the stop
+                // ran before there was anything to stop. Do it now.
+                s.stopCapture { _ in }
+            }
         }
         // The 1fps floor doubles as the first frame: its immediate first tick is
         // what hands a joining viewer a picture on the serve-mode path — the
@@ -990,6 +996,18 @@ final class MuxStream {
         // renegotiation restart). A dead stream's emit() already drops frames,
         // and fail/shutdown cancel the tick itself.
         fo.startIdleRefresh(filter: filter, config: config, queue: queue)
+        // Setting a stream up is not instantaneous, and shutdown() / fail() can
+        // land anywhere inside it — from the encoder's own fatal callback, off
+        // this queue. Such a stop finds `stream` and `output` still nil and
+        // tears down nothing, leaving ScreenCaptureKit capturing a window for
+        // an audience that has already gone: frames are dropped by emit(), so
+        // nothing downstream ever notices, and a laptop pays for it until the
+        // machine is restarted. Whoever set the stream up checks once more,
+        // now that there is something to stop.
+        if isDead {
+            fo.stopIdleRefresh()
+            s.stopCapture { _ in }
+        }
     }
 
     private func emit(_ payload: Data, _ flag: UInt8?) {
