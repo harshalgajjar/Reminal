@@ -305,6 +305,15 @@ type captureMux struct {
 	// idleAfter is how long a helper with no streams left is kept; zero means
 	// idleHelperGrace. Tests shorten it.
 	idleAfter time.Duration
+	// retiring is the exit signal of a helper that has been told to leave but
+	// has not finished leaving. The next helper waits for it: replayd keys a
+	// stream's application connection by code-signing identity (see the note
+	// above serve), so two helper processes overlapping is the one thing this
+	// mux exists to prevent.
+	retiring <-chan struct{}
+	// dead is the running helper's exit signal, kept so retirement can hand it
+	// to the successor to wait on.
+	dead <-chan struct{}
 }
 
 // idleHelperGrace is how long the capture helper is kept alive after its last
@@ -446,6 +455,33 @@ func (m *captureMux) armIdleRetire() {
 	time.AfterFunc(after, func() { m.retireIfIdle(gen) })
 }
 
+// awaitRetiredLocked waits for a retired helper to actually be gone before its
+// successor starts, so the two never overlap inside replayd. Called with m.mu
+// held and RETURNS with it held: the lock is dropped only for the wait itself,
+// because the retiring helper's demux needs it to finish its own teardown.
+//
+// Bounded: a helper that will not leave must not stop mirroring altogether,
+// and the exit signal is the same one startLocked's probe already waits on.
+func (m *captureMux) awaitRetiredLocked() {
+	ch := m.retiring
+	if ch == nil {
+		return
+	}
+	m.mu.Unlock()
+	select {
+	case <-ch:
+	case <-time.After(retiredExitWait):
+	}
+	m.mu.Lock()
+	if m.retiring == ch {
+		m.retiring = nil
+	}
+}
+
+// retiredExitWait bounds that wait. A helper told to leave closes in
+// milliseconds; this is the backstop for one that is wedged.
+const retiredExitWait = 2 * time.Second
+
 // retireIfIdle closes the helper's command channel — its cue to exit, and with
 // it anything it still holds — unless a stream arrived in the meantime, or
 // this helper has already been replaced.
@@ -458,6 +494,8 @@ func (m *captureMux) retireIfIdle(gen uint64) {
 	_ = m.stdin.Close()
 	m.stdin = nil
 	m.idleGen++
+	m.retiring = m.dead
+	m.dead = nil
 }
 
 // command sends one line to the helper. A dead helper (stdin nilled by the
@@ -478,6 +516,10 @@ func (m *captureMux) command(line string) {
 // until reaped, and a zombie still signals as alive). Called with m.mu held;
 // only capture starts stall behind it, and only while a helper comes up.
 func (m *captureMux) startLocked(helper string) bool {
+	m.awaitRetiredLocked()
+	if m.stdin != nil {
+		return true // someone else started one while we waited
+	}
 	cmd := exec.Command(helper, "serve")
 	cmd.Stderr = &lineLogger{prefix: "reminal: "}
 	stdin, err := cmd.StdinPipe()
@@ -498,6 +540,7 @@ func (m *captureMux) startLocked(helper string) bool {
 	select {
 	case <-ready:
 		m.stdin = stdin
+		m.dead = dead
 		m.idleGen++ // a pending retirement belongs to the helper this replaces
 		if m.conns == nil {
 			m.conns = make(map[uint32]*muxConn)

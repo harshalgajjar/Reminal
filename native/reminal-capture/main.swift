@@ -930,6 +930,12 @@ final class MuxStream {
     private var output: FrameOutput?
     private let lock = NSLock()
     private var dead = false
+    // capStopped: whether this stream's capture has already been stopped.
+    // Stopping is reachable from the control queue (shutdown, fail, and the
+    // re-check at the end of begin) and from ScreenCaptureKit's own queue
+    // (startCapture's completion), and SCStream does not promise anything
+    // about being stopped twice at once. One of them does it.
+    private var capStopped = false
 
     init(sid: UInt32, spec: String, out: ServeOut, onEnd: @escaping (UInt32) -> Void) {
         self.sid = sid
@@ -937,6 +943,22 @@ final class MuxStream {
         self.out = out
         self.onEnd = onEnd
         queue = DispatchQueue(label: "reminal.capture.\(sid)")
+    }
+
+    // stopCaptureOnce stops this stream's capture, once, whoever gets there
+    // first. `known` is the stream the caller is holding — during begin the
+    // property may not be set yet, and latching on a nil stream would swallow
+    // the real stop that follows.
+    private func stopCaptureOnce(_ known: SCStream? = nil) {
+        lock.lock()
+        let target = known ?? stream
+        if capStopped || target == nil {
+            lock.unlock()
+            return
+        }
+        capStopped = true
+        lock.unlock()
+        target?.stopCapture { _ in }
     }
 
     private func markDead() -> Bool {
@@ -987,7 +1009,7 @@ final class MuxStream {
             } else if self?.isDead ?? true {
                 // Asked to stop while the capture was still starting: the stop
                 // ran before there was anything to stop. Do it now.
-                s.stopCapture { _ in }
+                self?.stopCaptureOnce(s)
             }
         }
         // The 1fps floor doubles as the first frame: its immediate first tick is
@@ -998,15 +1020,16 @@ final class MuxStream {
         fo.startIdleRefresh(filter: filter, config: config, queue: queue)
         // Setting a stream up is not instantaneous, and shutdown() / fail() can
         // land anywhere inside it — from the encoder's own fatal callback, off
-        // this queue. Such a stop finds `stream` and `output` still nil and
-        // tears down nothing, leaving ScreenCaptureKit capturing a window for
+        // this queue. One landing before the two properties above are assigned
+        // finds them nil and tears down nothing, leaving ScreenCaptureKit
+        // capturing a window for
         // an audience that has already gone: frames are dropped by emit(), so
         // nothing downstream ever notices, and a laptop pays for it until the
         // machine is restarted. Whoever set the stream up checks once more,
         // now that there is something to stop.
         if isDead {
             fo.stopIdleRefresh()
-            s.stopCapture { _ in }
+            stopCaptureOnce(s)
         }
     }
 
@@ -1024,7 +1047,7 @@ final class MuxStream {
         FileHandle.standardError.write(Data("capture \(spec) ended: \(msg)\n".utf8))
         out.error(sid, msg)
         out.end(sid)
-        stream?.stopCapture { _ in }
+        stopCaptureOnce()
         onEnd(sid)
     }
 
@@ -1032,7 +1055,7 @@ final class MuxStream {
     func shutdown() {
         guard markDead() else { return }
         output?.stopIdleRefresh()
-        stream?.stopCapture { _ in }
+        stopCaptureOnce()
     }
 }
 
