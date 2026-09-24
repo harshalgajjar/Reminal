@@ -663,6 +663,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, "usage: reminal add owner <id> [--label <name>] [-y]")
 			os.Exit(1)
 			return
+		case "issues":
+			if err := runIssues(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "owners":
 			if err := runOwners(os.Args[2:]); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
