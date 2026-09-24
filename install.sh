@@ -7,6 +7,10 @@
 # Env overrides:
 #   REMINAL_VERSION       Install a specific version (default: latest)
 #   REMINAL_INSTALL_DIR   Install location (default: ~/.local/bin)
+#   REMINAL_ARCHIVE_URL   Install this build archive instead of a release from
+#                         GitHub (give REMINAL_VERSION too, for the messages)
+#   REMINAL_ARCHIVE_SHA256  The archive's SHA-256; nothing is installed unless
+#                         the download matches it
 
 set -e
 
@@ -129,6 +133,9 @@ fi
 # Resolve the latest version from the redirect of /releases/latest so we don't
 # need a GitHub API token. The effective URL ends in /releases/tag/vX.Y.Z.
 VERSION="$REMINAL_VERSION"
+if [ -n "${REMINAL_ARCHIVE_URL:-}" ] && [ -z "$VERSION" ]; then
+    VERSION="(archive)"
+fi
 if [ -z "$VERSION" ]; then
     EFFECTIVE=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")
     VERSION="${EFFECTIVE##*/v}"
@@ -152,6 +159,10 @@ say() { printf '%b\n' "$1"; }
 
 TARBALL="reminal_${VERSION}_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/$REPO/releases/download/v${VERSION}/${TARBALL}"
+if [ -n "${REMINAL_ARCHIVE_URL:-}" ]; then
+    URL="$REMINAL_ARCHIVE_URL"
+    TARBALL="$(basename "$URL")"
+fi
 
 say "${CD}Downloading reminal v${VERSION} (${OS}/${ARCH})…${C0}"
 
@@ -165,6 +176,10 @@ trap 'rm -rf "$TMPDIR"' EXIT
 # like a broken installer rather than a release still finishing, or one whose
 # build for this machine did not make it.
 if ! curl -fsSL -o "$TMPDIR/$TARBALL" "$URL"; then
+    if [ -n "${REMINAL_ARCHIVE_URL:-}" ]; then
+        echo "reminal: could not download $URL." >&2
+        exit 1
+    fi
     if curl -fsSLI -o /dev/null "https://github.com/$REPO/releases/tag/v${VERSION}" 2>/dev/null; then
         echo "reminal: release v${VERSION} exists but has no ${OS}/${ARCH} build." >&2
         echo "  It may still be publishing — try again in a few minutes." >&2
@@ -174,6 +189,21 @@ if ! curl -fsSL -o "$TMPDIR/$TARBALL" "$URL"; then
         echo "  Check your connection, or see https://github.com/$REPO/releases" >&2
     fi
     exit 1
+fi
+# A digest given is a digest kept: a build that is not the one named is never
+# unpacked, let alone installed.
+if [ -n "${REMINAL_ARCHIVE_SHA256:-}" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+        GOT=$(sha256sum "$TMPDIR/$TARBALL" | cut -d' ' -f1)
+    else
+        GOT=$(shasum -a 256 "$TMPDIR/$TARBALL" | cut -d' ' -f1)
+    fi
+    WANT=$(printf '%s' "$REMINAL_ARCHIVE_SHA256" | tr 'A-F' 'a-f')
+    if [ "$GOT" != "$WANT" ]; then
+        echo "reminal: the downloaded build is not the one that was published (sha256 $GOT, expected $WANT)." >&2
+        echo "  Nothing was installed." >&2
+        exit 1
+    fi
 fi
 if ! tar -xzf "$TMPDIR/$TARBALL" -C "$TMPDIR"; then
     echo "reminal: the downloaded archive could not be extracted (truncated download?)." >&2

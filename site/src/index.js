@@ -14,6 +14,8 @@
 //     reminal.app so links, OG cards and analytics don't fragment.
 //   * stray `/?s=` on this host — someone typing the marketing domain with a
 //     session id is sent to live.reminal.app, which is the real viewer.
+//   * /downloads/ — files kept in the DOWNLOADS bucket rather than on the
+//     public releases page (see serveDownload).
 
 const RAW = "https://raw.githubusercontent.com/harshalgajjar/Reminal/main";
 const REPO = "https://github.com/harshalgajjar/Reminal";
@@ -67,6 +69,65 @@ export function liveJoinURL(url) {
   return LIVE_ORIGIN + "/" + url.search + url.hash;
 }
 
+// Downloads: files kept in the DOWNLOADS bucket, one key per file, at
+// /downloads/<key>. Never indexed and never listed — what is here is fetched
+// by the software that knows its name, not found by a search engine — and a
+// path that names no file is a plain 404, folders included.
+//
+// A build's name carries its version, so its bytes never change and it is
+// cached for good. Everything else — a manifest, an install script — is
+// fetched fresh every time, so a new release is seen the moment it lands.
+const DOWNLOADS_PREFIX = "/downloads/";
+
+// downloadKey turns a request path into a bucket key: "" for a path that is
+// under /downloads/ but names no file it may serve, null for one that is not
+// under /downloads/ at all.
+export function downloadKey(pathname) {
+  if (!pathname.startsWith(DOWNLOADS_PREFIX)) return null;
+  let key;
+  try {
+    key = decodeURIComponent(pathname.slice(DOWNLOADS_PREFIX.length));
+  } catch {
+    return "";
+  }
+  if (!/^[A-Za-z0-9._/-]+$/.test(key)) return "";
+  if (key.split("/").some((part) => part === "" || part === "." || part === "..")) return "";
+  return key;
+}
+
+const DOWNLOAD_TYPES = [
+  [/\.json$/, "application/json; charset=utf-8"],
+  [/\.(sh|sha256|txt)$/, "text/plain; charset=utf-8"],
+  [/\.(tar\.gz|tgz)$/, "application/gzip"],
+  [/\.zip$/, "application/zip"],
+];
+
+export function downloadHeaders(key) {
+  const h = new Headers({
+    "x-robots-tag": "noindex, nofollow",
+    "x-content-type-options": "nosniff",
+  });
+  const type = DOWNLOAD_TYPES.find(([re]) => re.test(key));
+  h.set("content-type", type ? type[1] : "application/octet-stream");
+  h.set("cache-control", /\.(tar\.gz|tgz|zip)$/.test(key) ? "public, max-age=31536000, immutable" : "no-cache");
+  return h;
+}
+
+export async function serveDownload(request, env, key) {
+  const notFound = () =>
+    new Response("not found\n", { status: 404, headers: { "x-robots-tag": "noindex, nofollow", "content-type": "text/plain; charset=utf-8" } });
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return new Response("method not allowed\n", { status: 405, headers: { allow: "GET, HEAD" } });
+  }
+  if (!key || !env.DOWNLOADS) return notFound();
+  const obj = request.method === "HEAD" ? await env.DOWNLOADS.head(key) : await env.DOWNLOADS.get(key);
+  if (!obj) return notFound();
+  const h = downloadHeaders(key);
+  if (obj.httpEtag) h.set("etag", obj.httpEtag);
+  if (typeof obj.size === "number") h.set("content-length", String(obj.size));
+  return new Response(request.method === "HEAD" ? null : obj.body, { status: 200, headers: h });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -94,6 +155,13 @@ export default {
     if (ALIASES.has(url.hostname)) {
       url.hostname = CANONICAL_HOST;
       return Response.redirect(url.toString(), 301);
+    }
+
+    // Before the trailing-slash forgiveness below: a download is a file, and
+    // a folder under /downloads/ is a 404, not a redirect to somewhere else.
+    const key = downloadKey(url.pathname);
+    if (key !== null) {
+      return serveDownload(request, env, key);
     }
 
     // Trailing slashes are forgiven so /install.sh/ isn't a 404 someone has to
