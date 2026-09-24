@@ -312,9 +312,31 @@ func TestParseBuildChannel(t *testing.T) {
 	if ch, err := parseBuildChannel([]byte(`{"version":"1.0.0","channel":"alpha"}` + "\n")); err != nil || ch != "alpha" {
 		t.Fatalf("got %q, %v", ch, err)
 	}
-	for _, out := range []string{"3.14.3\n", "", `{"version":"1.0.0"}`} {
+	for _, out := range []string{"", `{"version":"1.0.0"}`, "nope"} {
 		if _, err := parseBuildChannel([]byte(out)); err == nil {
 			t.Fatalf("%q was taken as naming a channel", out)
 		}
+	}
+}
+
+// A build from before builds said their channel answers with a bare version:
+// a stable release, so it passes where stable releases are wanted and
+// nowhere else.
+func TestALegacyBuildIsAStableOne(t *testing.T) {
+	got, err := parseBuildChannel([]byte("3.14.4\n"))
+	if err != nil || got != legacyChannel {
+		t.Fatalf("a bare version is a legacy build: %q %v", got, err)
+	}
+	if _, err := parseBuildChannel([]byte("reminal: command not found")); err == nil {
+		t.Fatal("something that is not a version is no answer")
+	}
+	if !channelAccepts("stable", legacyChannel) {
+		t.Fatal("stable takes a legacy build")
+	}
+	if channelAccepts("nightly", legacyChannel) {
+		t.Fatal("another line never takes a legacy build")
+	}
+	if !channelAccepts("nightly", "nightly") || channelAccepts("stable", "nightly") || channelAccepts("nightly", "stable") {
+		t.Fatal("otherwise a build must follow the releases wanted")
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -149,16 +150,37 @@ func buildChannel(path string) (string, error) {
 	return parseBuildChannel(out.Bytes())
 }
 
+// legacyChannel is what a build from before builds said which releases they
+// follow answers with: a bare version. Every such build is a release of the
+// stable line — no other line existed then — so it is taken where stable
+// releases are wanted, and nowhere else: an earlier release can still be
+// installed, and a machine on another line can come back to the stable
+// release of the day even before one that answers exists.
+const legacyChannel = "legacy"
+
+var bareVersionRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+`)
+
 // parseBuildChannel reads the channel out of `version --json`. A build too
-// old to answer prints a bare version, which is no answer at all.
+// old to answer prints a bare version: legacyChannel. Anything else is no
+// answer at all.
 func parseBuildChannel(out []byte) (string, error) {
 	var v struct {
 		Channel string `json:"channel"`
 	}
-	if err := json.Unmarshal(bytes.TrimSpace(out), &v); err != nil || v.Channel == "" {
+	trimmed := bytes.TrimSpace(out)
+	if err := json.Unmarshal(trimmed, &v); err != nil || v.Channel == "" {
+		if bareVersionRe.Match(trimmed) {
+			return legacyChannel, nil
+		}
 		return "", fmt.Errorf("it does not say which releases it follows")
 	}
 	return v.Channel, nil
+}
+
+// channelAccepts is whether a build that follows got may be installed where
+// want is followed.
+func channelAccepts(want, got string) bool {
+	return got == want || (got == legacyChannel && want == mainChannel().Name)
 }
 
 func minimalEnv() []string {
@@ -183,7 +205,7 @@ func sameChannel(path string) error {
 	if err != nil {
 		return fmt.Errorf("could not ask the downloaded build which releases it follows (%v) — nothing was installed", err)
 	}
-	if got != channel.Name {
+	if !channelAccepts(channel.Name, got) {
 		return fmt.Errorf("the downloaded build follows %q releases, and this install follows %q — nothing was installed", got, channel.Name)
 	}
 	return nil
@@ -226,7 +248,7 @@ func SwitchChannel(manifestURL, want string) (string, error) {
 		if err != nil {
 			return fmt.Errorf("could not ask the downloaded build which releases it follows (%v) — nothing was installed", err)
 		}
-		if got != want {
+		if !channelAccepts(want, got) {
 			return fmt.Errorf("the downloaded build follows %q releases, not %q — nothing was installed", got, want)
 		}
 		return sameSigner(bin)
