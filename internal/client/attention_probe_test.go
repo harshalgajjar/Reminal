@@ -245,6 +245,44 @@ func TestResolveAttn(t *testing.T) {
 	}
 }
 
+// The three ways a hook is not to be believed, each seen on a real session:
+// written by a harness that has since exited, "working" over a screen that has
+// not moved for a minute and a half, and "done" under a chooser drawn at the
+// bottom of the screen.
+func TestResolveAttnDisbelievesAHookWhenTheScreenKnowsBetter(t *testing.T) {
+	now := time.Now()
+	hook := func(state string, ago time.Duration) *session.HookState {
+		return &session.HookState{State: state, TS: now.Add(-ago)}
+	}
+	cases := []struct {
+		name   string
+		screen string
+		hs     *session.HookState
+		fgAt   time.Time
+		idleMs int64
+		prompt bool
+		want   string
+	}{
+		// A "working" left by a turn that died; python3 started after it.
+		{"hook older than the foreground is ignored", "done", hook("working", 40*time.Second), now.Add(-12 * time.Second), 0, false, "done"},
+		{"hook newer than the foreground is believed", "done", hook("working", 0), now.Add(-12 * time.Second), 0, false, "working"},
+		// A working harness animates; this one has not drawn anything.
+		{"silent working falls back to the screen", "done", hook("working", 0), time.Time{}, hookWorkingSilentMs + 1, false, "done"},
+		{"a working harness that just drew is believed", "done", hook("working", 0), time.Time{}, 1000, false, "working"},
+		// Claude Code fires Stop when it yields for a question.
+		{"a chooser at the bottom beats done", "input", hook("done", time.Second), time.Time{}, 0, true, "input"},
+		{"a question only in the transcript above does not", "input", hook("done", time.Second), time.Time{}, 0, false, "done"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, _ := resolveAttn(c.screen, c.hs, now.Add(-30*time.Second), c.fgAt, c.idleMs, c.prompt)
+			if got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
 // The screen is read as TEXT. A harness that colours its dialog, or draws the
 // spaces between words as cursor moves, is still asking you something — and a
 // session sitting on a question that reads as "done" is the whole problem the
