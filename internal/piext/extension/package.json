@@ -7,8 +7,8 @@
   "keywords": ["pi-package", "pi-extension", "reminal"],
   "license": "AGPL-3.0-or-later",
   "engines": { "node": ">=22.0.0" },
-  "files": ["src/", "README.md"],
+  "files": ["index.ts", "mcp.ts", "README.md"],
   "pi": {
-    "extensions": ["./src/index.ts"]
+    "extensions": ["./index.ts"]
   }
 }

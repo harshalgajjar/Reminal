@@ -196,7 +196,7 @@ function resolveBin(): string {
 	if (fromEnv !== "") return fromEnv;
 	try {
 		const here = path.dirname(fileURLToPath(import.meta.url));
-		const parsed: unknown = JSON.parse(fs.readFileSync(path.join(here, "..", "bin.json"), "utf8"));
+		const parsed: unknown = JSON.parse(fs.readFileSync(path.join(here, "bin.json"), "utf8"));
 		if (isObject(parsed) && typeof parsed.bin === "string" && parsed.bin.trim() !== "") {
 			return parsed.bin.trim();
 		}

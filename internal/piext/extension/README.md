@@ -32,8 +32,8 @@ and a real pi loading the result and offering the tools to a model. It touches
 nothing of yours: pi gets its own home directory inside the container, and the
 repo is mounted read-only.
 
-- `src/index.ts` — the extension: lifecycle → attention state, and the tool
+- `index.ts` — the extension: lifecycle → attention state, and the tool
   registrations.
-- `src/mcp.ts` — a small MCP stdio client, just enough to talk to `reminal mcp`.
+- `mcp.ts` — a small MCP stdio client, just enough to talk to `reminal mcp`.
 - `test/harness.ts` — a stand-in for pi, so both halves can be exercised without
   starting pi or spending a model call.
