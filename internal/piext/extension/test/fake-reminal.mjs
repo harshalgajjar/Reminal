@@ -50,8 +50,9 @@ setInterval(() => {
 }, 50).unref();
 
 let buf = "";
+process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
-	buf += chunk.toString("utf8");
+	buf += chunk;
 	let nl = buf.indexOf("\n");
 	while (nl >= 0) {
 		const line = buf.slice(0, nl).trim();
@@ -67,13 +68,17 @@ process.stdin.on("data", (chunk) => {
 			case "tools/list":
 				send({ jsonrpc: "2.0", id: msg.id, result: { tools: toolsFor(currentNames()) } });
 				break;
-			case "tools/call":
-				send({
-					jsonrpc: "2.0",
-					id: msg.id,
-					result: { content: [{ type: "text", text: `${msg.params.name}: ${JSON.stringify(msg.params.arguments)}` }] },
-				});
+			case "tools/call": {
+				// Two blocks, and a big one made of the box-drawing an agent's screen
+				// is full of: enough to cross pipe-chunk boundaries, so a decoder that
+				// works a chunk at a time mangles it.
+				const content = [{ type: "text", text: `${msg.params.name}: ${JSON.stringify(msg.params.arguments)}` }];
+				if (msg.params.name === "big") {
+					content.push({ type: "text", text: "─│✓⏺".repeat(40000) });
+				}
+				send({ jsonrpc: "2.0", id: msg.id, result: { content } });
 				break;
+			}
 			default:
 				send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: `no ${msg.method}` } });
 		}

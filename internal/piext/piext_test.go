@@ -119,6 +119,43 @@ func TestRemove(t *testing.T) {
 	}
 }
 
+// An install that died halfway used to leave a directory with no manifest in it
+// — which is the file that says the directory is ours. Neither a re-install nor
+// a remove would touch it after that, and pi loads a bare index.ts, so it kept
+// trying the wreckage on every start.
+func TestAnInterruptedInstallCanBeRepaired(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	dir := Dir(home)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// What is left when the write stops before the manifest.
+	if err := os.WriteFile(filepath.Join(dir, "index.ts"), []byte("half an extension\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Install(home, "/opt/reminal/reminal"); err != nil {
+		t.Fatalf("could not repair a half-written install: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		t.Fatalf("no manifest after the repair: %v", err)
+	}
+	var manifest struct{ Name string }
+	if err := json.Unmarshal(raw, &manifest); err != nil || manifest.Name != marker {
+		t.Errorf("manifest is not ours after the repair: %s", raw)
+	}
+	if err := Remove(home); err != nil {
+		t.Errorf("could not remove after the repair: %v", err)
+	}
+
+	// And nothing of the staging directory is left lying about.
+	if _, err := os.Stat(dir + ".installing"); !os.IsNotExist(err) {
+		t.Error("the staging directory survived")
+	}
+}
+
 func TestRemoveLeavesSomebodyElsesDirectoryAlone(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", "")

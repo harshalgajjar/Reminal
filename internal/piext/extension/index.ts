@@ -15,7 +15,7 @@
 // reporting is skipped, and if reminal is missing altogether the extension
 // quietly does less instead of failing pi's startup.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -166,8 +166,11 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 				// Schema, and rewriting it here could only lose detail.
 				parameters: asSchema(tool.inputSchema),
 				async execute(_toolCallId, params, signal) {
-					const text = await client.call(tool.name, params, signal);
-					return { content: [{ type: "text", text }], details: {} };
+					const texts = await client.call(tool.name, params, signal);
+					// One block in, one block out: reminal keeps a notice separate from
+					// an answer the model parses, and flattening them here would undo
+					// that.
+					return { content: texts.map((text) => ({ type: "text" as const, text })), details: {} };
 				},
 			});
 		}
@@ -224,8 +227,21 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", () => {
-		// Quitting mid-run would otherwise leave "working" behind until it expired.
-		report("done");
+		// Quitting mid-run would otherwise leave "working" behind until it expired,
+		// and this is the last moment anything of ours runs — a parked write would
+		// never get its turn, and a spawn started here would outlive the event loop
+		// that was going to deliver its exit. So this one is synchronous, and it
+		// ignores the dedup: what was last *reported* is not necessarily what was
+		// last *written*, and only the file matters now.
+		if (reporting) {
+			last = undefined;
+			parked = undefined;
+			try {
+				spawnSync(bin, ["hook", "done"], { stdio: "ignore" });
+			} catch {
+				// nothing left to fall back to; pi is going away regardless
+			}
+		}
 		mcp?.stop();
 		mcp = undefined;
 	});

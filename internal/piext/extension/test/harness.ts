@@ -143,12 +143,27 @@ for (const [event, want] of [
 	["agent_settled", "done"],
 	["project_trust", "input"],
 	["turn_start", "working"],
-	["session_shutdown", "done"],
 ] as const) {
 	fs.rmSync(statePath, { force: true });
 	await b.emit(event, { type: event });
 	assert.equal(await reported(), want, `${event} should report ${want}`);
 }
+
+// Quitting has to leave the file right, whatever was queued behind it. A parked
+// write never gets its turn once pi is going away, and the dedup remembers what
+// was last reported rather than what was last written — so the shutdown report
+// has to land regardless of both.
+fs.rmSync(statePath, { force: true });
+await b.emit("turn_end", { type: "turn_end" });
+await b.emit("agent_settled", { type: "agent_settled" });
+await b.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
+let atQuit = "(never written)";
+try {
+	atQuit = JSON.parse(fs.readFileSync(statePath, "utf8")).state;
+} catch {
+	// left as "(never written)", which is itself a failure
+}
+assert.equal(atQuit, "done", `quitting left the session reading ${atQuit}`);
 
 // Repeating a state must not spawn a process per turn. The state is "working"
 // again after this turn_start; the turn_end behind it has nothing new to say.
@@ -229,6 +244,20 @@ for (const name of BUILT_INS) {
 	assert.ok(c.activeTools().includes(name), `dropped pi's own ${name}`);
 }
 assert.deepEqual(c.notices, [], `complained: ${c.notices.join("; ")}`);
+
+// A big answer has to survive the pipe intact. Decoding a chunk at a time splits
+// characters across chunk boundaries into replacement characters, and because no
+// continuation byte is ASCII the JSON still parses — so it is silent, and it
+// lands on exactly the box-drawing an agent's screen is made of.
+await offer(["always_here", "big"], () => c.activeTools().includes("big"), "the big tool should be offered");
+const blocks = await c.tools.get("big")!.execute("call-5", {}, undefined, undefined, c.ctx);
+const joined = blocks.content.map((b: { text: string }) => b.text).join("");
+assert.equal(joined.includes("\uFFFD"), false, "a multi-byte character was mangled crossing a chunk boundary");
+assert.ok(joined.length > 100000, `the big answer came back short: ${joined.length}`);
+
+// And reminal's blocks stay separate. It sends a notice as its own block so it is
+// never inlined into result text the model parses as JSON.
+assert.equal(blocks.content.length, 2, "reminal's separate content blocks were flattened into one");
 
 await c.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
 fs.rmSync(toolsFile, { force: true });
