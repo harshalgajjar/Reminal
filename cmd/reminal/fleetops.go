@@ -5,6 +5,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"runtime"
 	"sort"
@@ -53,6 +54,13 @@ func parseMachineScopeStrict(args []string) (machineScope, error) {
 	return parseMachineScopeWith(args, true)
 }
 
+// errScopeHelp is returned when the flags themselves were asked for; the
+// verb prints its usage and stops, doing nothing.
+var errScopeHelp = errors.New("help asked for")
+
+// scopeUsage is the scope flags every scoped verb takes.
+const scopeUsage = "[--machine <id|name>|--all-owned-machines]"
+
 func parseMachineScopeWith(args []string, strict bool) (machineScope, error) {
 	var sc machineScope
 	seen := false
@@ -60,7 +68,7 @@ func parseMachineScopeWith(args []string, strict bool) (machineScope, error) {
 		a := args[i]
 		switch {
 		case a == "-h" || a == "--help" || a == "help":
-			return sc, fmt.Errorf("usage: [--machine <id|name>] [--all-owned-machines]")
+			return sc, errScopeHelp
 		case a == "--all-owned-machines" || a == "--all-owned":
 			sc.allOwned = true
 		case a == "--machine" || a == "-machine" || a == "-m":
@@ -76,7 +84,7 @@ func parseMachineScopeWith(args []string, strict bool) (machineScope, error) {
 			sc.selector = strings.TrimPrefix(a, "--machine=")
 		default:
 			if strict {
-				return sc, fmt.Errorf("usage: [--machine <id|name>] [--all-owned-machines] — not %q", a)
+				return sc, fmt.Errorf("unknown flag %q — usage: %s", a, scopeUsage)
 			}
 		}
 	}

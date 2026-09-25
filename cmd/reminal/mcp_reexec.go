@@ -21,6 +21,11 @@ const reloadedEnv = "REMINAL_MCP_RELOADED"
 // seconds, not milliseconds.
 var binaryWatchInterval = 5 * time.Second
 
+// mcpIdleWait is how long the request reader waits for a line before it
+// counts the process idle (mcpReadLines). The same order as the binary
+// watch: a swap can never be noticed sooner than that anyway.
+var mcpIdleWait = binaryWatchInterval
+
 var binarySwapped atomic.Bool
 
 // mcpWatchBinary notices when our own on-disk binary is replaced — reminal
@@ -31,6 +36,8 @@ var binarySwapped atomic.Bool
 // (watchBinaryAndExit). An MCP server has no service manager: it is a stdio
 // child of the client, and if it exits the client may not bring it back, which
 // is worse than serving a stale tool list. So we re-exec in place instead.
+// mcpWatchBinary raises binarySwapped once the binary on disk is not the one
+// this process started from, then returns; mcpIdle acts on it.
 func mcpWatchBinary(stop <-chan struct{}) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -63,10 +70,11 @@ func mcpWatchBinary(stop <-chan struct{}) {
 // stdin/stdout — the client's pipes — open across the swap, so the client never
 // sees its server disconnect and never has to respawn anything.
 //
-// Called only just after answering a request. At that instant the client has not
-// yet received our reply, so it has not sent the next one: nothing is in flight
-// to lose. (Anything sitting unread in our buffer would not survive exec, which
-// is why this is never called while a read is pending.)
+// Called only when nothing of the client's is in this process's hands: just
+// after a request was answered (the client has not received the reply, so it
+// has not sent the next one), or when the reader's wait lapsed with nothing
+// read and nothing half read (mcpReadLines). Anything unread in a buffer
+// would not survive exec; what is still in the kernel's pipe does.
 //
 // On success it does not return. On failure — or on Windows, which has no exec —
 // we stay on the old image and fall back to the staleness warning, since a
@@ -79,9 +87,9 @@ func maybeReexec() {
 	if err != nil {
 		return
 	}
-	// Survives exec, and tells the new image to announce the change.
-	_ = os.Setenv(reloadedEnv, "1")
-	execSelf(exe, os.Args, os.Environ())
+	// The new image is told to announce the change; this one's environment
+	// is left as it is, in case the exec fails and it carries on.
+	execSelf(exe, os.Args, append(os.Environ(), reloadedEnv+"=1"))
 }
 
 // mcpReadLines hands each line of a client's requests to handle, and between
@@ -97,7 +105,7 @@ func maybeReexec() {
 // first; exec never happens while one is held.
 func mcpReadLines(in *os.File, handle func(line string)) {
 	f := mcpPollable(in)
-	rd := bufio.NewReaderSize(f, 8<<20)
+	rd := bufio.NewReaderSize(f, 64<<10) // a line longer than this is gathered in partial
 	var partial []byte
 	for {
 		// A fresh deadline for every wait, whether or not a line is half
@@ -105,17 +113,24 @@ func mcpReadLines(in *os.File, handle func(line string)) {
 		// makes every read after it fail at once — the server then never
 		// reads again (a re-exec'd image inherits an already-pollable stdin
 		// and did exactly that after its first request).
-		_ = f.SetReadDeadline(time.Now().Add(binaryWatchInterval))
+		_ = f.SetReadDeadline(time.Now().Add(mcpIdleWait))
 		chunk, err := rd.ReadString('\n')
 		partial = append(partial, chunk...)
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) {
-				if len(partial) == 0 && rd.Buffered() == 0 {
+				// On a lapsed wait bufio has handed back all it held, so
+				// partial alone says whether a request is half read.
+				if len(partial) == 0 {
 					mcpIdle() // nothing of the client's is in our hands
 				}
 				continue
 			}
-			return // the client closed its end
+			// The client closed its end. A last line without its newline is
+			// still a request.
+			if line := strings.TrimSpace(string(partial)); line != "" {
+				handle(line)
+			}
+			return
 		}
 		line := strings.TrimSpace(string(partial))
 		partial = partial[:0]

@@ -18,9 +18,9 @@ import (
 // wait lapses, the server sees it holds nothing, and the idle hook runs. A
 // half-written request is never counted as idle, and arrives whole.
 func TestAnIdleReaderSwapsAndAHalfLineIsNotIdle(t *testing.T) {
-	old := binaryWatchInterval
-	binaryWatchInterval = 30 * time.Millisecond
-	defer func() { binaryWatchInterval = old; mcpIdle = maybeReexec }()
+	old := mcpIdleWait
+	mcpIdleWait = 30 * time.Millisecond
+	defer func() { mcpIdleWait = old; mcpIdle = maybeReexec }()
 
 	var idle atomic.Int32
 	mcpIdle = func() { idle.Add(1) }
@@ -49,7 +49,7 @@ func TestAnIdleReaderSwapsAndAHalfLineIsNotIdle(t *testing.T) {
 	// A request split across the deadline: not idle while it is held, whole
 	// when it is delivered.
 	_, _ = w.WriteString(`{"id":1,`)
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(70 * time.Millisecond) // past any wait that lapsed before the write landed
 	before := idle.Load()
 	time.Sleep(100 * time.Millisecond)
 	if idle.Load() != before {
@@ -81,9 +81,9 @@ func TestAnIdleReaderSwapsAndAHalfLineIsNotIdle(t *testing.T) {
 // A re-exec'd image inherits a stdin Go already polls. It must keep reading
 // after its first request, and keep going idle between requests.
 func TestAnAlreadyPolledStdinKeepsServing(t *testing.T) {
-	old := binaryWatchInterval
-	binaryWatchInterval = 30 * time.Millisecond
-	defer func() { binaryWatchInterval = old; mcpIdle = maybeReexec }()
+	old := mcpIdleWait
+	mcpIdleWait = 30 * time.Millisecond
+	defer func() { mcpIdleWait = old; mcpIdle = maybeReexec }()
 	var idle atomic.Int32
 	mcpIdle = func() { idle.Add(1) }
 
@@ -113,5 +113,32 @@ func TestAnAlreadyPolledStdinKeepsServing(t *testing.T) {
 		t.Fatal("stopped going idle after serving requests")
 	}
 	_ = w.Close()
+	<-done
+}
+
+// A client that closes its end after a last request without a newline still
+// gets that request handled — the old scanner did as much.
+func TestALastLineWithoutNewlineIsStillARequest(t *testing.T) {
+	old := mcpIdleWait
+	mcpIdleWait = 30 * time.Millisecond
+	defer func() { mcpIdleWait = old; mcpIdle = maybeReexec }()
+	mcpIdle = func() {}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := make(chan string, 2)
+	done := make(chan struct{})
+	go func() { mcpReadLines(r, func(l string) { lines <- l }); close(done) }()
+	_, _ = w.WriteString("last")
+	_ = w.Close()
+	select {
+	case l := <-lines:
+		if l != "last" {
+			t.Fatalf("got %q", l)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the unterminated last line was dropped")
+	}
 	<-done
 }

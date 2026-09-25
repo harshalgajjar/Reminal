@@ -124,6 +124,18 @@ func newMCPServer() *mcpServer {
 	return &mcpServer{attached: map[uint32]bool{}, notes: map[uint32][]mcpNote{}}
 }
 
+// hasNotes reports whether this process itself is showing any note.
+func (s *mcpServer) hasNotes() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ns := range s.notes {
+		if len(ns) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // mcpNote mirrors one badge entry. Kept here as well as in the helper because
 // web viewers need the same list, and they reach it through the reminal agent,
 // not through this process.
@@ -889,6 +901,15 @@ func runMCP(_ []string) error {
 	out := json.NewEncoder(os.Stdout)
 	reply := func(id json.RawMessage, result any) {
 		_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+	}
+	// A swap onto a new binary never happens while this process holds notes
+	// of its own: with no daemon to keep them, exec would drop them and the
+	// badge helper with them.
+	mcpIdle = func() {
+		if !srv.daemonOwned && srv.hasNotes() {
+			return
+		}
+		maybeReexec()
 	}
 
 	// We just re-exec'd onto a new binary, keeping the client's pipes: the tools
