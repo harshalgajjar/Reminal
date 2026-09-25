@@ -110,6 +110,14 @@ for line in sys.stdin:
 
 mcp_call send_keys "{\"session\":\"$ID\",\"keys\":\"pi --approve\",\"enter\":true}" >/dev/null
 sleep 14
+
+# Reading a session is half of it; driving one is the other half. pi's `!` prefix
+# runs a shell command and shows the output, with no credentials and no network,
+# so the marker coming back proves the Return actually submitted rather than
+# sitting in the input box — the failure send_keys' own description warns about.
+mcp_call send_keys "{\"session\":\"$ID\",\"keys\":\"!echo LANDED-IN-PI\",\"enter\":true}" >/dev/null
+sleep 5
+
 mcp_call read_transcript "{\"session\":\"$ID\"}" > /tmp/transcript.txt
 FG=$(python3 -c "import json;print(json.load(open('$HOME/.reminal/active-$ID.json')).get('fg') or '')")
 /tmp/reminal kill "$ID" -y >/dev/null 2>&1
@@ -131,5 +139,9 @@ if grep -q "reminal tools unavailable" /tmp/transcript.txt; then
     echo "FAIL: the extension could not reach reminal from inside pi"; exit 1
 fi
 echo "the extension reached reminal without it being on PATH"
+
+grep -q "LANDED-IN-PI" /tmp/transcript.txt || {
+    echo "FAIL: send_keys did not submit into pi — the text never ran"; exit 1; }
+echo "send_keys: the Return landed and pi ran it"
 
 printf '\n\033[32mall good\033[0m — reminal'"'"'s tools are live in pi, pi kept its own,\nand a pi session reads correctly from another machine.\n'
