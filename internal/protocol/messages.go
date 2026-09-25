@@ -409,9 +409,11 @@ type MachineStats struct {
 	// first Linux sample that has no delta yet) from a genuine 0%.
 	CPUPercent *float64 `json:"cpu_pct,omitempty"`
 	// Version is the reminal this machine runs; Update is the newest release
-	// its last check saw, empty when current or never checked.
+	// its last check saw, empty when current or never checked. Channel is the
+	// line the build is on, so a viewer can say which beside the number.
 	Version string `json:"version,omitempty"`
 	Update  string `json:"update,omitempty"`
+	Channel string `json:"channel,omitempty"`
 }
 
 // DirResponse is the encrypted payload of a TypeDirResp: the machine's hostname
