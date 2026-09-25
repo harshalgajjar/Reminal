@@ -27,6 +27,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"reminal/internal/piext"
 )
 
 // mcpServerName is the key reminal registers itself under, in every agent.
@@ -52,6 +54,13 @@ type agentTarget struct {
 	// agent's config (separate from MCP registration). nil for agents whose hook
 	// support we haven't wired yet — those still get MCP + the screen fallback.
 	hooks *hookSpec
+
+	// Extension route: an agent with its own extension system takes a package
+	// rather than a config entry, and one package does both jobs — it hands the
+	// agent reminal's tools AND reports the session's attention state — so these
+	// targets carry no cliAdd, file, or hooks of their own.
+	install    func(home, exe string, remove bool) error
+	installHow string // what the plan line says, relative to $HOME
 }
 
 func stdioEntry(exe string) map[string]any {
@@ -283,6 +292,19 @@ func agentTargets() []agentTarget {
 			Name: "Amp", Bin: "amp",
 			file: ".config/amp/settings.json", keyPath: []string{"amp.mcpServers"}, entry: stdioEntry,
 		},
+		{
+			// pi has no MCP client to register with — it takes an extension, which
+			// covers both jobs at once: it discovers reminal's tools at runtime and
+			// reports pi's lifecycle as attention state. See internal/piext.
+			Name: "pi", Bin: "pi",
+			install: func(home, exe string, remove bool) error {
+				if remove {
+					return piext.Remove(home)
+				}
+				return piext.Install(home, exe)
+			},
+			installHow: "extension in ~/.pi/agent/extensions + attention",
+		},
 	}
 }
 
@@ -335,13 +357,15 @@ func runIntegrate(args []string) error {
 			continue
 		}
 		how := ""
-		if t.cliAdd != nil {
-			verb := "via " + t.Bin + " mcp add"
+		switch {
+		case t.install != nil:
+			how = t.installHow
+		case t.cliAdd != nil:
+			how = "via " + t.Bin + " mcp add"
 			if remove {
-				verb = "via " + t.Bin + " mcp remove"
+				how = "via " + t.Bin + " mcp remove"
 			}
-			how = verb
-		} else {
+		default:
 			how = filepath.Join("~", t.file)
 		}
 		if t.hooks != nil {
@@ -389,9 +413,12 @@ func runIntegrate(args []string) error {
 	var failures int
 	for _, p := range plan {
 		var mcpErr error
-		if p.target.cliAdd != nil {
+		switch {
+		case p.target.install != nil:
+			mcpErr = p.target.install(home, exe, remove)
+		case p.target.cliAdd != nil:
 			mcpErr = applyViaCLI(p, exe, remove)
-		} else {
+		default:
 			mcpErr = applyViaFile(p.target, home, exe, remove)
 		}
 		// The MCP server and the attention hooks are separate installs; do both
@@ -539,8 +566,8 @@ func printIntegrateHelp() {
   reminal integrate -y              skip the confirmation
 
 Two things get installed, in each agent's own native format (an ` + "`mcp add`" + `
-subcommand where one exists, otherwise a merge into its JSON config, backed up
-first):
+subcommand where one exists, a native extension for an agent that prefers one,
+otherwise a merge into its JSON config, backed up first):
 
   • the reminal MCP server — so the agent can leave notes on your windows;
   • attention hooks — so the agent reports its live state (working / needs you /

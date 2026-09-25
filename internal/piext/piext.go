@@ -1,0 +1,129 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
+// Package piext installs reminal's pi extension.
+//
+// pi has no `mcp add` subcommand and no MCP client to register with: it takes an
+// extension instead — a small TypeScript module it discovers from its own
+// extensions directory. That turns out to be the better deal for both jobs at
+// once. The extension asks reminal which tools this machine offers and registers
+// each one with pi directly, so pi gets exactly what reminal exposes and nothing
+// it invented; and pi's lifecycle events are exact, so the session reports
+// working / needs you / done instead of reminal reading it off the screen.
+//
+// The extension's sources are embedded in the reminal binary, so `reminal
+// integrate` installs it with no network, no npm, and no chance of the extension
+// being from a different version than the reminal it talks to.
+package piext
+
+import (
+	"embed"
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// The extension itself. Listed file by file rather than with a directory
+// pattern: the test harness beside it has no business in the shipped binary.
+//
+//go:embed extension/package.json extension/src/index.ts extension/src/mcp.ts
+var files embed.FS
+
+// dirName is the folder the extension is installed as. pi shows a discovered
+// extension under its directory name, so this is what a user sees in `pi config`
+// — and it is what Remove looks for, so it must not drift.
+const dirName = "reminal"
+
+// marker identifies the extension as ours. Remove refuses to delete a directory
+// whose package.json does not carry this name, so a folder that happens to share
+// the name is never somebody else's loss.
+const marker = "reminal-pi"
+
+// AgentDir returns pi's config directory for this user — the same one pi itself
+// resolves, honouring its override so a user who moved pi's config still gets
+// the extension where pi will look for it.
+func AgentDir(home string) string {
+	if dir := strings.TrimSpace(os.Getenv("PI_CODING_AGENT_DIR")); dir != "" {
+		if strings.HasPrefix(dir, "~") {
+			dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
+		}
+		return dir
+	}
+	return filepath.Join(home, ".pi", "agent")
+}
+
+// Dir is where the extension is installed.
+func Dir(home string) string {
+	return filepath.Join(AgentDir(home), "extensions", dirName)
+}
+
+// Install writes the extension into pi's extensions directory, replacing any
+// earlier copy, and records the path of the reminal that installed it.
+//
+// exe is baked in deliberately. The extension runs `reminal hook` and `reminal
+// mcp` as child processes, and pi's own PATH is whatever the shell that launched
+// it had — which, right after an install, frequently does not include reminal
+// yet. An absolute path costs nothing and removes the whole class of "it works
+// in my terminal but not under pi".
+func Install(home, exe string) error {
+	dir := Dir(home)
+	// Replace wholesale: a leftover file from an older version that this one no
+	// longer ships would still be loaded by pi.
+	if err := removeIfOurs(dir); err != nil {
+		return err
+	}
+	err := fs.WalkDir(files, "extension", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel("extension", filepath.FromSlash(p))
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		body, err := files.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, body, 0o644)
+	})
+	if err != nil {
+		return err
+	}
+
+	pin, err := json.Marshal(map[string]string{"bin": exe})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "bin.json"), append(pin, '\n'), 0o644)
+}
+
+// Remove uninstalls the extension. Absent is success: `integrate --remove` is
+// something a user may run twice, or on a machine that never had pi.
+func Remove(home string) error {
+	return removeIfOurs(Dir(home))
+}
+
+func removeIfOurs(dir string) error {
+	raw, err := os.ReadFile(filepath.Join(dir, "package.json"))
+	if os.IsNotExist(err) {
+		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+			return nil // nothing installed
+		}
+		return fmt.Errorf("%s exists but is not reminal's extension; leaving it alone", dir)
+	}
+	if err != nil {
+		return err
+	}
+	var manifest struct{ Name string }
+	if err := json.Unmarshal(raw, &manifest); err != nil || manifest.Name != marker {
+		return fmt.Errorf("%s is not reminal's extension; leaving it alone", dir)
+	}
+	return os.RemoveAll(dir)
+}

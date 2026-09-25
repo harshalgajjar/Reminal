@@ -121,7 +121,7 @@ Each machine watches itself and seals every alert to your browser's own keys bef
 reminal integrate
 ```
 
-One command registers reminal's **MCP server** with every agent CLI you have — Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity, Amp. From then on your agents can:
+One command registers reminal's **MCP server** with every agent CLI you have — Claude Code, Codex, Cursor, Gemini, Qwen, OpenCode, Antigravity, Amp, and pi (which takes a native extension instead). From then on your agents can:
 
 - **`list_sessions`** — every session you own, on this machine and every enrolled box
 - **`search_sessions`** — regex across live terminal scrollback, on all of them
@@ -389,7 +389,7 @@ The mirroring you see above isn't macOS-only — window capture **and** full con
 | `reminal kill [id\|name]` | Fully terminate a session (kills the shell — irreversible) |
 | `reminal prune [dur] [-y]` | Kill idle, unwatched sessions in one go (default idle ≥ 30m) |
 | `reminal restart [--all]` | Hot-swap the running agent(s) onto the latest binary — the shell stays alive |
-| `reminal integrate [--remove]` | Register reminal's MCP server with your agent CLIs (Claude Code, Codex, Cursor, Gemini, OpenCode, Antigravity, Amp) |
+| `reminal integrate [--remove]` | Register reminal's MCP server with your agent CLIs (Claude Code, Codex, Cursor, Gemini, Qwen, OpenCode, Antigravity, Amp, pi) |
 | `reminal mcp` | Run the MCP server on stdio — list, search, read and type into sessions across your machines |
 | `reminal expose <port> [--public]` | Forward a local HTTP port to a public URL (PIN-protected by default) |
 | `reminal send <file>` | Push a file to every connected viewer (web client auto-downloads) |
