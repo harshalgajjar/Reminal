@@ -57,19 +57,22 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 	// So a write in flight parks the next one instead of racing it. Only the
 	// newest parked state is kept, since an older one it superseded has nothing
 	// left to say.
-	let writing = false;
+	let writing: Attn | undefined;
 	let parked: Attn | undefined;
+	let child: ReturnType<typeof spawn> | undefined;
 
 	const write = (state: Attn): void => {
-		writing = true;
+		writing = state;
 		const done = () => {
-			writing = false;
+			writing = undefined;
+			child = undefined;
 			const next = parked;
 			parked = undefined;
 			if (next) write(next);
 		};
 		try {
 			const p = spawn(bin, ["hook", state], { stdio: "ignore", detached: true });
+			child = p;
 			// A hook that fails is not worth interrupting anyone over, but it must
 			// still release the queue behind it.
 			p.on("error", done);
@@ -86,7 +89,7 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		if (last && last.state === state && Date.now() - last.at < REFRESH_MS) return;
 		last = { state, at: Date.now() };
 		// Never block a lifecycle handler: the write happens on its own.
-		if (writing) {
+		if (writing !== undefined) {
 			parked = state;
 			return;
 		}
@@ -122,10 +125,29 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 	let mcp: McpClient | undefined;
 	let started = false;
 
+	/**
+	 * Say something to the user, or say nothing.
+	 *
+	 * pi's ui is a getter that THROWS once the extension runtime is torn down,
+	 * and a reload invalidates it immediately after session_shutdown — so any
+	 * continuation of ours that runs afterwards touches a live grenade. Thrown
+	 * from a promise nobody is awaiting, that becomes an unhandled rejection,
+	 * which pi routes to its uncaughtException handler, which exits pi and names
+	 * this extension as the cause. A warning is never worth that.
+	 */
+	const say = (ctx: ExtensionContext, message: string): void => {
+		try {
+			ctx.ui.notify(message, "warning");
+		} catch {
+			// the session it belonged to is gone; there is nobody to tell
+		}
+	};
+
 	// What we have put in front of the model, everything we have ever handed pi,
 	// and what pi had before we did.
 	const ours = new Set<string>();
 	const everRegistered = new Set<string>();
+	const shadowWarned = new Set<string>();
 	let theirs = new Set<string>();
 
 	/**
@@ -138,7 +160,7 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 	 * should be usable without restarting pi, and a tool that went away has to
 	 * stop being offered, because a tool the model can see is a tool it will try.
 	 */
-	async function syncTools(client: McpClient, ui: ExtensionContext["ui"]): Promise<void> {
+	async function syncTools(client: McpClient, ui: (message: string) => void): Promise<void> {
 		const offered = await client.list();
 		const names = new Set(offered.map((t) => t.name));
 		const shadowed: string[] = [];
@@ -150,13 +172,22 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		const returning: string[] = [];
 
 		for (const tool of offered) {
-			if (ours.has(tool.name)) continue; // already registered, and still offered
 			if (theirs.has(tool.name)) {
-				shadowed.push(tool.name);
+				// Warn once per name, not once per sync.
+				if (!shadowWarned.has(tool.name)) {
+					shadowWarned.add(tool.name);
+					shadowed.push(tool.name);
+				}
 				continue;
 			}
+			// Registered every time, not only when the name is new: a tool that is
+			// still on offer can have gained a parameter or a better description,
+			// and that is the whole reason reminal announces a changed list. pi
+			// overwrites by name, so this is how the new definition reaches the
+			// model instead of it going on from the one we first heard.
+			const wasOffered = ours.has(tool.name);
 			ours.add(tool.name);
-			if (everRegistered.has(tool.name)) returning.push(tool.name);
+			if (!wasOffered && everRegistered.has(tool.name)) returning.push(tool.name);
 			everRegistered.add(tool.name);
 			pi.registerTool({
 				name: tool.name,
@@ -191,7 +222,7 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		}
 
 		if (shadowed.length > 0) {
-			ui.notify(`reminal tools pi already has by these names, left alone: ${shadowed.join(", ")}`, "warning");
+			ui(`reminal tools pi already has by these names, left alone: ${shadowed.join(", ")}`);
 		}
 	}
 
@@ -206,7 +237,7 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 			client.stop();
 			// Missing or unhappy reminal: say so once, quietly, and carry on. pi is
 			// useful without these tools, and throwing here would take pi with us.
-			ctx.ui.notify(`reminal tools unavailable: ${(e as Error).message}`, "warning");
+			say(ctx, `reminal tools unavailable: ${(e as Error).message}`);
 			return;
 		}
 		mcp = client;
@@ -218,11 +249,30 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		let queue: Promise<void> = Promise.resolve();
 		const sync = () => {
 			queue = queue
-				.then(() => syncTools(client, ctx.ui))
-				.catch((e: Error) => ctx.ui.notify(`reminal tools: ${e.message}`, "warning"));
+				.then(() => syncTools(client, (m) => say(ctx, m)))
+				.catch((e: Error) => say(ctx, `reminal tools: ${e.message}`));
 			return queue;
 		};
 		client.onToolsChanged = sync;
+
+		// A server that has died cannot announce a tool list any more, so nothing
+		// else would ever take its tools off the table. Left there they stay active
+		// and fail every call for the rest of the session, and the model has no way
+		// to learn that it should stop reaching for them.
+		client.onClosed = (reason) => {
+			const lost = [...ours];
+			ours.clear();
+			if (lost.length > 0) {
+				const gone = new Set(lost);
+				try {
+					pi.setActiveTools(pi.getActiveTools().filter((name) => !gone.has(name)));
+				} catch {
+					// the session is already gone; there is nothing to take them off
+				}
+			}
+			say(ctx, `reminal's tools are no longer available: ${reason}`);
+		};
+
 		await sync();
 	});
 
@@ -233,7 +283,18 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		// that was going to deliver its exit. So this one is synchronous, and it
 		// ignores the dedup: what was last *reported* is not necessarily what was
 		// last *written*, and only the file matters now.
+		// Unconditional on purpose. Skipping this when a "done" is already in flight
+		// looks like an easy saving and is the bug back again: pi is about to exit,
+		// and an asynchronous write has no promise of landing first.
 		if (reporting) {
+			// Something else may be in flight, and it cannot be waited on — so stop
+			// it before it can land after us. Whatever it already wrote, the
+			// synchronous write below is the last word.
+			try {
+				child?.kill();
+			} catch {
+				// already gone
+			}
 			last = undefined;
 			parked = undefined;
 			try {
@@ -261,8 +322,12 @@ function resolveBin(): string {
 	try {
 		const here = path.dirname(fileURLToPath(import.meta.url));
 		const parsed: unknown = JSON.parse(fs.readFileSync(path.join(here, "bin.json"), "utf8"));
-		if (isObject(parsed) && typeof parsed.bin === "string" && parsed.bin.trim() !== "") {
-			return parsed.bin.trim();
+		const pinned = isObject(parsed) && typeof parsed.bin === "string" ? parsed.bin.trim() : "";
+		// Only if it is still there. reminal can move — an app bundle relocated, a
+		// reinstall elsewhere — and preferring a path that has gone would mean no
+		// tools at all, while a perfectly good reminal sits on PATH.
+		if (pinned !== "" && fs.existsSync(pinned)) {
+			return pinned;
 		}
 	} catch {
 		// not written, unreadable, or malformed — fall through to PATH

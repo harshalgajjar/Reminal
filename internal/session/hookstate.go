@@ -53,7 +53,28 @@ func WriteHookState(id, state string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0o600)
+	// Written whole, or not at all. Two hooks can fire close enough together to
+	// overlap — an agent reporting a state change as it exits, say — and writing
+	// in place leaves a reader the tail of the longer record stuck onto the
+	// shorter one. That does not parse, so the session silently loses its precise
+	// state and falls back to reading the screen until the record expires.
+	tmp, err := os.CreateTemp(filepath.Dir(p), "hook-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }() // no-op once the rename lands
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), p)
 }
 
 // ReadHookState returns the fresh hook state for a session, or nil when there is

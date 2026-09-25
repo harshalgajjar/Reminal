@@ -46,6 +46,9 @@ export class McpClient {
 	/** Called when reminal says its tool list has changed. */
 	onToolsChanged: (() => void) | undefined;
 
+	/** Called once when the server is gone and nothing more can be asked of it. */
+	onClosed: ((reason: string) => void) | undefined;
+
 	constructor(bin: string) {
 		this.bin = bin;
 	}
@@ -117,6 +120,7 @@ export class McpClient {
 	}
 
 	stop(): void {
+		this.onClosed = undefined; // we are the ones closing it; nobody needs telling
 		this.closed = true;
 		const p = this.proc;
 		this.proc = null;
@@ -207,11 +211,20 @@ export class McpClient {
 	}
 
 	private fail(message: string): void {
+		const first = !this.closed;
 		this.closed = true;
 		for (const [, p] of this.pending) {
 			p.settle();
 			p.reject(new Error(message));
 		}
 		this.pending.clear();
+		if (first) {
+			// Say so once. A server that is gone cannot announce a tool list any
+			// more, so nothing else would ever tell the caller to stop offering
+			// tools that can only fail from here on.
+			const tell = this.onClosed;
+			this.onClosed = undefined;
+			tell?.(message);
+		}
 	}
 }

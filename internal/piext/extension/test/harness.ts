@@ -259,6 +259,25 @@ assert.ok(joined.length > 100000, `the big answer came back short: ${joined.leng
 // never inlined into result text the model parses as JSON.
 assert.equal(blocks.content.length, 2, "reminal's separate content blocks were flattened into one");
 
+// A tool still on offer can have gained a parameter or a better description —
+// which is most of why reminal announces a changed list. Keeping the definition
+// we first heard is the exact skew reminal warns about in its own messages.
+await offer(["always_here", "!upgraded"], () => (c.tools.get("always_here")?.description ?? "").includes("upgraded"), "a changed description should reach the model");
+const schema = c.tools.get("always_here")!.parameters as { properties: Record<string, unknown> };
+assert.ok("added_later" in schema.properties, "a parameter added on the server never reached the model");
+
+// And when the server dies, its tools have to come off the table. Nothing else
+// ever would: a withdrawal is driven by an announcement, and a dead server makes
+// no announcements — so they would stay active and fail every call for the rest
+// of the session, with nothing telling the model to stop reaching for them.
+const beforeDeath = c.notices.length;
+fs.writeFileSync(toolsFile, "always_here\n!die\n");
+for (let i = 0; i < 100 && c.activeTools().includes("always_here"); i++) {
+	await new Promise((r) => setTimeout(r, 50));
+}
+assert.ok(!c.activeTools().includes("always_here"), "a dead server's tools are still offered to the model");
+assert.ok(c.notices.length > beforeDeath, "the user was never told the tools had gone");
+
 await c.emit("session_shutdown", { type: "session_shutdown", reason: "quit" });
 fs.rmSync(toolsFile, { force: true });
 fs.rmSync(fakeBin, { force: true });
