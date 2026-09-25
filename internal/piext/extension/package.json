@@ -1,0 +1,14 @@
+{
+  "name": "reminal-pi",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "reminal extension for pi — reminal's tools inside pi, and pi's live state on your reminal list",
+  "keywords": ["pi-package", "pi-extension", "reminal"],
+  "license": "AGPL-3.0-or-later",
+  "engines": { "node": ">=22.0.0" },
+  "files": ["src/", "README.md"],
+  "pi": {
+    "extensions": ["./src/index.ts"]
+  }
+}
