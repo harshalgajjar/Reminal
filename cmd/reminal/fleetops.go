@@ -42,11 +42,25 @@ func (s machineScope) remote() bool { return s.allOwned || strings.TrimSpace(s.s
 // restart, matching the --machine spellings new/kill/stop already accept so the
 // fleet verbs feel like the session verbs.
 func parseMachineScope(args []string) (machineScope, error) {
+	return parseMachineScopeWith(args, false)
+}
+
+// parseMachineScopeStrict is parseMachineScope for a verb with no flags of
+// its own: anything unknown is refused rather than ignored. The verbs this
+// scopes act the moment they run — "upgrade --help" once upgraded a machine
+// whose owner only wanted the flags.
+func parseMachineScopeStrict(args []string) (machineScope, error) {
+	return parseMachineScopeWith(args, true)
+}
+
+func parseMachineScopeWith(args []string, strict bool) (machineScope, error) {
 	var sc machineScope
 	seen := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "-h" || a == "--help" || a == "help":
+			return sc, fmt.Errorf("usage: [--machine <id|name>] [--all-owned-machines]")
 		case a == "--all-owned-machines" || a == "--all-owned":
 			sc.allOwned = true
 		case a == "--machine" || a == "-machine" || a == "-m":
@@ -60,6 +74,10 @@ func parseMachineScope(args []string) (machineScope, error) {
 		case strings.HasPrefix(a, "--machine="):
 			seen = true
 			sc.selector = strings.TrimPrefix(a, "--machine=")
+		default:
+			if strict {
+				return sc, fmt.Errorf("usage: [--machine <id|name>] [--all-owned-machines] — not %q", a)
+			}
 		}
 	}
 	if seen && strings.TrimSpace(sc.selector) == "" {
