@@ -3,7 +3,10 @@
 
 package main
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestParseMachineScope(t *testing.T) {
 	cases := []struct {
@@ -65,5 +68,8 @@ func TestStrictScopeRefusesUnknownFlags(t *testing.T) {
 	}
 	if sc, err := parseMachineScopeStrict([]string{"--machine", "box"}); err != nil || sc.selector != "box" {
 		t.Fatalf("a known flag still parses: %+v %v", sc, err)
+	}
+	if _, err := parseMachineScope([]string{"--all", "--help"}); !errors.Is(err, errScopeHelp) {
+		t.Fatalf("asking for help is its own answer, got %v", err)
 	}
 }

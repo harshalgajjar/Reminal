@@ -146,6 +146,10 @@ func main() {
 			// own; --all-owned-machines upgrades the whole fleet (this machine last,
 			// since upgrading ourselves re-execs the process running the fan-out).
 			sc, serr := parseMachineScopeStrict(os.Args[2:])
+			if errors.Is(serr, errScopeHelp) {
+				fmt.Println("usage: reminal upgrade " + scopeUsage)
+				return
+			}
 			if serr != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", serr)
 				os.Exit(1)
@@ -539,7 +543,10 @@ func main() {
 			// --machine <id|name> / --all-owned-machines restart the sessions on
 			// machines you own, over their owner directory channel. Checked first:
 			// the local flags below mean "which session on THIS machine".
-			if sc, serr := parseMachineScope(os.Args[2:]); serr != nil {
+			if sc, serr := parseMachineScope(os.Args[2:]); errors.Is(serr, errScopeHelp) {
+				fmt.Println("usage: reminal restart [id|name] [--all] " + scopeUsage)
+				return
+			} else if serr != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", serr)
 				os.Exit(1)
 			} else if sc.remote() {
