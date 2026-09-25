@@ -122,8 +122,10 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 	let mcp: McpClient | undefined;
 	let started = false;
 
-	// What we have put in front of the model, and what pi had before we did.
+	// What we have put in front of the model, everything we have ever handed pi,
+	// and what pi had before we did.
 	const ours = new Set<string>();
+	const everRegistered = new Set<string>();
 	let theirs = new Set<string>();
 
 	/**
@@ -141,6 +143,12 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		const names = new Set(offered.map((t) => t.name));
 		const shadowed: string[] = [];
 
+		// Tools coming back after being withdrawn need saying so explicitly: pi
+		// activates a tool when it first enters its registry and never removes the
+		// definition, so registering it a second time is silent — it would sit
+		// there deactivated, and the model would never see it again.
+		const returning: string[] = [];
+
 		for (const tool of offered) {
 			if (ours.has(tool.name)) continue; // already registered, and still offered
 			if (theirs.has(tool.name)) {
@@ -148,6 +156,8 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 				continue;
 			}
 			ours.add(tool.name);
+			if (everRegistered.has(tool.name)) returning.push(tool.name);
+			everRegistered.add(tool.name);
 			pi.registerTool({
 				name: tool.name,
 				label: label(tool.name),
@@ -163,13 +173,18 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		}
 
 		// pi has no way to unregister a tool, but it does not have to be active.
-		// Dropping it from the active set is what the model sees, which is the
-		// part that matters. Everything else stays exactly as the user left it.
+		// What the model is offered is the active set, which is the part that
+		// matters. One pass over it, so a withdrawal and a return settle together
+		// and everything else stays exactly as the user left it.
 		const withdrawn = [...ours].filter((name) => !names.has(name));
-		if (withdrawn.length > 0) {
-			for (const name of withdrawn) ours.delete(name);
+		for (const name of withdrawn) ours.delete(name);
+		if (withdrawn.length > 0 || returning.length > 0) {
 			const gone = new Set(withdrawn);
-			pi.setActiveTools(pi.getActiveTools().filter((name) => !gone.has(name)));
+			const next = pi.getActiveTools().filter((name) => !gone.has(name));
+			for (const name of returning) {
+				if (!next.includes(name)) next.push(name);
+			}
+			pi.setActiveTools(next);
 		}
 
 		if (shadowed.length > 0) {

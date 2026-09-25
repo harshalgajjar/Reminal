@@ -28,8 +28,15 @@ function fakePi() {
 			handlers.set(event, [...(handlers.get(event) ?? []), handler]);
 		},
 		registerTool(tool: any) {
+			// pi activates a tool when it FIRST enters the registry, not on any
+			// later registration of the same name (_refreshToolRegistry only adds
+			// names absent from the previous registry). It never removes a
+			// definition either, so re-registering a withdrawn tool does not bring
+			// it back — whoever withdrew it has to activate it again. The double has
+			// to be this strict, or it hides that.
+			const known = tools.has(tool.name);
 			tools.set(tool.name, tool);
-			if (!active.includes(tool.name)) active.push(tool.name);
+			if (!known && !active.includes(tool.name)) active.push(tool.name);
 		},
 		// pi's built-ins — the names an extension must not shadow.
 		getAllTools: () => BUILT_INS.map((name) => ({ name })),
@@ -213,6 +220,11 @@ assert.match(echoed.content[0].text, /appeared: \{"echo":"hi"\}/);
 // a tool it will try. pi's own tools, and the one still on offer, stay put.
 await offer(["always_here"], () => !c.activeTools().includes("appeared"), "a withdrawn tool should stop being offered");
 assert.ok(c.activeTools().includes("always_here"), "dropped a tool that is still on offer");
+
+// And offered again after that — an upgrade that restores what the one before it
+// dropped, or an entitlement regained. The tool has to come back usable, not sit
+// in pi's registry deactivated where the model will never see it.
+await offer(["always_here", "appeared"], () => c.activeTools().includes("appeared"), "a returning tool should be offered again");
 for (const name of BUILT_INS) {
 	assert.ok(c.activeTools().includes(name), `dropped pi's own ${name}`);
 }
