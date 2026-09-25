@@ -169,9 +169,10 @@ type HostInfo struct {
 func gatherHostInfo() HostInfo {
 	h := HostInfo{
 		MachineStats: protocol.MachineStats{
-			OS:   friendlyOS(runtime.GOOS),
-			Arch: runtime.GOARCH,
-			CPUs: runtime.NumCPU(),
+			OS:      friendlyOS(runtime.GOOS),
+			Arch:    runtime.GOARCH,
+			CPUs:    runtime.NumCPU(),
+			Channel: updater.ChannelName(),
 		},
 		// Only the macOS daemon injects drags phase by phase so far; the other
 		// backends still replay a path, and telling a viewer otherwise would
