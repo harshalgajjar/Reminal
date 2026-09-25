@@ -95,6 +95,16 @@ func runFakeAgent(t *testing.T, sessionID, pin string, sessionKey []byte, snapsh
 		close(ready)
 		return
 	}
+	// Ready only once the relay says so: it registers the session before it
+	// answers, and a viewer arriving before that is told the session is not
+	// there — which this test once was, now and then, on a busy runner.
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	var ok protocol.Message
+	if err := conn.ReadJSON(&ok); err != nil || ok.Type != protocol.TypeAuthOK {
+		t.Errorf("agent auth was not acknowledged: %v %q", err, ok.Type)
+		close(ready)
+		return
+	}
 	close(ready)
 
 	for {
