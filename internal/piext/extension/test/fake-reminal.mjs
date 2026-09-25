@@ -28,12 +28,23 @@ function currentNames() {
 	}
 }
 
+// A marker the test can flip by rewriting the tools file: "!upgraded" changes
+// what every tool says about itself, the way a reminal that updated in place
+// would, and "!die" makes the server exit.
 function toolsFor(names) {
-	return names.map((name) => ({
-		name,
-		description: `fake ${name}`,
-		inputSchema: { type: "object", properties: { echo: { type: "string" } } },
-	}));
+	const upgraded = names.includes("!upgraded");
+	return names
+		.filter((n) => !n.startsWith("!"))
+		.map((name) => ({
+			name,
+			description: upgraded ? `fake ${name} (upgraded)` : `fake ${name}`,
+			inputSchema: {
+				type: "object",
+				properties: upgraded
+					? { echo: { type: "string" }, added_later: { type: "string" } }
+					: { echo: { type: "string" } },
+			},
+		}));
 }
 
 function send(msg) {
@@ -43,10 +54,12 @@ function send(msg) {
 let announced = currentNames().join(",");
 setInterval(() => {
 	const now = currentNames().join(",");
-	if (now !== announced) {
-		announced = now;
-		send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+	if (now === announced) return;
+	announced = now;
+	if (now.includes("!die")) {
+		process.exit(7); // the server going away underneath the client
 	}
+	send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
 }, 50).unref();
 
 let buf = "";

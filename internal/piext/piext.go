@@ -80,13 +80,20 @@ func Install(home, exe string) error {
 	// that identifies the directory as ours is one of the ones not written yet,
 	// neither a re-install nor a remove could touch it afterwards. A rename is
 	// one step: either the old extension is there or the new one is.
-	staging := dir + ".installing"
-	if err := os.RemoveAll(staging); err != nil {
+	// A name of its own per run: two integrates at once sharing one staging path
+	// would delete each other's half-written files and then rename a directory
+	// with pieces missing — which, carrying a valid manifest, looks legitimate to
+	// everything downstream while pi finds no entry point in it.
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return err
+	}
+	staging, err := os.MkdirTemp(filepath.Dir(dir), dirName+".installing-*")
+	if err != nil {
 		return err
 	}
 	defer func() { _ = os.RemoveAll(staging) }()
 
-	err := fs.WalkDir(files, "extension", func(p string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(files, "extension", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
