@@ -208,6 +208,17 @@ type Agent struct {
 	// shell). Written by the attention detector goroutine, read by activeRecord
 	// so `reminal list` shows which session needs you without attaching.
 	attnState string
+	// attnSince is when attnState last changed. How LONG a session has been
+	// parked at a prompt says more than the state alone — it can't tell a
+	// click-through from an hour of nobody looking.
+	attnSince time.Time
+	// attnFGAt is when attnFG last changed: a harness that has only just
+	// started is drawing itself, and keys typed into it then are lost.
+	attnFGAt time.Time
+	// attnFG is the command in the terminal's foreground, as the attention
+	// detector last saw it. Written to the session record so a list can tell
+	// an agent from a plain terminal.
+	attnFG string
 	// harness is whether the agent in this session can work at all — its
 	// login; guarded by metaMu (harnesshealth.go).
 	harness harnessHealth
@@ -1169,6 +1180,8 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	name := a.name
 	cwd := a.cwd
 	attn := a.attnState
+	attnSince := a.attnSince
+	attnFG := a.attnFG
 	a.metaMu.Unlock()
 	if last.IsZero() {
 		last = a.startedAt
@@ -1187,6 +1200,8 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		Title:        title,
 		LastActivity: last,
 		Attn:         attn,
+		AttnSince:    attnSince,
+		Fg:           attnFG,
 	}
 }
 
