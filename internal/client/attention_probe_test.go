@@ -262,7 +262,7 @@ func TestResolveAttn(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := resolveAttn(c.screen, c.hs, c.lastOutput, time.Time{}, 0, c.screen == "input")
+			got, _ := resolveAttn(c.screen, c.hs, c.lastOutput, time.Time{}, 0, c.screen == "input", false)
 			if got != c.want {
 				t.Errorf("resolveAttn(screen=%q) = %q, want %q", c.screen, got, c.want)
 			}
@@ -300,7 +300,7 @@ func TestResolveAttnDisbelievesAHookWhenTheScreenKnowsBetter(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := resolveAttn(c.screen, c.hs, now.Add(-30*time.Second), c.fgAt, c.idleMs, c.prompt)
+			got, _ := resolveAttn(c.screen, c.hs, now.Add(-30*time.Second), c.fgAt, c.idleMs, c.prompt, false)
 			if got != c.want {
 				t.Errorf("got %q, want %q", got, c.want)
 			}
@@ -340,5 +340,40 @@ func TestPromptsAreSeenThroughStylingAndSpacing(t *testing.T) {
 		if attnLooksLikePrompt(notAPrompt) {
 			t.Errorf("read as a prompt: %q", notAPrompt)
 		}
+	}
+}
+
+// Claude Code's footer says "esc to interrupt" only while a turn is running.
+// Its Stop hook can fire the moment its words end, before a tool it called
+// has finished, and a quiet tool call draws nothing for the screen to go on:
+// a message typed into that seat then cut the tool call short.
+func TestBusyFooterKeepsATurnWorking(t *testing.T) {
+	running := "  ⎿  Running… (1m 48s · timeout 5m)\n✶ Drizzling… (1m 50s · ↓ 131 tokens)\n❯ \n" +
+		"  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt · ← for ag…"
+	resting := "✻ Worked for 2m 32s · done 3:44 PM\n❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
+	styled := "\x1b[2m⏵⏵ bypass permissions on\x1b[m · \x1b[2mesc\x1b[m \x1b[2mto\x1b[m \x1b[2minterrupt\x1b[m"
+	spaceless := "⏵⏵bypasspermissionson(shift+tabtocycle)·esctointerrupt·←foragents"
+	for name, tail := range map[string]string{"running": running, "styled": styled, "spaceless": spaceless} {
+		if !attnLooksBusy(tail) {
+			t.Errorf("%s: the footer was not read as busy", name)
+		}
+	}
+	if attnLooksBusy(resting) {
+		t.Error("the resting footer was read as busy")
+	}
+	// The trust dialog says how to cancel, not how to interrupt: a question.
+	if attnLooksBusy("❯No,exit\nYes,Itrustthisfolder\nEntertoconfirm·Esctocancel") {
+		t.Error("the trust dialog was read as busy")
+	}
+	now := time.Now()
+	hook := &session.HookState{State: "done", TS: now.Add(-time.Second)}
+	if got, src := resolveAttn("done", hook, now.Add(-2*time.Second), time.Time{}, 0, false, true); got != "working" || src != "screen(busy)" {
+		t.Fatalf("a done hook under a busy footer read as %q (%s), want working (screen(busy))", got, src)
+	}
+	if got, _ := resolveAttn("done", hook, now.Add(-2*time.Second), time.Time{}, 0, false, false); got != "done" {
+		t.Fatalf("without the footer a fresh done hook should stand, got %q", got)
+	}
+	if got, _ := resolveAttn("input", hook, now.Add(-2*time.Second), time.Time{}, 0, true, true); got != "input" {
+		t.Fatalf("a question on screen still wins over the footer, got %q", got)
 	}
 }
