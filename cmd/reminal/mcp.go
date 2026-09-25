@@ -900,16 +900,12 @@ func runMCP(_ []string) error {
 		_ = out.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
 	}
 
-	sc := bufio.NewScanner(os.Stdin)
-	sc.Buffer(make([]byte, 0, 64*1024), 8<<20)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" {
-			continue
-		}
+	// One request per line. Between lines, and only then, the process may
+	// swap itself onto a newly installed binary (mcpReadLines).
+	mcpReadLines(os.Stdin, func(line string) {
 		var msg rpcMessage
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			continue
+			return
 		}
 		switch msg.Method {
 		case "initialize":
@@ -968,7 +964,7 @@ func runMCP(_ []string) error {
 			}
 		default:
 			if len(msg.ID) == 0 {
-				continue // a notification; nothing to answer
+				return // a notification; nothing to answer
 			}
 			_ = out.Encode(map[string]any{
 				"jsonrpc": "2.0", "id": msg.ID,
@@ -978,8 +974,6 @@ func runMCP(_ []string) error {
 		// Between requests is the only safe moment to swap onto a newly installed
 		// binary: we have just answered, so the client has not sent the next
 		// message and there is nothing buffered to lose across exec. On success
-		// this does not return — the new image picks up the same pipes.
-		maybeReexec()
-	}
+	})
 	return nil
 }
