@@ -872,6 +872,18 @@ func (a *Agent) Run() error {
 	return a.serveRelay(shellExit)
 }
 
+// closeRelayConn hangs up with a WebSocket close frame before the socket
+// goes. A bare TCP close was enough for a relay in the same process, but the
+// hosted relay learned of a dead agent only when its next write to it
+// failed — so a viewer went on seeing "connected" after the session was
+// killed, until it typed or resized. The close frame is the standard word for
+// "gone", and the relay passes it on to every viewer at once.
+func closeRelayConn(conn *websocket.Conn, why string) {
+	_ = conn.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, why), time.Now().Add(time.Second))
+	_ = conn.Close()
+}
+
 // serveRelay keeps this agent connected to the relay until shellExit closes,
 // reconnecting with backoff. Shared by a session (shellExit = the shell ended)
 // and the machine channel (shellExit = the daemon is stopping).
@@ -1888,7 +1900,7 @@ func (a *Agent) pause() {
 	_ = session.ClearHookState(a.sessionID)
 	a.currentConnMu.Lock()
 	if a.currentConn != nil {
-		_ = a.currentConn.Close()
+		closeRelayConn(a.currentConn, "paused")
 	}
 	a.currentConnMu.Unlock()
 	// Drop the [HOST] terminal chrome — Run()'s defer only fires on real
@@ -2742,12 +2754,15 @@ func (a *Agent) serveConn(conn *websocket.Conn, shellExit <-chan struct{}, local
 
 	select {
 	case <-shellExit:
+		// Say goodbye properly: the frame is what tells the relay, and through
+		// it every viewer, that the agent is gone right now.
+		closeRelayConn(conn, "session ended")
 		return nil
 	case <-a.hostEscape:
 		// Host pressed Ctrl-]; close the live conn so the reader goroutine
 		// returns immediately rather than blocking on its next read until the
 		// read deadline fires.
-		_ = conn.Close()
+		closeRelayConn(conn, "host stopped sharing")
 		return nil
 	case err := <-readerDone:
 		return err
