@@ -29,3 +29,4 @@
 
 # signed release bundle staged by scripts/build-app.sh
 /dist-signed/
+__pycache__/

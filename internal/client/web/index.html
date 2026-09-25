@@ -865,11 +865,14 @@
        something. */
     /* Sits below the load line now, so it needs a normal gap above rather than
        the negative margin that used to tuck it under the meters. */
-    /* nowrap keeps the state on one line; overflow:hidden guarantees the row can
-       never widen the panel into a horizontal scroll if it does not fit. */
-    .host-ver { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: #8b949e;
+    /* The version and the state on one row; the notes button
+       on its own line beneath, left-aligned. Sharing the row, the button was
+       pushed off a phone's panel edge, and wrapped to an odd right-aligned
+       second line. */
+    .host-ver { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 10.5px; color: #8b949e;
                 margin: 8px 0 0; white-space: nowrap; min-width: 0; overflow: hidden; }
-    .host-ver .host-whatsnew { margin: 0 0 0 auto; width: auto; flex: 0 0 auto; }
+    .host-ver .host-br { flex: 0 0 100%; height: 0; } /* the line break before the button */
+    .host-ver .host-whatsnew { flex: 0 0 auto; width: auto; margin: 4px 0 0; }
     .host-ver code { background: #010409; border: 1px solid #21262d; border-radius: 4px;
                      padding: 1px 5px; color: #c9d1d9; font-size: 10px; }
     .host-ver .new { color: #3fb950; font-weight: 600; }
@@ -2283,7 +2286,7 @@
       // The count is releases you do not have yet, so it agrees with the
       // status beside it by construction: a count means "update available".
       const behind = changelog && changelog.releases ? changelog.releases.filter(r => !r.current).length : 0;
-      return '<button class="host-whatsnew">What\u2019s new' + (behind > 0 ? ' \u00b7 ' + behind : '') + '</button>';
+      return '<i class="host-br"></i><button class="host-whatsnew">What\u2019s new' + (behind > 0 ? ' \u00b7 ' + behind : '') + '</button>';
     }
 
     // Version, the control that changes it, and the notes for it — one block,
