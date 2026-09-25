@@ -8,6 +8,7 @@ package main
 import (
 	"os"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -23,10 +24,14 @@ func TestAnIdleReaderSwapsAndAHalfLineIsNotIdle(t *testing.T) {
 	var idle atomic.Int32
 	mcpIdle = func() { idle.Add(1) }
 
-	r, w, err := os.Pipe()
-	if err != nil {
+	// A client's stdin is a blocking pipe that Go does not poll — the shape
+	// mcpPollable exists for. os.Pipe's ends are already polled, so the pipe
+	// is made raw, as a descriptor arrives over exec.
+	var fds [2]int
+	if err := syscall.Pipe(fds[:]); err != nil {
 		t.Fatal(err)
 	}
+	r, w := os.NewFile(uintptr(fds[0]), "stdin"), os.NewFile(uintptr(fds[1]), "client")
 	lines := make(chan string, 8)
 	done := make(chan struct{})
 	go func() { mcpReadLines(r, func(l string) { lines <- l }); close(done) }()
