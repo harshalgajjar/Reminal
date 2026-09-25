@@ -171,8 +171,9 @@ func (a *Agent) runAttention(logPath string) {
 		a.metaMu.Lock()
 		fgAt := a.attnFGAt
 		a.metaMu.Unlock()
+		bottom := attentionProbeTail(render, attnPromptRows)
 		state, source := resolveAttn(screenState, session.ReadHookState(a.sessionID), last, fgAt, idleMs,
-			attnLooksLikePrompt(attentionProbeTail(render, attnPromptRows)))
+			attnLooksLikePrompt(bottom), attnLooksBusy(bottom))
 		if a.harnessDown() {
 			// It cannot work at all: that is what to report, not what it
 			// looked like it was doing when it took the message.
@@ -369,7 +370,7 @@ func (a *Agent) setAttnState(state string) {
 //
 // source is for the probe log only; it names which signal decided.
 func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt time.Time, idleMs int64,
-	promptOnScreen bool) (state, source string) {
+	promptOnScreen, busyOnScreen bool) (state, source string) {
 	state, source = screenState, "screen"
 	switch {
 	case hs == nil:
@@ -403,7 +404,35 @@ func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt t
 	if state == "done" && source == "hook" && screenState == "input" && promptOnScreen {
 		state, source = "input", "hook+screen"
 	}
+	// A harness that says, at the bottom of its screen, how to interrupt it
+	// is mid-turn, whatever else has been read. Claude Code fires Stop (→
+	// done) as soon as its words end, before a tool it called has finished —
+	// and a long tool call may draw nothing for a while, so neither the hook
+	// nor the screen's stillness says "working". The footer does.
+	if state == "done" && busyOnScreen {
+		state, source = "working", "screen(busy)"
+	}
 	return state, source
+}
+
+// attnBusyCues are lowercase substrings a harness draws at the bottom of its
+// screen only while a turn is running. Claude Code's footer reads "esc to
+// interrupt" from the prompt's submission to its Stop; at rest the same
+// footer has no such words. Matched the way attnLooksLikePrompt matches —
+// as text, with the styling and the spaces taken out.
+var attnBusyCues = []string{"esc to interrupt", "ctrl+c to interrupt", "to run in background"}
+
+// attnLooksBusy reports whether the bottom of the screen says a turn is
+// running.
+func attnLooksBusy(tail string) bool {
+	t := strings.ToLower(stripANSI(tail))
+	flat := strings.Join(strings.Fields(t), "")
+	for _, cue := range attnBusyCues {
+		if strings.Contains(t, cue) || strings.Contains(flat, strings.ReplaceAll(cue, " ", "")) {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyAttn maps the raw signals to an attention state:
