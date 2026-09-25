@@ -173,6 +173,16 @@ func OwnScreenTail(sessionID string, lines int) string {
 	return strings.Join(all, "\n")
 }
 
+// HarnessOf is the program in a session's foreground, as its record says —
+// which agent filed the report, when the report says "the tool misled me".
+func HarnessOf(sessionID string) string {
+	act, ok := activeByID(sessionID)
+	if !ok {
+		return ""
+	}
+	return act.Fg
+}
+
 func activeByID(id string) (session.Active, bool) {
 	all, err := session.ReadAllActive()
 	if err != nil {

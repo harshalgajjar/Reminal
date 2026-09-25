@@ -46,7 +46,7 @@ func mcpReportIssue(title, what, expected string) (string, error) {
 		sid = strings.ToUpper(session.Enclosing())
 	}
 	is := client.Issue{Session: sid, Title: title, What: what, Expected: strings.TrimSpace(expected),
-		Version: version}
+		Harness: client.HarnessOf(sid), Version: version}
 	if sid != "" {
 		is.Screen = client.OwnScreenTail(sid, 60)
 	}
