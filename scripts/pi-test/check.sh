@@ -144,4 +144,82 @@ grep -q "LANDED-IN-PI" /tmp/transcript.txt || {
     echo "FAIL: send_keys did not submit into pi — the text never ran"; exit 1; }
 echo "send_keys: the Return landed and pi ran it"
 
-printf '\n\033[32mall good\033[0m — reminal'"'"'s tools are live in pi, pi kept its own,\nand a pi session reads correctly from another machine.\n'
+say "7. the attention state comes from pi, not from the screen"
+# The states moving is not proof the hooks did it: while pi streams, the screen
+# moves too, and the screen detector would report the same thing. So give pi a
+# model that says NOTHING for 25 seconds. The screen freezes, the screen detector
+# calls a still screen settled within a couple of seconds, and anything still
+# reporting "working" can only have come from the agent's own hook.
+FAKE_MODEL_DELAY_MS=25000 FAKE_MODEL_STREAM_MS=1000 \
+    node /src/scripts/pi-test/fake-model.mjs >/dev/null 2>&1 &
+MODEL_PID=$!
+sleep 1
+
+/tmp/reminal new attntest >/dev/null 2>&1
+sleep 2
+AID=$(/tmp/reminal list 2>/dev/null | sed -n 's/^  attntest  \([A-Z0-9]*\).*/\1/p' | head -1)
+[ -n "$AID" ] || { echo "FAIL: no session started"; exit 1; }
+
+PI_ARGS="--approve --provider fake --model fake-1 -e /src/scripts/pi-test/fake-provider.ts"
+mcp_call send_keys "{\"session\":\"$AID\",\"keys\":\"pi $PI_ARGS\",\"enter\":true}" >/dev/null
+sleep 14
+
+# What the record says, and what the extension actually wrote.
+attn_of() { python3 -c "
+import json,os
+print(json.load(open('$HOME/.reminal/active-$AID.json')).get('attn') or '-')
+"; }
+hook_of() { python3 -c "
+import json,os
+p='$HOME/.reminal/hook-$AID.state'
+print(json.load(open(p)).get('state') if os.path.exists(p) else '(none)')
+"; }
+
+echo "at an idle prompt:   attn=$(attn_of) hook=$(hook_of)"
+
+mcp_call send_keys "{\"session\":\"$AID\",\"keys\":\"say something\",\"enter\":true}" >/dev/null
+sleep 10   # well past the ~1.5s a still screen needs to read as settled
+A=$(attn_of); H=$(hook_of)
+echo "10s into a frozen turn: attn=$A hook=$H"
+[ "$H" = "working" ] || { echo "FAIL: the extension did not report working during a turn"; kill $MODEL_PID 2>/dev/null; exit 1; }
+[ "$A" = "working" ] || { echo "FAIL: attn is '$A' — the hook said working and was not believed"; kill $MODEL_PID 2>/dev/null; exit 1; }
+echo "the hook held 'working' through a screen that never moved"
+
+sleep 22
+A=$(attn_of); H=$(hook_of)
+echo "after the turn:      attn=$A hook=$H"
+[ "$H" = "done" ] || { echo "FAIL: the extension did not report done after the turn"; kill $MODEL_PID 2>/dev/null; exit 1; }
+[ "$A" = "done" ] || { echo "FAIL: attn is '$A' after the turn, not done"; kill $MODEL_PID 2>/dev/null; exit 1; }
+/tmp/reminal kill "$AID" -y >/dev/null 2>&1
+kill $MODEL_PID 2>/dev/null
+sleep 1
+
+say "8. a model actually calls one of reminal's tools"
+# Registration is not use. This is the last link: a model choosing a reminal
+# tool, pi executing it, and the extension proxying it through to reminal.
+FAKE_MODEL_TOOL=list_sessions FAKE_MODEL_STREAM_MS=1000 \
+    node /src/scripts/pi-test/fake-model.mjs >/dev/null 2>&1 &
+MODEL_PID=$!
+sleep 1
+
+/tmp/reminal new tooltest >/dev/null 2>&1
+sleep 2
+TID=$(/tmp/reminal list 2>/dev/null | sed -n 's/^  tooltest  \([A-Z0-9]*\).*/\1/p' | head -1)
+[ -n "$TID" ] || { echo "FAIL: no session started"; kill $MODEL_PID 2>/dev/null; exit 1; }
+
+mcp_call send_keys "{\"session\":\"$TID\",\"keys\":\"pi $PI_ARGS\",\"enter\":true}" >/dev/null
+sleep 14
+mcp_call send_keys "{\"session\":\"$TID\",\"keys\":\"which reminals am I running\",\"enter\":true}" >/dev/null
+sleep 12
+mcp_call read_transcript "{\"session\":\"$TID\"}" > /tmp/tooltranscript.txt
+/tmp/reminal kill "$TID" -y >/dev/null 2>&1
+kill $MODEL_PID 2>/dev/null
+
+grep -q "list_sessions" /tmp/tooltranscript.txt || {
+    echo "FAIL: the model never called list_sessions"; exit 1; }
+# The answer has to have come back through the proxy, not just been asked for.
+grep -q "machines" /tmp/tooltranscript.txt || {
+    echo "FAIL: list_sessions was called but returned nothing through the proxy"; exit 1; }
+echo "the model called list_sessions and got reminal's answer back"
+
+printf '\n\033[32mall good\033[0m — reminal'"'"'s tools are live in pi, pi kept its own,\na pi session reads correctly from another machine, and its state on your\nlist comes from pi itself rather than from guessing at the screen.\n'
