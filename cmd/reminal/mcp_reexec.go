@@ -100,9 +100,12 @@ func mcpReadLines(in *os.File, handle func(line string)) {
 	rd := bufio.NewReaderSize(f, 8<<20)
 	var partial []byte
 	for {
-		if f != in || partial == nil {
-			_ = f.SetReadDeadline(time.Now().Add(binaryWatchInterval))
-		}
+		// A fresh deadline for every wait, whether or not a line is half
+		// read: a deadline is a bound on one wait, and one left in the past
+		// makes every read after it fail at once — the server then never
+		// reads again (a re-exec'd image inherits an already-pollable stdin
+		// and did exactly that after its first request).
+		_ = f.SetReadDeadline(time.Now().Add(binaryWatchInterval))
 		chunk, err := rd.ReadString('\n')
 		partial = append(partial, chunk...)
 		if err != nil {
