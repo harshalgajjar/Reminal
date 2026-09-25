@@ -69,7 +69,13 @@ export class McpClient {
 		// The server's stderr is diagnostics, not protocol. Drain it so a chatty
 		// server can never fill the pipe and wedge itself.
 		proc.stderr.on("data", () => {});
-		proc.stdout.on("data", (chunk: Buffer) => this.feed(chunk.toString("utf8")));
+		// setEncoding, not toString() per chunk: a character whose bytes straddle a
+		// chunk boundary would be decoded as two replacement characters, and since
+		// no continuation byte is ever ASCII the JSON still parses — so the damage
+		// is silent, and it lands squarely on the box-drawing an agent's screen is
+		// made of. The stream decoder holds the partial character instead.
+		proc.stdout.setEncoding("utf8");
+		proc.stdout.on("data", (chunk: string) => this.feed(chunk));
 
 		await this.request("initialize", {
 			protocolVersion: "2024-11-05",
@@ -89,18 +95,25 @@ export class McpClient {
 		return (listed?.tools ?? []).filter((t) => typeof t?.name === "string" && t.name !== "");
 	}
 
-	/** Call one tool and return its result as plain text. */
-	async call(name: string, args: unknown, signal?: AbortSignal): Promise<string> {
+	/**
+	 * Call one tool and return its result blocks, kept apart.
+	 *
+	 * Not joined into one string: reminal sends a notice — a version skew, say —
+	 * as its own block precisely so it is never inlined into result text that the
+	 * model is meant to parse, and several of its tools answer in JSON. Gluing
+	 * the two together turns a parseable answer into prose with a warning on the
+	 * front.
+	 */
+	async call(name: string, args: unknown, signal?: AbortSignal): Promise<string[]> {
 		const res = (await this.request("tools/call", { name, arguments: args ?? {} }, {
 			timeoutMs: CALL_TIMEOUT_MS,
 			signal,
 		})) as { content?: Array<{ text?: string }>; isError?: boolean } | undefined;
-		const text = (res?.content ?? [])
+		const texts = (res?.content ?? [])
 			.map((c) => (typeof c?.text === "string" ? c.text : ""))
-			.filter((t) => t !== "")
-			.join("\n");
-		if (res?.isError) throw new Error(text || `${name} failed`);
-		return text;
+			.filter((t) => t !== "");
+		if (res?.isError) throw new Error(texts.join("\n") || `${name} failed`);
+		return texts;
 	}
 
 	stop(): void {

@@ -171,6 +171,15 @@ func TestProgramFromArgsFindsTheAgentBehindTheName(t *testing.T) {
 		{[]string{"node", "/usr/lib/node_modules/@google/gemini/bin/gemini.js"}, "node", "gemini"},
 		{[]string{"python3", "ingest.py"}, "python3", ""},
 		{[]string{"/opt/tool/bin/thing", "serve"}, "MainThread", "thing"},
+		// pi renames itself, so it is argv[0] when it is really pi. Everywhere
+		// else, two letters is a filename: a session running one of these is not
+		// an agent session and must not be read or listed as one.
+		{[]string{"pi"}, "pi", "pi"},
+		{[]string{"python3", "pi.py"}, "python3", ""},
+		{[]string{"vim", "pi.txt"}, "vim", ""},
+		{[]string{"python3", "-m", "pi"}, "python3", ""},
+		{[]string{"node", "/home/u/src/pi/server.js"}, "node", ""},
+		{[]string{"ls", "pi"}, "ls", ""},
 	}
 	for _, c := range cases {
 		if got := programFromArgs(c.args, c.comm); got != c.want {

@@ -226,6 +226,15 @@ var agentPrograms = map[string]bool{
 // isAgentProgram reports whether a command name is a known coding agent.
 func isAgentProgram(name string) bool { return agentPrograms[name] }
 
+// ambiguousPrograms are agent names common enough to appear in a command line
+// that has nothing to do with the agent. They are matched only as the program
+// being run — the kernel's name for it, or the first argument — never as a path
+// component or a later argument, where "pi" also means pi.py, ./pi, -m pi, and
+// any directory somebody called pi. Reading one of those as an agent would put
+// the wrong program on the machines list and start dumping a plain script's
+// screen into read_transcript.
+var ambiguousPrograms = map[string]bool{"pi": true}
+
 // foregroundProgram names the program behind a command name. The kernel's
 // name is often not it: Node renames its main thread, so cursor-agent shows up
 // as "MainThread", and other agents run as plain "node" or "python3". The
@@ -247,15 +256,19 @@ func programFromArgs(args []string, comm string) string {
 	if len(args) > 4 {
 		args = args[:4]
 	}
-	for _, arg := range args {
+	for i, arg := range args {
 		if strings.HasPrefix(arg, "-") {
 			continue
 		}
 		for _, seg := range strings.Split(filepath.ToSlash(arg), "/") {
 			seg = strings.TrimSuffix(seg, filepath.Ext(seg))
-			if isAgentProgram(seg) {
-				return seg
+			if !isAgentProgram(seg) {
+				continue
 			}
+			if ambiguousPrograms[seg] && i != 0 {
+				continue // a short name anywhere but argv[0] is probably a file
+			}
+			return seg
 		}
 	}
 	if (comm == "" || comm == "MainThread") && len(args) > 0 {

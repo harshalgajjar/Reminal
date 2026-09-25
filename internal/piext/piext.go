@@ -12,8 +12,10 @@
 // working / needs you / done instead of reminal reading it off the screen.
 //
 // The extension's sources are embedded in the reminal binary, so `reminal
-// integrate` installs it with no network, no npm, and no chance of the extension
-// being from a different version than the reminal it talks to.
+// integrate` installs it with no network and no npm, and what lands is exactly
+// what the installing reminal shipped. Note it is written at integrate time and
+// not at upgrade time: a later `reminal upgrade` leaves the installed copy where
+// it is, so re-running integrate is what picks up a newer one.
 package piext
 
 import (
@@ -70,11 +72,20 @@ func Dir(home string) string {
 // in my terminal but not under pi".
 func Install(home, exe string) error {
 	dir := Dir(home)
-	// Replace wholesale: a leftover file from an older version that this one no
-	// longer ships would still be loaded by pi.
-	if err := removeIfOurs(dir); err != nil {
+	// Build it beside the real thing and move it into place at the end.
+	//
+	// Writing in place would mean a window — a Ctrl-C, a full disk — where the
+	// directory holds half an extension. pi loads a bare index.ts with no
+	// manifest, so it would try that wreckage on every start; and since the file
+	// that identifies the directory as ours is one of the ones not written yet,
+	// neither a re-install nor a remove could touch it afterwards. A rename is
+	// one step: either the old extension is there or the new one is.
+	staging := dir + ".installing"
+	if err := os.RemoveAll(staging); err != nil {
 		return err
 	}
+	defer func() { _ = os.RemoveAll(staging) }()
+
 	err := fs.WalkDir(files, "extension", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -83,7 +94,7 @@ func Install(home, exe string) error {
 		if err != nil {
 			return err
 		}
-		dst := filepath.Join(dir, rel)
+		dst := filepath.Join(staging, rel)
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return err
 		}
@@ -101,7 +112,17 @@ func Install(home, exe string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "bin.json"), append(pin, '\n'), 0o644)
+	if err := os.WriteFile(filepath.Join(staging, "bin.json"), append(pin, '\n'), 0o644); err != nil {
+		return err
+	}
+
+	// Only now is there anything worth replacing the old extension with. A
+	// leftover file from a version that no longer ships it would still be loaded
+	// by pi, so the old directory goes rather than being written over.
+	if err := removeIfOurs(dir); err != nil {
+		return err
+	}
+	return os.Rename(staging, dir)
 }
 
 // Remove uninstalls the extension. Absent is success: `integrate --remove` is
@@ -110,20 +131,29 @@ func Remove(home string) error {
 	return removeIfOurs(Dir(home))
 }
 
+// removeIfOurs deletes the extension directory unless something else is plainly
+// living in it.
+//
+// What counts as plainly is a manifest naming a different package — that is the
+// case worth protecting, and the only one we can be sure about. A directory with
+// no manifest at all is not evidence of somebody else: it is what a half-written
+// install leaves behind, since the manifest is one of the files it had not
+// reached yet. Refusing those meant reminal could neither repair nor remove its
+// own wreckage, and told the user it belonged to someone else.
 func removeIfOurs(dir string) error {
 	raw, err := os.ReadFile(filepath.Join(dir, "package.json"))
 	if os.IsNotExist(err) {
 		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
 			return nil // nothing installed
 		}
-		return fmt.Errorf("%s exists but is not reminal's extension; leaving it alone", dir)
+		return os.RemoveAll(dir) // ours, half-written, or abandoned in our slot
 	}
 	if err != nil {
 		return err
 	}
 	var manifest struct{ Name string }
-	if err := json.Unmarshal(raw, &manifest); err != nil || manifest.Name != marker {
-		return fmt.Errorf("%s is not reminal's extension; leaving it alone", dir)
+	if err := json.Unmarshal(raw, &manifest); err == nil && manifest.Name != "" && manifest.Name != marker {
+		return fmt.Errorf("%s belongs to %q, not reminal; leaving it alone", dir, manifest.Name)
 	}
 	return os.RemoveAll(dir)
 }
