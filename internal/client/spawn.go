@@ -195,8 +195,15 @@ func resolveSpawnDir(cwd string) (string, error) {
 		}
 		return "", nil
 	}
-	if !filepath.IsAbs(cwd) {
-		return "", fmt.Errorf("cwd must be an absolute path")
+	// "~", "~/x" and a bare relative path are taken from the user's home —
+	// what the dialog's placeholder suggests, and what anyone typing a path
+	// for a machine they are not sitting at means by it.
+	if cwd == "~" || strings.HasPrefix(cwd, "~/") || !filepath.IsAbs(cwd) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cwd: %w", err)
+		}
+		cwd = filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(cwd, "~"), "/"))
 	}
 	cwd = filepath.Clean(cwd)
 	st, err := os.Stat(cwd)

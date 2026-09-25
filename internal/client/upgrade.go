@@ -195,7 +195,13 @@ func (a *Agent) replaceAndRestart(conn *websocket.Conn, fetching string, replace
 	// would otherwise kickstart the machine's real daemon after replacing a
 	// binary that daemon has never run. Only the install the daemon actually
 	// executes gets to bounce it.
-	if daemonBounceApplies() {
+	//
+	// Not when this run IS the daemon (a machine request served by the daemon
+	// host): bouncing the service here killed the process running this very
+	// handler before it reached the sessions, which stayed on the old binary
+	// and could not take their seats. The daemon restarts itself as the last
+	// step below, after every session has moved.
+	if daemonBounceApplies() && !(a.machine && a.daemonHost) {
 		step(upgradeStage{Stage: "restart", Pct: 85, Version: a.version, Detail: "Restarting the background service"})
 		if err := RestartDaemonService(); err != nil {
 			step(upgradeStage{Stage: "restart", Pct: 85, Version: a.version,

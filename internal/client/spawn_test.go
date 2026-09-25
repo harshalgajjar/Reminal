@@ -21,9 +21,24 @@ func TestResolveSpawnDirExplicit(t *testing.T) {
 	}
 }
 
-func TestResolveSpawnDirRejectsRelative(t *testing.T) {
-	if _, err := resolveSpawnDir("relative/path"); err == nil {
-		t.Fatal("expected error for relative cwd")
+func TestResolveSpawnDirResolvesUnderHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sub := filepath.Join(home, "project")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []string{"~/project", "project", "./project", "~/project/"} {
+		got, err := resolveSpawnDir(in)
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if got != sub {
+			t.Fatalf("%q: got %q, want %q", in, got, sub)
+		}
+	}
+	if got, err := resolveSpawnDir("~"); err != nil || got != home {
+		t.Fatalf("~: got %q, %v", got, err)
 	}
 }
 
