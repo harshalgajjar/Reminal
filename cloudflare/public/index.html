@@ -1286,7 +1286,7 @@
       animation: wpspin 0.7s linear infinite;
     }
     .machine-box.is-pending { opacity: 0.6; }
-    .machine-pending { font-size: 11px; color: #d29922; font-style: italic; margin-left: 6px; white-space: nowrap; }
+    .machine-pending { font-size: 11px; color: #d29922; font-style: italic; white-space: nowrap; flex: none; }
     /* Window notes: the dots pill and its popover. Deliberately the same read
        as the desktop badge — colour carries the meaning, red is the only one
        that moves. */
@@ -5417,9 +5417,15 @@
         const dot = document.createElement('span');
         dot.className = 'machine-dot spin';
         dot.title = 'refreshing…';
-        const spacer = document.createElement('span');
-        spacer.style.flex = '1';
         if (rec.pendingRevoke) {
+          // Laid out like every other row — caret's width, dot, name — with
+          // the note where the stats would be, so the column lines up.
+          const caret = document.createElement('span');
+          caret.className = 'machine-caret';
+          caret.setAttribute('aria-hidden', 'true');
+          const title = document.createElement('span');
+          title.className = 'machine-title';
+          title.appendChild(nameEl);
           const pend = document.createElement('span');
           pend.className = 'machine-pending';
           pend.textContent = 'removing when online…';
@@ -5431,7 +5437,7 @@
           forget.title = 'Stop waiting — forget this machine now';
           forget.innerHTML = mIcon('x');
           forget.addEventListener('click', (ev) => { ev.stopPropagation(); forgetPendingMachine(b64, nameEl.textContent); });
-          head.appendChild(dot); head.appendChild(nameEl); head.appendChild(pend); head.appendChild(spacer); head.appendChild(forget);
+          head.appendChild(caret); head.appendChild(dot); head.appendChild(title); head.appendChild(pend); head.appendChild(forget);
           const sessions = document.createElement('div');
           sessions.className = 'machine-sessions';
           box.appendChild(head); box.appendChild(sessions);
