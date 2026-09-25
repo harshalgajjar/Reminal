@@ -84,12 +84,21 @@ type Active struct {
 	// records written before this field existed — LastActive() falls back to
 	// StartedAt in that case.
 	LastActivity time.Time `json:"last_activity,omitempty"`
+	// AttnSince is when Attn last changed. HOW LONG a session has been parked
+	// at a prompt is a signal of its own — the state alone cannot tell an
+	// approval someone is about to click from one nobody is watching — and
+	// only the agent that owns the session knows when it changed.
+	AttnSince time.Time `json:"attn_since,omitzero"`
 	// Attn is the detected attention state of the session's foreground agent:
 	// "working", "input" (blocked awaiting the user), or "done". Empty when no
 	// agent TUI is active (a bare shell) or the serving build predates this
 	// field. Heuristic — see internal/client/attention_probe.go. Surfaced by
 	// `reminal list` so you can tell which session needs you without attaching.
 	Attn string `json:"attn,omitempty"`
+	// Fg is the name of the command holding the terminal's foreground — "bash",
+	// "claude", "python3". It is what tells a session running an agent from one
+	// that is a plain terminal doing a job of its own.
+	Fg string `json:"fg,omitempty"`
 }
 
 // LastActive returns the best available "last used" timestamp: LastActivity

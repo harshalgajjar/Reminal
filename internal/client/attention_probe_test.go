@@ -76,6 +76,127 @@ func TestAttentionProbeTail(t *testing.T) {
 	}
 }
 
+// A harness with no lifecycle hooks gives us nothing but the screen, so every
+// shape of approval prompt it can show has to be recognised here. These are
+// transcribed from real sessions; a stuck session that reads as "done" is one
+// nobody comes to help.
+func TestPromptCuesCoverEachHarness(t *testing.T) {
+	cursorApproval := `$  ls -la /home/parallels/work/ && echo "no backend dir" in .
+
+Run this command?
+Not in allowlist: echo
+→ Run (once) (y)
+  Add Shell(echo) to allowlist? (tab)
+  Run Everything (shift+tab)
+  Skip & tell the agent what to do instead (esc or n)`
+
+	claudeApproval := `Do you want to proceed?
+❯ 1. Yes
+  2. No, and tell Claude what to do differently (esc)`
+
+	for name, tail := range map[string]string{
+		"cursor-agent approval": cursorApproval,
+		"claude approval":       claudeApproval,
+	} {
+		if !attnLooksLikePrompt(tail) {
+			t.Errorf("%s was not recognised as a prompt — a session stuck on it reads as done", name)
+		}
+		if got := classifyAttn(true, tail, attnSettleMs+1); got != "input" {
+			t.Errorf("%s classified as %q, want input", name, got)
+		}
+	}
+
+	// The working spinner must NOT read as a prompt, or every busy agent would
+	// look like it needs you.
+	working := `· Booping… (2s · esc to interrupt)`
+	if attnLooksLikePrompt(working) {
+		t.Error("the working spinner was read as a prompt")
+	}
+	// Ordinary output that merely mentions running something is not a prompt.
+	if attnLooksLikePrompt("I will run this command in a moment and report back") {
+		t.Error("prose about running a command was read as a prompt")
+	}
+}
+
+// Prose ABOUT approvals is not a request for one. Agents talk about approving,
+// confirming and permissions constantly, and each false positive made a
+// finished session read as "needs you".
+func TestProseAboutApprovalIsNotAPrompt(t *testing.T) {
+	prose := []string{
+		"Acknowledged — no action needed, this just confirms frontend has everything they need.",
+		"Approve only what the task you delegated plainly requires; anything destructive, escalate.",
+		"I approved the read-only lookup; frontend should continue on its own now.",
+		"It asked for permission earlier and lead granted it.",
+		"Backend is built and both obligations are closed.",
+	}
+	for _, line := range prose {
+		if attnLooksLikePrompt(line) {
+			t.Errorf("prose read as a prompt: %q", line)
+		}
+	}
+	// The real things must still register.
+	for _, p := range []string{
+		"Claude needs your permission to use Bash",
+		"Do you want to proceed?\n❯ 1. Yes",
+		"Run this command?\n→ Run (once) (y)",
+		"Confirm? (y/n)",
+	} {
+		if !attnLooksLikePrompt(p) {
+			t.Errorf("a real prompt was not recognised: %q", p)
+		}
+	}
+}
+
+// cursor-agent's yolo mode prints "Run Everything" in its footer on every
+// screen; that is a mode label, not a question.
+func TestYoloFooterIsNotAPrompt(t *testing.T) {
+	if attnLooksLikePrompt("  Auto                    Run Everything\n  ~/work/frontend") {
+		t.Fatal("the mode label read as a prompt")
+	}
+	if !attnLooksLikePrompt("Run this command?\n→ Run (once)  (y)") {
+		t.Fatal("the real approval prompt must still be recognised")
+	}
+}
+
+// The kernel's name for a process is often not the program: Node renames its
+// main thread, so cursor-agent is "MainThread", and the command line is what
+// says which agent it is.
+func TestProgramFromArgsFindsTheAgentBehindTheName(t *testing.T) {
+	cases := []struct {
+		args []string
+		comm string
+		want string
+	}{
+		{[]string{"/home/u/.local/bin/cursor-agent", "--use-system-ca", "/home/u/.local/share/cursor-agent/versions/1/index.js", "-f"}, "MainThread", "cursor-agent"},
+		{[]string{"node", "/usr/lib/node_modules/@google/gemini/bin/gemini.js"}, "node", "gemini"},
+		{[]string{"python3", "ingest.py"}, "python3", ""},
+		{[]string{"/opt/tool/bin/thing", "serve"}, "MainThread", "thing"},
+	}
+	for _, c := range cases {
+		if got := programFromArgs(c.args, c.comm); got != c.want {
+			t.Errorf("programFromArgs(%v, %q) = %q, want %q", c.args, c.comm, got, c.want)
+		}
+	}
+}
+
+// Claude Code draws the spaces between words as cursor moves, so its dialogs
+// render with none; they are prompts all the same.
+func TestPromptWithoutSpacesIsAPrompt(t *testing.T) {
+	trust := "ClaudeCode'llbeabletoread,edit,andexecutefileshere.\nSecurityguide\n" +
+		"❯No,exit\nYes,Itrustthisfolder\nEntertoconfirm·Esctocancel"
+	if !attnLooksLikePrompt(trust) {
+		t.Fatal("Claude Code's trust dialog, drawn without spaces, was not seen as a prompt")
+	}
+	styled := "   Yes, I trust this folder\n\n \x1b[38;5;246mEnter\x1b[m \x1b[38;5;246mto\x1b[m \x1b[38;5;246mconfirm\x1b[m " +
+		"\x1b[38;5;246m·\x1b[m \x1b[38;5;246mEsc\x1b[m \x1b[38;5;246mto\x1b[m \x1b[38;5;246mcancel\x1b[m"
+	if !attnLooksLikePrompt(styled) {
+		t.Fatal("Claude Code's trust dialog, as rendered with its styling, was not seen as a prompt")
+	}
+	if attnLooksLikePrompt("Donethechangesareinandthetestspass.\n❯\n────\n⏵⏵bypasspermissionson") {
+		t.Fatal("a finished turn drawn without spaces read as a prompt")
+	}
+}
+
 func TestResolveAttn(t *testing.T) {
 	now := time.Now()
 	hook := func(state string, agoSec int) *session.HookState {
@@ -116,7 +237,7 @@ func TestResolveAttn(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := resolveAttn(c.screen, c.hs, c.lastOutput)
+			got, _ := resolveAttn(c.screen, c.hs, c.lastOutput, time.Time{}, 0, c.screen == "input")
 			if got != c.want {
 				t.Errorf("resolveAttn(screen=%q) = %q, want %q", c.screen, got, c.want)
 			}

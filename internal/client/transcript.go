@@ -75,9 +75,10 @@ func ReadAgentTranscript(pid int, timeout ...time.Duration) (string, bool, error
 func (a *Agent) handleTranscriptControl() (string, error) {
 	text, truncated := clipTranscript(a.plaintextTranscript(), maxTranscriptBytes)
 	if scr := a.programScreenText(); scr != "" {
-		// A full-screen program paints with cursor moves, not lines: its
-		// output stream, stripped of the moves, is fragments run together.
-		// What it is showing is the screen itself.
+		// A full-screen program — and an agent's TUI, which draws the spaces
+		// between words as cursor moves — paints with cursor moves, not
+		// lines: its stream, stripped, is fragments run together. What it
+		// shows is the screen itself.
 		text, truncated = clipTranscript(text+"\n\n--- the screen now ---\n"+scr, maxTranscriptBytes)
 	}
 	body, err := json.Marshal(struct {
@@ -109,15 +110,18 @@ func (a *Agent) handleSearchControl(pattern string) (string, error) {
 	return string(body), nil
 }
 
-// programScreenText is what a full-screen program has on the screen now, or
-// "" when the session is on its normal screen and its output reads as text.
+// programScreenText is what a full-screen program or an agent has on the
+// screen now, or "" when the session is a plain shell on its normal screen.
 func (a *Agent) programScreenText() string {
 	if a == nil {
 		return ""
 	}
+	a.metaMu.Lock()
+	agent := isAgentProgram(a.attnFG)
+	a.metaMu.Unlock()
 	a.screenMu.Lock()
 	defer a.screenMu.Unlock()
-	if a.screen == nil || !a.screen.IsAltScreen() {
+	if a.screen == nil || (!agent && !a.screen.IsAltScreen()) {
 		return ""
 	}
 	return strings.TrimRight(attentionProbeTail(stripANSI(a.screen.Render()), 1<<20), "\n")

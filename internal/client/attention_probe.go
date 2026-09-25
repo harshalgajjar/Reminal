@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -36,6 +37,9 @@ import (
 const (
 	attnInterval = 300 * time.Millisecond
 	attnTailRows = 12
+	// attnPromptRows is how much of the bottom of the screen may overrule a
+	// harness that has said "done". A real chooser is right at the prompt.
+	attnPromptRows = 5
 	// A screen unchanged for at least this long counts as "settled". Agent
 	// spinners/elapsed-time counters repaint faster than this, so an actively
 	// working agent stays "working"; a blocked or finished one goes settled.
@@ -88,6 +92,7 @@ func (a *Agent) runAttention(logPath string) {
 
 	var lastTail string
 	lastChange := time.Now()
+	var progCache foregroundProgCache
 
 	for range ticker.C {
 		a.screenMu.Lock()
@@ -140,8 +145,10 @@ func (a *Agent) runAttention(logPath string) {
 		// compare stays as a backstop for when the name can't be read.
 		agentActive := alt
 		fg := ""
+		fgPgrpSeen := 0
 		if a.term != nil {
 			if fgPgrp := a.term.ForegroundPgrp(); fgPgrp > 0 {
+				fgPgrpSeen = fgPgrp
 				fg = attentionForegroundName(fgPgrp)
 				if fg != "" && !isLoginShell(fg) {
 					agentActive = true
@@ -151,12 +158,24 @@ func (a *Agent) runAttention(logPath string) {
 			}
 		}
 
+		a.noteForeground(progCache.resolve(fgPgrpSeen, fg))
+
 		// Prefer the agent's own hook-reported state when it's fresh (an
 		// integrated harness reporting via `reminal hook`); otherwise fall back to
 		// the screen inference. The hook is precise; the screen is universal.
 		screenState := classifyAttn(agentActive, tail, settledMs)
-		state, source := resolveAttn(screenState, session.ReadHookState(a.sessionID), last)
+		// The hook is precise; the screen is universal. resolveAttn puts the
+		// two together — including the cases where the hook is not to be
+		// believed: written by a harness that has since exited, left at
+		// "working" by a turn that died, or overtaken by output since.
+		a.metaMu.Lock()
+		fgAt := a.attnFGAt
+		a.metaMu.Unlock()
+		state, source := resolveAttn(screenState, session.ReadHookState(a.sessionID), last, fgAt, idleMs,
+			attnLooksLikePrompt(attentionProbeTail(render, attnPromptRows)))
 		if a.harnessDown() {
+			// It cannot work at all: that is what to report, not what it
+			// looked like it was doing when it took the message.
 			state, source = harnessLoggedOut, "screen(login)"
 		}
 		a.setAttnState(state)
@@ -170,6 +189,113 @@ func (a *Agent) runAttention(logPath string) {
 	}
 }
 
+// hookWorkingSilentMs is how long a screen may stay completely still before a
+// hook's "working" stops being believed.
+const hookWorkingSilentMs = 90_000
+
+// foregroundProgCache resolves the foreground PROGRAM — what a person would
+// call the thing running there — once per (process group, command name), since
+// on macOS it costs a fork.
+type foregroundProgCache struct {
+	pgrp       int
+	comm, prog string
+}
+
+func (c *foregroundProgCache) resolve(pgrp int, comm string) string {
+	if pgrp == c.pgrp && comm == c.comm {
+		return c.prog
+	}
+	c.pgrp, c.comm, c.prog = pgrp, comm, foregroundProgram(pgrp, comm)
+	return c.prog
+}
+
+// agentPrograms are the coding agents reminal knows by their command name.
+var agentPrograms = map[string]bool{
+	"claude": true, "cursor-agent": true, "codex": true, "gemini": true, "aider": true,
+	"goose": true, "crush": true, "qwen": true, "opencode": true, "amp": true,
+	"copilot": true, "droid": true, "cline": true, "kiro": true, "agy": true,
+}
+
+// isAgentProgram reports whether a command name is a known coding agent.
+func isAgentProgram(name string) bool { return agentPrograms[name] }
+
+// foregroundProgram names the program behind a command name. The kernel's
+// name is often not it: Node renames its main thread, so cursor-agent shows up
+// as "MainThread", and other agents run as plain "node" or "python3". The
+// command line says what was actually launched.
+func foregroundProgram(pid int, comm string) string {
+	if pid <= 0 || isLoginShell(comm) || isAgentProgram(comm) {
+		return comm
+	}
+	if prog := programFromArgs(processArgs(pid), comm); prog != "" {
+		return prog
+	}
+	return comm
+}
+
+// programFromArgs picks the program out of a command line: a known agent named
+// anywhere in the first few arguments (as a file or as a directory on the way
+// to one), else argv[0] when the kernel's name is meaningless.
+func programFromArgs(args []string, comm string) string {
+	if len(args) > 4 {
+		args = args[:4]
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		for _, seg := range strings.Split(filepath.ToSlash(arg), "/") {
+			seg = strings.TrimSuffix(seg, filepath.Ext(seg))
+			if isAgentProgram(seg) {
+				return seg
+			}
+		}
+	}
+	if (comm == "" || comm == "MainThread") && len(args) > 0 {
+		return filepath.Base(args[0])
+	}
+	return ""
+}
+
+// processArgs is a process's command line: /proc on Linux, ps elsewhere.
+func processArgs(pid int) []string {
+	if runtime.GOOS == "linux" {
+		b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+		if err != nil {
+			return nil
+		}
+		return strings.FieldsFunc(string(b), func(r rune) bool { return r == 0 })
+	}
+	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return nil
+	}
+	return strings.Fields(string(out))
+}
+
+// noteForeground records the foreground command and, when it changes, flushes
+// the session record — `claude` starting or exiting is what turns a terminal
+// into an agent and back, and `reminal list` should see it within a tick.
+func (a *Agent) noteForeground(fg string) {
+	a.metaMu.Lock()
+	changed := fg != a.attnFG
+	a.attnFG = fg
+	if changed {
+		a.attnFGAt = time.Now()
+	}
+	a.metaMu.Unlock()
+	if !changed {
+		return
+	}
+	a.metaDirty.Store(true)
+	if a.metaKick != nil {
+		select {
+		case a.metaKick <- struct{}{}:
+		default:
+		}
+	}
+}
+
 // setAttnState stores the state and, on a change, marks the record dirty and
 // kicks an immediate meta-flush (same pattern as commitOscCwd) so `reminal list`
 // reflects the new state within ~a tick instead of at the next slow flush.
@@ -177,6 +303,9 @@ func (a *Agent) setAttnState(state string) {
 	a.metaMu.Lock()
 	changed := state != a.attnState
 	a.attnState = state
+	if changed {
+		a.attnSince = time.Now()
+	}
 	a.metaMu.Unlock()
 	if !changed {
 		return
@@ -219,9 +348,20 @@ func (a *Agent) setAttnState(state string) {
 //     you are in fact being asked to choose.
 //
 // source is for the probe log only; it names which signal decided.
-func resolveAttn(screenState string, hs *session.HookState, lastActivity time.Time) (state, source string) {
+func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt time.Time, idleMs int64,
+	promptOnScreen bool) (state, source string) {
 	state, source = screenState, "screen"
-	if hs != nil {
+	switch {
+	case hs == nil:
+	case !fgAt.IsZero() && hs.TS.Before(fgAt):
+		// Written by a harness that has since exited; the one running now has
+		// not said anything yet. A "working" left behind by a turn that died
+		// (a failed login, a crash) held every message for this session until
+		// the TTL ran out.
+	case hs.State == "working" && idleMs > hookWorkingSilentMs:
+		// A working harness animates; this screen has not moved at all. Its
+		// "done" never came — believe the screen.
+	default:
 		state, source = hs.State, "hook"
 		if (hs.State == "input" || hs.State == "done") && lastActivity.After(hs.TS.Add(attnHookGrace)) {
 			state, source = screenState, "screen(resumed)"
@@ -233,7 +373,14 @@ func resolveAttn(screenState string, hs *session.HookState, lastActivity time.Ti
 			}
 		}
 	}
-	if state == "done" && screenState == "input" {
+	// A prompt visible on screen wins over a "done" hook. Claude Code fires
+	// Stop (→ done) when it yields for an AskUserQuestion or ends a turn on a
+	// question — there's no distinct "I'm asking you" event — so the hook
+	// alone reads "done" while you are actually being asked to choose. Only
+	// the BOTTOM of the screen may overrule it: a chooser sits at the prompt,
+	// while rows of transcript above it are full of agents discussing
+	// approvals in prose.
+	if state == "done" && source == "hook" && screenState == "input" && promptOnScreen {
 		state, source = "input", "hook+screen"
 	}
 	return state, source
@@ -262,10 +409,12 @@ func classifyAttn(agentActive bool, tail string, settledMs int64) string {
 // attnPromptCues are lowercase substrings that mark a screen asking the user to
 // act — tool/permission approvals and interactive questions across harnesses.
 // Kept deliberately small and data-like so a harness UI change is a one-line fix.
-// Every cue has to be PROMPT-SHAPED, not a word a prompt might use: a bare
-// "confirm" matched an agent's own prose ("this just confirms the build is
-// green"), and a bare "approve" matched a sentence about approvals — so a
-// session that had plainly finished sat there reading "needs you".
+// Every cue has to be PROMPT-SHAPED, not a word a prompt might use. Bare
+// "confirm" matched "this just confirms the build is green" in an agent's own
+// prose, and bare "approve" matched "Approve only what the task requires" in
+// text it was reading — so a session that had plainly finished sat there
+// reading "needs you". Agents talk about approvals constantly; only the shape
+// of an actual question can be trusted.
 var attnPromptCues = []string{
 	"(y/n)", "[y/n]", "y/n)", "yes/no", "(y)",
 	"do you want to", "would you like to", "allow this", "approve?", "approve this",
@@ -277,18 +426,18 @@ var attnPromptCues = []string{
 	// interrupt" — that's the WORKING spinner's footer, not a prompt.
 	"enter to select", "esc to cancel",
 	// cursor-agent's approval prompt. It has no lifecycle hooks, so the screen
-	// is the ONLY signal it gives, and none of the cues above appear on it.
-	// NOT "run everything": that is also the label of its yolo mode, printed
-	// in the footer of every screen.
+	// is the ONLY signal it gives, and none of the cues above appear on it —
+	// which made a session stuck on this read as "done". NOT "run everything":
+	// that is also the label of its yolo mode, printed in the footer of every
+	// screen, so a session launched with -f read as stuck from its first second.
 	"run this command?", "run (once)", "not in allowlist", "(esc or n)",
 }
 
-// attnLooksLikePrompt reads the screen as TEXT: the render carries its
-// styling, and Claude Code's trust dialog arrives as
-// "\x1b[38;5;246mEsc\x1b[m \x1b[38;5;246mto\x1b[m…", which no cue could ever
-// match — the dialog read as a finished turn. Whitespace goes too, because
-// some harnesses draw the spaces between words as cursor moves, leaving
-// "Entertoconfirm·Esctocancel" on the rendered screen.
+// The screen is read as text: the render carries its styling, and Claude
+// Code's trust-this-folder dialog reads "\x1b[38;5;246mEsc\x1b[m
+// \x1b[38;5;246mto…" — no cue matched it, the session read as done, and a
+// message typed into it confirmed "No, exit". Matched with whitespace
+// removed from both, too: some screens draw the spaces as cursor moves.
 func attnLooksLikePrompt(tail string) bool {
 	low := attnFlat(stripANSI(tail))
 	for _, cue := range attnPromptCuesFlat {

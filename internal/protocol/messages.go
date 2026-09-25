@@ -376,6 +376,9 @@ type DirSession struct {
 	// or a host too old to report it. Lets the fleet view show which session
 	// needs you. See internal/client/attention_probe.go (writer side).
 	Attn string `json:"attn,omitempty"`
+	// Fg is the program in the session's foreground ("bash", "claude",
+	// "python3") — what says whether an agent or a plain terminal is there.
+	Fg string `json:"fg,omitempty"`
 	// SearchHits is filled when the directory query carried a regex: snippets
 	// from this session's live scrollback. Omitted on a plain listing, and by
 	// hosts that do not search yet (they still return the session list).

@@ -342,6 +342,7 @@ func localDirSessions() []protocol.DirSession {
 			Headless: a.Headless,
 			Viewers:  a.Viewers,
 			Attn:     a.Attn,
+			Fg:       a.Fg,
 		}
 		if la := a.LastActive(); !la.IsZero() {
 			if secs := int64(now.Sub(la).Seconds()); secs > 0 {
