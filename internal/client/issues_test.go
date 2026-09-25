@@ -4,6 +4,7 @@
 package client
 
 import (
+	"reminal/internal/session"
 	"strings"
 	"testing"
 	"time"
@@ -46,5 +47,19 @@ func TestAReportIsKeptHereAndExported(t *testing.T) {
 	}
 	if issues, _, _ := ListIssues(); len(issues) != 0 {
 		t.Fatal("cleared")
+	}
+}
+
+// The report names the program that filed it, from the session's own record.
+func TestHarnessOfReadsTheSessionRecord(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := session.WriteActive(session.Active{ID: "HARN0001", PID: 1, Fg: "claude"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := HarnessOf("harn0001"); got != "claude" {
+		t.Fatalf("HarnessOf = %q, want claude", got)
+	}
+	if got := HarnessOf("NOSUCH01"); got != "" {
+		t.Fatalf("HarnessOf(unknown) = %q, want empty", got)
 	}
 }
