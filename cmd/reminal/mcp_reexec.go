@@ -4,7 +4,10 @@
 package main
 
 import (
+	"bufio"
+	"errors"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -16,7 +19,7 @@ const reloadedEnv = "REMINAL_MCP_RELOADED"
 // binaryWatchInterval polls our own binary for the atomic rename an upgrade
 // performs. One stat, and an upgrade is rare — the goal is to be current within
 // seconds, not milliseconds.
-const binaryWatchInterval = 5 * time.Second
+var binaryWatchInterval = 5 * time.Second
 
 var binarySwapped atomic.Bool
 
@@ -80,3 +83,52 @@ func maybeReexec() {
 	_ = os.Setenv(reloadedEnv, "1")
 	execSelf(exe, os.Args, os.Environ())
 }
+
+// mcpReadLines hands each line of a client's requests to handle, and between
+// lines — only then — lets the process swap onto a newly installed binary.
+//
+// Waiting on a line blocks, and a client that never calls a reminal tool
+// never sends one: an agent started before reminal was upgraded kept the
+// old build's tools for as long as it ran, whatever the new build added.
+// So the wait has a deadline. When it lapses with nothing read and nothing
+// buffered, the process is provably idle: anything the client has written
+// since is still in the kernel's pipe, and survives exec for the new image
+// to read. A partial line read before the deadline is kept and completed
+// first; exec never happens while one is held.
+func mcpReadLines(in *os.File, handle func(line string)) {
+	f := mcpPollable(in)
+	rd := bufio.NewReaderSize(f, 8<<20)
+	var partial []byte
+	for {
+		if f != in || partial == nil {
+			_ = f.SetReadDeadline(time.Now().Add(binaryWatchInterval))
+		}
+		chunk, err := rd.ReadString('\n')
+		partial = append(partial, chunk...)
+		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				if len(partial) == 0 && rd.Buffered() == 0 {
+					mcpIdle() // nothing of the client's is in our hands
+				}
+				continue
+			}
+			return // the client closed its end
+		}
+		line := strings.TrimSpace(string(partial))
+		partial = partial[:0]
+		if line == "" {
+			continue
+		}
+		handle(line)
+		// Just answered: the client has not sent the next request yet, and
+		// nothing is buffered to lose across exec.
+		if rd.Buffered() == 0 {
+			mcpIdle()
+		}
+	}
+}
+
+// mcpIdle runs when the server provably holds nothing of the client's. What it
+// does is swap onto a newer binary if one was installed; a variable so the
+// reader's timing can be tested without an exec.
+var mcpIdle = maybeReexec
