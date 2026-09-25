@@ -153,6 +153,20 @@ await b.emit("turn_end", { type: "turn_end" });
 await new Promise((r) => setTimeout(r, 300));
 assert.equal(fs.existsSync(statePath), false, "rewrote an unchanged state");
 
+// A fast turn reports twice in a row. Each report is a separate process writing
+// the same file, so unless they are ordered the second can land first and leave
+// the session reading "working" after it has finished — a stuck pill from a turn
+// that ended cleanly. Once raced, this failed about one round in five.
+for (let round = 0; round < 12; round++) {
+	fs.rmSync(statePath, { force: true });
+	await b.emit("agent_start", { type: "agent_start" });
+	await b.emit("turn_start", { type: "turn_start" });
+	await b.emit("turn_end", { type: "turn_end" });
+	await b.emit("agent_settled", { type: "agent_settled" });
+	const got = await reported();
+	assert.equal(got, "done", `round ${round}: a finished turn left the session reading ${got}`);
+}
+
 fs.rmSync(statePath, { force: true });
 delete process.env.REMINAL_SESSION;
 

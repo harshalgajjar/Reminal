@@ -45,19 +45,52 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 	const reporting = (process.env.REMINAL_SESSION ?? "") !== "";
 	let last: { state: Attn; at: number } | undefined;
 
+	// One `reminal hook` at a time, and only ever the newest state.
+	//
+	// Each report is a separate process racing to write the same file, and the
+	// last writer wins. Two fired back to back — which is exactly what a fast
+	// turn does, agent_start then agent_settled — land in whatever order the OS
+	// schedules them. When they land backwards the session is left reading
+	// "working" after it has finished, and stays that way until the state
+	// expires: the stuck pill, from a turn that ended cleanly.
+	//
+	// So a write in flight parks the next one instead of racing it. Only the
+	// newest parked state is kept, since an older one it superseded has nothing
+	// left to say.
+	let writing = false;
+	let parked: Attn | undefined;
+
+	const write = (state: Attn): void => {
+		writing = true;
+		const done = () => {
+			writing = false;
+			const next = parked;
+			parked = undefined;
+			if (next) write(next);
+		};
+		try {
+			const p = spawn(bin, ["hook", state], { stdio: "ignore", detached: true });
+			// A hook that fails is not worth interrupting anyone over, but it must
+			// still release the queue behind it.
+			p.on("error", done);
+			p.on("exit", done);
+			p.unref();
+		} catch {
+			// no reminal on PATH — the rest of the extension still works
+			done();
+		}
+	};
+
 	const report = (state: Attn): void => {
 		if (!reporting) return;
 		if (last && last.state === state && Date.now() - last.at < REFRESH_MS) return;
 		last = { state, at: Date.now() };
-		try {
-			// Fire and forget. A lifecycle handler must never make the agent wait on
-			// us, and a hook that fails is not worth interrupting anyone over.
-			const p = spawn(bin, ["hook", state], { stdio: "ignore", detached: true });
-			p.on("error", () => {});
-			p.unref();
-		} catch {
-			// no reminal on PATH — the rest of the extension still works
+		// Never block a lifecycle handler: the write happens on its own.
+		if (writing) {
+			parked = state;
+			return;
 		}
+		write(state);
 	};
 
 	// A run is under way. agent_start covers the whole loop; turn_start and
