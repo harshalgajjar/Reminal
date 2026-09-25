@@ -210,10 +210,17 @@ func (c *foregroundProgCache) resolve(pgrp int, comm string) string {
 }
 
 // agentPrograms are the coding agents reminal knows by their command name.
+//
+// Being on this list is what tells reminal to read a session's SCREEN rather
+// than its scrollback (see programScreenText). An agent that draws a TUI on the
+// main screen — no alternate screen to give it away — reads as a plain terminal
+// until it is named here, and `read_transcript` returns the stream it painted
+// with instead of what the screen says.
 var agentPrograms = map[string]bool{
 	"claude": true, "cursor-agent": true, "codex": true, "gemini": true, "aider": true,
 	"goose": true, "crush": true, "qwen": true, "opencode": true, "amp": true,
 	"copilot": true, "droid": true, "cline": true, "kiro": true, "agy": true,
+	"pi": true,
 }
 
 // isAgentProgram reports whether a command name is a known coding agent.

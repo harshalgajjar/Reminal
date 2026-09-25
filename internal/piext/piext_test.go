@@ -58,6 +58,16 @@ func TestInstallWritesADiscoverableExtension(t *testing.T) {
 		t.Errorf("bin.json = %q, want the installing binary's path", pinned.Bin)
 	}
 
+	// The extension reads bin.json as a SIBLING of itself. Moving an entry point
+	// into a subdirectory without moving bin.json too breaks that silently: the
+	// extension falls back to PATH, which on a fresh install is exactly where
+	// reminal is not yet.
+	for _, entry := range manifest.Pi.Extensions {
+		if d := filepath.Dir(filepath.Join(dir, filepath.FromSlash(entry))); d != filepath.Clean(dir) {
+			t.Errorf("entry point %s is not beside bin.json (%s); the extension would not find reminal", entry, d)
+		}
+	}
+
 	// The test harness is for this repo, not for users' machines.
 	if _, err := os.Stat(filepath.Join(dir, "test")); !os.IsNotExist(err) {
 		t.Error("shipped the test harness into the install")
@@ -74,7 +84,7 @@ func TestInstallIsIdempotentAndRepointable(t *testing.T) {
 	}
 	// A file an older version shipped and this one does not: a second install
 	// must not leave it behind for pi to load.
-	stale := filepath.Join(dir, "src", "stale.ts")
+	stale := filepath.Join(dir, "stale.ts")
 	if err := os.WriteFile(stale, []byte("export default () => {};\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

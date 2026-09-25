@@ -29,7 +29,7 @@ import (
 // The extension itself. Listed file by file rather than with a directory
 // pattern: the test harness beside it has no business in the shipped binary.
 //
-//go:embed extension/package.json extension/src/index.ts extension/src/mcp.ts
+//go:embed extension/package.json extension/index.ts extension/mcp.ts
 var files embed.FS
 
 // dirName is the folder the extension is installed as. pi shows a discovered

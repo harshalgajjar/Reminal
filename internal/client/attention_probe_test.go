@@ -179,6 +179,22 @@ func TestProgramFromArgsFindsTheAgentBehindTheName(t *testing.T) {
 	}
 }
 
+// Every agent `reminal integrate` sets up has to be one reminal can recognise
+// on sight. Being on this list is what makes reminal read the session's screen
+// instead of the stream it was painted with (programScreenText), and an agent
+// that draws on the main screen — pi's default, and no alternate screen to give
+// it away — reads as a plain terminal until it is named here. That failure is
+// quiet: `read_transcript` still answers, just with cursor-move debris instead
+// of what is on the screen.
+func TestEveryIntegratedAgentIsRecognisedOnSight(t *testing.T) {
+	// The binaries cmd/reminal/integrate.go looks for.
+	for _, bin := range []string{"claude", "codex", "agy", "opencode", "cursor-agent", "gemini", "qwen", "amp", "pi"} {
+		if !isAgentProgram(bin) {
+			t.Errorf("%s is integrated but not a known agent program: its screen will not be read", bin)
+		}
+	}
+}
+
 // Claude Code draws the spaces between words as cursor moves, so its dialogs
 // render with none; they are prompts all the same.
 func TestPromptWithoutSpacesIsAPrompt(t *testing.T) {
