@@ -931,6 +931,8 @@
     .cl-list li { margin-bottom: 3px; }
     .cl-list code, .cl-sub code { background: rgba(110,118,129,.2); padding: .08em .34em; border-radius: 4px; font-size: 11.5px; }
     .cl-sub { font-size: 11px; color: #8b949e; margin: 7px 0 3px; text-transform: uppercase; letter-spacing: .06em; }
+    .cl-p { margin: 0 0 6px; color: #c9d1d9; font-size: 12.5px; line-height: 1.6; }
+    .cl-p code { background: rgba(110,118,129,.2); padding: .08em .34em; border-radius: 4px; font-size: 11.5px; }
     .cl-here { padding: 11px 0 2px; font-size: 11.5px; color: #6e7681; display: flex; align-items: center; gap: 7px; }
     .cl-here::before, .cl-here::after { content: ""; height: 1px; background: #30363d; flex: 1; }
     .cl-foot { position: sticky; bottom: 0; background: #161b22; border-top: 1px solid #21262d; padding: 11px 16px; }
@@ -2411,7 +2413,11 @@
           continue;
         }
         flush();
-        out.push('<div class="cl-sub">' + inlineNotes(line) + '</div>');
+        // A short label ("Fixed", "New") heads a section; a sentence is a
+        // paragraph. Notes written as prose came out as section headings —
+        // uppercase, small and grey, line after line.
+        const label = line.length <= 32 && !/[.!?:,]$/.test(line);
+        out.push(label ? '<div class="cl-sub">' + inlineNotes(line) + '</div>' : '<p class="cl-p">' + inlineNotes(line) + '</p>');
       }
       flush();
       return out.join('') || '<div class="cl-sub">No notes for this release.</div>';
