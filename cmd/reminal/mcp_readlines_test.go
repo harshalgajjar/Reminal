@@ -7,6 +7,7 @@ package main
 
 import (
 	"os"
+	"runtime"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -32,6 +33,10 @@ func TestAnIdleReaderSwapsAndAHalfLineIsNotIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, w := os.NewFile(uintptr(fds[0]), "stdin"), os.NewFile(uintptr(fds[1]), "client")
+	// The reader wraps the same descriptor in a second *os.File; if this one
+	// is collected first its finalizer closes the descriptor under it, and a
+	// later pipe reusing the number inherits the poller's stale registration.
+	defer runtime.KeepAlive(r)
 	lines := make(chan string, 8)
 	done := make(chan struct{})
 	go func() { mcpReadLines(r, func(l string) { lines <- l }); close(done) }()
@@ -71,4 +76,42 @@ func TestAnIdleReaderSwapsAndAHalfLineIsNotIdle(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("reader did not stop when the client closed its end")
 	}
+}
+
+// A re-exec'd image inherits a stdin Go already polls. It must keep reading
+// after its first request, and keep going idle between requests.
+func TestAnAlreadyPolledStdinKeepsServing(t *testing.T) {
+	old := binaryWatchInterval
+	binaryWatchInterval = 30 * time.Millisecond
+	defer func() { binaryWatchInterval = old; mcpIdle = maybeReexec }()
+	var idle atomic.Int32
+	mcpIdle = func() { idle.Add(1) }
+
+	r, w, err := os.Pipe() // both ends already registered with the poller
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := make(chan string, 8)
+	done := make(chan struct{})
+	go func() { mcpReadLines(r, func(l string) { lines <- l }); close(done) }()
+
+	for i, want := range []string{"one", "two", "three"} {
+		time.Sleep(100 * time.Millisecond) // well past the deadline between requests
+		_, _ = w.WriteString(want + "\n")
+		select {
+		case got := <-lines:
+			if got != want {
+				t.Fatalf("line %d = %q, want %q", i, got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("request %d (%q) was never read", i, want)
+		}
+	}
+	n := idle.Load()
+	time.Sleep(120 * time.Millisecond)
+	if idle.Load() <= n {
+		t.Fatal("stopped going idle after serving requests")
+	}
+	_ = w.Close()
+	<-done
 }
