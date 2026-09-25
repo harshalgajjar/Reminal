@@ -26,6 +26,9 @@ func TestParseMachineScope(t *testing.T) {
 		{name: "machine swallowing a flag errors", args: []string{"--machine", "--all"}, wantErr: true},
 		{name: "bare machine errors", args: []string{"--machine"}, wantErr: true},
 		{name: "machine plus all-owned is refused", args: []string{"--machine", "box", "--all-owned-machines"}, wantErr: true},
+		// Asking for help is never a scope: "upgrade --help" must not upgrade.
+		{name: "help is not a scope", args: []string{"--help"}, wantErr: true},
+		{name: "-h is not a scope", args: []string{"-h"}, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -49,5 +52,18 @@ func TestParseMachineScope(t *testing.T) {
 				t.Errorf("remote() = %v, want %v", got, tc.remote)
 			}
 		})
+	}
+}
+
+// A verb with no flags of its own (upgrade) refuses anything it does not
+// know, so a typo or a stray flag never turns into an upgrade.
+func TestStrictScopeRefusesUnknownFlags(t *testing.T) {
+	for _, args := range [][]string{{"--al-owned"}, {"--all"}, {"now"}} {
+		if _, err := parseMachineScopeStrict(args); err == nil {
+			t.Errorf("%v: want an error", args)
+		}
+	}
+	if sc, err := parseMachineScopeStrict([]string{"--machine", "box"}); err != nil || sc.selector != "box" {
+		t.Fatalf("a known flag still parses: %+v %v", sc, err)
 	}
 }

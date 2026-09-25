@@ -145,7 +145,7 @@ func main() {
 			// Default: upgrade this machine. --machine <id|name> upgrades one you
 			// own; --all-owned-machines upgrades the whole fleet (this machine last,
 			// since upgrading ourselves re-execs the process running the fan-out).
-			sc, serr := parseMachineScope(os.Args[2:])
+			sc, serr := parseMachineScopeStrict(os.Args[2:])
 			if serr != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", serr)
 				os.Exit(1)
