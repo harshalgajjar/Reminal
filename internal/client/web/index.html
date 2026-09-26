@@ -9819,55 +9819,26 @@
       // to be copied out by hand. Synthesising the trio would work, but it
       // would also deliver a real click to any TUI with mouse reporting on, so
       // resolve the link from the buffer instead: the tap stays a tap.
-      // Trailing punctuation is excluded — a URL at the end of a sentence
-      // shouldn't carry the full stop into the address bar.
-      const TAP_URL_RE = /https?:\/\/[^\s"'<>`{}|\\^[\]]+/g;
-      // Reads the LOGICAL line at a row. xterm stores a wrapped line as
-      // several rows, and a long URL is exactly the thing that wraps, so
-      // following isWrapped is what makes those tappable at all. Returns the
-      // joined text and where the tapped row starts inside it.
-      function logicalLineAt(buf, row) {
-        let start = row;
-        while (start > 0) {
-          const l = buf.getLine(start);
-          if (!l || !l.isWrapped) break;
-          start--;
-        }
-        let text = '', rowOffset = 0;
-        for (let i = start; i < buf.length; i++) {
-          const l = buf.getLine(i);
-          if (!l || (i > start && !l.isWrapped)) break;
-          if (i === row) rowOffset = text.length;
-          // Every row but the last must contribute exactly cols characters. A
-          // line wraps at the column boundary, so that is what makes a tapped
-          // column line up with an index in the joined text; a row reporting a
-          // different width would shift everything after it and split the URL
-          // being reassembled. (Wide CJK cells still count as one character
-          // here, so a tap on a line mixing them with a URL can be off — the
-          // URL itself resolves, only the hit test drifts.)
-          const next = buf.getLine(i + 1);
-          const continued = !!(next && next.isWrapped);
-          let seg = l.translateToString(false);
-          if (continued && seg.length !== term.cols) {
-            seg = seg.length > term.cols ? seg.slice(0, term.cols) : seg.padEnd(term.cols, ' ');
-          }
-          text += seg;
-          if (!continued) break;
-        }
-        return { text, rowOffset };
-      }
+      // The link under a tap comes from the same joiner the mouse path uses
+      // (reminalLinks): a URL the terminal wrapped, or one the program broke
+      // across rows, opens whole either way. Resolved from the buffer, so
+      // the tap stays a tap and no TUI with mouse reporting sees a click.
       function linkAtPoint(clientX, clientY) {
         try {
           const { col, row } = pointToCell(clientX, clientY);
           const buf = term.buffer.active;
-          const { text, rowOffset } = logicalLineAt(buf, row);
-          const idx = rowOffset + col;
-          TAP_URL_RE.lastIndex = 0;
-          let m;
-          while ((m = TAP_URL_RE.exec(text)) !== null) {
-            if (idx >= m.index && idx < m.index + m[0].length) {
-              return m[0].replace(/[.,;:!?)\]}'"]+$/, '');
-            }
+          const from = Math.max(0, row - 40), to = Math.min(buf.length - 1, row + 40);
+          const rows = [];
+          for (let i = from; i <= to; i++) {
+            const l = buf.getLine(i);
+            rows.push({ text: l ? l.translateToString(true) : '', wrapped: !!(l && l.isWrapped) });
+          }
+          for (const k of reminalLinks.linksInRows(rows, row - from)) {
+            const s = k.start.row + from, e = k.end.row + from;
+            if (row < s || row > e) continue;
+            if (row === s && col < k.start.col) continue;
+            if (row === e && col > k.end.col) continue;
+            return k.url;
           }
         } catch (_) {}
         return null;
