@@ -337,12 +337,16 @@ if ( : >/dev/tty ) 2>/dev/null; then
     fi
 
     next_step "Coding agents"
-    say "  Lets the coding agents on this machine list your sessions, read"
-    say "  what is on them, and type into them."
+    say "  Shows each session as working, needs you, or done, so you can tell"
+    say "  from your phone which one to go back to. And lets the agents here"
+    say "  list your sessions, read what is on them, and type into them."
     if ask "Set up now?"; then
-        "$INSTALL_DIR/reminal" integrate </dev/tty || true
+        # -y because the question above WAS the consent. Without it the user is
+        # asked twice, and the second one defaults to no — so answering yes and
+        # pressing Enter installed nothing.
+        "$INSTALL_DIR/reminal" integrate -y </dev/tty || true
     else
-        skip "reminal integrate       let coding agents drive your sessions"
+        skip "reminal integrate       show session states, and let agents drive them"
     fi
 
     if [ "$OS" = "darwin" ]; then
@@ -372,7 +376,7 @@ else
     if [ "$OS" = "darwin" ]; then
         say "  reminal permissions     mirror and control windows"
     fi
-    say "  reminal integrate       let coding agents drive your sessions"
+    say "  reminal integrate       show session states, and let agents drive them"
     if [ "$OS" = "darwin" ]; then
         say "  reminal settings        keep serving with the lid shut, and stop it locking"
     fi
