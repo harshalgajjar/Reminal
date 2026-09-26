@@ -7549,6 +7549,13 @@
             hideOverlay();
             setBtnDisconnect();
             renderRecents();
+            // Report this screen's size now that the agent can hear it. The
+            // sync at page load ran before the agent was live and reported
+            // nothing, and after that a report is sent only when the box
+            // moves. On a phone nothing moves until the keyboard opens, so
+            // the PTY stayed at another screen's width and the frame came
+            // out garbled until then.
+            try { TermSize.sync(); } catch (_) {}
             if (!wasLive) {
               // Agent (re)attached — it may be a fresh process, so any session
               // key we hold is stale; drop it and (re)handshake. Do NOT clear
