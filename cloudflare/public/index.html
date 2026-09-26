@@ -1927,31 +1927,43 @@
         for (let k = L.top; k <= L.bot; k++) t += rows[k].text;
         return t;
       }
-      // The width the program wrapped at: the longest logical line nearby,
-      // this one excluded. A line that reaches it (within a column) was cut
-      // by the margin, not ended by the program.
+      // The width the program wrapped at: the longest logical line in the
+      // same paragraph, this one excluded. The paragraph, not the whole
+      // neighbourhood: a screen that has been wider holds older lines
+      // wrapped at that width, and against those nothing written at a
+      // phone's width ever looks full. A line that reaches the margin
+      // (within a column) was cut by it, not ended by the program.
       function marginAround(rows, L) {
-        let m = 0, k = Math.max(0, L.top - 30);
-        const end = Math.min(rows.length - 1, L.bot + 30);
-        while (k <= end) {
-          const M = logicalAt(rows, k);
-          if (M.top !== L.top) m = Math.max(m, textOf(rows, M).length);
-          k = M.bot + 1;
-        }
+        let m = 0;
+        const blank = k => !rows[k].text.trim();
+        let k = L.top - 1, seen = 0;
+        while (k >= 0 && !blank(k) && seen < 30) { const M = logicalAt(rows, k); m = Math.max(m, textOf(rows, M).length); k = M.top - 1; seen++; }
+        k = L.bot + 1; seen = 0;
+        while (k < rows.length && !blank(k) && seen < 30) { const M = logicalAt(rows, k); m = Math.max(m, textOf(rows, M).length); k = M.bot + 1; seen++; }
         return m;
+      }
+      // marginFloor is the narrowest a row may be and still count as cut by
+      // the margin. A short paragraph sets no margin of its own, and without
+      // this a sentence ending in a URL would take the indented line under
+      // it. Phones start at about 45 columns.
+      const marginFloor = 40;
+      // The column a line's text starts at, past its indent and a list
+      // marker: the rest of a URL the program broke is indented to it.
+      function contentIndent(text) {
+        return text.match(/^\s*(?:[-*\u2022]\s+|\d+[.)]\s+)?/)[0].length;
       }
       // continues: logical line N carries the rest of a URL the program
       // broke at the margin at the end of the text so far — that text ends
       // inside an open URL (nothing a URL would not end with), the line it
       // came from is full to the margin, and N starts with an indent and a
       // run of URL characters.
-      function continues(rows, prev, sofar, N) {
+      function continues(rows, first, prev, sofar, N) {
         if (!N || rows[N.top].wrapped) return false;
         const m = textOf(rows, N).match(/^(\s+)(\S{2,})/);
-        if (!m || !URL_CHARS.test(m[2])) return false;
+        if (!m || !URL_CHARS.test(m[2]) || m[1].length !== contentIndent(rows[first.top].text)) return false;
         const tail = sofar.match(/https?:\/\/[^\s<>"'`]*$/);
         if (!tail || trimTrail(tail[0]) !== tail[0]) return false;
-        return textOf(rows, prev).length >= marginAround(rows, prev) - 1;
+        return textOf(rows, prev).length >= Math.max(marginFloor, marginAround(rows, prev) - 1);
       }
       // The pieces of a logical line: its rows, the first one past the
       // indent it was given as a continuation.
@@ -1970,7 +1982,7 @@
         for (;;) {
           if (prev.bot + 1 >= rows.length) break;
           const N = logicalAt(rows, prev.bot + 1);
-          if (!continues(rows, prev, sofar, N)) break;
+          if (!continues(rows, S, prev, sofar, N)) break;
           const indent = textOf(rows, N).match(/^\s*/)[0].length;
           pieces.push(...piecesOf(rows, N, indent));
           sofar += textOf(rows, N).slice(indent);
@@ -1991,7 +2003,7 @@
         while (cur.top > 0) {
           const P = logicalAt(rows, cur.top - 1);
           const t = textOf(rows, cur);
-          if (!/^\s+\S{2,}/.test(t) || textOf(rows, P).length < marginAround(rows, P) - 1) break;
+          if (!/^\s+\S{2,}/.test(t) || textOf(rows, P).length < Math.max(marginFloor, marginAround(rows, P) - 1)) break;
           starts.unshift(P);
           cur = P;
         }
