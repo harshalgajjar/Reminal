@@ -1947,10 +1947,12 @@
       // this a sentence ending in a URL would take the indented line under
       // it. Phones start at about 45 columns.
       const marginFloor = 40;
-      // The column a line's text starts at, past its indent and a list
-      // marker: the rest of a URL the program broke is indented to it.
+      // The column a line's text starts at, past its indent and any
+      // markers: a bullet, a numbered item, and the glyph an agent puts
+      // before its first line ("\u25cf - Pro release: https://…"). The rest
+      // of a URL the program broke is indented to that column.
       function contentIndent(text) {
-        return text.match(/^\s*(?:[-*\u2022]\s+|\d+[.)]\s+)?/)[0].length;
+        return text.match(/^\s*(?:[^\w\s"'(\[{]{1,2}\s+)*(?:\d+[.)]\s+)?/)[0].length;
       }
       // continues: logical line N carries the rest of a URL the program
       // broke at the margin at the end of the text so far — that text ends
@@ -2022,6 +2024,11 @@
         return piecesOf(rows, L, 0);
       }
       function linksInRows(rows, i) {
+        if (!rows || i < 0 || i >= rows.length) return [];
+        // Spaces a program painted to the right edge (an input box, a
+        // status line) stay in the buffer; a URL never ends in one, and a
+        // row ending in them would never read as cut at the margin.
+        rows = rows.map(r => ({ text: r.text.replace(/\s+$/, ''), wrapped: r.wrapped }));
         const pieces = lineAt(rows, i);
         const joined = pieces.map(p => p.text).join('');
         const out = [];
