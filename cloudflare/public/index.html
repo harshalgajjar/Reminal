@@ -9098,6 +9098,12 @@
     // Initial layout.
     applyViewportHeight();
     requestAnimationFrame(() => TermSize.sync());
+    // Once more when the terminal font has loaded: a wrap measured with the
+    // fallback font's cell width reports the wrong column count, and the
+    // PTY would be laid out for a screen this one is not.
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => { try { TermSize.schedule(); } catch (_) {} });
+    }
 
     // Tap-to-focus: on mobile, tapping an empty area of the terminal
     // wrapper should always open the soft keyboard, even if xterm.js
