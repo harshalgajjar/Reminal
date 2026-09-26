@@ -7549,6 +7549,13 @@
             hideOverlay();
             setBtnDisconnect();
             renderRecents();
+            // Report this screen's size now that the agent can hear it. The
+            // sync at page load ran before the agent was live and reported
+            // nothing, and after that a report is sent only when the box
+            // moves. On a phone nothing moves until the keyboard opens, so
+            // the PTY stayed at another screen's width and the frame came
+            // out garbled until then.
+            try { TermSize.sync(); } catch (_) {}
             if (!wasLive) {
               // Agent (re)attached — it may be a fresh process, so any session
               // key we hold is stale; drop it and (re)handshake. Do NOT clear
@@ -9091,6 +9098,12 @@
     // Initial layout.
     applyViewportHeight();
     requestAnimationFrame(() => TermSize.sync());
+    // Once more when the terminal font has loaded: a wrap measured with the
+    // fallback font's cell width reports the wrong column count, and the
+    // PTY would be laid out for a screen this one is not.
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => { try { TermSize.schedule(); } catch (_) {} });
+    }
 
     // Tap-to-focus: on mobile, tapping an empty area of the terminal
     // wrapper should always open the soft keyboard, even if xterm.js
