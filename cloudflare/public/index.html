@@ -4879,6 +4879,7 @@
         'raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']
       );
       dbg('✓ handshake complete — session key set');
+      reportSizeNow();
       // Burn ALL ephemeral material (every outstanding attempt) — nothing
       // downstream needs it, and holding on makes a long-running tab a juicier
       // target.
@@ -5000,6 +5001,7 @@
         { name: 'AES-GCM', iv: wrapped.slice(0, 12) }, wrapKey, wrapped.slice(12)));
       cryptoKey = await crypto.subtle.importKey('raw', sessionKeyRaw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
       dbg('✓ owner handshake complete — PIN-free');
+      reportSizeNow();
       ownerAttempts.clear();
       if (ownerTimer) { clearTimeout(ownerTimer); ownerTimer = 0; }
       // We just proved ownership of this machine — remember it (keyed by machine
@@ -6956,7 +6958,9 @@
         paint(cols, rows);
       }
       function report(wrap) {
-        if (!ownsTerminal || !agentLive) return;
+        // Not before the session key: send() drops a resize it cannot
+        // encrypt, and a report remembered as sent is never sent again.
+        if (!ownsTerminal || !agentLive || !cryptoKey) return;
         if (!wrap) wrap = measure();
         if (!wrap) return;
         if (wrap.cols === lastReportC && wrap.rows === lastReportR) return;
@@ -7009,6 +7013,13 @@
         },
       };
     })();
+    // reportSizeNow sends this screen's size the moment the session key
+    // exists — the first moment a resize can be sent at all. The sync at
+    // page load ran before that and could report nothing, and after it a
+    // report went out only when the box moved. On a phone nothing moves
+    // until the keyboard opens, so the PTY stayed at another screen's
+    // width and the frame came out garbled until then.
+    function reportSizeNow() { try { TermSize.sync(); } catch (_) {} }
     function sendResize() { TermSize.sync(); }
     function publishSize() { TermSize.sync(); }
     function scheduleSize() { TermSize.schedule(); }
@@ -7549,13 +7560,6 @@
             hideOverlay();
             setBtnDisconnect();
             renderRecents();
-            // Report this screen's size now that the agent can hear it. The
-            // sync at page load ran before the agent was live and reported
-            // nothing, and after that a report is sent only when the box
-            // moves. On a phone nothing moves until the keyboard opens, so
-            // the PTY stayed at another screen's width and the frame came
-            // out garbled until then.
-            try { TermSize.sync(); } catch (_) {}
             if (!wasLive) {
               // Agent (re)attached — it may be a fresh process, so any session
               // key we hold is stale; drop it and (re)handshake. Do NOT clear
