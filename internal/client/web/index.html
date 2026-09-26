@@ -1821,7 +1821,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script>
     window.__REMINAL_WEB = '3.5.3';
@@ -1888,6 +1887,109 @@
     // "Open this somewhere other than here": ⌘/Ctrl (new tab), Shift (new
     // window), middle-click, Alt (download). All of them mean the click was
     // never a request to switch THIS tab's session.
+    // reminalLinks finds URLs in terminal rows, including a URL broken across
+    // rows. Two kinds of break: one the terminal made itself (the row is
+    // flagged wrapped, so the next row is the same line), and one the
+    // program made — Claude Code wraps its own text and prints a real
+    // newline when a URL reaches the margin, then indents the rest. That
+    // second kind leaves no flag, so it is read from the shape: the row is
+    // full to the margin its neighbours share, the URL runs to its end, and
+    // the next row starts with an indent and a run of URL characters.
+    const reminalLinks = (function () {
+      const URL_START = /https?:\/\/[^\s<>"'`]+/g;
+      const URL_CHARS = /^[A-Za-z0-9\-._~:\/?#\[\]@!$&'()*+,;=%]+/;
+      const TRAIL = /[.,;:!?'"]+$/;
+      // A closing bracket at the very end belongs to the prose around the
+      // URL unless the URL opened it: "(https://a/b)" ends before the ")".
+      function trimTrail(url) {
+        for (;;) {
+          const before = url;
+          url = url.replace(TRAIL, '');
+          while (/[)\]}]$/.test(url)) {
+            const close = url[url.length - 1], open = { ')': '(', ']': '[', '}': '{' }[close];
+            const opens = url.split(open).length - 1, closes = url.split(close).length - 1;
+            if (closes > opens) url = url.slice(0, -1); else break;
+          }
+          if (url === before) return url;
+        }
+      }
+      // The width the program wrapped at: the longest row nearby. A row
+      // that reaches it (within one column) was cut by the margin.
+      function marginAround(rows, i) {
+        let m = 0;
+        for (let k = Math.max(0, i - 30); k <= Math.min(rows.length - 1, i + 30); k++) {
+          if (k !== i) m = Math.max(m, rows[k].text.length);
+        }
+        return m;
+      }
+      // The logical line holding row i: rows the terminal wrapped, joined
+      // as they are; a program-wrapped URL row joined with the indented
+      // continuation that follows it. Each piece remembers where it came
+      // from so a match maps back to rows and columns.
+      // continuation: row k carries the rest of a URL the program broke
+      // at the margin on row k-1 — that row is full to the margin its
+      // neighbours share and ends inside a URL, and row k starts with an
+      // indent and a run of URL characters.
+      function continuation(rows, k, sofar) {
+        const prev = rows[k - 1], row = rows[k];
+        if (!prev || !row || row.wrapped) return null;
+        const m = row.text.match(/^(\s+)(\S+)/);
+        if (!m || !URL_CHARS.test(m[2])) return null;
+        if (!/https?:\/\/[^\s<>"'`]*$/.test(sofar) || prev.text.length < marginAround(rows, k - 1) - 1) return null;
+        return { row: k, col: m[1].length, text: m[2] };
+      }
+      function lineAt(rows, i) {
+        // Up to the row the line starts on: through rows the terminal
+        // wrapped, and through continuations of a program-broken URL.
+        let top = i;
+        for (;;) {
+          if (top > 0 && rows[top].wrapped) { top--; continue; }
+          if (top > 0 && continuation(rows, top, rows[top - 1].text)) { top--; continue; }
+          break;
+        }
+        const pieces = [];
+        let k = top, sofar = '';
+        for (;;) {
+          pieces.push({ row: k, col: 0, text: rows[k].text });
+          sofar += rows[k].text;
+          if (k + 1 < rows.length && rows[k + 1].wrapped) { k++; continue; }
+          let c;
+          while ((c = continuation(rows, k + 1, sofar))) {
+            pieces.push(c);
+            sofar += c.text;
+            k++;
+          }
+          break;
+        }
+        return pieces;
+      }
+      function linksInRows(rows, i) {
+        const pieces = lineAt(rows, i);
+        const joined = pieces.map(p => p.text).join('');
+        const out = [];
+        let m;
+        URL_START.lastIndex = 0;
+        while ((m = URL_START.exec(joined))) {
+          const url = trimTrail(m[0]);
+          if (url.length < 8) continue;
+          const s = m.index, e = s + url.length - 1;
+          out.push({ url: url, start: place(pieces, s), end: place(pieces, e) });
+        }
+        // Only links that touch the row asked about: the others belong
+        // to their own rows and are reported there.
+        return out.filter(k => k.start.row <= i && i <= k.end.row);
+      }
+      function place(pieces, off) {
+        for (const p of pieces) {
+          if (off < p.text.length) return { row: p.row, col: p.col + off };
+          off -= p.text.length;
+        }
+        const last = pieces[pieces.length - 1];
+        return { row: last.row, col: last.col + last.text.length - 1 };
+      }
+      return { linksInRows, lineAt, trimTrail };
+    })();
+    window.__links = (row) => { const buf = window.__term.buffer.active; const rows = []; for (let i = 0; i < buf.length; i++) { const l = buf.getLine(i); rows.push({ text: l ? l.translateToString(true) : '', wrapped: !!(l && l.isWrapped) }); } return reminalLinks.linksInRows(rows, row); };
     function wantsNewTab(ev) {
       return !!(ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button === 1);
     }
@@ -4014,10 +4116,30 @@
     });
     const searchAddon = new SearchAddon.SearchAddon();
     term.loadAddon(searchAddon);
-    // WebLinksAddon: any http(s)://… in terminal output becomes a tap
-    // target. Default handler opens in a new tab — perfect for phones
-    // where you can't easily copy-paste a URL into the address bar.
-    term.loadAddon(new WebLinksAddon.WebLinksAddon());
+    // Any http(s)://… in terminal output becomes a tap target that opens in
+    // a new tab — on a phone you cannot copy a URL into the address bar.
+    // Links are found across rows, not one row at a time: an agent that
+    // word-wraps its own text breaks a long URL with a real newline and
+    // indents the rest, and the first row alone opened a 404 (see
+    // reminalLinks).
+    term.registerLinkProvider({
+      provideLinks(y, cb) {
+        const buf = term.buffer.active;
+        const rows = [];
+        const at = y - 1;
+        const from = Math.max(0, at - 40), to = Math.min(buf.length - 1, at + 40);
+        for (let i = from; i <= to; i++) {
+          const l = buf.getLine(i);
+          rows.push({ text: l ? l.translateToString(true) : '', wrapped: !!(l && l.isWrapped) });
+        }
+        const found = reminalLinks.linksInRows(rows, at - from);
+        cb(found.length ? found.map(k => ({
+          text: k.url,
+          range: { start: { x: k.start.col + 1, y: k.start.row + from + 1 }, end: { x: k.end.col + 1, y: k.end.row + from + 1 } },
+          activate: (ev, text) => { window.open(text, '_blank', 'noopener,noreferrer'); },
+        })) : undefined);
+      },
+    });
     term.open(document.getElementById('terminal'));
     window.__term = term; // debug/test handle (harmless; used by automated viewer tests)
     // Chrome Android pans the layout to keep xterm's hidden textarea in
