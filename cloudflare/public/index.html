@@ -1913,55 +1913,93 @@
           if (url === before) return url;
         }
       }
-      // The width the program wrapped at: the longest row nearby. A row
-      // that reaches it (within one column) was cut by the margin.
-      function marginAround(rows, i) {
-        let m = 0;
-        for (let k = Math.max(0, i - 30); k <= Math.min(rows.length - 1, i + 30); k++) {
-          if (k !== i) m = Math.max(m, rows[k].text.length);
+      // Rows the terminal wrapped form one logical line; the program's
+      // own line breaks separate logical lines. Everything below works in
+      // logical lines and maps back to rows at the end.
+      function logicalAt(rows, i) {
+        let top = i, bot = i;
+        while (top > 0 && rows[top].wrapped) top--;
+        while (bot + 1 < rows.length && rows[bot + 1].wrapped) bot++;
+        return { top, bot };
+      }
+      function textOf(rows, L) {
+        let t = '';
+        for (let k = L.top; k <= L.bot; k++) t += rows[k].text;
+        return t;
+      }
+      // The width the program wrapped at: the longest logical line nearby,
+      // this one excluded. A line that reaches it (within a column) was cut
+      // by the margin, not ended by the program.
+      function marginAround(rows, L) {
+        let m = 0, k = Math.max(0, L.top - 30);
+        const end = Math.min(rows.length - 1, L.bot + 30);
+        while (k <= end) {
+          const M = logicalAt(rows, k);
+          if (M.top !== L.top) m = Math.max(m, textOf(rows, M).length);
+          k = M.bot + 1;
         }
         return m;
       }
-      // The logical line holding row i: rows the terminal wrapped, joined
-      // as they are; a program-wrapped URL row joined with the indented
-      // continuation that follows it. Each piece remembers where it came
-      // from so a match maps back to rows and columns.
-      // continuation: row k carries the rest of a URL the program broke
-      // at the margin on row k-1 — that row is full to the margin its
-      // neighbours share and ends inside a URL, and row k starts with an
-      // indent and a run of URL characters.
-      function continuation(rows, k, sofar) {
-        const prev = rows[k - 1], row = rows[k];
-        if (!prev || !row || row.wrapped) return null;
-        const m = row.text.match(/^(\s+)(\S+)/);
-        if (!m || !URL_CHARS.test(m[2])) return null;
-        if (!/https?:\/\/[^\s<>"'`]*$/.test(sofar) || prev.text.length < marginAround(rows, k - 1) - 1) return null;
-        return { row: k, col: m[1].length, text: m[2] };
+      // continues: logical line N carries the rest of a URL the program
+      // broke at the margin at the end of the text so far — that text ends
+      // inside an open URL (nothing a URL would not end with), the line it
+      // came from is full to the margin, and N starts with an indent and a
+      // run of URL characters.
+      function continues(rows, prev, sofar, N) {
+        if (!N || rows[N.top].wrapped) return false;
+        const m = textOf(rows, N).match(/^(\s+)(\S{2,})/);
+        if (!m || !URL_CHARS.test(m[2])) return false;
+        const tail = sofar.match(/https?:\/\/[^\s<>"'`]*$/);
+        if (!tail || trimTrail(tail[0]) !== tail[0]) return false;
+        return textOf(rows, prev).length >= marginAround(rows, prev) - 1;
       }
-      function lineAt(rows, i) {
-        // Up to the row the line starts on: through rows the terminal
-        // wrapped, and through continuations of a program-broken URL.
-        let top = i;
-        for (;;) {
-          if (top > 0 && rows[top].wrapped) { top--; continue; }
-          if (top > 0 && continuation(rows, top, rows[top - 1].text)) { top--; continue; }
-          break;
+      // The pieces of a logical line: its rows, the first one past the
+      // indent it was given as a continuation.
+      function piecesOf(rows, L, indent) {
+        const out = [];
+        for (let k = L.top; k <= L.bot; k++) {
+          out.push(k === L.top ? { row: k, col: indent, text: rows[k].text.slice(indent) } : { row: k, col: 0, text: rows[k].text });
         }
-        const pieces = [];
-        let k = top, sofar = '';
+        return out;
+      }
+      // Walking down from logical line S: the pieces of the chain of
+      // continuations it starts.
+      function chainFrom(rows, S) {
+        const pieces = piecesOf(rows, S, 0);
+        let sofar = textOf(rows, S), prev = S;
         for (;;) {
-          pieces.push({ row: k, col: 0, text: rows[k].text });
-          sofar += rows[k].text;
-          if (k + 1 < rows.length && rows[k + 1].wrapped) { k++; continue; }
-          let c;
-          while ((c = continuation(rows, k + 1, sofar))) {
-            pieces.push(c);
-            sofar += c.text;
-            k++;
-          }
-          break;
+          if (prev.bot + 1 >= rows.length) break;
+          const N = logicalAt(rows, prev.bot + 1);
+          if (!continues(rows, prev, sofar, N)) break;
+          const indent = textOf(rows, N).match(/^\s*/)[0].length;
+          pieces.push(...piecesOf(rows, N, indent));
+          sofar += textOf(rows, N).slice(indent);
+          prev = N;
         }
         return pieces;
+      }
+      // The pieces of the logical line holding row i, joined with the rows
+      // a broken URL continues on: the highest line above that chains
+      // down to this one, then everything that chains on below.
+      function lineAt(rows, i) {
+        const L = logicalAt(rows, i);
+        // Candidates above: lines that look like they could start the
+        // chain. Each is tried from the top; the first whose chain reaches
+        // this line wins, and the line itself is the fallback.
+        const starts = [L];
+        let cur = L;
+        while (cur.top > 0) {
+          const P = logicalAt(rows, cur.top - 1);
+          const t = textOf(rows, cur);
+          if (!/^\s+\S{2,}/.test(t) || textOf(rows, P).length < marginAround(rows, P) - 1) break;
+          starts.unshift(P);
+          cur = P;
+        }
+        for (const S of starts) {
+          const pieces = chainFrom(rows, S);
+          if (pieces.some(p => p.row === i)) return pieces;
+        }
+        return piecesOf(rows, L, 0);
       }
       function linksInRows(rows, i) {
         const pieces = lineAt(rows, i);
@@ -1971,7 +2009,7 @@
         URL_START.lastIndex = 0;
         while ((m = URL_START.exec(joined))) {
           const url = trimTrail(m[0]);
-          if (url.length < 8) continue;
+          if (!/^https?:\/\/[^\/]/.test(url)) continue; // "https://..." in prose is not a link
           const s = m.index, e = s + url.length - 1;
           out.push({ url: url, start: place(pieces, s), end: place(pieces, e) });
         }
