@@ -1957,12 +1957,20 @@
       // inside an open URL (nothing a URL would not end with), the line it
       // came from is full to the margin, and N starts with an indent and a
       // run of URL characters.
+      // A URL cut at the margin may end on any of its characters — a dot
+      // in "releases.json", or a single letter left over — so only a closing
+      // bracket the URL did not open says it has ended.
+      function stillOpen(url) {
+        const close = url[url.length - 1], open = { ')': '(', ']': '[', '}': '{' }[close];
+        if (!open) return true;
+        return url.split(close).length - 1 <= url.split(open).length - 1;
+      }
       function continues(rows, first, prev, sofar, N) {
         if (!N || rows[N.top].wrapped) return false;
-        const m = textOf(rows, N).match(/^(\s+)(\S{2,})/);
+        const m = textOf(rows, N).match(/^(\s+)(\S+)/);
         if (!m || !URL_CHARS.test(m[2]) || m[1].length !== contentIndent(rows[first.top].text)) return false;
         const tail = sofar.match(/https?:\/\/[^\s<>"'`]*$/);
-        if (!tail || trimTrail(tail[0]) !== tail[0]) return false;
+        if (!tail || !stillOpen(tail[0])) return false;
         return textOf(rows, prev).length >= Math.max(marginFloor, marginAround(rows, prev) - 1);
       }
       // The pieces of a logical line: its rows, the first one past the
@@ -2003,7 +2011,7 @@
         while (cur.top > 0) {
           const P = logicalAt(rows, cur.top - 1);
           const t = textOf(rows, cur);
-          if (!/^\s+\S{2,}/.test(t) || textOf(rows, P).length < Math.max(marginFloor, marginAround(rows, P) - 1)) break;
+          if (!/^\s+\S/.test(t) || textOf(rows, P).length < Math.max(marginFloor, marginAround(rows, P) - 1)) break;
           starts.unshift(P);
           cur = P;
         }
