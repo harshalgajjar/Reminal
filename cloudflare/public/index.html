@@ -1947,22 +1947,32 @@
       // this a sentence ending in a URL would take the indented line under
       // it. Phones start at about 45 columns.
       const marginFloor = 40;
-      // The column a line's text starts at, past its indent and a list
-      // marker: the rest of a URL the program broke is indented to it.
+      // The column a line's text starts at, past its indent and any
+      // markers: a bullet, a numbered item, and the glyph an agent puts
+      // before its first line ("\u25cf - Pro release: https://…"). The rest
+      // of a URL the program broke is indented to that column.
       function contentIndent(text) {
-        return text.match(/^\s*(?:[-*\u2022]\s+|\d+[.)]\s+)?/)[0].length;
+        return text.match(/^\s*(?:[^\w\s"'(\[{]{1,2}\s+)*(?:\d+[.)]\s+)?/)[0].length;
       }
       // continues: logical line N carries the rest of a URL the program
       // broke at the margin at the end of the text so far — that text ends
       // inside an open URL (nothing a URL would not end with), the line it
       // came from is full to the margin, and N starts with an indent and a
       // run of URL characters.
+      // A URL cut at the margin may end on any of its characters — a dot
+      // in "releases.json", or a single letter left over — so only a closing
+      // bracket the URL did not open says it has ended.
+      function stillOpen(url) {
+        const close = url[url.length - 1], open = { ')': '(', ']': '[', '}': '{' }[close];
+        if (!open) return true;
+        return url.split(close).length - 1 <= url.split(open).length - 1;
+      }
       function continues(rows, first, prev, sofar, N) {
         if (!N || rows[N.top].wrapped) return false;
-        const m = textOf(rows, N).match(/^(\s+)(\S{2,})/);
+        const m = textOf(rows, N).match(/^(\s+)(\S+)/);
         if (!m || !URL_CHARS.test(m[2]) || m[1].length !== contentIndent(rows[first.top].text)) return false;
         const tail = sofar.match(/https?:\/\/[^\s<>"'`]*$/);
-        if (!tail || trimTrail(tail[0]) !== tail[0]) return false;
+        if (!tail || !stillOpen(tail[0])) return false;
         return textOf(rows, prev).length >= Math.max(marginFloor, marginAround(rows, prev) - 1);
       }
       // The pieces of a logical line: its rows, the first one past the
@@ -2003,7 +2013,7 @@
         while (cur.top > 0) {
           const P = logicalAt(rows, cur.top - 1);
           const t = textOf(rows, cur);
-          if (!/^\s+\S{2,}/.test(t) || textOf(rows, P).length < Math.max(marginFloor, marginAround(rows, P) - 1)) break;
+          if (!/^\s+\S/.test(t) || textOf(rows, P).length < Math.max(marginFloor, marginAround(rows, P) - 1)) break;
           starts.unshift(P);
           cur = P;
         }
@@ -2014,6 +2024,11 @@
         return piecesOf(rows, L, 0);
       }
       function linksInRows(rows, i) {
+        if (!rows || i < 0 || i >= rows.length) return [];
+        // Spaces a program painted to the right edge (an input box, a
+        // status line) stay in the buffer; a URL never ends in one, and a
+        // row ending in them would never read as cut at the margin.
+        rows = rows.map(r => ({ text: r.text.replace(/\s+$/, ''), wrapped: r.wrapped }));
         const pieces = lineAt(rows, i);
         const joined = pieces.map(p => p.text).join('');
         const out = [];
@@ -9804,55 +9819,26 @@
       // to be copied out by hand. Synthesising the trio would work, but it
       // would also deliver a real click to any TUI with mouse reporting on, so
       // resolve the link from the buffer instead: the tap stays a tap.
-      // Trailing punctuation is excluded — a URL at the end of a sentence
-      // shouldn't carry the full stop into the address bar.
-      const TAP_URL_RE = /https?:\/\/[^\s"'<>`{}|\\^[\]]+/g;
-      // Reads the LOGICAL line at a row. xterm stores a wrapped line as
-      // several rows, and a long URL is exactly the thing that wraps, so
-      // following isWrapped is what makes those tappable at all. Returns the
-      // joined text and where the tapped row starts inside it.
-      function logicalLineAt(buf, row) {
-        let start = row;
-        while (start > 0) {
-          const l = buf.getLine(start);
-          if (!l || !l.isWrapped) break;
-          start--;
-        }
-        let text = '', rowOffset = 0;
-        for (let i = start; i < buf.length; i++) {
-          const l = buf.getLine(i);
-          if (!l || (i > start && !l.isWrapped)) break;
-          if (i === row) rowOffset = text.length;
-          // Every row but the last must contribute exactly cols characters. A
-          // line wraps at the column boundary, so that is what makes a tapped
-          // column line up with an index in the joined text; a row reporting a
-          // different width would shift everything after it and split the URL
-          // being reassembled. (Wide CJK cells still count as one character
-          // here, so a tap on a line mixing them with a URL can be off — the
-          // URL itself resolves, only the hit test drifts.)
-          const next = buf.getLine(i + 1);
-          const continued = !!(next && next.isWrapped);
-          let seg = l.translateToString(false);
-          if (continued && seg.length !== term.cols) {
-            seg = seg.length > term.cols ? seg.slice(0, term.cols) : seg.padEnd(term.cols, ' ');
-          }
-          text += seg;
-          if (!continued) break;
-        }
-        return { text, rowOffset };
-      }
+      // The link under a tap comes from the same joiner the mouse path uses
+      // (reminalLinks): a URL the terminal wrapped, or one the program broke
+      // across rows, opens whole either way. Resolved from the buffer, so
+      // the tap stays a tap and no TUI with mouse reporting sees a click.
       function linkAtPoint(clientX, clientY) {
         try {
           const { col, row } = pointToCell(clientX, clientY);
           const buf = term.buffer.active;
-          const { text, rowOffset } = logicalLineAt(buf, row);
-          const idx = rowOffset + col;
-          TAP_URL_RE.lastIndex = 0;
-          let m;
-          while ((m = TAP_URL_RE.exec(text)) !== null) {
-            if (idx >= m.index && idx < m.index + m[0].length) {
-              return m[0].replace(/[.,;:!?)\]}'"]+$/, '');
-            }
+          const from = Math.max(0, row - 40), to = Math.min(buf.length - 1, row + 40);
+          const rows = [];
+          for (let i = from; i <= to; i++) {
+            const l = buf.getLine(i);
+            rows.push({ text: l ? l.translateToString(true) : '', wrapped: !!(l && l.isWrapped) });
+          }
+          for (const k of reminalLinks.linksInRows(rows, row - from)) {
+            const s = k.start.row + from, e = k.end.row + from;
+            if (row < s || row > e) continue;
+            if (row === s && col < k.start.col) continue;
+            if (row === e && col > k.end.col) continue;
+            return k.url;
           }
         } catch (_) {}
         return null;
