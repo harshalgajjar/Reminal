@@ -55,6 +55,9 @@ function fakePi() {
 
 const BUILT_INS = ["read", "bash", "edit", "write", "grep", "find", "ls"];
 
+/** Long enough for the extension's agent_end grace to have elapsed, and then some. */
+const AGENT_END_GRACE_SLACK_MS = 2200;
+
 // ---------------------------------------------------------------------------
 // 1. the tools pi is offered
 // ---------------------------------------------------------------------------
@@ -140,19 +143,63 @@ async function reported(): Promise<string | undefined> {
 
 for (const [event, want] of [
 	["agent_start", "working"],
-	["agent_end", "done"],
 	["agent_settled", "done"],
 	["project_trust", "input"],
 	["turn_start", "working"],
 ] as const) {
-	// The extension reports only a change of state, so move it off `want`
-	// first: agent_end and agent_settled both say done, and the second
-	// would otherwise be a no-op the file cannot show.
-	await b.emit(want === "working" ? "agent_end" : "agent_start", { type: want === "working" ? "agent_end" : "agent_start" });
 	fs.rmSync(statePath, { force: true });
 	await b.emit(event, { type: event });
 	assert.equal(await reported(), want, `${event} should report ${want}`);
 }
+
+/** Wait for the session to settle on `want`, however long the report takes. */
+async function settlesOn(want: string): Promise<string> {
+	let seen = "(never written)";
+	for (let i = 0; i < 80; i++) {
+		try {
+			seen = JSON.parse(fs.readFileSync(statePath, "utf8")).state;
+			if (seen === want) return seen;
+		} catch {
+			// not written yet
+		}
+		await new Promise((r) => setTimeout(r, 50));
+	}
+	return seen;
+}
+
+// agent_end does not report the end, it proposes it. On a pi that has
+// agent_settled too, agent_end fires BEFORE a retry or a queued continuation, so
+// reporting there would say "your turn" mid-run — and a seat reading done gets
+// its org mail typed in, so that is not merely cosmetic.
+await b.emit("turn_start", { type: "turn_start" }); // a run under way
+fs.rmSync(statePath, { force: true });
+await b.emit("agent_end", { type: "agent_end" });
+await new Promise((r) => setTimeout(r, 400)); // well inside the grace
+let duringGrace = "(never written)";
+try {
+	duringGrace = JSON.parse(fs.readFileSync(statePath, "utf8")).state;
+} catch {
+	// nothing written, which is the point
+}
+assert.notEqual(duringGrace, "done", "agent_end reported the end at once instead of proposing it");
+assert.equal(await settlesOn("done"), "done", "agent_end never reported the end at all");
+
+// And a proposal is dropped once something newer is said, so it cannot surface
+// later and overwrite it. Here the newer thing is a question pi is waiting on:
+// losing that to a late "done" would take a session off the needs-you list while
+// it sits there blocked.
+await b.emit("turn_start", { type: "turn_start" });
+await b.emit("agent_end", { type: "agent_end" });
+await b.emit("agent_settled", { type: "agent_settled" });
+fs.rmSync(statePath, { force: true });
+await b.emit("project_trust", { type: "project_trust" });
+assert.equal(await reported(), "input", "project_trust should report input");
+await new Promise((r) => setTimeout(r, AGENT_END_GRACE_SLACK_MS));
+assert.equal(
+	JSON.parse(fs.readFileSync(statePath, "utf8")).state,
+	"input",
+	"a proposal that was already overtaken surfaced later and overwrote a newer state",
+);
 
 // Quitting has to leave the file right, whatever was queued behind it. A parked
 // write never gets its turn once pi is going away, and the dedup remembers what
@@ -193,7 +240,9 @@ for (let round = 0; round < 12; round++) {
 	// agent_settled. Either way the seat must read done.
 	await b.emit("agent_end", { type: "agent_end" });
 	if (round % 2 === 0) await b.emit("agent_settled", { type: "agent_settled" });
-	const got = await reported();
+	// On an odd round there is no agent_settled, so the end arrives after
+	// agent_end's grace rather than at once — later, but it must still arrive.
+	const got = await settlesOn("done");
 	assert.equal(got, "done", `round ${round}: a finished turn left the session reading ${got}`);
 }
 
