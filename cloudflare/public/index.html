@@ -1685,7 +1685,7 @@
        follows it. Everything is fixed-position above the app (the header is
        z 50, the share modal 100), and the tour owns input while it runs: a
        transparent blocker eats clicks so a stray tap cannot open a menu out
-       from under a step. */
+       from under a step. Square corners throughout, on purpose. */
     #tour-btn {
       display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
       gap: 3px; min-width: 46px; padding: 4px 7px; line-height: 1; white-space: nowrap;
@@ -1699,21 +1699,21 @@
 
     .tour-block { position: fixed; inset: 0; z-index: 9000; background: transparent; touch-action: none; }
     .tour-ring {
-      position: fixed; z-index: 9001; pointer-events: none; border-radius: 12px;
-      box-shadow: 0 0 0 200vmax rgba(1, 4, 9, 0.74);
+      position: fixed; z-index: 9002; pointer-events: none;
+      box-shadow: 0 0 0 200vmax rgba(1, 4, 9, 0.76);
       transition: left .55s cubic-bezier(.2,.85,.25,1.05), top .55s cubic-bezier(.2,.85,.25,1.05),
                   width .55s cubic-bezier(.2,.85,.25,1.05), height .55s cubic-bezier(.2,.85,.25,1.05),
-                  border-radius .55s ease, box-shadow .4s ease;
+                  box-shadow .4s ease;
     }
     .tour-ring::before {
-      content: ''; position: absolute; inset: -2px; border-radius: inherit; padding: 2px;
+      content: ''; position: absolute; inset: -2px; padding: 2px;
       background: conic-gradient(from var(--tour-a, 0deg), #58a6ff, #a371f7, #3fb950, #58a6ff);
       -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
       -webkit-mask-composite: xor; mask-composite: exclude;
       animation: tour-spin 3.2s linear infinite;
     }
     .tour-ring::after {
-      content: ''; position: absolute; inset: -2px; border-radius: inherit;
+      content: ''; position: absolute; inset: -2px;
       box-shadow: 0 0 22px 2px rgba(88, 166, 255, 0.45);
       animation: tour-breathe 2.4s ease-in-out infinite;
     }
@@ -1724,17 +1724,18 @@
     .tour-ring.intro { box-shadow: 0 0 0 200vmax rgba(1, 4, 9, 0); }
 
     .tour-card {
-      position: fixed; z-index: 9002; width: 360px; max-width: calc(100vw - 24px);
+      position: fixed; z-index: 9003; width: 368px; max-width: calc(100vw - 24px);
       background: linear-gradient(180deg, rgba(28, 35, 46, 0.97), rgba(18, 23, 31, 0.97));
-      border: 1px solid rgba(88, 166, 255, 0.28); border-radius: 16px;
+      border: 1px solid rgba(88, 166, 255, 0.28);
       box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
       -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
       color: #e6edf3; font-size: 14px; line-height: 1.5;
       transition: left .5s cubic-bezier(.2,.85,.25,1.05), top .5s cubic-bezier(.2,.85,.25,1.05), opacity .3s ease;
       -webkit-user-select: none; user-select: none; touch-action: pan-y;
     }
+    .tour-card button { border-radius: 0; }
     .tour-card.hero { width: 440px; text-align: center; }
-    .tour-card .tour-bar { height: 3px; border-radius: 16px 16px 0 0; background: rgba(255,255,255,.06); overflow: hidden; }
+    .tour-card .tour-bar { height: 3px; background: rgba(255,255,255,.06); overflow: hidden; }
     .tour-card .tour-bar i {
       display: block; height: 100%; width: 0;
       background: linear-gradient(90deg, #58a6ff, #a371f7, #3fb950);
@@ -1742,52 +1743,76 @@
     }
     .tour-card .tour-in { padding: 16px 18px 14px; }
     .tour-card.hero .tour-in { padding: 22px 26px 20px; }
-    .tour-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+    .tour-top { display: flex; align-items: center; gap: 11px; margin-bottom: 10px; }
+    /* Each step gets its own colour: a lit tile with a duotone glyph. */
     .tour-ico {
-      flex: none; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
-      background: linear-gradient(135deg, rgba(88,166,255,.22), rgba(163,113,247,.22));
-      border: 1px solid rgba(88,166,255,.3); color: #79c0ff;
+      --c1: #388bfd; --c2: #1f6feb;
+      flex: none; width: 36px; height: 36px; display: grid; place-items: center; color: #fff;
+      background: linear-gradient(135deg, var(--c1), var(--c2));
+      box-shadow: 0 6px 16px -6px var(--c1), inset 0 1px 0 rgba(255,255,255,.25);
     }
-    .tour-ico svg { width: 16px; height: 16px; }
+    .tour-ico[data-c="violet"] { --c1: #a371f7; --c2: #6e40c9; }
+    .tour-ico[data-c="green"] { --c1: #3fb950; --c2: #1a7f37; }
+    .tour-ico[data-c="teal"] { --c1: #2dd4bf; --c2: #0f766e; }
+    .tour-ico[data-c="amber"] { --c1: #e3b341; --c2: #b7791f; }
+    .tour-ico[data-c="pink"] { --c1: #f778ba; --c2: #bf3989; }
+    .tour-ico[data-c="red"] { --c1: #ff7b72; --c2: #b62324; }
+    .tour-ico svg { width: 20px; height: 20px; }
     .tour-count { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #8b949e; }
     .tour-x {
       margin-left: auto; background: transparent; color: #8b949e; border: none; padding: 4px 6px;
-      font-size: 12px; font-weight: 500; border-radius: 6px;
+      font-size: 12px; font-weight: 500;
     }
     .tour-x:hover { background: rgba(255,255,255,.06); color: #e6edf3; }
     .tour-title { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; margin-bottom: 4px; }
     .tour-card.hero .tour-title { font-size: 24px; margin: 10px 0 6px; }
     .tour-body { color: #b6c2cf; }
     .tour-body b { color: #e6edf3; font-weight: 600; }
-    .tour-body kbd, .tour-body code {
+    .tour-body b.ok { color: #3fb950; }
+    .tour-body b.warn { color: #d29922; }
+    .tour-card kbd, .tour-body code {
       font-family: Menlo, Monaco, monospace; font-size: 12px; color: #e6edf3;
-      background: #0d1117; border: 1px solid #30363d; border-bottom-width: 2px; border-radius: 5px; padding: 0 5px;
+      background: #0d1117; border: 1px solid #30363d; border-bottom-width: 2px; padding: 0 5px;
     }
-    .tour-tips { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+    /* A control named mid-sentence: its real glyph on a key cap. */
+    .tour-k {
+      display: inline-grid; place-items: center; width: 20px; height: 20px; vertical-align: -5px;
+      background: #0d1117; border: 1px solid #30363d; border-bottom-width: 2px; color: #e6edf3;
+    }
+    .tour-k svg { width: 12px; height: 12px; }
+    .tour-tips { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 7px; }
     .tour-tips li { display: flex; gap: 8px; align-items: baseline; color: #b6c2cf; font-size: 13px; }
-    .tour-tips li::before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: #58a6ff; transform: translateY(-1px); }
+    .tour-tips li::before { content: ''; flex: none; width: 5px; height: 5px; background: #58a6ff; transform: translateY(-2px); }
+    .tour-note {
+      display: flex; gap: 7px; align-items: center; margin-top: 12px; padding: 7px 9px;
+      font-size: 12px; color: #d29922; background: rgba(210, 153, 34, 0.08); border-left: 2px solid #d29922;
+    }
+    .tour-note svg { flex: none; width: 14px; height: 14px; }
     .tour-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-    .tour-dots { display: flex; gap: 5px; flex-wrap: wrap; margin-right: auto; }
+    .tour-dots { display: flex; gap: 4px; flex-wrap: wrap; margin-right: auto; }
     .tour-dots button {
-      width: 7px; height: 7px; padding: 0; border-radius: 99px; background: #30363d; border: none;
+      width: 8px; height: 3px; padding: 0; background: #30363d; border: none;
       transition: width .3s ease, background .3s ease;
     }
     .tour-dots button:hover { background: #484f58; }
     .tour-dots button.on { width: 20px; background: #58a6ff; }
-    .tour-dots button.seen { background: #1f6feb88; }
+    .tour-dots button.seen { background: #1f6feb99; }
     .tour-btn2 {
-      background: transparent; border: 1px solid #30363d; color: #c9d1d9; padding: 7px 13px; border-radius: 9px; font-size: 13px;
+      background: transparent; border: 1px solid #30363d; color: #c9d1d9; padding: 7px 13px; font-size: 13px;
     }
     .tour-btn2:hover { background: #21262d; }
     .tour-btn1 {
+      display: inline-flex; align-items: center; gap: 7px;
       background: linear-gradient(135deg, #1f6feb, #8957e5); border: none; color: #fff; padding: 8px 16px;
-      border-radius: 9px; font-size: 13px; font-weight: 600; box-shadow: 0 6px 18px rgba(31, 111, 235, 0.35);
+      font-size: 13px; font-weight: 600; box-shadow: 0 6px 18px rgba(31, 111, 235, 0.35);
     }
     .tour-btn1:hover { background: linear-gradient(135deg, #388bfd, #a371f7); }
+    .tour-btn1 svg { width: 15px; height: 15px; transition: transform .2s ease; }
+    .tour-btn1:hover svg { transform: translateX(3px); }
     .tour-card.hero .tour-foot { justify-content: center; margin-top: 18px; }
     .tour-card.hero .tour-btn1 { padding: 10px 22px; font-size: 14px; }
     .tour-hint { margin-top: 10px; font-size: 11px; color: #6e7681; }
-    .tour-hint kbd { font-family: inherit; font-size: 10px; border: 1px solid #30363d; border-radius: 4px; padding: 0 4px; color: #8b949e; }
+    .tour-hint kbd { font-family: inherit; font-size: 10px; padding: 0 4px; color: #8b949e; }
     @media (pointer: coarse) { .tour-hint.keys { display: none; } }
     .tour-arrow {
       position: absolute; width: 14px; height: 14px; background: #1c232e; transform: rotate(45deg);
@@ -1809,18 +1834,75 @@
     @keyframes tour-pop { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
     @keyframes tour-blink { 50% { opacity: 0; } }
     @keyframes tour-type { 0% { width: 0; } 60%, 100% { width: 56px; } }
-    .tour-word { font-size: 13px; font-weight: 700; letter-spacing: .02em; color: #8b949e; }
-    .tour-word span { color: #58a6ff; }
     .tour-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 12px; }
     .tour-chips span {
-      font-size: 12px; color: #c9d1d9; padding: 3px 10px; border-radius: 99px;
+      font-size: 12px; color: #c9d1d9; padding: 3px 10px;
       background: rgba(88,166,255,.08); border: 1px solid rgba(88,166,255,.22);
     }
     .tour-done-check { width: 56px; height: 56px; margin: 4px auto 0; display: block; }
-    .tour-done-check circle { stroke-dasharray: 160; stroke-dashoffset: 160; animation: tour-draw .7s ease forwards; }
+    .tour-done-check rect { stroke-dasharray: 200; stroke-dashoffset: 200; animation: tour-draw .7s ease forwards; }
     .tour-done-check path { stroke-dasharray: 40; stroke-dashoffset: 40; animation: tour-draw .4s .55s ease forwards; }
     @keyframes tour-draw { to { stroke-dashoffset: 0; } }
-    .tour-confetti { position: fixed; inset: 0; z-index: 9003; pointer-events: none; }
+    .tour-confetti { position: fixed; inset: 0; z-index: 9004; pointer-events: none; }
+
+    /* Example panels: what a menu looks like once it has things in it,
+       standing in for the real one, which a new user has nothing in yet. */
+    .tour-mock {
+      position: fixed; z-index: 9001; pointer-events: none;
+      background: #161b22; border: 1px solid #30363d; box-shadow: 0 16px 40px rgba(0,0,0,.5);
+      padding: 10px; font-size: 13px; color: #e6edf3; transition: opacity .2s ease;
+    }
+    .tour-mock svg { width: 14px; height: 14px; flex: none; }
+    .tm-tag {
+      position: absolute; top: -10px; right: 10px; display: inline-flex; align-items: center; gap: 5px;
+      padding: 2px 8px; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+      color: #1c1400; background: #e3b341;
+    }
+    .tm-tag svg { width: 11px; height: 11px; }
+    .tm-bar { display: flex; gap: 8px; margin-bottom: 8px; }
+    .tm-search {
+      flex: 1; display: flex; align-items: center; gap: 7px; padding: 7px 9px;
+      background: #0d1117; border: 1px solid #30363d; color: #6e7681;
+    }
+    .tm-bell { width: 32px; display: grid; place-items: center; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9; }
+    .tm-mach { display: flex; align-items: center; gap: 8px; padding: 9px 4px 5px; }
+    .tm-mach b { font-weight: 600; }
+    .tm-mach.off { color: #8b949e; }
+    .tm-sub { color: #8b949e; font-size: 11px; font-family: Menlo, Monaco, monospace; }
+    .tm-dot { width: 8px; height: 8px; background: #484f58; flex: none; }
+    .tm-dot.on { background: #3fb950; box-shadow: 0 0 8px #3fb95099; }
+    .tm-acts { margin-left: auto; display: flex; gap: 10px; color: #8b949e; }
+    .tm-acts svg { width: 13px; height: 13px; }
+    .tm-sess { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 20px; }
+    .tm-sess.cur, .tm-win.cur { background: rgba(56, 139, 253, 0.1); }
+    .tm-sess > div { min-width: 0; flex: 1; }
+    .tm-name { font-weight: 500; }
+    .tm-meta { color: #8b949e; font-size: 11px; font-family: Menlo, Monaco, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .tm-state { font-size: 10px; font-weight: 600; padding: 2px 7px; white-space: nowrap; }
+    .tm-state.work { color: #79c0ff; background: rgba(56,139,253,.14); }
+    .tm-state.ask { color: #e3b341; background: rgba(210,153,34,.14); }
+    .tm-state.done { color: #3fb950; background: rgba(63,185,80,.14); }
+    .tm-win { display: flex; align-items: center; gap: 10px; padding: 7px 6px; }
+    .tm-app {
+      flex: none; width: 30px; height: 30px; display: grid; place-items: center; color: #fff;
+      background: linear-gradient(135deg, var(--c), color-mix(in srgb, var(--c) 55%, #000));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.25);
+    }
+    .tour-mock .tm-app svg { width: 16px; height: 16px; }
+    .tm-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding-top: 6px; }
+    .tm-cell { display: grid; justify-items: center; gap: 6px; padding: 8px 2px; font-size: 11px; color: #c9d1d9; }
+    .tm-cell .tm-app { width: 40px; height: 40px; }
+    .tour-mock .tm-cell .tm-app svg { width: 20px; height: 20px; }
+    .tm-hosthead { padding: 2px 2px 8px; }
+    .tm-meter { padding: 4px 2px; }
+    .tm-meter > div { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; }
+    .tm-meter b { color: #e6edf3; font-weight: 600; }
+    .tm-meter i { display: block; height: 4px; margin-top: 4px; background: linear-gradient(90deg, #3fb950 var(--v), #21262d var(--v)); }
+    .tm-btn {
+      display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; padding: 7px;
+      background: #21262d; border: 1px solid #30363d; font-size: 12px;
+    }
+    .tm-own { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 10px; color: #3fb950; font-size: 12px; }
 
     /* Phones: the card is a sheet pinned to whichever edge the target is not
        near, so it never covers what it is pointing at. */
@@ -1829,11 +1911,12 @@
       .tour-card.hero .tour-in { padding: 18px 18px 16px; }
       .tour-card.hero .tour-title { font-size: 21px; }
       .tour-arrow { display: none; }
+      .tm-sess, .tm-win { padding-top: 5px; padding-bottom: 5px; }
     }
     @media (prefers-reduced-motion: reduce) {
       .tour-ring, .tour-card, .tour-arrow, .tour-card .tour-bar i { transition: none; }
       .tour-ring::before, .tour-ring::after, .tour-scene *, .tour-done-check * { animation: none !important; }
-      .tour-done-check circle, .tour-done-check path { stroke-dashoffset: 0; }
+      .tour-done-check rect, .tour-done-check path { stroke-dashoffset: 0; }
     }
   </style>
 </head>
@@ -7664,7 +7747,7 @@
         const tour = document.createElement('button');
         tour.type = 'button';
         tour.className = 'sett-row';
-        tour.innerHTML = '<span>Take the tour</span><span class="sett-sw">→</span>';
+        tour.innerHTML = '<span>Take the tour</span><span class="sett-sw"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>';
         tour.addEventListener('click', (e) => {
           e.stopPropagation();
           close();
@@ -13078,28 +13161,52 @@
     // and swipes. Steps describe what they point at rather than where it is,
     // and each one is skipped when its target is not on screen, so the same
     // list serves a phone (key bar, ⚙ replay) and a desktop (header Tour
-    // button), connected or not. Menus a step talks about are opened for it
-    // and closed again after.
+    // button), connected or not.
+    //
+    // Menus are never opened for real. Someone taking the tour usually has
+    // nothing in them yet, so each menu step drops an example panel, filled
+    // with made-up machines and windows and labelled as an example, under the
+    // control it describes.
     (function initTour() {
       const DONE_KEY = 'reminal-tour-v1';
       const $ = (id) => document.getElementById(id);
+      const svg = (body, extra) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"' + (extra || '') + '>' + body + '</svg>';
+      const soft = 'fill="currentColor" fill-opacity=".22"';
+      // Duotone step icons: an outline plus a tinted fill, drawn on a coloured
+      // tile per step (see .tour-ico[data-c]).
       const I = {
-        term: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>',
-        key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></svg>',
-        dot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>',
-        mach: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg>',
-        bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
-        win: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/></svg>',
-        app: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>',
-        host: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>',
-        share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 10.5l6.8-4M8.6 13.5l6.8 4"/></svg>',
-        exit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>',
-        tools: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
-        snip: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12"/></svg>',
-        dock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
-        plug: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="M10 17l5-5-5-5M15 12H3"/></svg>',
-        star: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m16.24 7.76-2.12 6.36-6.36 2.12 2.12-6.36z"/></svg>',
+        term: svg('<rect x="2.5" y="4" width="19" height="16" ' + soft + '/><path d="m7 10 3 2.5L7 15M12.5 15h4.5"/>'),
+        pulse: svg('<circle cx="12" cy="12" r="9" ' + soft + '/><path d="M3 12h3.5l2.5-5 4 10 2.5-5H21"/>'),
+        mach: svg('<rect x="3" y="4" width="18" height="12" ' + soft + '/><path d="M8 20h8M12 16v4"/>'),
+        bell: svg('<path d="M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8 2.5 8h-17S6 15.5 6 9z" ' + soft + '/><path d="M10.3 20.5a2 2 0 0 0 3.4 0"/>'),
+        win: svg('<rect x="3" y="3" width="8" height="8" ' + soft + '/><rect x="13" y="3" width="8" height="8"/><rect x="3" y="13" width="8" height="8"/><rect x="13" y="13" width="8" height="8" ' + soft + '/>'),
+        app: svg('<path d="M12 2.5c4 2.5 5.5 6.5 5 11l-2.5 3h-5L7 13.5c-.5-4.5 1-8.5 5-11z" ' + soft + '/><circle cx="12" cy="9.5" r="1.8"/><path d="M9.5 16.5 8 21l4-2 4 2-1.5-4.5"/>'),
+        host: svg('<rect x="3" y="3" width="18" height="18" ' + soft + '/><path d="M7 15v-3M11 15V8M15 15v-5M19 15"/>'),
+        share: svg('<circle cx="18" cy="5.5" r="2.8" ' + soft + '/><circle cx="6" cy="12" r="2.8" ' + soft + '/><circle cx="18" cy="18.5" r="2.8" ' + soft + '/><path d="m8.5 10.7 7-3.9M8.5 13.3l7 3.9"/>'),
+        exit: svg('<path d="M4 3h7v18H4z" ' + soft + '/><path d="M11 3H4v18h7M15.5 16.5 20 12l-4.5-4.5M20 12H9"/>'),
+        plug: svg('<path d="M13 3h7v18h-7z" ' + soft + '/><path d="M13 3h7v18h-7M8.5 7.5 13 12l-4.5 4.5M13 12H3"/>'),
+        key: svg('<rect x="2" y="6" width="20" height="12" ' + soft + '/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>'),
+        tools: svg('<path d="M3 6h18v12H3z" ' + soft + '/><path d="M7 10v4M5 12h4M14 11h5M14 14h3"/>'),
+        snip: svg('<rect x="4" y="3" width="16" height="18" ' + soft + '/><path d="M8 8h8M8 12h8M8 16h5"/>'),
+        dock: svg('<rect x="3" y="14" width="18" height="7" ' + soft + '/><path d="M12 11V3M8.5 6.5 12 3l3.5 3.5M7 17.5h10"/>'),
+        arrowR: svg('<path d="M5 12h14M13 6l6 6-6 6"/>'),
+        info: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'),
+        search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
+        check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
       };
+      // Small inline glyphs for naming controls inside a sentence, drawn as
+      // key caps instead of emoji so they match the rest of the UI.
+      const G = {
+        plus: svg('<path d="M12 5v14M5 12h14"/>'),
+        pen: svg('<path d="M4 20h4L19 9l-4-4L4 16z"/>'),
+        x: svg('<path d="M6 6l12 12M18 6 6 18"/>'),
+        bksp: svg('<path d="M9 5h12v14H9l-6-7z"/><path d="m12 9 6 6M18 9l-6 6"/>'),
+        gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'),
+        snip: svg('<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>'),
+        menu: svg('<path d="M4 7h16M4 12h16M4 17h16"/>'),
+        bell: svg('<path d="M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8 2.5 8h-17S6 15.5 6 9z"/><path d="M10.3 20.5a2 2 0 0 0 3.4 0"/>'),
+      };
+      const k = (name) => '<span class="tour-k">' + G[name] + '</span>';
 
       const connected = () => document.body.classList.contains('connected');
       const touchUI = () => {
@@ -13113,16 +13220,8 @@
         const cs = getComputedStyle(el);
         return cs.visibility !== 'hidden' && cs.display !== 'none';
       }
-      // Open one header menu (closing the rest) the way a click would, so its
-      // toggle handler fetches whatever the panel lists.
-      function openMenu(id) {
-        ['recents', 'windows', 'apps', 'host'].forEach((m) => {
-          const d = $(m);
-          if (d && d.open !== (m === id)) d.open = (m === id);
-        });
-      }
-      const closeMenus = () => openMenu(null);
-      const panel = (id) => { const d = $(id); return d && d.open ? [d.querySelector('summary'), d.querySelector('.recents-list')] : [$(id)]; };
+      const closeMenus = () => ['recents', 'windows', 'apps', 'host'].forEach((m) => { const d = $(m); if (d && d.open) d.open = false; });
+      const summary = (id) => { const d = $(id); return d && d.querySelector('summary'); };
       // The key bar scrolls sideways under the pinned ✂ and ≡, so a group
       // of keys is only the ones actually in view: not scrolled off the left,
       // not tucked under the pinned pair on the right.
@@ -13144,129 +13243,185 @@
       const scrollKeybar = (end) => { const kb = $('keybar'); if (kb) kb.scrollLeft = end ? kb.scrollWidth : 0; };
       const mod = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘' : 'Ctrl';
 
+      // ── example panels ──
+      const tile = (c, glyph) => '<span class="tm-app" style="--c:' + c + '">' + glyph + '</span>';
+      const A = {
+        code: svg('<path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"/>'),
+        web: svg('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z"/>'),
+        pen: svg('<path d="M12 19l7-7-3-3-7 7v3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18z"/>'),
+        term: svg('<path d="m5 8 4 4-4 4M12 16h7"/>'),
+        note: svg('<path d="M5 3h10l4 4v14H5z"/><path d="M9 11h6M9 15h6"/>'),
+        music: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'),
+        mail: svg('<rect x="3" y="5" width="18" height="14"/><path d="m3 7 9 6 9-6"/>'),
+        cal: svg('<rect x="3" y="5" width="18" height="16"/><path d="M3 10h18M8 3v4M16 3v4"/>'),
+        files: svg('<path d="M3 6h7l2 2h9v11H3z"/>'),
+        photo: svg('<rect x="3" y="4" width="18" height="16"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/>'),
+      };
+      const tag = '<div class="tm-tag">' + I.info + 'Example</div>';
+      const acts = '<span class="tm-acts">' + G.plus + G.pen + G.x + '</span>';
+      const sess = (name, meta, state, cur) => '<div class="tm-sess' + (cur ? ' cur' : '') + '"><div><div class="tm-name">' + name + '</div><div class="tm-meta">' + meta + '</div></div>' +
+        (state ? '<span class="tm-state ' + state[0] + '">' + state[1] + '</span>' : '') + '</div>';
+      const MOCK = {
+        machines: () => tag +
+          '<div class="tm-bar"><div class="tm-search">' + I.search + 'Search machines &amp; sessions…</div><div class="tm-bell" data-mock="bell">' + G.bell + '</div></div>' +
+          '<div class="tm-mach"><span class="tm-dot on"></span><b>MacBook Pro</b><span class="tm-sub">18% · 3</span>' + acts + '</div>' +
+          sess('claude', '~/projects/webapp', ['work', 'Working'], true) +
+          sess('dev-server', 'npm run dev · idle 2m') +
+          sess('codex', '~/projects/api', ['ask', 'Needs you']) +
+          '<div class="tm-mach"><span class="tm-dot on"></span><b>home-server</b><span class="tm-sub">4% · 2</span>' + acts + '</div>' +
+          sess('backups', 'restic · idle 1h', ['done', 'Done']) +
+          '<div class="tm-mach off"><span class="tm-dot"></span><b>Work laptop</b><span class="tm-sub">offline · 2h ago</span></div>',
+        windows: () => tag +
+          '<div class="tm-bar"><div class="tm-search">' + I.search + 'Search windows…</div></div>' +
+          [['#3b82f6', A.code, 'Code', 'main.go · webapp'], ['#f59e0b', A.web, 'Browser', 'localhost:3000'],
+           ['#a855f7', A.pen, 'Design', 'Onboarding flow'], ['#22c55e', A.term, 'Terminal', '~/projects/webapp'],
+           ['#ec4899', A.photo, 'Preview', 'screenshot.png']]
+            .map((w, i) => '<div class="tm-win' + (i ? '' : ' cur') + '">' + tile(w[0], w[1]) + '<div><div class="tm-name">' + w[2] + '</div><div class="tm-meta">' + w[3] + '</div></div></div>').join(''),
+        apps: () => tag +
+          '<div class="tm-grid">' +
+          [['#f59e0b', A.web, 'Browser'], ['#3b82f6', A.code, 'Code'], ['#22c55e', A.term, 'Terminal'], ['#eab308', A.note, 'Notes'],
+           ['#ec4899', A.music, 'Music'], ['#0ea5e9', A.mail, 'Mail'], ['#ef4444', A.cal, 'Calendar'], ['#6366f1', A.files, 'Files']]
+            .map((a) => '<div class="tm-cell">' + tile(a[0], a[1]) + '<span>' + a[2] + '</span></div>').join('') + '</div>',
+        host: () => tag +
+          '<div class="tm-hosthead"><b>MacBook Pro</b><div class="tm-meta">macOS · arm64 · 10 cores</div></div>' +
+          '<div class="tm-meter"><div><span>Memory</span><b>9.6 GB / 16 GB</b></div><i style="--v:60%"></i></div>' +
+          '<div class="tm-meter"><div><span>CPU</span><b>23%</b></div><i style="--v:23%"></i></div>' +
+          '<div class="tm-meter"><div><span>Battery</span><b>82% · 4h 10m left</b></div><i style="--v:82%"></i></div>' +
+          '<div class="tm-btn">' + G.plus + 'New session on this host</div><div class="tm-btn">View full desktop</div>' +
+          '<div class="tm-own">' + I.check + 'You own this machine</div>',
+      };
+      const MOCK_W = { machines: 340, windows: 320, apps: 312, host: 290 };
+      const NOTE = {
+        machines: 'Example data. Yours will list your own machines and sessions.',
+        windows: 'Example windows. Yours will list what is open on your computer.',
+        apps: 'Example apps. Yours will list the apps on your computer.',
+        host: 'Example numbers. Yours are live from your computer.',
+      };
+      const exampleNote = (name) => '<div class="tour-note">' + I.info + '<span>' + NOTE[name] + '</span></div>';
+
       const STEPS = [
         { id: 'welcome', hero: true },
         {
-          id: 'connect', icon: I.plug, when: () => !connected(),
+          id: 'connect', icon: I.plug, c: 'blue', when: () => !connected(),
           target: () => [$('session-input'), $('pin-input'), $('connect-btn')],
           title: 'Join a session',
           body: () => 'Run <code>reminal</code> on your computer. It prints a <b>session code</b> and a <b>PIN</b>: type them here, or just scan the QR code it shows and skip the typing.',
         },
         {
-          id: 'terminal', icon: I.term, when: connected, target: () => $('terminal-wrap'), place: 'inside',
+          id: 'terminal', icon: I.term, c: 'green', when: connected, target: () => $('terminal-wrap'), place: 'inside',
           title: 'This is your computer’s terminal',
           body: () => 'Not a copy, the real shell, live. Whatever you type runs there, and everyone watching sees the same screen. It is end-to-end encrypted, so the relay in between only ever sees noise.',
           tips: () => touchUI()
             ? ['Swipe to scroll back through history', 'Long-press to select and copy text', 'Tap a link to open it']
-            : ['Drop a file here to upload it to the computer', mod + '+F searches the scrollback', 'Paste a screenshot and it lands on the computer'],
+            : ['Drop a file here to upload it to the computer', '<kbd>' + mod + '</kbd> <kbd>F</kbd> searches the scrollback', 'Paste a screenshot and it lands on the computer'],
         },
         {
-          id: 'status', icon: I.dot, target: () => $('status'),
+          id: 'status', icon: I.pulse, c: 'teal', target: () => $('status'),
           title: () => connected() ? 'Live, and it stays that way' : 'Connection status',
           body: () => connected()
-            ? '<b style="color:#3fb950">Green</b> means live. If your Wi-Fi drops or your laptop sleeps, it turns <b style="color:#d29922">amber</b> and reconnects on its own, right where you left off.'
+            ? '<b class="ok">Green</b> means live. If your Wi-Fi drops or your laptop sleeps, it turns <b class="warn">amber</b> and reconnects on its own, right where you left off.'
             : 'This pill tells you what is happening: what reminal is waiting for, when it is connecting, and green once you are live.',
         },
         {
-          id: 'machines', icon: I.mach, target: () => panel('recents'), menu: 'recents',
+          id: 'machines', icon: I.mach, c: 'blue', anchor: () => summary('recents'), mock: 'machines',
           title: 'All your machines, one list',
-          body: () => 'Every computer you own and every terminal running on it. Pick one to jump straight in. Your own machines never ask for a PIN.',
-          tips: () => ['<b>+</b> starts a new terminal on that machine', 'The pencil renames, <b>✕</b> ends a session', 'Search finds a session by name, folder or what is on its screen'],
+          body: () => 'Every computer you own and every terminal running on it, with what each one is doing. Pick one to jump straight in. Your own machines never ask for a PIN.',
+          tips: () => [k('plus') + ' starts a new terminal on that machine', k('pen') + ' renames it, ' + k('x') + ' ends a session', 'Search finds a session by name, folder or what is on its screen'],
         },
         {
-          id: 'alerts', icon: I.bell, target: () => $('alerts-bar-btn'), menu: 'recents',
+          id: 'alerts', icon: I.bell, c: 'amber', anchor: () => summary('recents'), mock: 'machines', focus: '[data-mock="bell"]',
           title: 'Alerts',
           body: () => 'Get a notification when a machine’s CPU runs hot, its battery gets low, or the charger is unplugged, even with this page closed.',
         },
         {
-          id: 'windows', icon: I.win, when: connected, target: () => panel('windows'), menu: 'windows',
+          id: 'windows', icon: I.win, c: 'violet', when: connected, anchor: () => summary('windows'), mock: 'windows',
           title: 'Any window, right here',
           body: () => 'Every app window on the computer. Pick one and it opens as a live pane you can click, type into, drag and resize, like it was running here.',
         },
         {
-          id: 'apps', icon: I.app, when: connected, target: () => panel('apps'), menu: 'apps',
+          id: 'apps', icon: I.app, c: 'pink', when: connected, anchor: () => summary('apps'), mock: 'apps',
           title: 'Launch apps',
           body: () => 'Start any app on the computer from here. Its window shows up ready to use.',
         },
         {
-          id: 'host', icon: I.host, when: connected, target: () => panel('host'), menu: 'host',
+          id: 'host', icon: I.host, c: 'green', when: connected, anchor: () => summary('host'), mock: 'host',
           title: 'The computer at a glance',
-          body: () => 'Live CPU and memory, a button for another terminal, and one for the whole desktop. Updates and <b>What’s new</b> live here too.',
+          body: () => 'Live CPU, memory and battery, a button for another terminal, and one for the whole desktop. Updates and <b>What’s new</b> live here too.',
         },
         {
-          id: 'share', icon: I.share, when: connected, target: () => $('share-btn'),
+          id: 'share', icon: I.share, c: 'violet', when: connected, target: () => $('share-btn'),
           title: 'Bring someone in',
           body: () => 'A link and a QR code for this exact terminal. <b>Copy for an AI agent</b> gives an agent everything it needs to join and work alongside you.',
         },
         {
-          id: 'leave', icon: I.exit, when: connected, target: () => $('connect-btn'),
+          id: 'leave', icon: I.exit, c: 'red', when: connected, target: () => $('connect-btn'),
           title: 'Leave any time',
           body: () => 'Disconnecting only closes this view. The terminal keeps running on your computer, so you can come back to it from any device.',
         },
         {
-          id: 'keys', icon: I.key, when: touchUI,
+          id: 'keys', icon: I.key, c: 'blue', when: touchUI,
           target: () => keys($('keybar').querySelector('[data-key="up"]'), $('keybar').querySelector('[data-key="tilde"]')),
           enter: () => scrollKeybar(false),
           title: 'Keys your phone forgot',
-          body: () => 'Arrows, <b>Tab</b>, <b>Esc</b> and the Ctrl shortcuts a shell needs. Hold an arrow or <b>⌫</b> and it repeats. Swipe the bar for more.',
+          body: () => 'Arrows, <b>Tab</b>, <b>Esc</b> and the Ctrl shortcuts a shell needs. Hold an arrow or ' + k('bksp') + ' and it repeats. Swipe the bar for more.',
         },
         {
-          id: 'tools', icon: I.tools, when: touchUI,
+          id: 'tools', icon: I.tools, c: 'teal', when: touchUI,
           target: () => keys($('kb-focus-btn'), $('upload-btn')),
           enter: () => scrollKeybar(true),
           title: 'Handy tools',
           body: () => 'Bring up the keyboard, make text bigger or smaller, copy and paste, search the scrollback, and <b>upload</b> a photo or file straight to the computer.',
         },
         {
-          id: 'snips', icon: I.snip, when: touchUI, target: () => $('snip-btn'),
+          id: 'snips', icon: I.snip, c: 'amber', when: touchUI, target: () => $('snip-btn'),
           title: 'Snippets',
-          body: () => 'Save the commands you type all the time. <b>Drag up</b> from here and let go on one to paste it. Tap to manage them.',
+          body: () => 'Save the commands you type all the time. <b>Drag up</b> from ' + k('snip') + ' and let go on one to paste it. Tap it to manage them.',
         },
         {
-          id: 'dock', icon: I.dock, when: touchUI, target: () => $('keybar-toggle'),
+          id: 'dock', icon: I.dock, c: 'violet', when: touchUI, target: () => $('keybar-toggle'),
           title: 'Switch sessions in one move',
-          body: () => '<b>Tap</b> to hide the key bar. <b>Drag up</b> and slide onto a session to switch to it, across all your machines.',
+          body: () => '<b>Tap</b> ' + k('menu') + ' to hide the key bar. <b>Drag up</b> and slide onto a session to switch to it, across all your machines.',
         },
         // The finale lands the spotlight on where the tour lives from now on.
         { id: 'done', hero: true, done: true, spot: () => touchUI() ? $('settings-btn') : $('tour-btn'), enter: () => scrollKeybar(true) },
       ];
 
       let active = false, list = [], idx = 0, seen = new Set();
-      let blockEl, ringEl, cardEl, tick = null, lastKey = '', swipeX = null;
+      let blockEl, ringEl, cardEl, mockEl = null, mockName = '', tick = null, lastKey = '', swipeX = null;
 
       function heroHTML(done) {
         if (done) {
-          return '<svg class="tour-done-check" viewBox="0 0 56 56" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">' +
-            '<circle cx="28" cy="28" r="25" stroke="#3fb950"/><path d="m17 29 7 7 15-15" stroke="#3fb950"/></svg>' +
+          return '<svg class="tour-done-check" viewBox="0 0 56 56" fill="none" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter">' +
+            '<rect x="4" y="4" width="48" height="48" stroke="#3fb950"/><path d="m17 29 7 7 15-15" stroke="#3fb950"/></svg>' +
             '<div class="tour-title">You’re all set</div>' +
             '<div class="tour-body">That’s everything. Your computer is a tap away now, from anywhere.<br>Replay this tour any time from ' +
-            (touchUI() ? 'the <b>⚙</b> on the key bar.' : 'the <b>Tour</b> button up top.') + '</div>';
+            (touchUI() ? k('gear') + ' on the key bar.' : 'the <b>Tour</b> button up top.') + '</div>';
         }
         return '<svg class="tour-scene" viewBox="0 0 340 128" fill="none" aria-hidden="true">' +
           '<defs><linearGradient id="tour-g" x1="0" x2="1"><stop offset="0" stop-color="#58a6ff"/><stop offset="1" stop-color="#a371f7"/></linearGradient></defs>' +
           // the computer
-          '<rect x="14" y="20" width="118" height="78" rx="7" fill="#0d1117" stroke="#30363d" stroke-width="2"/>' +
-          '<path d="M4 108h138" stroke="#30363d" stroke-width="4" stroke-linecap="round"/>' +
+          '<rect x="14" y="20" width="118" height="78" fill="#0d1117" stroke="#30363d" stroke-width="2"/>' +
+          '<path d="M4 108h138" stroke="#30363d" stroke-width="4"/>' +
           '<text x="26" y="44" font-family="Menlo,monospace" font-size="10" fill="#3fb950">~ $</text>' +
           '<svg x="48" y="35" width="56" height="12" class="typed" style="overflow:hidden"><text x="0" y="9" font-family="Menlo,monospace" font-size="10" fill="#e6edf3">npm run dev</text></svg>' +
-          '<rect x="26" y="54" width="70" height="4" rx="2" fill="#21262d"/><rect x="26" y="64" width="52" height="4" rx="2" fill="#21262d"/><rect x="26" y="74" width="80" height="4" rx="2" fill="#21262d"/>' +
+          '<rect x="26" y="54" width="70" height="4" fill="#21262d"/><rect x="26" y="64" width="52" height="4" fill="#21262d"/><rect x="26" y="74" width="80" height="4" fill="#21262d"/>' +
           '<rect class="cur" x="104" y="36" width="6" height="10" fill="#58a6ff"/>' +
           // the line between
-          '<path class="flow" d="M140 56 H200" stroke="url(#tour-g)" stroke-width="3" stroke-linecap="round"/>' +
-          '<path class="flow rev" d="M140 72 H200" stroke="url(#tour-g)" stroke-width="3" stroke-linecap="round" opacity=".6"/>' +
-          '<g class="lock"><circle cx="170" cy="64" r="15" fill="#161b22" stroke="url(#tour-g)" stroke-width="2"/>' +
-          '<rect x="164" y="63" width="12" height="9" rx="2" fill="#79c0ff"/><path d="M166.5 63v-3a3.5 3.5 0 0 1 7 0v3" stroke="#79c0ff" stroke-width="2"/></g>' +
+          '<path class="flow" d="M140 56 H200" stroke="url(#tour-g)" stroke-width="3"/>' +
+          '<path class="flow rev" d="M140 72 H200" stroke="url(#tour-g)" stroke-width="3" opacity=".6"/>' +
+          '<g class="lock"><rect x="155" y="49" width="30" height="30" fill="#161b22" stroke="url(#tour-g)" stroke-width="2"/>' +
+          '<rect x="164" y="63" width="12" height="9" fill="#79c0ff"/><path d="M166.5 63v-3a3.5 3.5 0 0 1 7 0v3" stroke="#79c0ff" stroke-width="2"/></g>' +
           // the phone
-          '<rect x="226" y="6" width="62" height="116" rx="11" fill="#0d1117" stroke="#30363d" stroke-width="2"/>' +
-          '<rect x="248" y="12" width="18" height="4" rx="2" fill="#30363d"/>' +
+          '<rect x="226" y="6" width="62" height="116" fill="#0d1117" stroke="#30363d" stroke-width="2"/>' +
+          '<rect x="248" y="12" width="18" height="3" fill="#30363d"/>' +
           '<text x="234" y="34" font-family="Menlo,monospace" font-size="8" fill="#3fb950">~ $</text>' +
           '<svg x="252" y="27" width="56" height="10" class="typed" style="overflow:hidden"><text x="0" y="7" font-family="Menlo,monospace" font-size="8" fill="#e6edf3">npm run dev</text></svg>' +
-          '<rect x="234" y="42" width="42" height="3" rx="1.5" fill="#21262d"/><rect x="234" y="50" width="30" height="3" rx="1.5" fill="#21262d"/>' +
-          '<rect x="232" y="100" width="50" height="14" rx="4" fill="#161b22" stroke="#30363d"/>' +
+          '<rect x="234" y="42" width="42" height="3" fill="#21262d"/><rect x="234" y="50" width="30" height="3" fill="#21262d"/>' +
+          '<rect x="232" y="100" width="50" height="14" fill="#161b22" stroke="#30363d"/>' +
           '</svg>' +
           '<div class="tour-title">Welcome to <span style="color:#58a6ff">re</span>minal</div>' +
           '<div class="tour-body">Your computer’s terminal, windows and apps, live on any screen. Here’s a one-minute look around.</div>' +
-          '<div class="tour-chips"><span>End-to-end encrypted</span><span>Works on any device</span><span>No setup here</span></div>';
+          '<div class="tour-chips"><span>End-to-end encrypted</span><span>Works on any device</span><span>Nothing to install here</span></div>';
       }
 
       function build() {
@@ -13289,14 +13444,53 @@
         document.body.append(blockEl, ringEl, cardEl);
       }
 
+      function setMock(name) {
+        if (name === mockName) return;
+        if (mockEl) {
+          const old = mockEl;
+          old.style.opacity = '0';
+          setTimeout(() => old.remove(), 200);
+          mockEl = null;
+        }
+        mockName = name || '';
+        if (!name) return;
+        mockEl = document.createElement('div');
+        mockEl.className = 'tour-mock tm-' + name;
+        mockEl.setAttribute('aria-hidden', 'true');
+        mockEl.innerHTML = MOCK[name]();
+        document.body.appendChild(mockEl);
+        if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          mockEl.animate([{ opacity: 0, transform: 'translateY(-6px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: 'cubic-bezier(.2,.85,.25,1)' });
+        }
+      }
+
+      // Drop the example panel under its header control, where the real menu
+      // would open.
+      function placeMock(step) {
+        if (!mockEl || !step.anchor) return;
+        const a = step.anchor();
+        if (!a) return;
+        const ar = a.getBoundingClientRect();
+        const vw = innerWidth;
+        const w = Math.min(MOCK_W[mockName] || 320, vw - 16);
+        const left = Math.min(vw - w - 8, Math.max(8, ar.left + ar.width / 2 - w / 2));
+        mockEl.style.width = w + 'px';
+        mockEl.style.left = Math.round(left) + 'px';
+        mockEl.style.top = Math.round(ar.bottom + 10) + 'px';
+      }
+
       function nudge() {
         if (!cardEl || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
         cardEl.animate([{ transform: 'none' }, { transform: 'scale(1.03)' }, { transform: 'none' }], { duration: 260, easing: 'ease-out' });
       }
 
       function targetsOf(step) {
-        if (!step.target) return [];
-        let t = step.target();
+        let t;
+        if (step.mock) {
+          if (step.focus) t = mockEl ? [mockEl.querySelector(step.focus)] : [];
+          else t = [step.anchor(), mockEl];
+        } else if (step.target) t = step.target();
+        else return [];
         if (!Array.isArray(t)) t = [t];
         return t.filter(shown);
       }
@@ -13307,9 +13501,7 @@
           const x = el.getBoundingClientRect();
           l = Math.min(l, x.left); t = Math.min(t, x.top); r = Math.max(r, x.right); b = Math.max(b, x.bottom);
         }
-        const vw = innerWidth, vh = innerHeight;
-        l = Math.max(l, 2); t = Math.max(t, 2); r = Math.min(r, vw - 2); b = Math.min(b, vh - 2);
-        return { left: l, top: t, right: r, bottom: b, width: Math.max(0, r - l), height: Math.max(0, b - t) };
+        return { left: l, top: t, right: r, bottom: b, width: r - l, height: b - t };
       }
 
       function render(dir) {
@@ -13325,17 +13517,18 @@
           inner = heroHTML(step.done) +
             '<div class="tour-foot">' + (step.done
               ? '<button type="button" class="tour-btn2" data-t="back">Back</button><button type="button" class="tour-btn1" data-t="next">Start using reminal</button>'
-              : '<button type="button" class="tour-btn2" data-t="skip">Skip</button><button type="button" class="tour-btn1" data-t="next">Show me around →</button>') +
+              : '<button type="button" class="tour-btn2" data-t="skip">Skip</button><button type="button" class="tour-btn1" data-t="next">Show me around' + I.arrowR + '</button>') +
             '</div>' + (step.done ? '' : '<div class="tour-hint keys">Use <kbd>←</kbd> <kbd>→</kbd> to move, <kbd>Esc</kbd> to skip</div>');
         } else {
           const title = typeof step.title === 'function' ? step.title() : step.title;
           const tips = step.tips ? step.tips() : null;
-          inner = '<div class="tour-top"><div class="tour-ico">' + (step.icon || '') + '</div>' +
-            '<div class="tour-count">' + pos + ' of ' + mid + '</div>' +
+          inner = '<div class="tour-top"><div class="tour-ico" data-c="' + (step.c || 'blue') + '">' + (step.icon || '') + '</div>' +
+            '<div class="tour-count">Step ' + pos + ' of ' + mid + '</div>' +
             '<button type="button" class="tour-x" data-t="skip">Skip tour</button></div>' +
             '<div class="tour-title">' + title + '</div>' +
             '<div class="tour-body">' + step.body() + '</div>' +
             (tips ? '<ul class="tour-tips">' + tips.map((t) => '<li>' + t + '</li>').join('') + '</ul>' : '') +
+            (step.mock ? exampleNote(step.mock) : '') +
             '<div class="tour-foot"><div class="tour-dots">' + dots + '</div>' +
             '<button type="button" class="tour-btn2" data-t="back">Back</button>' +
             '<button type="button" class="tour-btn1" data-t="next">' + (idx === n - 2 ? 'Finish' : 'Next') + '</button></div>';
@@ -13346,8 +13539,7 @@
         const bar = cardEl.querySelector('.tour-bar i');
         bar.style.width = (cardEl._pct || 0) + '%';
         requestAnimationFrame(() => { bar.style.width = pct + '%'; cardEl._pct = pct; });
-        const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-        if (!reduce) {
+        if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
           cardEl.querySelector('.tour-in').animate(
             [{ opacity: 0, transform: 'translateX(' + (dir * 18) + 'px)' }, { opacity: 1, transform: 'none' }],
             { duration: 320, easing: 'cubic-bezier(.2,.85,.25,1)' });
@@ -13362,6 +13554,7 @@
         if (!active) return;
         const step = list[idx];
         const vw = innerWidth, vh = innerHeight;
+        placeMock(step);
         const els = step.hero ? (step.spot ? [step.spot()].filter(shown) : []) : targetsOf(step);
         const narrow = vw <= 560;
         let r = null;
@@ -13373,18 +13566,26 @@
           r = { left: l, top: t, right: rr, bottom: bb, width: rr - l, height: bb - t };
           if (r.width < 4 || r.height < 4) r = null;
         }
+        // A spotlit control inside an example panel still wants the card
+        // clear of the whole panel, not just of the control.
+        let avoid = r;
+        if (r && step.focus && mockEl) {
+          const m = unionRect([step.anchor(), mockEl]);
+          avoid = { left: Math.min(r.left, m.left), top: Math.min(r.top, m.top), right: Math.max(r.right, m.right), bottom: Math.max(r.bottom, m.bottom) };
+          avoid.width = avoid.right - avoid.left; avoid.height = avoid.bottom - avoid.top;
+        }
         const key = r ? [r.left, r.top, r.width, r.height].map(Math.round).join(',') + ',' + vw + ',' + vh : 'c' + vw + ',' + vh;
         if (key === lastKey) return;
         lastKey = key;
 
         if (r) {
           ringEl.classList.remove('empty');
-          Object.assign(ringEl.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px', borderRadius: '12px' });
+          Object.assign(ringEl.style, { left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
         } else {
           // No target: the hole shrinks to a point in the middle and the
           // whole page dims, which is the hero's backdrop.
           ringEl.classList.add('empty');
-          Object.assign(ringEl.style, { left: vw / 2 + 'px', top: vh / 2 + 'px', width: '0px', height: '0px', borderRadius: '50%' });
+          Object.assign(ringEl.style, { left: vw / 2 + 'px', top: vh / 2 + 'px', width: '0px', height: '0px' });
         }
 
         const cw = cardEl.offsetWidth, ch = cardEl.offsetHeight;
@@ -13397,16 +13598,19 @@
           y = narrow ? vh - ch - 16 - (touchUI() ? ($('keybar').offsetHeight || 0) : 0) : Math.max(r.top + 24, (vh - ch) / 2);
         } else {
           const gap = 16;
-          const below = r.bottom + gap, above = r.top - gap - ch;
+          const below = avoid.bottom + gap, above = avoid.top - gap - ch;
           if (below + ch <= vh - 8) { y = below; side = 'up'; }
           else if (above >= 8) { y = above; side = 'down'; }
-          else { y = Math.max(8, vh - ch - 8); }
+          else if (!narrow && avoid.right + gap + cw <= vw - 8) {
+            // No room above or below: sit beside it.
+            y = Math.min(vh - ch - 8, Math.max(8, avoid.top)); x = avoid.right + gap;
+          } else { y = Math.max(8, vh - ch - 8); }
           const cx = r.left + r.width / 2;
-          x = narrow ? 12 : Math.min(vw - cw - 12, Math.max(12, cx - cw / 2));
-          if (side !== 'none') {
+          if (x === undefined) x = narrow ? 12 : Math.min(vw - cw - 12, Math.max(12, cx - cw / 2));
+          if (side !== 'none' && avoid === r) {
             arrow.className = 'tour-arrow ' + side;
             arrow.style.left = Math.min(cw - 26, Math.max(12, cx - x - 7)) + 'px';
-          }
+          } else side = 'none';
         }
         if (side === 'none') arrow.className = 'tour-arrow none';
         cardEl.style.left = Math.round(x) + 'px';
@@ -13415,17 +13619,11 @@
 
       function go(i, dir) {
         if (i < 0 || i >= list.length) return;
-        const prev = list[idx];
-        if (prev && prev.leave) prev.leave();
         idx = i;
         const step = list[idx];
-        // A menu stays open only for the steps that are about it.
-        openMenu(step.menu || null);
+        setMock(step.mock);
         if (step.enter) step.enter();
-        // A menu that just opened fills in asynchronously; a beat lets the
-        // panel take its size before the ring measures it.
-        if (step.menu) setTimeout(() => { if (active && list[idx] === step) render(dir); }, 60);
-        else render(dir);
+        render(dir);
         if (step.done) confetti();
       }
       function next() {
@@ -13435,8 +13633,8 @@
       function back() { if (idx > 0) go(idx - 1, -1); }
 
       // Clicks are taken at the window's capture phase, before the app's own
-      // capture-phase "click outside closes the menu" handler can see them —
-      // otherwise touching the card would shut the very menu it describes.
+      // capture-phase "click outside closes the menu" handler and anything
+      // under the blocker can see them.
       function onClick(e) {
         if (!active) return;
         const inCard = cardEl.contains(e.target);
@@ -13474,17 +13672,16 @@
 
       function start() {
         if (active) return;
-        list = STEPS.filter((s) => !s.when || s.when());
+        closeMenus();
         // Drop steps whose controls are not on this screen (a hidden key bar,
         // a desktop without a Tour button) before the counter is computed.
-        list = list.filter((s) => {
+        list = STEPS.filter((s) => {
+          if (s.when && !s.when()) return false;
           if (s.hero) return true;
-          openMenu(s.menu || null);
+          if (s.mock) return shown(s.anchor());
           if (s.enter) s.enter();
-          const ok = targetsOf(s).length > 0;
-          return ok;
+          return targetsOf(s).length > 0;
         });
-        closeMenus();
         scrollKeybar(false);
         active = true;
         idx = 0;
@@ -13505,9 +13702,7 @@
         if (!active) return;
         active = false;
         try { localStorage.setItem(DONE_KEY, completed ? 'done' : 'skipped'); } catch (_) {}
-        const step = list[idx];
-        if (step && step.leave) step.leave();
-        closeMenus();
+        setMock(null);
         scrollKeybar(false);
         clearInterval(tick);
         window.removeEventListener('keydown', onKey, true);
@@ -13518,7 +13713,7 @@
         ringEl.classList.add('intro', 'empty');
         cardEl.style.opacity = '0';
         setTimeout(() => els.forEach((el) => el.remove()), 380);
-        try { if (connected() && typeof term !== 'undefined' && term.focus && !touchUI()) term.focus(); } catch (_) {}
+        try { if (connected() && !touchUI()) term.focus(); } catch (_) {}
       }
 
       function confetti() {
