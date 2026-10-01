@@ -914,6 +914,7 @@
                      background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
                      border-radius: 5px; padding: 2px 7px; }
     .host-whatsnew:hover { background: #2a313a; border-color: #3d444d; }
+    .host-tour { margin-left: 4px; }
 
     /* The sheet lives outside the 290px panel: release notes are prose, and a
        250px column turns three bullets into fourteen lines. */
@@ -1682,225 +1683,216 @@
     .panel-search.is-idle { display: none; }
     /* ── Guided tour ──────────────────────────────────────────────────────
        A spotlight that glides from control to control, and a card that
-       follows it. Everything is fixed-position above the app (the header is
-       z 50, the share modal 100), and the tour owns input while it runs: a
-       transparent blocker eats clicks so a stray tap cannot open a menu out
-       from under a step. Square corners throughout, on purpose. */
-    #tour-btn {
-      display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 3px; min-width: 46px; padding: 4px 7px; line-height: 1; white-space: nowrap;
-      font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em;
-      background: transparent; border: 1px solid transparent; border-radius: 7px; color: #c9d1d9;
+       follows it. It borrows reminal.app's look: Geist, monochrome,
+       hairline borders, mono eyebrows, colour only where it means something.
+       Everything is fixed-position above the app (the header is z 50, the
+       share modal 100), and the tour owns input while it runs: a transparent
+       blocker eats clicks so a stray tap cannot open a menu out from under a
+       step. Geist comes from the same CDN as xterm.js, so the viewer gains
+       no new third party. */
+    @font-face { font-family: "Tour Geist"; src: url(https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
+    @font-face { font-family: "Tour Geist Mono"; src: url(https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/GeistMono-Variable.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
+    .tour-card, .tour-mock {
+      --t-sans: "Tour Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      --t-mono: "Tour Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --t-panel: #0a0a0a; --t-soft: #111; --t-ink: #ededed; --t-dim: #a1a1a1; --t-mute: #7d7d7d;
+      --t-line: #1f1f1f; --t-line2: #2e2e2e; --t-yes: #62c073;
     }
-    #tour-btn:hover { background: #21262d; }
-    #tour-btn svg { width: 16px; height: 16px; }
-    /* Phones replay it from the ⚙ menu instead; the header row is full. */
-    @media (max-width: 480px) { #tour-btn { display: none; } }
 
     .tour-block { position: fixed; inset: 0; z-index: 9000; background: transparent; touch-action: none; }
+    /* The spotlight is only a hole in the dim: no outline, no glow. */
     .tour-ring {
-      position: fixed; z-index: 9002; pointer-events: none;
-      box-shadow: 0 0 0 200vmax rgba(1, 4, 9, 0.76);
-      transition: left .55s cubic-bezier(.2,.85,.25,1.05), top .55s cubic-bezier(.2,.85,.25,1.05),
-                  width .55s cubic-bezier(.2,.85,.25,1.05), height .55s cubic-bezier(.2,.85,.25,1.05),
+      position: fixed; z-index: 9002; pointer-events: none; border-radius: 10px;
+      box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0.72);
+      transition: left .55s cubic-bezier(.2,.7,.2,1), top .55s cubic-bezier(.2,.7,.2,1),
+                  width .55s cubic-bezier(.2,.7,.2,1), height .55s cubic-bezier(.2,.7,.2,1),
                   box-shadow .4s ease;
     }
-    .tour-ring::before {
-      content: ''; position: absolute; inset: -2px; padding: 2px;
-      background: conic-gradient(from var(--tour-a, 0deg), #58a6ff, #a371f7, #3fb950, #58a6ff);
-      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-      -webkit-mask-composite: xor; mask-composite: exclude;
-      animation: tour-spin 3.2s linear infinite;
-    }
-    .tour-ring::after {
-      content: ''; position: absolute; inset: -2px;
-      box-shadow: 0 0 22px 2px rgba(88, 166, 255, 0.45);
-      animation: tour-breathe 2.4s ease-in-out infinite;
-    }
-    .tour-ring.empty::before, .tour-ring.empty::after { opacity: 0; }
-    @property --tour-a { syntax: '<angle>'; initial-value: 0deg; inherits: false; }
-    @keyframes tour-spin { to { --tour-a: 360deg; } }
-    @keyframes tour-breathe { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
-    .tour-ring.intro { box-shadow: 0 0 0 200vmax rgba(1, 4, 9, 0); }
+    .tour-ring.intro { box-shadow: 0 0 0 200vmax rgba(0, 0, 0, 0); }
 
     .tour-card {
-      position: fixed; z-index: 9003; width: 368px; max-width: calc(100vw - 24px);
-      background: linear-gradient(180deg, rgba(28, 35, 46, 0.97), rgba(18, 23, 31, 0.97));
-      border: 1px solid rgba(88, 166, 255, 0.28);
-      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
-      -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-      color: #e6edf3; font-size: 14px; line-height: 1.5;
-      transition: left .5s cubic-bezier(.2,.85,.25,1.05), top .5s cubic-bezier(.2,.85,.25,1.05), opacity .3s ease;
+      position: fixed; z-index: 9003; width: 360px; max-width: calc(100vw - 24px); overflow: hidden;
+      background: var(--t-panel); border: 1px solid var(--t-line2); border-radius: 12px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+      color: var(--t-ink); font: 400 14px/1.55 var(--t-sans); letter-spacing: -.006em;
+      -webkit-font-smoothing: antialiased;
+      transition: left .5s cubic-bezier(.2,.7,.2,1), top .5s cubic-bezier(.2,.7,.2,1), opacity .3s ease;
       -webkit-user-select: none; user-select: none; touch-action: pan-y;
     }
-    .tour-card button { border-radius: 0; }
-    .tour-card.hero { width: 440px; text-align: center; }
-    .tour-card .tour-bar { height: 3px; background: rgba(255,255,255,.06); overflow: hidden; }
-    .tour-card .tour-bar i {
-      display: block; height: 100%; width: 0;
-      background: linear-gradient(90deg, #58a6ff, #a371f7, #3fb950);
-      transition: width .5s cubic-bezier(.2,.85,.25,1);
-    }
-    .tour-card .tour-in { padding: 16px 18px 14px; }
-    .tour-card.hero .tour-in { padding: 22px 26px 20px; }
-    .tour-top { display: flex; align-items: center; gap: 11px; margin-bottom: 10px; }
-    /* Each step gets its own colour: a lit tile with a duotone glyph. */
+    .tour-card.hero { width: 480px; }
+    .tour-card .tour-bar { height: 1px; margin: 0 14px; background: var(--t-line); }
+    .tour-card .tour-bar i { display: block; height: 100%; width: 0; background: var(--t-ink); transition: width .5s cubic-bezier(.2,.7,.2,1); }
+    .tour-card .tour-in { position: relative; padding: 18px 20px 16px; }
+    .tour-card.hero .tour-in { padding: 30px 30px 24px; }
+    .tour-top { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
     .tour-ico {
-      --c1: #388bfd; --c2: #1f6feb;
-      flex: none; width: 36px; height: 36px; display: grid; place-items: center; color: #fff;
-      background: linear-gradient(135deg, var(--c1), var(--c2));
-      box-shadow: 0 6px 16px -6px var(--c1), inset 0 1px 0 rgba(255,255,255,.25);
+      flex: none; width: 32px; height: 32px; display: grid; place-items: center; color: var(--t-ink);
+      background: var(--t-soft); border: 1px solid var(--t-line2); border-radius: 8px;
     }
-    .tour-ico[data-c="violet"] { --c1: #a371f7; --c2: #6e40c9; }
-    .tour-ico[data-c="green"] { --c1: #3fb950; --c2: #1a7f37; }
-    .tour-ico[data-c="teal"] { --c1: #2dd4bf; --c2: #0f766e; }
-    .tour-ico[data-c="amber"] { --c1: #e3b341; --c2: #b7791f; }
-    .tour-ico[data-c="pink"] { --c1: #f778ba; --c2: #bf3989; }
-    .tour-ico[data-c="red"] { --c1: #ff7b72; --c2: #b62324; }
-    .tour-ico svg { width: 20px; height: 20px; }
-    .tour-count { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #8b949e; }
+    .tour-ico svg { width: 17px; height: 17px; }
+    .tour-count { font: 500 12px var(--t-mono); color: var(--t-ink); letter-spacing: .02em; }
+    .tour-count span { color: var(--t-mute); }
     .tour-x {
-      margin-left: auto; background: transparent; color: #8b949e; border: none; padding: 4px 6px;
-      font-size: 12px; font-weight: 500;
+      margin-left: auto; background: transparent; border: none; padding: 4px 2px;
+      font: 400 13px var(--t-sans); color: var(--t-mute);
     }
-    .tour-x:hover { background: rgba(255,255,255,.06); color: #e6edf3; }
-    .tour-title { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; margin-bottom: 4px; }
-    .tour-card.hero .tour-title { font-size: 24px; margin: 10px 0 6px; }
-    .tour-body { color: #b6c2cf; }
-    .tour-body b { color: #e6edf3; font-weight: 600; }
-    .tour-body b.ok { color: #3fb950; }
-    .tour-body b.warn { color: #d29922; }
+    .tour-x:hover { background: transparent; color: var(--t-ink); }
+    .tour-title { font: 600 18px/1.3 var(--t-sans); letter-spacing: -.025em; margin-bottom: 6px; }
+    .tour-body { color: var(--t-dim); }
+    .tour-body b { color: var(--t-ink); font-weight: 500; }
+    .tour-body b.ok { color: var(--t-yes); }
+    .tour-body b.warn { color: #f2a20d; }
     .tour-card kbd, .tour-body code {
-      font-family: Menlo, Monaco, monospace; font-size: 12px; color: #e6edf3;
-      background: #0d1117; border: 1px solid #30363d; border-bottom-width: 2px; padding: 0 5px;
+      font: 500 12px var(--t-mono); color: var(--t-ink);
+      background: var(--t-soft); border: 1px solid var(--t-line2); border-radius: 5px; padding: 1px 5px;
     }
     /* A control named mid-sentence: its real glyph on a key cap. */
     .tour-k {
       display: inline-grid; place-items: center; width: 20px; height: 20px; vertical-align: -5px;
-      background: #0d1117; border: 1px solid #30363d; border-bottom-width: 2px; color: #e6edf3;
+      background: var(--t-soft); border: 1px solid var(--t-line2); border-radius: 5px; color: var(--t-ink);
     }
     .tour-k svg { width: 12px; height: 12px; }
-    .tour-tips { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 7px; }
-    .tour-tips li { display: flex; gap: 8px; align-items: baseline; color: #b6c2cf; font-size: 13px; }
-    .tour-tips li::before { content: ''; flex: none; width: 5px; height: 5px; background: #58a6ff; transform: translateY(-2px); }
+    .tour-tips { margin: 12px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+    .tour-tips li { display: flex; gap: 10px; align-items: baseline; color: var(--t-dim); font-size: 13.5px; }
+    .tour-tips li::before { content: ''; flex: none; width: 4px; height: 4px; border-radius: 50%; background: var(--t-mute); transform: translateY(-3px); }
     .tour-note {
-      display: flex; gap: 7px; align-items: center; margin-top: 12px; padding: 7px 9px;
-      font-size: 12px; color: #d29922; background: rgba(210, 153, 34, 0.08); border-left: 2px solid #d29922;
+      display: flex; gap: 10px; align-items: center; margin-top: 14px; padding-top: 12px;
+      border-top: 1px solid var(--t-line); font-size: 12.5px; color: var(--t-mute); line-height: 1.45;
     }
-    .tour-note svg { flex: none; width: 14px; height: 14px; }
-    .tour-foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-    .tour-dots { display: flex; gap: 4px; flex-wrap: wrap; margin-right: auto; }
+    .tour-chip, .tm-tag {
+      flex: none; font: 500 10.5px var(--t-mono); letter-spacing: .06em; text-transform: uppercase;
+      color: var(--t-dim); border: 1px solid var(--t-line2); border-radius: 5px; padding: 2px 7px; background: var(--t-soft);
+    }
+    .tour-foot { display: flex; align-items: center; gap: 8px; margin-top: 18px; }
+    .tour-dots { display: flex; gap: 5px; flex-wrap: wrap; margin-right: auto; }
     .tour-dots button {
-      width: 8px; height: 3px; padding: 0; background: #30363d; border: none;
-      transition: width .3s ease, background .3s ease;
+      width: 6px; height: 6px; padding: 0; border-radius: 50%; background: var(--t-line2); border: none;
+      transition: background .25s ease, transform .25s ease;
     }
-    .tour-dots button:hover { background: #484f58; }
-    .tour-dots button.on { width: 20px; background: #58a6ff; }
-    .tour-dots button.seen { background: #1f6feb99; }
-    .tour-btn2 {
-      background: transparent; border: 1px solid #30363d; color: #c9d1d9; padding: 7px 13px; font-size: 13px;
+    .tour-dots button:hover { background: var(--t-mute); }
+    .tour-dots button.seen { background: #4d4d4d; }
+    .tour-dots button.on { background: var(--t-ink); transform: scale(1.15); }
+    .tour-btn2, .tour-btn1 {
+      height: 34px; padding: 0 14px; border-radius: 6px; font: 500 13.5px var(--t-sans); letter-spacing: -.01em;
+      display: inline-flex; align-items: center; gap: 6px; transition: background .15s, border-color .15s, color .15s;
     }
-    .tour-btn2:hover { background: #21262d; }
-    .tour-btn1 {
-      display: inline-flex; align-items: center; gap: 7px;
-      background: linear-gradient(135deg, #1f6feb, #8957e5); border: none; color: #fff; padding: 8px 16px;
-      font-size: 13px; font-weight: 600; box-shadow: 0 6px 18px rgba(31, 111, 235, 0.35);
-    }
-    .tour-btn1:hover { background: linear-gradient(135deg, #388bfd, #a371f7); }
+    .tour-btn2 { background: transparent; border: 1px solid var(--t-line2); color: var(--t-dim); }
+    .tour-btn2:hover { background: var(--t-soft); color: var(--t-ink); border-color: #3d3d3d; }
+    .tour-btn1 { background: var(--t-ink); border: 1px solid var(--t-ink); color: #0a0a0a; }
+    .tour-btn1:hover { background: #fff; }
+    .tour-btn1:focus-visible, .tour-btn2:focus-visible { outline: 2px solid #52a8ff; outline-offset: 2px; }
     .tour-btn1 svg { width: 15px; height: 15px; transition: transform .2s ease; }
-    .tour-btn1:hover svg { transform: translateX(3px); }
-    .tour-card.hero .tour-foot { justify-content: center; margin-top: 18px; }
-    .tour-card.hero .tour-btn1 { padding: 10px 22px; font-size: 14px; }
-    .tour-hint { margin-top: 10px; font-size: 11px; color: #6e7681; }
-    .tour-hint kbd { font-family: inherit; font-size: 10px; padding: 0 4px; color: #8b949e; }
-    @media (pointer: coarse) { .tour-hint.keys { display: none; } }
+    .tour-btn1:hover svg { transform: translateX(2px); }
     .tour-arrow {
-      position: absolute; width: 14px; height: 14px; background: #1c232e; transform: rotate(45deg);
-      border: 1px solid rgba(88, 166, 255, 0.28); transition: left .5s cubic-bezier(.2,.85,.25,1.05);
+      position: absolute; width: 12px; height: 12px; background: var(--t-panel); transform: rotate(45deg);
+      border: 1px solid var(--t-line2); transition: left .5s cubic-bezier(.2,.7,.2,1); z-index: 1;
     }
-    .tour-arrow.up { top: -8px; border-right: none; border-bottom: none; }
-    .tour-arrow.down { bottom: -8px; border-left: none; border-top: none; background: #12171f; }
+    .tour-arrow.up { top: -7px; border-right: none; border-bottom: none; }
+    .tour-arrow.down { bottom: -7px; border-left: none; border-top: none; }
     .tour-arrow.none { display: none; }
+    .tour-card:has(.tour-arrow:not(.none)) { overflow: visible; }
 
-    /* The welcome scene: this screen, a computer, and the encrypted line
-       between them. Pure SVG + CSS, so it costs nothing to load. */
-    .tour-scene { display: block; margin: 0 auto; width: 100%; max-width: 340px; height: auto; }
-    .tour-scene .flow { stroke-dasharray: 2 10; animation: tour-flow 1.1s linear infinite; }
-    .tour-scene .flow.rev { animation-direction: reverse; }
-    .tour-scene .lock { transform-origin: 170px 64px; animation: tour-pop 2.4s ease-in-out infinite; }
-    .tour-scene .cur { animation: tour-blink 1s steps(1) infinite; }
-    .tour-scene .typed { animation: tour-type 2.8s steps(14) infinite; }
-    @keyframes tour-flow { to { stroke-dashoffset: -24; } }
-    @keyframes tour-pop { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.12); } }
-    @keyframes tour-blink { 50% { opacity: 0; } }
-    @keyframes tour-type { 0% { width: 0; } 60%, 100% { width: 56px; } }
-    .tour-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 12px; }
-    .tour-chips span {
-      font-size: 12px; color: #c9d1d9; padding: 3px 10px;
-      background: rgba(88,166,255,.08); border: 1px solid rgba(88,166,255,.22);
+    /* Welcome + finale: reminal.app's hero in miniature. */
+    .tour-grid {
+      position: absolute; inset: 0 0 auto; height: 220px; pointer-events: none;
+      background-image: linear-gradient(var(--t-line) 1px, transparent 1px), linear-gradient(90deg, var(--t-line) 1px, transparent 1px);
+      background-size: 32px 32px; background-position: center top;
+      -webkit-mask-image: radial-gradient(ellipse 80% 90% at 30% 0%, #000 15%, transparent 75%);
+      mask-image: radial-gradient(ellipse 80% 90% at 30% 0%, #000 15%, transparent 75%);
     }
-    .tour-done-check { width: 56px; height: 56px; margin: 4px auto 0; display: block; }
-    .tour-done-check rect { stroke-dasharray: 200; stroke-dashoffset: 200; animation: tour-draw .7s ease forwards; }
-    .tour-done-check path { stroke-dasharray: 40; stroke-dashoffset: 40; animation: tour-draw .4s .55s ease forwards; }
+    .tour-card.hero .tour-in > :not(.tour-grid) { position: relative; }
+    .tour-eyebrow { font: 500 11.5px var(--t-mono); letter-spacing: .04em; text-transform: uppercase; color: var(--t-mute); margin-bottom: 12px; }
+    .tour-card.hero .tour-title { font-size: 30px; line-height: 1.08; letter-spacing: -.045em; color: var(--t-mute); margin-bottom: 12px; }
+    .tour-card.hero .tour-title .em { color: var(--t-ink); }
+    .tour-card.hero .tour-body { font-size: 15px; }
+    .tour-fig {
+      margin-top: 20px; background: #0a0a0a; border: 1px solid var(--t-line2); border-radius: 10px; overflow: hidden;
+      font: 400 12.5px/1.7 var(--t-mono); color: var(--t-ink);
+    }
+    .tour-figbar { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; background: #111; border-bottom: 1px solid var(--t-line); }
+    .tour-figbar i { width: 9px; height: 9px; border-radius: 50%; background: #2e2e2e; }
+    .tour-figbar span { flex: 1; text-align: center; margin-right: 33px; font-size: 11px; color: var(--t-mute); }
+    .tour-figbody { padding: 12px 14px 14px; min-height: 92px; }
+    .tour-figbody .p { color: var(--t-mute); }
+    .tour-figbody .ok { color: var(--t-yes); }
+    .tour-figbody .out { color: var(--t-dim); opacity: 0; animation: tour-in .3s ease forwards; }
+    .tour-figbody .o1 { animation-delay: 1.5s; }
+    .tour-figbody .o2 { animation-delay: 1.8s; }
+    .tour-figbody .typed { display: inline-block; vertical-align: bottom; overflow: hidden; white-space: nowrap; width: 0; animation: tour-type .9s steps(11) .4s forwards; }
+    .tour-figbody .cur { display: inline-block; width: 7px; height: 14px; margin-left: 2px; vertical-align: -2px; background: var(--t-ink); animation: tour-blink 1s steps(1) infinite; }
+    @keyframes tour-type { to { width: 11ch; } }
+    @keyframes tour-in { to { opacity: 1; } }
+    @keyframes tour-blink { 50% { opacity: 0; } }
+    .tour-stats { display: flex; margin-top: 14px; border: 1px solid var(--t-line2); border-radius: 10px; overflow: hidden; }
+    .tour-stats div { flex: 1; padding: 12px 14px 11px; border-left: 1px solid var(--t-line2); }
+    .tour-stats div:first-child { border-left: none; }
+    .tour-stats b { display: block; font: 600 20px/1 var(--t-sans); letter-spacing: -.04em; color: var(--t-ink); }
+    .tour-stats b span { font: 500 11px var(--t-mono); color: var(--t-mute); margin-left: 2px; letter-spacing: 0; }
+    .tour-stats em { display: block; margin-top: 6px; font: 400 11px var(--t-mono); font-style: normal; color: var(--t-mute); }
+    .tour-card.hero .tour-foot { margin-top: 22px; }
+    .tour-card.hero .tour-foot .tour-btn2 { margin-left: auto; }
+    .tour-hint { margin-top: 14px; font: 400 11px var(--t-mono); color: var(--t-mute); }
+    .tour-hint kbd { font-size: 10.5px; padding: 0 4px; }
+    @media (pointer: coarse) { .tour-hint.keys { display: none; } }
+    .tour-done-check { width: 44px; height: 44px; margin-bottom: 16px; }
+    .tour-done-check .arc { stroke-dasharray: 140; stroke-dashoffset: 140; transform: rotate(-90deg); transform-origin: center; animation: tour-draw .8s cubic-bezier(.2,.7,.2,1) forwards; }
+    .tour-done-check path { stroke-dasharray: 30; stroke-dashoffset: 30; animation: tour-draw .4s .6s ease forwards; }
     @keyframes tour-draw { to { stroke-dashoffset: 0; } }
     .tour-confetti { position: fixed; inset: 0; z-index: 9004; pointer-events: none; }
 
     /* Example panels: what a menu looks like once it has things in it,
-       standing in for the real one, which a new user has nothing in yet. */
+       standing in for the real one, which a new user has nothing in yet.
+       Drawn in the app's own dropdown style so they read as the real menu. */
     .tour-mock {
       position: fixed; z-index: 9001; pointer-events: none;
-      background: #161b22; border: 1px solid #30363d; box-shadow: 0 16px 40px rgba(0,0,0,.5);
-      padding: 10px; font-size: 13px; color: #e6edf3; transition: opacity .2s ease;
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+      padding: 8px; font-size: 13px; color: #e6edf3; transition: opacity .2s ease;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
     .tour-mock svg { width: 14px; height: 14px; flex: none; }
-    .tm-tag {
-      position: absolute; top: -10px; right: 10px; display: inline-flex; align-items: center; gap: 5px;
-      padding: 2px 8px; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
-      color: #1c1400; background: #e3b341;
-    }
-    .tm-tag svg { width: 11px; height: 11px; }
-    .tm-bar { display: flex; gap: 8px; margin-bottom: 8px; }
+    .tm-tag { position: absolute; top: -11px; right: 10px; background: #0a0a0a; }
+    .tm-bar { display: flex; gap: 6px; margin-bottom: 6px; }
     .tm-search {
-      flex: 1; display: flex; align-items: center; gap: 7px; padding: 7px 9px;
+      flex: 1; display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 6px;
       background: #0d1117; border: 1px solid #30363d; color: #6e7681;
     }
-    .tm-bell { width: 32px; display: grid; place-items: center; border: 1px solid #30363d; background: #0d1117; color: #c9d1d9; }
-    .tm-mach { display: flex; align-items: center; gap: 8px; padding: 9px 4px 5px; }
+    .tm-bell { width: 32px; display: grid; place-items: center; border: 1px solid #30363d; border-radius: 6px; background: #0d1117; color: #c9d1d9; }
+    .tm-mach { display: flex; align-items: center; gap: 8px; padding: 8px 6px 4px; }
     .tm-mach b { font-weight: 600; }
     .tm-mach.off { color: #8b949e; }
     .tm-sub { color: #8b949e; font-size: 11px; font-family: Menlo, Monaco, monospace; }
-    .tm-dot { width: 8px; height: 8px; background: #484f58; flex: none; }
-    .tm-dot.on { background: #3fb950; box-shadow: 0 0 8px #3fb95099; }
+    .tm-dot { width: 8px; height: 8px; border-radius: 50%; background: #484f58; flex: none; }
+    .tm-dot.on { background: #3fb950; }
     .tm-acts { margin-left: auto; display: flex; gap: 10px; color: #8b949e; }
     .tm-acts svg { width: 13px; height: 13px; }
-    .tm-sess { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 20px; }
+    .tm-sess { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 22px; border-radius: 6px; }
     .tm-sess.cur, .tm-win.cur { background: rgba(56, 139, 253, 0.1); }
+    .tm-sess.cur .tm-name { color: #58a6ff; }
     .tm-sess > div { min-width: 0; flex: 1; }
     .tm-name { font-weight: 500; }
     .tm-meta { color: #8b949e; font-size: 11px; font-family: Menlo, Monaco, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .tm-state { font-size: 10px; font-weight: 600; padding: 2px 7px; white-space: nowrap; }
-    .tm-state.work { color: #79c0ff; background: rgba(56,139,253,.14); }
-    .tm-state.ask { color: #e3b341; background: rgba(210,153,34,.14); }
-    .tm-state.done { color: #3fb950; background: rgba(63,185,80,.14); }
-    .tm-win { display: flex; align-items: center; gap: 10px; padding: 7px 6px; }
+    .tm-state { font-size: 10.5px; font-weight: 500; padding: 1px 7px; border-radius: 999px; white-space: nowrap; border: 1px solid; }
+    .tm-state.work { color: #58a6ff; border-color: rgba(88,166,255,.4); }
+    .tm-state.ask { color: #d29922; border-color: rgba(210,153,34,.4); }
+    .tm-state.done { color: #3fb950; border-color: rgba(63,185,80,.4); }
+    .tm-win { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 6px; }
     .tm-app {
-      flex: none; width: 30px; height: 30px; display: grid; place-items: center; color: #fff;
-      background: linear-gradient(135deg, var(--c), color-mix(in srgb, var(--c) 55%, #000));
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.25);
+      flex: none; width: 28px; height: 28px; display: grid; place-items: center; color: #c9d1d9;
+      background: #21262d; border: 1px solid #30363d; border-radius: 7px;
     }
-    .tour-mock .tm-app svg { width: 16px; height: 16px; }
-    .tm-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding-top: 6px; }
-    .tm-cell { display: grid; justify-items: center; gap: 6px; padding: 8px 2px; font-size: 11px; color: #c9d1d9; }
-    .tm-cell .tm-app { width: 40px; height: 40px; }
-    .tour-mock .tm-cell .tm-app svg { width: 20px; height: 20px; }
+    .tour-mock .tm-app svg { width: 15px; height: 15px; }
+    .tm-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
+    .tm-cell { display: grid; justify-items: center; gap: 6px; padding: 10px 2px 8px; font-size: 11px; color: #c9d1d9; }
+    .tm-cell .tm-app { width: 38px; height: 38px; border-radius: 9px; }
+    .tour-mock .tm-cell .tm-app svg { width: 18px; height: 18px; }
     .tm-hosthead { padding: 2px 2px 8px; }
-    .tm-meter { padding: 4px 2px; }
-    .tm-meter > div { display: flex; justify-content: space-between; font-size: 12px; color: #8b949e; }
+    .tm-meter { padding: 3px 2px; }
+    .tm-meter > div { display: flex; justify-content: space-between; font-size: 11px; color: #8b949e; }
     .tm-meter b { color: #e6edf3; font-weight: 600; }
-    .tm-meter i { display: block; height: 4px; margin-top: 4px; background: linear-gradient(90deg, #3fb950 var(--v), #21262d var(--v)); }
+    .tm-meter i { display: block; height: 3px; margin-top: 3px; border-radius: 2px; background: linear-gradient(90deg, #3fb950 var(--v), #21262d var(--v)); }
     .tm-btn {
-      display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; padding: 7px;
-      background: #21262d; border: 1px solid #30363d; font-size: 12px;
+      display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 8px; padding: 6px;
+      background: #21262d; border: 1px solid #30363d; border-radius: 6px; font-size: 12px;
     }
     .tm-own { display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 10px; color: #3fb950; font-size: 12px; }
 
@@ -1908,15 +1900,17 @@
        near, so it never covers what it is pointing at. */
     @media (max-width: 560px) {
       .tour-card, .tour-card.hero { width: auto; left: 12px !important; right: 12px; }
-      .tour-card.hero .tour-in { padding: 18px 18px 16px; }
-      .tour-card.hero .tour-title { font-size: 21px; }
+      .tour-card.hero .tour-in { padding: 24px 20px 20px; }
+      .tour-card.hero .tour-title { font-size: 26px; }
       .tour-arrow { display: none; }
       .tm-sess, .tm-win { padding-top: 5px; padding-bottom: 5px; }
     }
     @media (prefers-reduced-motion: reduce) {
       .tour-ring, .tour-card, .tour-arrow, .tour-card .tour-bar i { transition: none; }
-      .tour-ring::before, .tour-ring::after, .tour-scene *, .tour-done-check * { animation: none !important; }
-      .tour-done-check rect, .tour-done-check path { stroke-dashoffset: 0; }
+      .tour-figbody *, .tour-done-check * { animation: none !important; }
+      .tour-figbody .typed { width: 11ch; }
+      .tour-figbody .out { opacity: 1; }
+      .tour-done-check .arc, .tour-done-check path { stroke-dashoffset: 0; }
     }
   </style>
 </head>
@@ -1949,7 +1943,6 @@
       <input id="pin-input" placeholder="PIN" maxlength="8" inputmode="numeric" autocomplete="off" spellcheck="false">
       <button id="connect-btn">Connect</button>
       <button id="share-btn" title="Show join URL + QR for this session">Share</button>
-      <button id="tour-btn" type="button" title="Take the tour" aria-label="Take the tour"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m16.24 7.76-2.12 6.36-6.36 2.12 2.12-6.36z"/></svg>Tour</button>
     </div>
     <div id="status" class="">Session + PIN required</div>
   </header>
@@ -2702,7 +2695,8 @@
       // The count is releases you do not have yet, so it agrees with the
       // status beside it by construction: a count means "update available".
       const behind = changelog && changelog.releases ? changelog.releases.filter(r => !r.current).length : 0;
-      return '<i class="host-br"></i><button class="host-whatsnew">What\u2019s new' + (behind > 0 ? ' \u00b7 ' + behind : '') + '</button>';
+      return '<i class="host-br"></i><button class="host-whatsnew">What\u2019s new' + (behind > 0 ? ' \u00b7 ' + behind : '') + '</button>' +
+        '<button class="host-whatsnew host-tour">Take the tour</button>';
     }
 
     // Version, the control that changes it, and the notes for it — one block,
@@ -10581,6 +10575,7 @@
         sendOwnerAction('upgrade', 'upgrade');
         return;
       }
+      if (e.target.closest('.host-tour')) { document.getElementById('host').open = false; if (window.reminalTour) window.reminalTour.start(); return; }
       if (e.target.closest('.host-whatsnew')) { openChangelog(); return; }
       // Every branch below re-renders the panel (renderHost), which detaches the
       // clicked element. The document-level outside-click closer then sees
@@ -13160,8 +13155,8 @@
     // between controls, a card that follows it, Back / Next / Skip, arrow keys
     // and swipes. Steps describe what they point at rather than where it is,
     // and each one is skipped when its target is not on screen, so the same
-    // list serves a phone (key bar, ⚙ replay) and a desktop (header Tour
-    // button), connected or not.
+    // list serves a phone (key bar, ⚙ replay) and a desktop (Host panel
+    // replay), connected or not.
     //
     // Menus are never opened for real. Someone taking the tour usually has
     // nothing in them yet, so each menu step drops an example panel, filled
@@ -13170,25 +13165,24 @@
     (function initTour() {
       const DONE_KEY = 'reminal-tour-v1';
       const $ = (id) => document.getElementById(id);
-      const svg = (body, extra) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"' + (extra || '') + '>' + body + '</svg>';
-      const soft = 'fill="currentColor" fill-opacity=".22"';
-      // Duotone step icons: an outline plus a tinted fill, drawn on a coloured
-      // tile per step (see .tour-ico[data-c]).
+      const svg = (body, extra) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"' + (extra || '') + '>' + body + '</svg>';
+      // One line weight, no fills, no colour: the same drawing language as
+      // reminal.app and the header icons above.
       const I = {
-        term: svg('<rect x="2.5" y="4" width="19" height="16" ' + soft + '/><path d="m7 10 3 2.5L7 15M12.5 15h4.5"/>'),
-        pulse: svg('<circle cx="12" cy="12" r="9" ' + soft + '/><path d="M3 12h3.5l2.5-5 4 10 2.5-5H21"/>'),
-        mach: svg('<rect x="3" y="4" width="18" height="12" ' + soft + '/><path d="M8 20h8M12 16v4"/>'),
-        bell: svg('<path d="M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8 2.5 8h-17S6 15.5 6 9z" ' + soft + '/><path d="M10.3 20.5a2 2 0 0 0 3.4 0"/>'),
-        win: svg('<rect x="3" y="3" width="8" height="8" ' + soft + '/><rect x="13" y="3" width="8" height="8"/><rect x="3" y="13" width="8" height="8"/><rect x="13" y="13" width="8" height="8" ' + soft + '/>'),
-        app: svg('<path d="M12 2.5c4 2.5 5.5 6.5 5 11l-2.5 3h-5L7 13.5c-.5-4.5 1-8.5 5-11z" ' + soft + '/><circle cx="12" cy="9.5" r="1.8"/><path d="M9.5 16.5 8 21l4-2 4 2-1.5-4.5"/>'),
-        host: svg('<rect x="3" y="3" width="18" height="18" ' + soft + '/><path d="M7 15v-3M11 15V8M15 15v-5M19 15"/>'),
-        share: svg('<circle cx="18" cy="5.5" r="2.8" ' + soft + '/><circle cx="6" cy="12" r="2.8" ' + soft + '/><circle cx="18" cy="18.5" r="2.8" ' + soft + '/><path d="m8.5 10.7 7-3.9M8.5 13.3l7 3.9"/>'),
-        exit: svg('<path d="M4 3h7v18H4z" ' + soft + '/><path d="M11 3H4v18h7M15.5 16.5 20 12l-4.5-4.5M20 12H9"/>'),
-        plug: svg('<path d="M13 3h7v18h-7z" ' + soft + '/><path d="M13 3h7v18h-7M8.5 7.5 13 12l-4.5 4.5M13 12H3"/>'),
-        key: svg('<rect x="2" y="6" width="20" height="12" ' + soft + '/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>'),
-        tools: svg('<path d="M3 6h18v12H3z" ' + soft + '/><path d="M7 10v4M5 12h4M14 11h5M14 14h3"/>'),
-        snip: svg('<rect x="4" y="3" width="16" height="18" ' + soft + '/><path d="M8 8h8M8 12h8M8 16h5"/>'),
-        dock: svg('<rect x="3" y="14" width="18" height="7" ' + soft + '/><path d="M12 11V3M8.5 6.5 12 3l3.5 3.5M7 17.5h10"/>'),
+        term: svg('<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="m7.5 9.5 3 2.5-3 2.5M12.5 14.5h4"/>'),
+        pulse: svg('<path d="M3 12h4l2.5-6 5 12L17 12h4"/>'),
+        mach: svg('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+        bell: svg('<path d="M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8 2.5 8h-17S6 15.5 6 9z"/><path d="M10.3 20.5a2 2 0 0 0 3.4 0"/>'),
+        win: svg('<rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/>'),
+        app: svg('<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>'),
+        host: svg('<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-6"/>'),
+        share: svg('<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4"/>'),
+        exit: svg('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/>'),
+        plug: svg('<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><path d="m10 17 5-5-5-5M15 12H3"/>'),
+        key: svg('<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M18 13h.01M8 16h8"/>'),
+        tools: svg('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
+        snip: svg('<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12"/>'),
+        dock: svg('<path d="m7 15 5-5 5 5"/><path d="M4 20h16"/><path d="M12 10V3"/>'),
         arrowR: svg('<path d="M5 12h14M13 6l6 6-6 6"/>'),
         info: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'),
         search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
@@ -13250,14 +13244,14 @@
         web: svg('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z"/>'),
         pen: svg('<path d="M12 19l7-7-3-3-7 7v3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18z"/>'),
         term: svg('<path d="m5 8 4 4-4 4M12 16h7"/>'),
-        note: svg('<path d="M5 3h10l4 4v14H5z"/><path d="M9 11h6M9 15h6"/>'),
+        note: svg('<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><path d="M9 11h6M9 15h6"/>'),
         music: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'),
-        mail: svg('<rect x="3" y="5" width="18" height="14"/><path d="m3 7 9 6 9-6"/>'),
-        cal: svg('<rect x="3" y="5" width="18" height="16"/><path d="M3 10h18M8 3v4M16 3v4"/>'),
-        files: svg('<path d="M3 6h7l2 2h9v11H3z"/>'),
-        photo: svg('<rect x="3" y="4" width="18" height="16"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/>'),
+        mail: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>'),
+        cal: svg('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>'),
+        files: svg('<path d="M20 19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5l2 2h7a1 1 0 0 1 1 1z"/>'),
+        photo: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 17-5-5-9 8"/>'),
       };
-      const tag = '<div class="tm-tag">' + I.info + 'Example</div>';
+      const tag = '<div class="tm-tag">Example</div>';
       const acts = '<span class="tm-acts">' + G.plus + G.pen + G.x + '</span>';
       const sess = (name, meta, state, cur) => '<div class="tm-sess' + (cur ? ' cur' : '') + '"><div><div class="tm-name">' + name + '</div><div class="tm-meta">' + meta + '</div></div>' +
         (state ? '<span class="tm-state ' + state[0] + '">' + state[1] + '</span>' : '') + '</div>';
@@ -13292,23 +13286,23 @@
       };
       const MOCK_W = { machines: 340, windows: 320, apps: 312, host: 290 };
       const NOTE = {
-        machines: 'Example data. Yours will list your own machines and sessions.',
-        windows: 'Example windows. Yours will list what is open on your computer.',
-        apps: 'Example apps. Yours will list the apps on your computer.',
-        host: 'Example numbers. Yours are live from your computer.',
+        machines: 'Placeholder data. Yours will list your own machines and sessions.',
+        windows: 'Placeholder data. Yours will list the windows open on your computer.',
+        apps: 'Placeholder data. Yours will list the apps on your computer.',
+        host: 'Placeholder numbers. Yours are live from your computer.',
       };
-      const exampleNote = (name) => '<div class="tour-note">' + I.info + '<span>' + NOTE[name] + '</span></div>';
+      const exampleNote = (name) => '<div class="tour-note"><span class="tour-chip">Example</span><span>' + NOTE[name] + '</span></div>';
 
       const STEPS = [
         { id: 'welcome', hero: true },
         {
-          id: 'connect', icon: I.plug, c: 'blue', when: () => !connected(),
+          id: 'connect', icon: I.plug, when: () => !connected(),
           target: () => [$('session-input'), $('pin-input'), $('connect-btn')],
           title: 'Join a session',
           body: () => 'Run <code>reminal</code> on your computer. It prints a <b>session code</b> and a <b>PIN</b>: type them here, or just scan the QR code it shows and skip the typing.',
         },
         {
-          id: 'terminal', icon: I.term, c: 'green', when: connected, target: () => $('terminal-wrap'), place: 'inside',
+          id: 'terminal', icon: I.term, when: connected, target: () => $('terminal-wrap'), place: 'inside',
           title: 'This is your computer’s terminal',
           body: () => 'Not a copy, the real shell, live. Whatever you type runs there, and everyone watching sees the same screen. It is end-to-end encrypted, so the relay in between only ever sees noise.',
           tips: () => touchUI()
@@ -13316,112 +13310,101 @@
             : ['Drop a file here to upload it to the computer', '<kbd>' + mod + '</kbd> <kbd>F</kbd> searches the scrollback', 'Paste a screenshot and it lands on the computer'],
         },
         {
-          id: 'status', icon: I.pulse, c: 'teal', target: () => $('status'),
+          id: 'status', icon: I.pulse, target: () => $('status'),
           title: () => connected() ? 'Live, and it stays that way' : 'Connection status',
           body: () => connected()
             ? '<b class="ok">Green</b> means live. If your Wi-Fi drops or your laptop sleeps, it turns <b class="warn">amber</b> and reconnects on its own, right where you left off.'
             : 'This pill tells you what is happening: what reminal is waiting for, when it is connecting, and green once you are live.',
         },
         {
-          id: 'machines', icon: I.mach, c: 'blue', anchor: () => summary('recents'), mock: 'machines',
+          id: 'machines', icon: I.mach, anchor: () => summary('recents'), mock: 'machines',
           title: 'All your machines, one list',
           body: () => 'Every computer you own and every terminal running on it, with what each one is doing. Pick one to jump straight in. Your own machines never ask for a PIN.',
           tips: () => [k('plus') + ' starts a new terminal on that machine', k('pen') + ' renames it, ' + k('x') + ' ends a session', 'Search finds a session by name, folder or what is on its screen'],
         },
         {
-          id: 'alerts', icon: I.bell, c: 'amber', anchor: () => summary('recents'), mock: 'machines', focus: '[data-mock="bell"]',
+          id: 'alerts', icon: I.bell, anchor: () => summary('recents'), mock: 'machines', focus: '[data-mock="bell"]',
           title: 'Alerts',
           body: () => 'Get a notification when a machine’s CPU runs hot, its battery gets low, or the charger is unplugged, even with this page closed.',
         },
         {
-          id: 'windows', icon: I.win, c: 'violet', when: connected, anchor: () => summary('windows'), mock: 'windows',
+          id: 'windows', icon: I.win, when: connected, anchor: () => summary('windows'), mock: 'windows',
           title: 'Any window, right here',
           body: () => 'Every app window on the computer. Pick one and it opens as a live pane you can click, type into, drag and resize, like it was running here.',
         },
         {
-          id: 'apps', icon: I.app, c: 'pink', when: connected, anchor: () => summary('apps'), mock: 'apps',
+          id: 'apps', icon: I.app, when: connected, anchor: () => summary('apps'), mock: 'apps',
           title: 'Launch apps',
           body: () => 'Start any app on the computer from here. Its window shows up ready to use.',
         },
         {
-          id: 'host', icon: I.host, c: 'green', when: connected, anchor: () => summary('host'), mock: 'host',
+          id: 'host', icon: I.host, when: connected, anchor: () => summary('host'), mock: 'host',
           title: 'The computer at a glance',
           body: () => 'Live CPU, memory and battery, a button for another terminal, and one for the whole desktop. Updates and <b>What’s new</b> live here too.',
         },
         {
-          id: 'share', icon: I.share, c: 'violet', when: connected, target: () => $('share-btn'),
+          id: 'share', icon: I.share, when: connected, target: () => $('share-btn'),
           title: 'Bring someone in',
           body: () => 'A link and a QR code for this exact terminal. <b>Copy for an AI agent</b> gives an agent everything it needs to join and work alongside you.',
         },
         {
-          id: 'leave', icon: I.exit, c: 'red', when: connected, target: () => $('connect-btn'),
+          id: 'leave', icon: I.exit, when: connected, target: () => $('connect-btn'),
           title: 'Leave any time',
           body: () => 'Disconnecting only closes this view. The terminal keeps running on your computer, so you can come back to it from any device.',
         },
         {
-          id: 'keys', icon: I.key, c: 'blue', when: touchUI,
+          id: 'keys', icon: I.key, when: touchUI,
           target: () => keys($('keybar').querySelector('[data-key="up"]'), $('keybar').querySelector('[data-key="tilde"]')),
           enter: () => scrollKeybar(false),
           title: 'Keys your phone forgot',
           body: () => 'Arrows, <b>Tab</b>, <b>Esc</b> and the Ctrl shortcuts a shell needs. Hold an arrow or ' + k('bksp') + ' and it repeats. Swipe the bar for more.',
         },
         {
-          id: 'tools', icon: I.tools, c: 'teal', when: touchUI,
+          id: 'tools', icon: I.tools, when: touchUI,
           target: () => keys($('kb-focus-btn'), $('upload-btn')),
           enter: () => scrollKeybar(true),
           title: 'Handy tools',
           body: () => 'Bring up the keyboard, make text bigger or smaller, copy and paste, search the scrollback, and <b>upload</b> a photo or file straight to the computer.',
         },
         {
-          id: 'snips', icon: I.snip, c: 'amber', when: touchUI, target: () => $('snip-btn'),
+          id: 'snips', icon: I.snip, when: touchUI, target: () => $('snip-btn'),
           title: 'Snippets',
           body: () => 'Save the commands you type all the time. <b>Drag up</b> from ' + k('snip') + ' and let go on one to paste it. Tap it to manage them.',
         },
         {
-          id: 'dock', icon: I.dock, c: 'violet', when: touchUI, target: () => $('keybar-toggle'),
+          id: 'dock', icon: I.dock, when: touchUI, target: () => $('keybar-toggle'),
           title: 'Switch sessions in one move',
           body: () => '<b>Tap</b> ' + k('menu') + ' to hide the key bar. <b>Drag up</b> and slide onto a session to switch to it, across all your machines.',
         },
         // The finale lands the spotlight on where the tour lives from now on.
-        { id: 'done', hero: true, done: true, spot: () => touchUI() ? $('settings-btn') : $('tour-btn'), enter: () => scrollKeybar(true) },
+        { id: 'done', hero: true, done: true, spot: () => touchUI() ? $('settings-btn') : summary('host'), enter: () => scrollKeybar(true) },
       ];
 
       let active = false, list = [], idx = 0, seen = new Set();
       let blockEl, ringEl, cardEl, mockEl = null, mockName = '', tick = null, lastKey = '', swipeX = null;
 
+      // The welcome and the finale borrow reminal.app's hero: a faint grid,
+      // a mono eyebrow, a headline that is mostly grey with the point in
+      // white, an always-dark terminal figure and a row of figures.
       function heroHTML(done) {
         if (done) {
-          return '<svg class="tour-done-check" viewBox="0 0 56 56" fill="none" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter">' +
-            '<rect x="4" y="4" width="48" height="48" stroke="#3fb950"/><path d="m17 29 7 7 15-15" stroke="#3fb950"/></svg>' +
-            '<div class="tour-title">You’re all set</div>' +
-            '<div class="tour-body">That’s everything. Your computer is a tap away now, from anywhere.<br>Replay this tour any time from ' +
-            (touchUI() ? k('gear') + ' on the key bar.' : 'the <b>Tour</b> button up top.') + '</div>';
+          return '<div class="tour-grid"></div>' +
+            '<svg class="tour-done-check" viewBox="0 0 48 48" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+            '<circle cx="24" cy="24" r="22" stroke="#2e2e2e"/><circle class="arc" cx="24" cy="24" r="22" stroke="#ededed"/><path d="m15.5 24.5 6 6 11-12" stroke="#ededed"/></svg>' +
+            '<div class="tour-eyebrow">Tour complete</div>' +
+            '<div class="tour-title">That’s the whole app. <span class="em">Your computer is a tap away.</span></div>' +
+            '<div class="tour-body">Replay this tour any time from ' +
+            (touchUI() ? k('gear') + ' on the key bar.' : 'the <b>Host</b> menu, next to What’s new.') + '</div>';
         }
-        return '<svg class="tour-scene" viewBox="0 0 340 128" fill="none" aria-hidden="true">' +
-          '<defs><linearGradient id="tour-g" x1="0" x2="1"><stop offset="0" stop-color="#58a6ff"/><stop offset="1" stop-color="#a371f7"/></linearGradient></defs>' +
-          // the computer
-          '<rect x="14" y="20" width="118" height="78" fill="#0d1117" stroke="#30363d" stroke-width="2"/>' +
-          '<path d="M4 108h138" stroke="#30363d" stroke-width="4"/>' +
-          '<text x="26" y="44" font-family="Menlo,monospace" font-size="10" fill="#3fb950">~ $</text>' +
-          '<svg x="48" y="35" width="56" height="12" class="typed" style="overflow:hidden"><text x="0" y="9" font-family="Menlo,monospace" font-size="10" fill="#e6edf3">npm run dev</text></svg>' +
-          '<rect x="26" y="54" width="70" height="4" fill="#21262d"/><rect x="26" y="64" width="52" height="4" fill="#21262d"/><rect x="26" y="74" width="80" height="4" fill="#21262d"/>' +
-          '<rect class="cur" x="104" y="36" width="6" height="10" fill="#58a6ff"/>' +
-          // the line between
-          '<path class="flow" d="M140 56 H200" stroke="url(#tour-g)" stroke-width="3"/>' +
-          '<path class="flow rev" d="M140 72 H200" stroke="url(#tour-g)" stroke-width="3" opacity=".6"/>' +
-          '<g class="lock"><rect x="155" y="49" width="30" height="30" fill="#161b22" stroke="url(#tour-g)" stroke-width="2"/>' +
-          '<rect x="164" y="63" width="12" height="9" fill="#79c0ff"/><path d="M166.5 63v-3a3.5 3.5 0 0 1 7 0v3" stroke="#79c0ff" stroke-width="2"/></g>' +
-          // the phone
-          '<rect x="226" y="6" width="62" height="116" fill="#0d1117" stroke="#30363d" stroke-width="2"/>' +
-          '<rect x="248" y="12" width="18" height="3" fill="#30363d"/>' +
-          '<text x="234" y="34" font-family="Menlo,monospace" font-size="8" fill="#3fb950">~ $</text>' +
-          '<svg x="252" y="27" width="56" height="10" class="typed" style="overflow:hidden"><text x="0" y="7" font-family="Menlo,monospace" font-size="8" fill="#e6edf3">npm run dev</text></svg>' +
-          '<rect x="234" y="42" width="42" height="3" fill="#21262d"/><rect x="234" y="50" width="30" height="3" fill="#21262d"/>' +
-          '<rect x="232" y="100" width="50" height="14" fill="#161b22" stroke="#30363d"/>' +
-          '</svg>' +
-          '<div class="tour-title">Welcome to <span style="color:#58a6ff">re</span>minal</div>' +
-          '<div class="tour-body">Your computer’s terminal, windows and apps, live on any screen. Here’s a one-minute look around.</div>' +
-          '<div class="tour-chips"><span>End-to-end encrypted</span><span>Works on any device</span><span>Nothing to install here</span></div>';
+        return '<div class="tour-grid"></div>' +
+          '<div class="tour-eyebrow">Welcome to reminal</div>' +
+          '<div class="tour-title">Your computer’s terminal, windows and apps, <span class="em">live on this screen.</span></div>' +
+          '<div class="tour-body">A one-minute look at where everything is. Nothing here changes your computer.</div>' +
+          '<div class="tour-fig" aria-hidden="true"><div class="tour-figbar"><i></i><i></i><i></i><span>~/projects/webapp</span></div>' +
+          '<div class="tour-figbody"><div><span class="p">$</span> <span class="typed">npm run dev</span><span class="cur"></span></div>' +
+          '<div class="out o1">  ready on <span class="ok">http://localhost:3000</span></div>' +
+          '<div class="out o2">  compiled in 412 ms</div></div></div>' +
+          '<div class="tour-stats"><div><b>E2E</b><em>encrypted</em></div><div><b>0</b><em>open ports</em></div><div><b>60<span>fps</span></b><em>live windows</em></div></div>';
       }
 
       function build() {
@@ -13522,8 +13505,8 @@
         } else {
           const title = typeof step.title === 'function' ? step.title() : step.title;
           const tips = step.tips ? step.tips() : null;
-          inner = '<div class="tour-top"><div class="tour-ico" data-c="' + (step.c || 'blue') + '">' + (step.icon || '') + '</div>' +
-            '<div class="tour-count">Step ' + pos + ' of ' + mid + '</div>' +
+          inner = '<div class="tour-top"><div class="tour-ico">' + (step.icon || '') + '</div>' +
+            '<div class="tour-count">' + String(pos).padStart(2, '0') + '<span> / ' + String(mid).padStart(2, '0') + '</span></div>' +
             '<button type="button" class="tour-x" data-t="skip">Skip tour</button></div>' +
             '<div class="tour-title">' + title + '</div>' +
             '<div class="tour-body">' + step.body() + '</div>' +
@@ -13545,7 +13528,9 @@
             { duration: 320, easing: 'cubic-bezier(.2,.85,.25,1)' });
         }
         const primary = cardEl.querySelector('.tour-btn1');
-        if (primary) primary.focus({ preventScroll: true });
+        // Focused for Enter and screen readers, without painting a focus
+        // ring nobody asked for (focusVisible is ignored where unsupported).
+        if (primary) primary.focus({ preventScroll: true, focusVisible: false });
         lastKey = '';
         layout();
       }
@@ -13725,7 +13710,7 @@
         document.body.appendChild(c);
         const g = c.getContext('2d');
         g.scale(dpr, dpr);
-        const colors = ['#58a6ff', '#a371f7', '#3fb950', '#d29922', '#f778ba', '#79c0ff'];
+        const colors = ['#ededed', '#a1a1a1', '#7d7d7d', '#ffffff', '#62c073'];
         const cx = innerWidth / 2, cy = innerHeight / 2;
         const bits = Array.from({ length: 160 }, () => {
           const a = Math.random() * Math.PI * 2, v = 5 + Math.random() * 9;
@@ -13748,8 +13733,6 @@
       }
 
       window.reminalTour = { start };
-      const tb = $('tour-btn');
-      if (tb) tb.addEventListener('click', (e) => { e.stopPropagation(); start(); });
 
       // First visit: show it once. A join link waits for the session to come
       // up (or give up) so the tour can show the connected UI; a bare visit
