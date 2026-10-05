@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -217,6 +218,7 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 	var child *exec.Cmd
 	var childStdin io.WriteCloser
 	var childDone chan struct{} // closed by the waiter goroutine when the child exits
+	mirroring := false          // the child was told to mirror the built-in panel
 	lastW, lastH := 1920, 1080
 
 	reap := func() {
@@ -241,13 +243,24 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		}
 		child, childStdin, childDone = nil, nil, nil
 	}
+	// A session on a machine whose daemon is installed never holds the
+	// display: one it held died with it (every session restarting at once
+	// took a closed-lid Mac's display away for good, 2026-10-04). The daemon
+	// owns it, and makes it at its own start, not a poll later.
+	if !isDaemon {
+		if u, err := user.Current(); err == nil && serviceInstalled(u) {
+			return
+		}
+	}
 	defer reap()
 	defer releaseCensusLease()
 
+	first := isDaemon
 	for {
-		if sleepOrStop(stop, vdisplayPoll) {
+		if !first && sleepOrStop(stop, vdisplayPoll) {
 			return
 		}
+		first = false
 
 		// Someone else is already doing this. A deferring session spawns
 		// nothing — a stat, a small read and a signal-0 probe — which is the
@@ -282,6 +295,13 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		if child == nil && vdisplayHeldByOther() {
 			continue
 		}
+		// A built-in panel mirroring our display is no longer listed as a
+		// screen, so the census alone would never see the lid open: ask the
+		// lid, and stand down so the helper puts the person's screen back.
+		if child != nil && mirroring && !lidClosed() {
+			reap()
+			continue
+		}
 		real, w, h, err := displayCensus()
 		if err != nil {
 			continue // census is best-effort; try again next tick
@@ -312,7 +332,8 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		// REMINAL_FORCE_VDISPLAY exists purely so this path is testable with a
 		// monitor attached (census is skipped above when forcing).
 		args := []string{"vdisplay", strconv.Itoa(lastW), strconv.Itoa(lastH)}
-		if lidClosed() {
+		mirroring = lidClosed()
+		if mirroring {
 			// The built-in panel stays listed with the lid closed and keeps
 			// every window on it, dark: make it a mirror of the virtual display
 			// so windows are drawn where capture can see them. The helper puts
