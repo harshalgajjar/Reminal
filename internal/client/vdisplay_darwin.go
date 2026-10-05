@@ -226,10 +226,16 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		if childStdin != nil {
 			_ = childStdin.Close() // lifeline EOF — graceful exit
 		}
-		if child.Process != nil {
-			_ = child.Process.Kill() // backstop
+		// Let it exit on its own first: a helper mirroring the built-in panel
+		// puts the person's screen back as it goes, which a kill would skip.
+		select {
+		case <-childDone:
+		case <-time.After(3 * time.Second):
+			if child.Process != nil {
+				_ = child.Process.Kill() // backstop
+			}
+			<-childDone // the waiter goroutine reaps; no zombies
 		}
-		<-childDone // the waiter goroutine reaps; no zombies
 		if p := vdisplayLockPath(); p != "" {
 			_ = os.Remove(p)
 		}
@@ -305,7 +311,16 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		}
 		// REMINAL_FORCE_VDISPLAY exists purely so this path is testable with a
 		// monitor attached (census is skipped above when forcing).
-		cmd := exec.Command(helper, "vdisplay", strconv.Itoa(lastW), strconv.Itoa(lastH))
+		args := []string{"vdisplay", strconv.Itoa(lastW), strconv.Itoa(lastH)}
+		if lidClosed() {
+			// The built-in panel stays listed with the lid closed and keeps
+			// every window on it, dark: make it a mirror of the virtual display
+			// so windows are drawn where capture can see them. The helper puts
+			// it back when it exits (the lid opening makes the census count
+			// the built-in again, and reap stops the helper).
+			args = append(args, "mirror")
+		}
+		cmd := exec.Command(helper, args...)
 		stdin, err := cmd.StdinPipe() // lifeline
 		if err != nil {
 			continue

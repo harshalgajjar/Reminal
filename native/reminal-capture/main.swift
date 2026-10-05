@@ -346,7 +346,20 @@ if fstat(0, &stdinStat) == 0 && (stdinStat.st_mode & S_IFMT) == S_IFIFO {
     }
 }
 
-// Virtual display subcommand: `reminal-capture vdisplay <w> <h>` creates a
+// Displays the vdisplay subcommand made mirrors of its virtual display; put
+// back on exit so the person's own screen returns when the lid opens.
+var mirroredDisplays: [CGDirectDisplayID] = []
+
+func unmirrorDisplays() {
+    guard !mirroredDisplays.isEmpty else { return }
+    var cfg: CGDisplayConfigRef?
+    guard CGBeginDisplayConfiguration(&cfg) == .success else { return }
+    for t in mirroredDisplays { _ = CGConfigureDisplayMirrorOfDisplay(cfg, t, kCGNullDirectDisplay) }
+    _ = CGCompleteDisplayConfiguration(cfg, .forSession)
+    mirroredDisplays = []
+}
+
+// Virtual display subcommand: `reminal-capture vdisplay <w> <h> [mirror]` creates a
 // software display of w×h points named "reminal" and keeps it alive until this
 // process exits (stdin lifeline above included). Used by closed-lid mode: a
 // headless Mac (lid shut, no monitor) has no display, so windows lose their
@@ -415,6 +428,44 @@ if args.count >= 2, args[1] == "vdisplay" {
     // display lives exactly as long as this process (`display` is kept alive by
     // the closure reference below).
     print("vdisplay up id=\(did) \(vw)x\(vh)")
+
+    // `mirror` (closed lid): macOS moves windows to a new display only when one
+    // disappears, and with the lid closed the built-in panel stays listed and
+    // "active" while WindowServer stops compositing it — so every window stays
+    // on a dark panel and capture gets nothing, virtual display or not. Making
+    // the built-in a mirror of the virtual display puts the virtual one in
+    // charge: windows are drawn there, and capture and clicks work. Undone when
+    // this process exits (lifeline EOF, SIGTERM), so opening the lid — the
+    // agent stops us then — gives the person their screen back as it was.
+    // `mirror=<id>` names the display to mirror explicitly (tests on a Mac with
+    // no built-in panel).
+    if did != 0, args.count >= 5, args[4].hasPrefix("mirror") {
+        var targets: [CGDirectDisplayID] = []
+        if args[4].hasPrefix("mirror="), let id = UInt32(args[4].dropFirst("mirror=".count)) {
+            targets = [id]
+        } else {
+            var n: UInt32 = 0
+            var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+            if CGGetOnlineDisplayList(16, &ids, &n) == .success {
+                targets = ids.prefix(Int(n)).filter { $0 != did && CGDisplayIsBuiltin($0) != 0 }
+            }
+        }
+        if !targets.isEmpty {
+            mirroredDisplays = targets
+            var cfg: CGDisplayConfigRef?
+            var ok = CGBeginDisplayConfiguration(&cfg) == .success
+            if ok {
+                for t in targets { ok = ok && CGConfigureDisplayMirrorOfDisplay(cfg, t, did) == .success }
+                ok = ok && CGCompleteDisplayConfiguration(cfg, .forSession) == .success
+                if !ok { CGCancelDisplayConfiguration(cfg) }
+            }
+            let held = targets.allSatisfy { CGDisplayMirrorsDisplay($0) == did }
+            print("vdisplay mirror \(targets.map(String.init).joined(separator: ",")) -> \(did) \(ok && held ? "ok" : "failed")")
+            atexit { unmirrorDisplays() }
+            signal(SIGTERM) { _ in unmirrorDisplays(); exit(0) }
+        }
+    }
+    fflush(stdout)
     FileHandle.standardOutput.synchronizeFile()
     withExtendedLifetime(display) { CFRunLoopRun() }
     exit(0)
