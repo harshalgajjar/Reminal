@@ -100,12 +100,12 @@ func parseCensus(out string, lidClosed bool) (real, w, h int) {
 			continue
 		}
 		if len(f) >= 6 {
-			builtin, asleep, active := f[3] == "1", f[4] == "1", f[5]
-			if builtin && lidClosed {
+			// Only the lid decides. A display that is merely asleep (energy
+			// settings dim it after idle) is still a display: dropping it would
+			// grow the virtual display on every idle and move the person's
+			// windows onto it and back on wake.
+			if f[3] == "1" && lidClosed {
 				continue // a closed lid's panel is dark: nothing to capture
-			}
-			if asleep || active == "0" {
-				continue
 			}
 		} else if lidClosed && strings.Contains(strings.ToLower(f[0]), "built-in") {
 			continue

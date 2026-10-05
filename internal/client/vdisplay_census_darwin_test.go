@@ -7,7 +7,7 @@ import "testing"
 
 // A closed lid's built-in panel, still listed by NSScreen, is not a display:
 // counting it left a closed-lid Mac with no virtual display (Harshal's Mac,
-// 2026-10-04). Asleep or inactive displays do not count either.
+// 2026-10-04). Asleep or inactive displays do count: display sleep is routine.
 func TestParseCensusLidClosed(t *testing.T) {
 	builtin := "Built-in Retina Display\t1728\t1117\t1\t0\t1"
 	external := "DELL U2720Q\t2560\t1440\t0\t0\t1"
@@ -22,8 +22,9 @@ func TestParseCensusLidClosed(t *testing.T) {
 		{"lid closed, built-in only (the bug)", builtin, true, 0, 0},
 		{"lid closed, external attached", builtin + "\n" + external, true, 1, 2560},
 		{"our virtual display never counts", ours, true, 0, 0},
-		{"asleep display", "Studio Display\t2560\t1440\t0\t1\t1", false, 0, 0},
-		{"inactive display", "Studio Display\t2560\t1440\t0\t0\t0", false, 0, 0},
+		{"external display asleep, lid open: still a display", "Studio Display\t2560\t1440\t0\t1\t1", false, 1, 2560},
+		{"built-in asleep, lid open: still a display", "Built-in Retina Display\t1728\t1117\t1\t1\t1", false, 1, 1728},
+		{"inactive display: still a display", "Studio Display\t2560\t1440\t0\t0\t0", false, 1, 2560},
 		{"old three-field line, lid open", "Built-in Retina Display\t1728\t1117", false, 1, 1728},
 		{"old three-field line, lid closed", "Built-in Retina Display\t1728\t1117", true, 0, 0},
 		{"flags unknown (bridge failed)", "Built-in Retina Display\t1728\t1117\t\t\t", false, 1, 1728},
