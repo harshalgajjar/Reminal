@@ -84,6 +84,7 @@ func allChecks(currentVersion string) []check {
 		{"At-rest key", checkAtRestKey},
 		{"Owner key", checkOwnerKey},
 		{"Window notes", checkWindowNotes},
+		{"Display", checkDisplay},
 	}
 }
 
@@ -340,4 +341,13 @@ func checkWindowNotes() (level, string) {
 		p = "~" + strings.TrimPrefix(p, home)
 	}
 	return levelOK, fmt.Sprintf("%d kept in %s (survive daemon restarts)", n, p)
+}
+
+// checkDisplay: what this Mac can show a viewer (macOS only).
+func checkDisplay() (level, string) {
+	lvl, msg, ok := displayDoctor()
+	if !ok {
+		return levelOK, "n/a on this OS"
+	}
+	return lvl, msg
 }

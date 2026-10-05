@@ -1538,14 +1538,35 @@ func (s winSinks) expectsAck() bool { return len(s.confirmed) > 0 || s.ws }
 
 // winStream is the state machine for one mirrored window. One runs per
 // streamed id (see startWindowStream); all fields are goroutine-local.
+// noPictureAfter is how long a stream may run without a single picture
+// before the pane is told why; noPictureEvery is how often it is told again.
+const (
+	noPictureAfter = 10 * time.Second
+	noPictureEvery = 5 * time.Second
+)
+
+// noPictureDue decides, for a heartbeat, whether the stream is still without
+// a picture past noPictureAfter (hold: send no heartbeat, which would keep the
+// pane on "Connecting…") and whether it is time to tell the pane why (tell).
+func noPictureDue(gotPicture bool, startedAt, lastTold, now time.Time) (hold, tell bool) {
+	if gotPicture || now.Sub(startedAt) <= noPictureAfter {
+		return false, false
+	}
+	return true, now.Sub(lastTold) >= noPictureEvery
+}
+
 type winStream struct {
-	a       *Agent
-	b       windowBackend
-	w       winInfo
-	stop    <-chan struct{}
-	ack     <-chan uint64
-	quality <-chan windowQuality
-	profile windowQuality
+	// startedAt, gotPicture, lastNoPicture: see sendHeartbeat.
+	startedAt     time.Time
+	gotPicture    bool
+	lastNoPicture time.Time
+	a             *Agent
+	b             windowBackend
+	w             winInfo
+	stop          <-chan struct{}
+	ack           <-chan uint64
+	quality       <-chan windowQuality
+	profile       windowQuality
 	// forceSend makes the next capture ship whatever the change detector
 	// thinks, and bypasses the relay pacing while it does. Raised for a viewer
 	// that has joined an in-flight stream and has no picture at all; cleared
@@ -1630,7 +1651,7 @@ type winStream struct {
 // maxFramesInFlight unacknowledged frames, so latency can't accumulate on a
 // slow link and the rate adapts to what the viewer actually consumes.
 func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64, quality <-chan windowQuality, keyReq, flush *atomic.Bool) {
-	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, flush: flush, lastGeoCheck: time.Now()}
+	s := &winStream{a: a, b: a.windows(), w: w, stop: stop, ack: ack, quality: quality, profile: (windowQuality{}).normalized(), keyReq: keyReq, flush: flush, lastGeoCheck: time.Now(), startedAt: time.Now()}
 	defer s.cleanup()
 	s.run()
 }
@@ -1702,6 +1723,9 @@ func (s *winStream) run() {
 		s.noteKeyRequest()
 		start := time.Now()
 		f, err := s.capture()
+		if len(f.Data) > 0 {
+			s.gotPicture = true
+		}
 		switch {
 		case err != nil || (len(f.Data) == 0 && !s.capNative):
 			// No pixels from the subprocess path: closed window, or capture
@@ -2665,6 +2689,21 @@ func buildWinBinMsgs(id string, seq uint64, w, h int, key bool, data []byte, max
 // congestion that delays frames it ALSO stopped arriving — so the pane
 // announced the host was asleep at the one moment it was busiest.
 func (s *winStream) sendHeartbeat(conn *websocket.Conn, confirmed, probing []*rtcPeer, vc int) {
+	// A stream that has never produced a picture is not "alive with an
+	// unchanged screen": a heartbeat would keep the pane on "Connecting…"
+	// forever (a closed lid with no display). Past noPictureAfter, say why
+	// instead, now and then.
+	if hold, tell := noPictureDue(s.gotPicture, s.startedAt, s.lastNoPicture, time.Now()); hold {
+		if tell {
+			s.lastNoPicture = time.Now()
+			s.lastSent = time.Now()
+			s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, struct {
+				ID    string `json:"id"`
+				Error string `json:"error"`
+			}{ID: s.w.ID, Error: noPictureReason()})
+		}
+		return
+	}
 	hb := struct {
 		ID string `json:"id"`
 		HB bool   `json:"hb"`

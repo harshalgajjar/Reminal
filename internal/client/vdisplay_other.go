@@ -8,3 +8,9 @@ package client
 // vdisplayLoop is macOS-only: closed-lid mode's virtual display rides the
 // ScreenCaptureKit helper, which doesn't exist elsewhere.
 func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {}
+
+func noPictureReason() string {
+	return "Screen capture is running but has produced no picture yet. If this persists, run reminal doctor on that machine."
+}
+
+func displayDoctor() (level, string, bool) { return levelOK, "", false }

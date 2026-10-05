@@ -58,23 +58,56 @@ func vdisplayLockPath() string {
 // displayCensus returns how many REAL displays are attached (ours excluded)
 // and the point size of the first real one (0,0 when none) — remembered so the
 // virtual display can match the layout the windows were living in.
+//
+// With the lid closed, macOS can go on listing the built-in panel as a screen
+// although it is dark and ScreenCaptureKit gets nothing from it: counting it
+// left a closed-lid Mac with no virtual display and every desktop/window view
+// on "Connecting…" forever. So the built-in display does not count while the
+// lid is closed, and no display counts while it is asleep or inactive.
 func displayCensus() (real int, w, h int, err error) {
-	out, err := run("osascript", "-l", "JavaScript", "-e",
-		`ObjC.import("AppKit");
-var s = $.NSScreen.screens, out = [];
-for (var i = 0; i < s.count; i++) {
-  var sc = s.objectAtIndex(i), name = "";
-  try { name = ObjC.unwrap(sc.localizedName); } catch (e) {}
-  var f = sc.frame;
-  out.push(name + "\t" + Math.round(f.size.width) + "\t" + Math.round(f.size.height));
-}
-out.join("\n");`)
+	out, err := run("osascript", "-l", "JavaScript", "-e", censusScript)
 	if err != nil {
 		return 0, 0, 0, err
 	}
+	real, w, h = parseCensus(out, lidClosed())
+	return real, w, h, nil
+}
+
+// censusScript prints one line per screen: name, width, height, and whether
+// it is the built-in panel, asleep, and active (1/0; "" when unknown).
+const censusScript = `ObjC.import("AppKit"); ObjC.import("CoreGraphics");
+var s = $.NSScreen.screens, out = [];
+for (var i = 0; i < s.count; i++) {
+  var sc = s.objectAtIndex(i), name = "", builtin = "", asleep = "", active = "";
+  try { name = ObjC.unwrap(sc.localizedName); } catch (e) {}
+  try {
+    var id = sc.deviceDescription.objectForKey("NSScreenNumber").unsignedIntValue;
+    builtin = $.CGDisplayIsBuiltin(id) ? "1" : "0";
+    asleep = $.CGDisplayIsAsleep(id) ? "1" : "0";
+    active = $.CGDisplayIsActive(id) ? "1" : "0";
+  } catch (e) {}
+  var f = sc.frame;
+  out.push(name + "\t" + Math.round(f.size.width) + "\t" + Math.round(f.size.height) + "\t" + builtin + "\t" + asleep + "\t" + active);
+}
+out.join("\n");`
+
+// parseCensus counts the real displays in censusScript's output. Lines from
+// an older three-field format are counted as before.
+func parseCensus(out string, lidClosed bool) (real, w, h int) {
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(strings.TrimSpace(line), "\t")
-		if len(f) != 3 || f[0] == vdisplayName {
+		if len(f) < 3 || f[0] == vdisplayName {
+			continue
+		}
+		if len(f) >= 6 {
+			builtin, asleep, active := f[3] == "1", f[4] == "1", f[5]
+			if builtin && lidClosed {
+				continue // a closed lid's panel is dark: nothing to capture
+			}
+			if asleep || active == "0" {
+				continue
+			}
+		} else if lidClosed && strings.Contains(strings.ToLower(f[0]), "built-in") {
 			continue
 		}
 		if real == 0 {
@@ -82,7 +115,91 @@ out.join("\n");`)
 		}
 		real++
 	}
-	return real, w, h, nil
+	return real, w, h
+}
+
+// lidClosed reports whether a laptop's lid is closed (AppleClamshellState on
+// the power-management root domain). False on a desktop Mac and on error.
+func lidClosed() bool {
+	out, err := run("ioreg", "-r", "-k", "AppleClamshellState", "-d", "1")
+	if err != nil {
+		return false
+	}
+	return parseClamshell(out)
+}
+
+func parseClamshell(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, `"AppleClamshellState"`) {
+			return strings.Contains(line, "Yes")
+		}
+	}
+	return false
+}
+
+// displayStatus is what `reminal doctor` and a pane with no picture say about
+// this Mac's displays.
+type displayStatus struct {
+	LidClosed   bool
+	Real        int
+	VirtualUp   bool
+	ClosedLidOn bool
+	Known       bool // the census ran
+}
+
+func currentDisplayStatus() displayStatus {
+	st := displayStatus{LidClosed: lidClosed(), ClosedLidOn: config.LoadSettings().ClosedLid}
+	if real, _, _, err := displayCensus(); err == nil {
+		st.Real, st.Known = real, true
+	}
+	if p := vdisplayLockPath(); p != "" {
+		if b, err := os.ReadFile(p); err == nil {
+			if pid, _ := strconv.Atoi(strings.TrimSpace(string(b))); pid > 0 && proc.Alive(pid) {
+				st.VirtualUp = true
+			}
+		}
+	}
+	return st
+}
+
+// noPictureReason is the line a pane shows when capture has produced nothing
+// for a while.
+func noPictureReason() string {
+	st := currentDisplayStatus()
+	switch {
+	case st.Known && st.Real == 0 && !st.VirtualUp && st.LidClosed && !st.ClosedLidOn:
+		return "This Mac's lid is closed and no display is attached, so there is nothing to show. Open the lid, or turn on closed-lid mode in reminal's settings."
+	case st.Known && st.Real == 0 && !st.VirtualUp && st.ClosedLidOn:
+		return "This Mac has no display right now; reminal is bringing up its closed-lid display and the picture will follow in a few seconds."
+	case st.Known && st.Real == 0 && !st.VirtualUp:
+		return "This Mac has no display attached, so there is nothing to show. Attach one, or turn on closed-lid mode in reminal's settings."
+	}
+	return "Screen capture is running but has produced no picture yet. If this persists, run reminal doctor on that machine."
+}
+
+// displayDoctor is the doctor line for displays.
+func displayDoctor() (level, string, bool) {
+	st := currentDisplayStatus()
+	lid := "open"
+	if st.LidClosed {
+		lid = "closed"
+	}
+	vd := "no"
+	if st.VirtualUp {
+		vd = "yes"
+	}
+	cl := "off"
+	if st.ClosedLidOn {
+		cl = "on"
+	}
+	msg := fmt.Sprintf("lid %s · %d real display(s) · virtual display %s · closed-lid mode %s", lid, st.Real, vd, cl)
+	if st.Known && st.Real == 0 && !st.VirtualUp {
+		if st.ClosedLidOn {
+			return levelWarn, msg + " (it should appear within a few seconds)", true
+		}
+		return levelWarn, msg + " — nothing to capture; open the lid or turn on closed-lid mode", true
+	}
+	return levelOK, msg, true
 }
 
 // vdisplayLoop keeps the closed-lid promise: while settings.ClosedLid is on
