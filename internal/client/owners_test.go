@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -31,7 +32,25 @@ func isolateHome(t *testing.T) string {
 	// Keep the machine-level owners store inside the test's temp dir instead of
 	// the real /etc/reminal.
 	t.Setenv("REMINAL_OWNERS_DIR", filepath.Join(home, "etc-reminal"))
+	// What this process remembers about the last HOME's sessions is not this
+	// one's.
+	forgetSessionCount(t)
 	return home
+}
+
+// forgetSessionCount drops the cached session count (countRestartableSessions)
+// now and when the test ends: a count cached by an earlier test is another
+// HOME's, and within its TTL it was served to the next — a restart of one
+// seeded session reported zero.
+func forgetSessionCount(t *testing.T) {
+	t.Helper()
+	forget := func() {
+		sessCountMu.Lock()
+		sessCountVal, sessCountRead = 0, time.Time{}
+		sessCountMu.Unlock()
+	}
+	forget()
+	t.Cleanup(forget)
 }
 
 // ownersJSONPath is the owners.json location under the current test override.

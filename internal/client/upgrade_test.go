@@ -32,10 +32,7 @@ func TestCountRestartableSessionsIsCached(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Force a cold read for this test's HOME.
-	sessCountMu.Lock()
-	sessCountRead = time.Time{}
-	sessCountMu.Unlock()
+	forgetSessionCount(t) // a cold read for this test's HOME
 
 	first := countRestartableSessions()
 	if first != 5 {
@@ -63,6 +60,7 @@ func TestCountRestartableSessionsIsCached(t *testing.T) {
 // A read error must not silently report "no sessions": the subtitle would
 // claim an upgrade restarts nothing.
 func TestCountKeepsLastGoodAnswerOnError(t *testing.T) {
+	forgetSessionCount(t)
 	sessCountMu.Lock()
 	sessCountVal, sessCountRead = 7, time.Now().Add(-sessionCountTTL-time.Second)
 	sessCountMu.Unlock()
