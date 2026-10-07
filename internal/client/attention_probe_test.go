@@ -463,7 +463,7 @@ func TestTheAgentsOwnWordsAboveItsInputBoxAreNotAPrompt(t *testing.T) {
 		if got := classifyAttn(true, claude, 5000); got != "done" {
 			t.Errorf("Claude Code at rest classified %q:\n%s", got, claude)
 		}
-		gemini := said + "\n╭" + rule + "╮\n│ >   Type your message or @path/to/file │\n╰" + rule + "╯\n~/proj   no sandbox   gemini-2.5-pro"
+		gemini := said + "\n╭" + rule + "╮\n│ >   Type your message or @path/to/file │\n╰" + rule + "╯\n~/proj   no sandbox   gemini-2.5-flash"
 		if attnLooksLikePrompt(gemini) {
 			t.Errorf("Gemini at rest read as a prompt:\n%s", gemini)
 		}
