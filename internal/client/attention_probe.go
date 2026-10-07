@@ -188,7 +188,7 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 				fg, agentActive = prog, true
 			}
 		}
-		a.noteForeground(progCache.resolve(fgPgrpSeen, fg))
+		a.noteForeground(progCache.resolve(fgPgrpSeen, fg), fgPgrpSeen)
 
 		// Prefer the agent's own hook-reported state when it's fresh (an
 		// integrated harness reporting via `reminal hook`); otherwise fall back to
@@ -207,7 +207,7 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// going is honestly "done", and "done · 1 shell" is the thing worth
 		// knowing before deciding it needs nothing from you.
 		a.noteShells(attnShellCount(agentActive, bottom))
-		state, source := resolveAttn(screenState, session.ReadHookState(a.sessionID), last, fgAt, idleMs,
+		state, source := resolveAttn(screenState, session.ReadHookStateAnyAge(a.sessionID), last, fgAt, idleMs,
 			attnLooksLikePrompt(bottom), attnLooksBusy(bottom))
 		if a.harnessDown() {
 			// It cannot work at all: that is what to report, not what it
@@ -375,12 +375,25 @@ func (a *Agent) noteShells(n int) {
 	}
 }
 
-func (a *Agent) noteForeground(fg string) {
+// noteForeground records the program in the foreground, and when it STARTED
+// (attnFGAt): the kernel's start time of its process group's leader, when
+// that can be read and it is not a shell, else now. A hook written before that program started is
+// another program's word (resolveAttn) — but one written by the program that
+// is still running is its own, however recently this process began watching.
+// Taking "now" there made every hook stale after a restart of reminal itself,
+// and the screen's guess stood in for the harness's word indefinitely.
+func (a *Agent) noteForeground(fg string, pgrp int) {
 	a.metaMu.Lock()
 	changed := fg != a.attnFG
 	a.attnFG = fg
 	if changed {
 		a.attnFGAt = time.Now()
+		// Not for a shell: a harness that exited leaves its login shell in the
+		// foreground, which started before the harness wrote its last hook —
+		// that hook must read as another program's, not the shell's.
+		if t, ok := session.ProcStartTime(pgrp); ok && pgrp > 0 && fg != "" && !isLoginShell(fg) && t.Before(a.attnFGAt) {
+			a.attnFGAt = t
+		}
 	}
 	a.metaMu.Unlock()
 	if !changed {
@@ -457,6 +470,11 @@ func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt t
 		// not said anything yet. A "working" left behind by a turn that died
 		// (a failed login, a crash) held every message for this session until
 		// the TTL ran out.
+	case hs.State == "working" && time.Since(hs.TS) > session.HookStateTTL:
+		// A turn longer than this would have said something since. A resting
+		// state (done, input) has no such limit: the harness that wrote it is
+		// still the one in the foreground (above), and at rest it says nothing
+		// more for as long as it is left there.
 	case hs.State == "working" && idleMs > hookWorkingSilentMs:
 		// A working harness animates; this screen has not moved at all. Its
 		// "done" never came — believe the screen.
@@ -605,8 +623,14 @@ var attnPromptCues = []string{
 // \x1b[38;5;246mto…" — no cue matched it, the session read as done, and a
 // message typed into it confirmed "No, exit". Matched with whitespace
 // removed from both, too: some screens draw the spaces as cursor moves.
+//
+// Only the harness's own question counts, not its conversation. A harness at
+// rest draws its empty input box at the bottom (attnPromptRegion), and every
+// row above that box is what the agent said — "press Enter once the typed
+// text appears", "do you want to…" — so the cues are looked for below it
+// only. A chooser or a permission prompt replaces the box, and is read whole.
 func attnLooksLikePrompt(tail string) bool {
-	low := attnFlat(stripANSI(tail))
+	low := attnFlat(stripANSI(attnPromptRegion(tail)))
 	for _, cue := range attnPromptCuesFlat {
 		if strings.Contains(low, cue) {
 			return true
@@ -614,6 +638,93 @@ func attnLooksLikePrompt(tail string) bool {
 	}
 	return false
 }
+
+// attnPromptRegion is the part of the screen's bottom rows a prompt can be
+// in. When they end in a harness's own input box — Claude Code's
+// "────" / "❯ …" / "────", Gemini's "╭──╮" / "│ > … │" / "╰──╯" — the agent
+// is waiting at its prompt, and only the rows below the box (its footer) are
+// returned; the rows above are the agent's own words. A box whose top rule
+// has scrolled out of the rows still counts when its prompt line is empty.
+// Anything else — no box, a chooser drawn instead of one — comes back whole.
+func attnPromptRegion(tail string) string {
+	rows := strings.Split(stripANSI(tail), "\n")
+	last := -1
+	for i := len(rows) - 1; i >= 0; i-- {
+		if attnIsRule(rows[i]) {
+			last = i
+			break
+		}
+	}
+	if last <= 0 {
+		return tail
+	}
+	footer := strings.Join(rows[last+1:], "\n")
+	// The box's prompt line, just above its bottom rule: empty, the box is
+	// at rest even if its top rule is out of view.
+	if attnIsEmptyInput(rows[last-1]) {
+		return footer
+	}
+	for top := last - 1; top >= 0 && last-top <= attnInputBoxRows; top-- {
+		if attnIsRule(rows[top]) {
+			if top+1 < last && attnIsInputLine(rows[top+1]) {
+				return footer
+			}
+			break
+		}
+	}
+	return tail
+}
+
+// attnInputBoxRows bounds how tall an input box with text typed into it is
+// taken to be.
+const attnInputBoxRows = 8
+
+// attnIsRule: a row drawn as a horizontal line (box-drawing characters, at
+// least a few of them, and nothing else).
+func attnIsRule(row string) bool {
+	n := 0
+	for _, r := range strings.TrimSpace(row) {
+		switch r {
+		case '─', '━', '═', '╌', '╍', '┄', '┅', '-':
+			n++
+		case '╭', '╮', '╰', '╯', '┌', '┐', '└', '┘':
+		default:
+			return false
+		}
+	}
+	return n >= 8
+}
+
+// attnInputLine strips what frames an input line: a box's side bars, spaces
+// (non-breaking ones too).
+func attnInputLine(row string) string {
+	return strings.TrimSpace(strings.Trim(strings.ReplaceAll(row, "\u00a0", " "), " │┃|"))
+}
+
+// attnIsInputLine: the row starts with a prompt marker, typed text or not.
+// A chooser's option ("❯ 1. Yes") is not one.
+func attnIsInputLine(row string) bool {
+	l := attnInputLine(row)
+	for _, m := range []string{"❯", ">", "›"} {
+		if strings.HasPrefix(l, m) {
+			rest := strings.TrimSpace(strings.TrimPrefix(l, m))
+			return !attnOptionRe.MatchString(rest)
+		}
+	}
+	return false
+}
+
+// attnIsEmptyInput: a prompt marker and nothing else.
+func attnIsEmptyInput(row string) bool {
+	switch attnInputLine(row) {
+	case "❯", ">", "›":
+		return true
+	}
+	return false
+}
+
+// attnOptionRe is a numbered option, as a chooser draws them.
+var attnOptionRe = regexp.MustCompile(`^[0-9]+[.)]`)
 
 func attnFlat(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), "")) }
 

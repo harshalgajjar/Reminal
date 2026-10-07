@@ -410,3 +410,7 @@ func pidAlive(pid int) bool {
 	// instead of showing it in `reminal list` forever.
 	return !pidIsZombie(pid)
 }
+
+// ProcStartTime is when the process now at pid was started, per the kernel,
+// and whether that could be read (not on every platform).
+func ProcStartTime(pid int) (time.Time, bool) { return procStartTime(pid) }

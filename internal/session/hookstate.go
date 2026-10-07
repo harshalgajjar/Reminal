@@ -85,6 +85,18 @@ func WriteHookState(id, state string) error {
 // none, it's unreadable, or it's older than HookStateTTL (stale → let the caller
 // fall back to the screen detector).
 func ReadHookState(id string) *HookState {
+	hs := ReadHookStateAnyAge(id)
+	if hs == nil || time.Since(hs.TS) > HookStateTTL {
+		return nil
+	}
+	return hs
+}
+
+// ReadHookStateAnyAge is the session's hook state however old it is, for a
+// caller that knows whether the program that wrote it is still running —
+// a harness at rest stays at rest, and says nothing more, for as long as it
+// is left there.
+func ReadHookStateAnyAge(id string) *HookState {
 	p, err := hookStatePath(id)
 	if err != nil {
 		return nil
@@ -97,7 +109,7 @@ func ReadHookState(id string) *HookState {
 	if err := json.Unmarshal(raw, &hs); err != nil {
 		return nil
 	}
-	if hs.State == "" || time.Since(hs.TS) > HookStateTTL {
+	if hs.State == "" {
 		return nil
 	}
 	return &hs

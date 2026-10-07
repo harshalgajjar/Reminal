@@ -1,6 +1,8 @@
 package client
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -440,5 +442,110 @@ func TestShellCountExpiresWithTheProgramThatDrewIt(t *testing.T) {
 	}
 	if got := attnShellCount(false, leftBehind); got != 0 {
 		t.Errorf("a dead harness's footer still reported %d shells; a session at its own shell has none", got)
+	}
+}
+
+// A harness at rest under its own words: whatever the agent said above its
+// empty input box — a question, an instruction to press Enter — is not a
+// prompt. The box itself says the harness is waiting for its next message.
+func TestTheAgentsOwnWordsAboveItsInputBoxAreNotAPrompt(t *testing.T) {
+	rule := strings.Repeat("─", 60)
+	for _, said := range []string{
+		"⏺ Typed it in; press Enter once the typed text appears.",
+		"⏺ Do you want to keep the old name? I left it as is for now.",
+		"⏺ The installer asks (y/n) before it overwrites anything.",
+		"⏺ Proceed? Only if the tests pass — they do.",
+	} {
+		claude := said + "\n\n" + rule + "\n❯\u00a0\n" + rule + "\n  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 2 agents"
+		if attnLooksLikePrompt(claude) {
+			t.Errorf("Claude Code at rest read as a prompt:\n%s", claude)
+		}
+		if got := classifyAttn(true, claude, 5000); got != "done" {
+			t.Errorf("Claude Code at rest classified %q:\n%s", got, claude)
+		}
+		gemini := said + "\n╭" + rule + "╮\n│ >   Type your message or @path/to/file │\n╰" + rule + "╯\n~/proj   no sandbox   gemini-2.5-pro"
+		if attnLooksLikePrompt(gemini) {
+			t.Errorf("Gemini at rest read as a prompt:\n%s", gemini)
+		}
+		// The box's top rule scrolled out of the rows read: an empty prompt
+		// line above the bottom rule is enough.
+		cut := said + "\n❯\n" + rule + "\n  ? for shortcuts"
+		if attnLooksLikePrompt(cut) {
+			t.Errorf("a box missing its top rule read as a prompt:\n%s", cut)
+		}
+		// What a person is typing into the box is not a prompt either.
+		typing := said + "\n" + rule + "\n❯ answer (y/n) later\n" + rule + "\n  ? for shortcuts"
+		if attnLooksLikePrompt(typing) {
+			t.Errorf("text typed into the box read as a prompt:\n%s", typing)
+		}
+	}
+}
+
+// What a harness draws instead of its input box when it does ask still reads
+// as a prompt.
+func TestAChooserInPlaceOfTheInputBoxIsStillAPrompt(t *testing.T) {
+	rule := strings.Repeat("─", 60)
+	for _, screen := range []string{
+		// a permission prompt
+		"⏺ I'll run the tests.\n" + rule + "\n Bash command\n   go test ./...\n Do you want to proceed?\n ❯ 1. Yes\n   2. No, and tell Claude what to do differently\n Esc to cancel · Tab to amend",
+		// AskUserQuestion
+		"⏺ Two ways to do this.\n" + rule + "\n ☐ Approach\n Which one?\n ❯ 1. Event-driven\n   2. Polling\n Enter to select · ↑/↓ to navigate · Esc to cancel",
+		// trust this folder (no rule at all)
+		"Do you trust the files in this folder?\n❯ 1. Yes, proceed\n  2. No, exit\nEnter to confirm · Esc to cancel",
+	} {
+		if !attnLooksLikePrompt(screen) {
+			t.Errorf("a real prompt was missed:\n%s", screen)
+		}
+		if got := classifyAttn(true, screen, 5000); got != "input" {
+			t.Errorf("a real prompt classified %q:\n%s", got, screen)
+		}
+	}
+}
+
+// Restarting reminal does not restart the harness in the foreground: a hook
+// that harness wrote is still its word. attnFGAt is when the program started,
+// not when this process first looked.
+func TestAHookOutlivesARestartOfReminalButNotOfTheHarness(t *testing.T) {
+	started := time.Now().Add(-time.Hour) // the harness, long before reminal restarted
+	hook := &session.HookState{State: "done", TS: time.Now().Add(-10 * time.Minute)}
+	// The screen guessed "input" from the agent's prose; the hook said done.
+	if s, src := resolveAttn("input", hook, hook.TS, started, 600000, false, false); s != "done" || src != "hook" {
+		t.Errorf("the harness's own done was overruled after a restart: %s (%s)", s, src)
+	}
+	// A harness started after the hook: the hook was another program's.
+	if s, _ := resolveAttn("input", hook, hook.TS, time.Now(), 600000, false, false); s != "input" {
+		t.Errorf("a hook older than the program in the foreground was believed: %s", s)
+	}
+	// A resting hook stands however long the harness rests; a "working" one
+	// does not outlast HookStateTTL.
+	old := &session.HookState{State: "done", TS: time.Now().Add(-6 * time.Hour)}
+	if s, src := resolveAttn("input", old, old.TS, started.Add(-6*time.Hour), 600000, false, false); s != "done" || src != "hook" {
+		t.Errorf("a harness at rest for hours lost its done: %s (%s)", s, src)
+	}
+	stuck := &session.HookState{State: "working", TS: time.Now().Add(-time.Hour)}
+	if s, _ := resolveAttn("done", stuck, time.Now(), started.Add(-6*time.Hour), 0, false, false); s != "done" {
+		t.Errorf("an hour-old working outlived its TTL: %s", s)
+	}
+	// noteForeground takes the program's start from the kernel — not a
+	// shell's, which would make a dead harness's last hook look current.
+	sh := &Agent{}
+	sh.noteForeground("zsh", os.Getpid())
+	sh.metaMu.Lock()
+	shAt := sh.attnFGAt
+	sh.metaMu.Unlock()
+	if time.Since(shAt) > time.Second {
+		t.Errorf("a shell in the foreground took a start time from the kernel: %v", shAt)
+	}
+	if _, ok := session.ProcStartTime(os.Getpid()); !ok {
+		t.Skip("process start times are not readable here")
+	}
+	before := time.Now()
+	a := &Agent{}
+	a.noteForeground("claude", os.Getpid())
+	a.metaMu.Lock()
+	at := a.attnFGAt
+	a.metaMu.Unlock()
+	if !at.Before(before) {
+		t.Errorf("attnFGAt is when it was first seen (%v), not when it started", at)
 	}
 }
