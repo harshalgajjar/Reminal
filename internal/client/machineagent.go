@@ -70,6 +70,10 @@ func newMachineAgent(version string, daemonHost bool) (*Agent, error) {
 		daemonHost:     daemonHost,
 		dirLimits:      newDirLimits(),
 		cwd:            currentCwd(),
+		// The machine channel's proofs are remembered on disk: a daemon
+		// restarted (every upgrade restarts it) inside a proof's freshness
+		// window must not take one it already took.
+		ownerNonces: ownerNonces{file: ownerNoncesFile()},
 	}, nil
 }
 

@@ -6,6 +6,9 @@ package client
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -40,14 +43,43 @@ const ownerNonceMax = 512
 type ownerNonces struct {
 	mu   sync.Mutex
 	seen map[string]time.Time
+	// file, when set, keeps the set on disk (the machine channel's, see
+	// newMachineAgent): a process restarted — every upgrade restarts the
+	// daemon — inside a proof's freshness window must not take a proof the
+	// one before it already took. Read and written under ownerNoncesLock.
+	file string
 }
 
-// use records a nonce and reports whether it was fresh. A repeat is a replay.
-func (n *ownerNonces) use(nonce string, now time.Time) bool {
+// ownerNoncesLock serialises the read-modify-write of an ownerNonces file
+// between processes: an old daemon and its replacement can overlap.
+const ownerNoncesLock = "owner-nonces.lock"
+
+// ownerNoncesFile is where the machine channel keeps the proofs it took.
+func ownerNoncesFile() string {
+	dir, err := reminalDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "owner-nonces.json")
+}
+
+// use records a nonce, reporting "" when it was fresh, or why not. A repeat
+// is a replay.
+func (n *ownerNonces) use(nonce string, now time.Time) string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.seen == nil {
 		n.seen = make(map[string]time.Time)
+	}
+	if n.file != "" {
+		lock, held, err := tryLockFile(ownerNoncesLock)
+		if err != nil || !held {
+			// Not taken without the record: a proof taken here and not
+			// written down could be taken again after a restart.
+			return "this machine is busy; try again"
+		}
+		defer unlockFile(lock)
+		n.loadFile() // what another process (or the one before) took
 	}
 	// Drop anything older than the window on the way past; a proof that stale
 	// is rejected by the skew check anyway, so remembering it buys nothing.
@@ -57,15 +89,57 @@ func (n *ownerNonces) use(nonce string, now time.Time) bool {
 		}
 	}
 	if _, dup := n.seen[nonce]; dup {
-		return false
+		return "this owner proof has already been used"
 	}
 	if len(n.seen) >= ownerNonceMax {
 		// Full of live entries: refuse rather than evict. Evicting under
 		// pressure is precisely how an attacker would make room for a replay.
-		return false
+		return "this owner proof has already been used"
 	}
 	n.seen[nonce] = now
-	return true
+	if n.file != "" && !n.saveFile() {
+		delete(n.seen, nonce)
+		return "this machine could not record the proof; try again"
+	}
+	return ""
+}
+
+// loadFile merges the set on disk into memory, pruning what is past the
+// window (it was pruned before it was written, but time has passed since).
+func (n *ownerNonces) loadFile() {
+	b, err := os.ReadFile(n.file)
+	if err != nil {
+		return
+	}
+	var on map[string]int64
+	if json.Unmarshal(b, &on) != nil {
+		return
+	}
+	for k, t := range on {
+		if _, have := n.seen[k]; !have {
+			n.seen[k] = time.Unix(t, 0)
+		}
+	}
+}
+
+// saveFile writes the set (already pruned to the window) whole, atomically.
+func (n *ownerNonces) saveFile() bool {
+	on := make(map[string]int64, len(n.seen))
+	for k, t := range n.seen {
+		on[k] = t.Unix()
+	}
+	b, err := json.Marshal(on)
+	if err != nil {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(n.file), 0o700); err != nil {
+		return false
+	}
+	tmp := n.file + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return false
+	}
+	return os.Rename(tmp, n.file) == nil
 }
 
 // ownerProof is what a viewer attaches to a privileged request.
@@ -108,8 +182,8 @@ func (a *Agent) verifyOwnerAction(p ownerProof, action string) string {
 	}
 	// Last, so a forged proof can never consume a nonce and lock out the real
 	// one by filling the set.
-	if !a.ownerNonces.use(p.Nonce, now) {
-		return "this owner proof has already been used"
+	if why := a.ownerNonces.use(p.Nonce, now); why != "" {
+		return why
 	}
 	return ""
 }

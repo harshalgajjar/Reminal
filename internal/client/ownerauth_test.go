@@ -7,6 +7,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -124,5 +126,74 @@ func TestForgedProofDoesNotSpendANonce(t *testing.T) {
 	}
 	if why := a.verifyOwnerAction(good, "upgrade"); why != "" {
 		t.Errorf("the real owner was locked out by a forged proof reusing its nonce: %s", why)
+	}
+}
+
+// A daemon is restarted by every upgrade, inside the window a proof stays
+// fresh. The machine channel keeps the proofs it took on disk, so one taken
+// before the restart is not taken again after it.
+func TestAProofReplayedAfterARestartIsRefused(t *testing.T) {
+	isolateHome(t)
+	ownerPub, ownerPriv, _ := ed25519.GenerateKey(rand.Reader)
+	if _, _, err := AddOwner(ownerID(ownerPub), "test device"); err != nil {
+		t.Skipf("cannot enrol an owner in this environment: %v", err)
+	}
+	file := ownerNoncesFile()
+	before := &Agent{sessionID: "DIRECTORY1", ownerNonces: ownerNonces{file: file}}
+	p := signAction(t, ownerPriv, "DIRECTORY1", "integrate", time.Now().Unix())
+	if why := before.verifyOwnerAction(p, "integrate"); why != "" {
+		t.Fatalf("first use refused: %s", why)
+	}
+	after := &Agent{sessionID: "DIRECTORY1", ownerNonces: ownerNonces{file: file}}
+	if why := after.verifyOwnerAction(p, "integrate"); why == "" {
+		t.Fatal("a proof taken before a restart was taken again after it")
+	}
+	// The control: a fresh proof after the restart is fine.
+	if why := after.verifyOwnerAction(signAction(t, ownerPriv, "DIRECTORY1", "integrate", time.Now().Unix()), "integrate"); why != "" {
+		t.Fatalf("a fresh proof after the restart was refused: %s", why)
+	}
+}
+
+// What is on disk is pruned past the freshness window, so the file never
+// grows with proofs that could no longer be replayed anyway.
+func TestTheProofsOnDiskArePrunedPastTheWindow(t *testing.T) {
+	isolateHome(t)
+	file := ownerNoncesFile()
+	n := &ownerNonces{file: file}
+	long := time.Now().Add(-ownerActionSkew * 3)
+	if why := n.use("old", long); why != "" {
+		t.Fatal(why)
+	}
+	fresh := &ownerNonces{file: file}
+	if why := fresh.use("new", time.Now()); why != "" {
+		t.Fatal(why)
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var on map[string]int64
+	if err := json.Unmarshal(b, &on); err != nil {
+		t.Fatal(err)
+	}
+	if _, kept := on["old"]; kept || len(on) != 1 {
+		t.Fatalf("on disk after the window: %v", on)
+	}
+}
+
+// A process that cannot take the lock does not take the proof: one taken
+// without being written down could be taken again after a restart.
+func TestAProofIsNotTakenWithoutTheLock(t *testing.T) {
+	isolateHome(t)
+	lock, held, err := tryLockFile(ownerNoncesLock)
+	if err != nil || !held {
+		t.Skipf("cannot take the lock in this environment: %v %v", held, err)
+	}
+	defer unlockFile(lock)
+	// flock is per open file description: a second open in this process
+	// contends as another process would.
+	n := &ownerNonces{file: ownerNoncesFile()}
+	if why := n.use("x", time.Now()); why == "" {
+		t.Fatal("a proof was taken while another holder had the lock")
 	}
 }
