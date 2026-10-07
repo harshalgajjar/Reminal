@@ -378,6 +378,24 @@
        terminal. On a 393pt iPhone the six controls plus the wordmark plus the
        status pill simply do not fit at desktop metrics, so shrink them and drop
        the purely decorative parts rather than let it wrap. */
+    /* header.tight: the same one-row layout at ANY width where the toolbar
+       would otherwise wrap (fitHeader sets it). Between ~480 and ~700px, with
+       every control showing (Orgs included), the wordmark stayed and the
+       status pill dropped to a second row, leaving the toolbar squeezed. The
+       controls keep their normal size here; only the decoration goes and the
+       toolbar scrolls, as on a phone. */
+    header.tight { flex-wrap: nowrap; }
+    header.tight h1 { display: none; }
+    header.tight #session-form {
+      flex-wrap: nowrap; min-width: 0; flex: 1 1 auto;
+      overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+      touch-action: pan-x; scrollbar-width: none;
+    }
+    header.tight #session-form::-webkit-scrollbar { display: none; }
+    header.tight #session-form > * { flex: none; }
+    header.tight #session-form.menu-open { overflow: visible; }
+    header.tight #session-form.menu-open ~ #status { display: none; }
+    header.tight #status { flex: none; }
     @media (max-width: 480px) {
       header {
         gap: 4px;
@@ -1949,6 +1967,42 @@
     </div>
     <div id="status" class="">Session + PIN required</div>
   </header>
+  <script>
+  // ── header fit: one row at every width ──────────────────────────────
+  // header.tight (see its CSS) whenever the wordmark, toolbar and status pill
+  // would not share one row. Measured with the class off, then set, in the
+  // same frame, so nothing flickers; re-checked when the width, the visible
+  // controls or the status text change.
+  (function () {
+    const header = document.querySelector('header');
+    const form = document.getElementById('session-form');
+    const status = document.getElementById('status');
+    if (!header || !form) return;
+    let queued = false;
+    // Two boxes are on different rows when one starts below where the other
+    // ends. Comparing tops alone would not do: items of different heights,
+    // centred on one row, have different tops.
+    function onTwoRows(els) {
+      const r = els.filter(e => e && e.offsetParent !== null).map(e => e.getBoundingClientRect());
+      return r.some(a => r.some(b => a.top >= b.bottom - 2));
+    }
+    function wraps() {
+      return onTwoRows([header.querySelector('h1'), form, status]) || onTwoRows([...form.children]);
+    }
+    function fit() {
+      queued = false;
+      if (form.classList.contains('menu-open')) return; // never re-lay out under an open menu
+      header.classList.remove('tight');
+      if (wraps()) header.classList.add('tight');
+    }
+    function queue() { if (!queued) { queued = true; requestAnimationFrame(fit); } }
+    window.addEventListener('resize', queue);
+    new MutationObserver(queue).observe(form, { subtree: true, childList: true, attributes: true, attributeFilter: ['hidden', 'style'] });
+    if (status) new MutationObserver(queue).observe(status, { childList: true, characterData: true, subtree: true });
+    new MutationObserver(queue).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    queue();
+  })();
+</script>
   <div id="terminal-wrap">
     <div id="terminal"></div>
     <div id="overlay"><span id="overlay-text">Connecting…</span></div>
