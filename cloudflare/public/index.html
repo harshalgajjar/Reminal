@@ -8247,13 +8247,25 @@
         pinInput.value = '';
       }
       if (!s) { setStatus('Session required', 'error'); return; }
+      // Settle where keys go BEFORE the first await below: a key typed while
+      // loadDeviceKeyPair runs is held for the session we are joining — not
+      // dropped later as "typed for the session being left", not left in the
+      // form field that had focus, and not sent down the socket of a session
+      // still open while we switch away from it (switchingTo holds it).
+      const gen = ++connectGen;
+      if (s !== sessionId) dropHeldInput(); // typed for the session being left
+      switchingTo = s !== sessionId ? s : '';
+      term.focus();
       if (!p) {
         // PIN-free is only possible if this browser has an owner key to try;
         // otherwise a PIN is required.
-        if (!(await loadDeviceKeyPair())) { setStatus('PIN required', 'error'); pinInput.focus(); return; }
+        const dk = await loadDeviceKeyPair();
+        if (gen !== connectGen) return; // a newer connect took over
+        if (!dk) { abandonSwitch(); setStatus('PIN required', 'error'); pinInput.focus(); return; }
       } else if (!/^\d{6,8}$/.test(p)) {
-        setStatus('PIN must be 6–8 digits', 'error'); return;
+        abandonSwitch(); setStatus('PIN must be 6–8 digits', 'error'); return;
       }
+      switchingTo = '';
 
       manualClose = false;
       fatal = false;
@@ -8264,7 +8276,6 @@
         lastSeq = 0;
         sessionId = s;
         term.reset();
-        dropHeldInput(); // typed for the session being left
         // host_info describes the session we are LEAVING. Share falls back to
         // it for the PIN (see sharePin), so keeping it here handed out an
         // invite pairing the new session's id with the old session's PIN —
@@ -9269,8 +9280,17 @@
     let heldSince = 0;
     let heldOverflow = false;
     let inputSerial = 0;
+    // The session a connect is switching to while it awaits the owner key;
+    // until it has dialled, the socket still open is the old session's.
+    let switchingTo = '';
+    let connectGen = 0;
+    function abandonSwitch() {
+      if (!switchingTo) return;
+      switchingTo = '';
+      dropHeldInput(); // typed for a session we are not joining
+    }
     function inputLive() {
-      return !!(agentLive && authed && cryptoKey && ws && ws.readyState === WebSocket.OPEN);
+      return !!(!switchingTo && agentLive && authed && cryptoKey && ws && ws.readyState === WebSocket.OPEN);
     }
     function holdInput(data, n) {
       if (heldBytes + data.length > INPUT_HOLD_BYTES) { heldOverflow = true; return; }
