@@ -74,7 +74,7 @@ func (a *Agent) saveRestore() {
 	prog, args, pid, atPrompt := restoreForeground(a.term)
 	if _, ok := resumers[prog]; ok {
 		r.Fg, r.FgArgs = prog, args
-		r.Conv = session.ReadConv(a.sessionID)
+		r.Conv = agentConv(prog, pid, a.sessionID)
 		// Resumed where the agent itself runs: an agent keys its
 		// conversations by folder, and the session's own cwd is a guess —
 		// on Windows, from its youngest helper process (cursor-agent's
@@ -83,14 +83,21 @@ func (a *Agent) saveRestore() {
 			r.Cwd = c
 		}
 	}
+	now := time.Now()
 	if r.Fg != "" {
 		a.restoreAgentSeen = true // it is running again; the restore is over
+		a.agentLastSeen = now
 	}
-	if r.Fg == "" && holdPreviousAgent(a.restoring, a.restoreAgentSeen, atPrompt, time.Since(a.startedAt)) {
+	sinceAgent := time.Duration(1<<63 - 1)
+	if !a.agentLastSeen.IsZero() {
+		sinceAgent = now.Sub(a.agentLastSeen)
+	}
+	if r.Fg == "" && holdPreviousAgent(a.restoring, a.restoreAgentSeen, atPrompt, time.Since(a.startedAt), sinceAgent) {
 		if prev, err := session.ReadRestore(a.sessionID); err == nil {
 			r.Fg, r.FgArgs, r.Conv = prev.Fg, prev.FgArgs, prev.Conv
 		}
 	}
+	r.ConvSince = a.convSince(r.Conv, now)
 	if err := session.WriteRestore(r); err != nil {
 		if errors.Is(err, atrest.ErrCurrentKeyMissing) && !a.saveStalled {
 			a.saveStalled = true
@@ -126,11 +133,39 @@ func (a *Agent) saveRestore() {
 // and the next restart brought it back from the dead. Once the agent has
 // actually been seen running, the exception has served its purpose: a prompt
 // after that is a person quitting, and must be recorded as one.
-func holdPreviousAgent(restoring, agentSeen, atPrompt bool, since time.Duration) bool {
-	if !atPrompt {
+//
+// A prompt within agentGoneGrace of the agent last being seen is held too.
+// As a machine shuts down, the agent often quits a moment before reminal
+// does; a save in that moment saw only the prompt, and the record forgot the
+// agent the restart was meant to bring back. A person who really quit it is
+// recorded as such at the first save after the grace.
+func holdPreviousAgent(restoring, agentSeen, atPrompt bool, since, sinceAgent time.Duration) bool {
+	if !atPrompt || sinceAgent < agentGoneGrace {
 		return true
 	}
 	return restoring && !agentSeen && since < restoreSettle
+}
+
+// agentGoneGrace is how long a prompt goes on naming the agent that just
+// left it (see holdPreviousAgent): two saves.
+const agentGoneGrace = 2 * restoreSaveEvery
+
+// convSince is since when this session has had conv: kept while it stays
+// the same, carried over from the record a restore started from, reset when
+// it changes.
+func (a *Agent) convSince(conv string, now time.Time) time.Time {
+	if conv == "" {
+		a.restoreConv, a.restoreConvSince = "", time.Time{}
+		return time.Time{}
+	}
+	if conv != a.restoreConv {
+		since := now
+		if prev, err := session.ReadRestore(a.sessionID); err == nil && prev.Conv == conv && !prev.ConvSince.IsZero() {
+			since = prev.ConvSince
+		}
+		a.restoreConv, a.restoreConvSince = conv, since
+	}
+	return a.restoreConvSince
 }
 
 func (a *Agent) restoreLoop(stop <-chan struct{}) {
@@ -321,13 +356,23 @@ func resumeArgv(r session.Restore) []string {
 // person picks — or, for an agent with none, it is not started and the
 // line says how to find the conversation.
 func resumePlan(r session.Restore, peers []session.Restore) (argv []string, note string) {
-	argv = resumeArgv(r)
 	rs := resumers[r.Fg]
-	if argv == nil || (r.Conv != "" && rs.byID != nil) || !sharesFolder(r, peers) {
+	taken := r.Conv != "" && !ownsConv(r, peers)
+	if taken {
+		// Another session has this conversation, and had it first: resuming
+		// it here too would open one conversation in two sessions. This
+		// session's own is not known, so it is picked from the list.
+		r.Conv = ""
+	}
+	argv = resumeArgv(r)
+	if argv == nil || (r.Conv != "" && rs.byID != nil) || (!taken && !sharesFolder(r, peers)) {
 		return argv, ""
 	}
 	flags, _ := resumeFlags(r)
 	if rs.pick != nil {
+		if taken {
+			return rs.pick(r.Fg, flags), "the conversation this session last had is open in another session — pick this session's"
+		}
 		return rs.pick(r.Fg, flags), "several " + r.Fg + " conversations were running in this folder — pick this session's"
 	}
 	how := rs.how
@@ -335,6 +380,33 @@ func resumePlan(r session.Restore, peers []session.Restore) (argv []string, note
 		how = "start " + r.Fg + " and pick the conversation"
 	}
 	return nil, r.Fg + " was running here, as it was in another session in this folder; to find this one's conversation: " + how
+}
+
+// ownsConv says r is the session to resume r.Conv in: no other record of
+// the same agent names it, or r has had it longest (the other picked it up
+// later, by continuing "the latest" here). A record that does not say since
+// when comes after one that does; between equals, the lower id, so every
+// session restored in one pass comes to the same answer.
+func ownsConv(r session.Restore, peers []session.Restore) bool {
+	for _, p := range peers {
+		if p.ID == r.ID || p.Fg != r.Fg || p.Conv != r.Conv {
+			continue
+		}
+		if convBefore(p, r) {
+			return false
+		}
+	}
+	return true
+}
+
+func convBefore(a, b session.Restore) bool {
+	switch {
+	case a.ConvSince.IsZero() != b.ConvSince.IsZero():
+		return !a.ConvSince.IsZero()
+	case !a.ConvSince.Equal(b.ConvSince):
+		return a.ConvSince.Before(b.ConvSince)
+	}
+	return a.ID < b.ID
 }
 
 // sharesFolder says another session ran the same agent in r's folder.
