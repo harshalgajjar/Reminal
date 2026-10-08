@@ -21,6 +21,8 @@
 // This is why a ~40-bit code is safe here where it wouldn't be for a
 // store-and-forward drop.
 
+import { armAlarm } from "./alarm";
+
 const RV_TTL_MS = 60 * 60 * 1000; // hard server cap; the source may close earlier
 
 type RvRole = "source" | "paste";
@@ -72,7 +74,7 @@ export class RendezvousRoom {
       server.serializeAttachment({ role: "source" } satisfies RvAttachment);
       this.state.acceptWebSocket(server);
       // Arm the lifetime cap from first source connect.
-      await this.state.storage.setAlarm(Date.now() + RV_TTL_MS);
+      await armAlarm(this.state, "RendezvousRoom", Date.now() + RV_TTL_MS);
       return new Response(null, { status: 101, webSocket: client });
     }
 
