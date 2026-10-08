@@ -143,3 +143,28 @@ func TestAddressGroupByIPv6Prefix(t *testing.T) {
 }
 
 func jsString(s string) string { return "'" + strings.ReplaceAll(s, "'", "\\'") + "'" }
+
+// Every alarm a room sets goes through armAlarm (src/alarm.ts), which bounds
+// how often a room can run on its own: an alarm that re-arms itself without
+// a bound bills for every run, and Cloudflare has no spend cap. A direct
+// storage.setAlarm anywhere else would sidestep it.
+func TestEveryAlarmGoesThroughArmAlarm(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("src", "*.ts"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no Worker sources found: %v", err)
+	}
+	for _, f := range files {
+		if filepath.Base(f) == "alarm.ts" {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if strings.Contains(line, ".setAlarm(") {
+				t.Errorf("%s:%d sets an alarm directly; use armAlarm: %s", f, i+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}

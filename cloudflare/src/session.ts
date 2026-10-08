@@ -1,4 +1,5 @@
 import type { Attachment, TunnelMeta } from "./types";
+import { ALARM_ARMS, armAlarm, type AlarmArms } from "./alarm";
 
 const MAX_ATTEMPTS = 5;
 
@@ -194,16 +195,21 @@ export class SessionRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    const src = role === "viewer" ? await addressTag(request.headers.get("cf-connecting-ip") ?? "", await this.tagSalt()) : undefined;
-    server.serializeAttachment({ role, authed: false, src } satisfies Attachment);
-    this.state.acceptWebSocket(server);
 
     if (rejectReason) {
+      // Nothing is written for a room that is not ready: a viewer can name
+      // any session id, and a room that was never used has no expiry to
+      // clear what it would leave.
       server.serializeAttachment({ role, authed: false, rejected: true } satisfies Attachment);
+      this.state.acceptWebSocket(server);
       server.send(JSON.stringify({ type: "error", error: rejectReason }));
       server.close(4002, rejectReason);
       return new Response(null, { status: 101, webSocket: client });
     }
+
+    const src = role === "viewer" ? await addressTag(request.headers.get("cf-connecting-ip") ?? "", await this.tagSalt()) : undefined;
+    server.serializeAttachment({ role, authed: false, src } satisfies Attachment);
+    this.state.acceptWebSocket(server);
 
     // The expiry alarm is cancelled once this connection authenticates
     // (handleAuth), not here: a connection that never does must not keep an
@@ -361,7 +367,7 @@ export class SessionRoom {
           v.send(JSON.stringify({ type: "agent_offline" }));
         }
       }
-      await this.state.storage.setAlarm(Date.now() + this.orphanTTL);
+      await armAlarm(this.state, "SessionRoom", Date.now() + this.orphanTTL);
     } else if (attachment.role === "viewer") {
       const remaining = this.getSockets("viewer").filter(v => v !== ws);
       if (remaining.length === 0) {
@@ -408,7 +414,7 @@ export class SessionRoom {
       for (const v of this.getSockets("visitor")) {
         try { v.close(1011, "reminal: tunnel disconnected"); } catch { /* already closing */ }
       }
-      await this.state.storage.setAlarm(Date.now() + this.orphanTTL);
+      await armAlarm(this.state, "SessionRoom", Date.now() + this.orphanTTL);
     } else if (attachment.role === "visitor") {
       // Visitor hung up: tell the agent to close the backend connection.
       const tunnel = this.authedTunnel();
@@ -447,15 +453,18 @@ export class SessionRoom {
       }
     }
     // Clear the room, but keep who it belongs to until that runs out; the
-    // alarm comes back then to clear that too.
-    const [ownerHash, ownerUntil] = await Promise.all([
+    // alarm comes back then to clear that too. The alarm count stays with
+    // it, or clearing would reset the bound armAlarm keeps.
+    const [ownerHash, ownerUntil, arms] = await Promise.all([
       this.state.storage.get<string>("ownerHash"),
       this.state.storage.get<number>("ownerUntil"),
+      this.state.storage.get<AlarmArms>(ALARM_ARMS),
     ]);
     await this.state.storage.deleteAll();
     if (ownerHash && ownerUntil && Date.now() < ownerUntil) {
       await this.state.storage.put({ ownerHash, ownerUntil });
-      await this.state.storage.setAlarm(ownerUntil);
+      if (arms) await this.state.storage.put(ALARM_ARMS, arms);
+      await armAlarm(this.state, "SessionRoom", ownerUntil);
     }
   }
 
@@ -1427,7 +1436,7 @@ export class SessionRoom {
   private async armExpiry() {
     const at = await this.state.storage.getAlarm();
     const due = Date.now() + this.orphanTTL;
-    if (at === null || at > due) await this.state.storage.setAlarm(due);
+    if (at === null || at > due) await armAlarm(this.state, "SessionRoom", due);
   }
 
   private agentPresent(): boolean {
