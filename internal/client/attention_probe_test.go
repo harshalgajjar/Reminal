@@ -264,9 +264,9 @@ func TestResolveAttn(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := resolveAttn(c.screen, c.hs, c.lastOutput, time.Time{}, 0, c.screen == "input", false)
+			got, _ := resolveAttn(c.screen, c.hs, c.lastOutput, time.Time{}, 0, c.screen == "input", false, false)
 			if got != c.want {
-				t.Errorf("resolveAttn(screen=%q) = %q, want %q", c.screen, got, c.want)
+				t.Errorf("resolveAttn(screen=%q, false) = %q, want %q", c.screen, got, c.want)
 			}
 		})
 	}
@@ -302,7 +302,7 @@ func TestResolveAttnDisbelievesAHookWhenTheScreenKnowsBetter(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, _ := resolveAttn(c.screen, c.hs, now.Add(-30*time.Second), c.fgAt, c.idleMs, c.prompt, false)
+			got, _ := resolveAttn(c.screen, c.hs, now.Add(-30*time.Second), c.fgAt, c.idleMs, c.prompt, false, false)
 			if got != c.want {
 				t.Errorf("got %q, want %q", got, c.want)
 			}
@@ -369,13 +369,13 @@ func TestBusyFooterKeepsATurnWorking(t *testing.T) {
 	}
 	now := time.Now()
 	hook := &session.HookState{State: "done", TS: now.Add(-time.Second)}
-	if got, src := resolveAttn("done", hook, now.Add(-2*time.Second), time.Time{}, 0, false, true); got != "working" || src != "screen(busy)" {
+	if got, src := resolveAttn("done", hook, now.Add(-2*time.Second), time.Time{}, 0, false, true, false); got != "working" || src != "screen(busy)" {
 		t.Fatalf("a done hook under a busy footer read as %q (%s), want working (screen(busy))", got, src)
 	}
-	if got, _ := resolveAttn("done", hook, now.Add(-2*time.Second), time.Time{}, 0, false, false); got != "done" {
+	if got, _ := resolveAttn("done", hook, now.Add(-2*time.Second), time.Time{}, 0, false, false, false); got != "done" {
 		t.Fatalf("without the footer a fresh done hook should stand, got %q", got)
 	}
-	if got, _ := resolveAttn("input", hook, now.Add(-2*time.Second), time.Time{}, 0, true, true); got != "input" {
+	if got, _ := resolveAttn("input", hook, now.Add(-2*time.Second), time.Time{}, 0, true, true, false); got != "input" {
 		t.Fatalf("a question on screen still wins over the footer, got %q", got)
 	}
 }
@@ -509,21 +509,21 @@ func TestAHookOutlivesARestartOfReminalButNotOfTheHarness(t *testing.T) {
 	started := time.Now().Add(-time.Hour) // the harness, long before reminal restarted
 	hook := &session.HookState{State: "done", TS: time.Now().Add(-10 * time.Minute)}
 	// The screen guessed "input" from the agent's prose; the hook said done.
-	if s, src := resolveAttn("input", hook, hook.TS, started, 600000, false, false); s != "done" || src != "hook" {
+	if s, src := resolveAttn("input", hook, hook.TS, started, 600000, false, false, false); s != "done" || src != "hook" {
 		t.Errorf("the harness's own done was overruled after a restart: %s (%s)", s, src)
 	}
 	// A harness started after the hook: the hook was another program's.
-	if s, _ := resolveAttn("input", hook, hook.TS, time.Now(), 600000, false, false); s != "input" {
+	if s, _ := resolveAttn("input", hook, hook.TS, time.Now(), 600000, false, false, false); s != "input" {
 		t.Errorf("a hook older than the program in the foreground was believed: %s", s)
 	}
 	// A resting hook stands however long the harness rests; a "working" one
 	// does not outlast HookStateTTL.
 	old := &session.HookState{State: "done", TS: time.Now().Add(-6 * time.Hour)}
-	if s, src := resolveAttn("input", old, old.TS, started.Add(-6*time.Hour), 600000, false, false); s != "done" || src != "hook" {
+	if s, src := resolveAttn("input", old, old.TS, started.Add(-6*time.Hour), 600000, false, false, false); s != "done" || src != "hook" {
 		t.Errorf("a harness at rest for hours lost its done: %s (%s)", s, src)
 	}
 	stuck := &session.HookState{State: "working", TS: time.Now().Add(-time.Hour)}
-	if s, _ := resolveAttn("done", stuck, time.Now(), started.Add(-6*time.Hour), 0, false, false); s != "done" {
+	if s, _ := resolveAttn("done", stuck, time.Now(), started.Add(-6*time.Hour), 0, false, false, false); s != "done" {
 		t.Errorf("an hour-old working outlived its TTL: %s", s)
 	}
 	// noteForeground takes the program's start from the kernel — not a
@@ -547,5 +547,37 @@ func TestAHookOutlivesARestartOfReminalButNotOfTheHarness(t *testing.T) {
 	a.metaMu.Unlock()
 	if !at.Before(before) {
 		t.Errorf("attnFGAt is when it was first seen (%v), not when it started", at)
+	}
+}
+
+// A harness that reports each turn's start by its own hook (Claude Code, and
+// the others hookTurns lists) moves off "done" or "needs you" only by that
+// hook or its busy footer. Its screen moves at rest — a repaint when a viewer
+// connects or resizes, a footer swapping "new task? /clear …" for "Update
+// installed · Restart to update" — and each such move used to read
+// "working", then "done": a turn nobody took, filed under While you were
+// away. Seen on idle seats, their hook's "done" hours old.
+func TestARestingHarnessThatReportsItsTurnsIgnoresItsOwnRepaint(t *testing.T) {
+	now := time.Now()
+	done := &session.HookState{State: "done", TS: now.Add(-3 * time.Hour)}
+	input := &session.HookState{State: "input", TS: now.Add(-5 * time.Minute)}
+	// The footer just changed: the screen reads "working" for a beat.
+	if s, src := resolveAttn("working", done, now, time.Time{}, 0, false, false, true); s != "done" || src != "hook" {
+		t.Fatalf("a repaint of a resting claude read as %q (%s), want done (hook)", s, src)
+	}
+	if s, _ := resolveAttn("working", input, now, time.Time{}, 0, true, false, true); s != "input" {
+		t.Fatalf("a repaint under a question read as %q, want input", s)
+	}
+	// A turn shows itself: the busy footer — after a fresh prompt, or after a
+	// permission answer, whose hook still says "needs you".
+	if s, _ := resolveAttn("working", done, now, time.Time{}, 0, false, true, true); s != "working" {
+		t.Fatalf("a busy footer after done read as %q, want working", s)
+	}
+	if s, src := resolveAttn("working", input, now, time.Time{}, 0, false, true, true); s != "working" || src != "screen(busy)" {
+		t.Fatalf("work after a permission answer read as %q (%s), want working (screen(busy))", s, src)
+	}
+	// A harness that does not report its turns keeps the resumed reading.
+	if s, src := resolveAttn("working", done, now, time.Time{}, 0, false, false, false); s != "working" || src != "screen(resumed)" {
+		t.Fatalf("output after done from a harness without turn hooks read as %q (%s), want working (screen(resumed))", s, src)
 	}
 }

@@ -188,7 +188,8 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 				fg, agentActive = prog, true
 			}
 		}
-		a.noteForeground(progCache.resolve(fgPgrpSeen, fg), fgPgrpSeen)
+		prog := progCache.resolve(fgPgrpSeen, fg)
+		a.noteForeground(prog, fgPgrpSeen)
 
 		// Prefer the agent's own hook-reported state when it's fresh (an
 		// integrated harness reporting via `reminal hook`); otherwise fall back to
@@ -208,7 +209,7 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// knowing before deciding it needs nothing from you.
 		a.noteShells(attnShellCount(agentActive, bottom))
 		state, source := resolveAttn(screenState, session.ReadHookStateAnyAge(a.sessionID), last, fgAt, idleMs,
-			attnLooksLikePrompt(bottom), attnLooksBusy(bottom))
+			attnLooksLikePrompt(bottom), attnLooksBusy(bottom), hookTurns[prog])
 		if a.harnessDown() {
 			// It cannot work at all: that is what to report, not what it
 			// looked like it was doing when it took the message.
@@ -460,8 +461,16 @@ func (a *Agent) setAttnState(state string) {
 //     you are in fact being asked to choose.
 //
 // source is for the probe log only; it names which signal decided.
+//
+// turnsByHook says the harness in front reports each turn's start by its own
+// hook (hookTurns). For one that does, output after it said "done" or
+// "needs you" is not a turn resuming: a turn comes with its "working", or
+// shows on the busy footer. Its screen moves at rest all the same — a viewer
+// connecting or resizing makes it repaint, its footer swaps one tip or
+// notice for another — and each move read as "working", then "done": a turn
+// nobody took, filed for review.
 func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt time.Time, idleMs int64,
-	promptOnScreen, busyOnScreen bool) (state, source string) {
+	promptOnScreen, busyOnScreen, turnsByHook bool) (state, source string) {
 	state, source = screenState, "screen"
 	switch {
 	case hs == nil:
@@ -480,7 +489,7 @@ func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt t
 		// "done" never came — believe the screen.
 	default:
 		state, source = hs.State, "hook"
-		if (hs.State == "input" || hs.State == "done") && lastActivity.After(hs.TS.Add(attnHookGrace)) {
+		if !turnsByHook && (hs.State == "input" || hs.State == "done") && lastActivity.After(hs.TS.Add(attnHookGrace)) {
 			state, source = screenState, "screen(resumed)"
 			if state == "" {
 				// No screen verdict (a bare-shell read, or Windows where the
@@ -505,11 +514,20 @@ func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt t
 	// done) as soon as its words end, before a tool it called has finished —
 	// and a long tool call may draw nothing for a while, so neither the hook
 	// nor the screen's stillness says "working". The footer does.
-	if state == "done" && busyOnScreen {
+	//
+	// So does one answered at a permission prompt and carrying on: no hook
+	// marks that, and the hook stays at "needs you" until the turn's Stop —
+	// unless a prompt is still on screen, which is the question itself.
+	if (state == "done" || (state == "input" && source == "hook" && !promptOnScreen)) && busyOnScreen {
 		state, source = "working", "screen(busy)"
 	}
 	return state, source
 }
+
+// hookTurns are the harnesses whose own hook marks the start of every turn
+// (`reminal integrate`: Claude Code's and Qwen's UserPromptSubmit, Gemini's
+// BeforeAgent, Antigravity's PreInvocation), by the program name in front.
+var hookTurns = map[string]bool{"claude": true, "qwen": true, "gemini": true, "agy": true}
 
 // attnBusyCues are lowercase substrings a harness draws at the bottom of its
 // screen only while a turn is running. Claude Code's footer reads "esc to
