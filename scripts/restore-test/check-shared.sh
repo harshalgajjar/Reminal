@@ -42,8 +42,11 @@ send $C "$(printf '\\u0004')"   # C quits claude...
 sleep 17                         # ...and a save sees only its prompt
 box 'echo; for f in /root/.reminal/restore/*.conv; do echo "$f: $(cat $f)"; done'
 
-docker restart $BOX >/dev/null
-ok "box rebooted"
+# Power loss: every process SIGKILLed at once, nothing settles. The last save
+# C had was the one at its prompt.
+docker kill -s KILL $BOX >/dev/null
+docker start $BOX >/dev/null
+ok "box lost power and came back"
 sleep 12
 
 # Only what came after the restore, in the scrollback: a session's output from
