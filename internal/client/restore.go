@@ -735,6 +735,11 @@ func restoreAtStart() {
 			}
 			tried[r.ID] = true
 			if _, err := RestoreSession(r); err != nil {
+				// A handshake that timed out may still have brought it back,
+				// slowly — or something else did: running is not a failure.
+				if runningElsewhere(r.ID) != "" {
+					continue
+				}
 				agentNotify("  reminal: could not restore session %s: %v\n", r.ID, err)
 			}
 		}

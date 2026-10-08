@@ -281,11 +281,21 @@ const (
 )
 
 // ActiveState says whether a session is running, by its record and its
-// process — Unknown when the record is there but cannot be read.
+// process — Unknown when the record is there, was written since this machine
+// started, and cannot be read.
+//
+// A record last written before this boot cannot be a running process's,
+// whatever it says: it is Gone, readable or not. That is the case a restore
+// exists for — a power cut — and the one that catches a record mid-write
+// (older versions wrote it in place), leaving it cut short; taking that as
+// "may be running" would keep its session from ever coming back.
 func ActiveState(id string) Liveness {
 	p, err := activePath(id)
 	if err != nil {
 		return Unknown
+	}
+	if writtenBeforeBoot(p) {
+		return Gone
 	}
 	a, err := readActiveRaw(p)
 	if err != nil {
@@ -428,6 +438,20 @@ func ReadActive() (*Active, error) {
 	a := all[0]
 	return &a, nil
 }
+
+// writtenBeforeBoot says p was last written before this machine started.
+// Unknown boot time, or no file: false.
+func writtenBeforeBoot(p string) bool {
+	boot, ok := bootTimeFn()
+	if !ok {
+		return false
+	}
+	fi, err := os.Stat(p)
+	return err == nil && fi.ModTime().Before(boot)
+}
+
+// bootTimeFn is bootTime, replaced in tests.
+var bootTimeFn = bootTime
 
 // readActiveRaw is a record as it is on disk: no PIN opened or asked for.
 func readActiveRaw(path string) (*Active, error) {

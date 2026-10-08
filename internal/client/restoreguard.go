@@ -94,6 +94,11 @@ func runningElsewhere(id string) string {
 	return ""
 }
 
+// SessionRunning says a session is being served by some process now, or may
+// be (its record cannot be read) — for `reminal restore`, after a restore
+// that did not report back in time.
+func SessionRunning(id string) bool { return runningElsewhere(id) != "" }
+
 // claimForRestore is a restored agent's first act: the session's id, held,
 // or an error saying why it may not come back.
 func claimForRestore(id string) error {

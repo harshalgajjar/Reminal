@@ -77,7 +77,7 @@ func TestARestoredSessionDoesNotHandItsIDOn(t *testing.T) {
 // cannot be read: not knowing is not gone.
 func TestOnlyASessionThatIsGoneIsRestorable(t *testing.T) {
 	isolateHome(t)
-	for _, id := range []string{"LIVE0001", "GONE0001", "BAD00001", "DEAD0001"} {
+	for _, id := range []string{"LIVE0001", "GONE0001", "BAD00001", "DEAD0001", "CUT00001"} {
 		saveRecord(t, id)
 	}
 	if err := session.WriteActive(session.Active{ID: "LIVE0001", PID: otherProcess(t), StartedAt: time.Now()}); err != nil {
@@ -92,8 +92,18 @@ func TestOnlyASessionThatIsGoneIsRestorable(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".reminal", "active-BAD00001.json"), []byte(`{"id":"BAD0`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(restorable(t), " "); got != "DEAD0001 GONE0001" {
-		t.Fatalf("restorable: %q, want only the two that are gone", got)
+	// Cut short by a power cut: as unreadable, but from before this boot —
+	// no process of this boot can be running it, and it must come back.
+	cut := filepath.Join(home, ".reminal", "active-CUT00001.json")
+	if err := os.WriteFile(cut, []byte(`{"id":"CUT0`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(cut, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(restorable(t), " "); got != "CUT00001 DEAD0001 GONE0001" {
+		t.Fatalf("restorable: %q, want the three that are gone", got)
 	}
 }
 

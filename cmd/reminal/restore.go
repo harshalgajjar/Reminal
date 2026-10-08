@@ -67,6 +67,11 @@ func runRestore(args []string) error {
 	failed := 0
 	for _, r := range pick {
 		sp, err := client.RestoreSession(r)
+		if err != nil && client.SessionRunning(r.ID) {
+			// It did not report back in time, but it is running.
+			fmt.Printf("  %s %s %s back — it was slow to say so; see reminal list\n", cGreen("✓"), cBold(r.ID), cDim(r.Name))
+			continue
+		}
 		if err != nil {
 			fmt.Printf("  %s %s: %v\n", cRed("✗"), r.ID, err)
 			failed++
