@@ -6,6 +6,7 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,17 +27,22 @@ import (
 // exactly when it is needed. It goes only when the session is ended on
 // purpose: `reminal kill`, `reminal stop`, or the shell exiting by itself.
 type Restore struct {
-	ID       string    `json:"id"`
-	PIN      string    `json:"pin"`
-	PinHash  string    `json:"pin_hash,omitempty"`
-	Token    string    `json:"token,omitempty"`
-	Name     string    `json:"name,omitempty"`
-	Cwd      string    `json:"cwd,omitempty"`
-	Headless bool      `json:"headless,omitempty"`
-	Fg       string    `json:"fg,omitempty"`      // the coding agent in the foreground, by name
-	FgArgs   []string  `json:"fg_args,omitempty"` // its command line
-	Conv     string    `json:"conv,omitempty"`    // its conversation id, from its hook
-	SavedAt  time.Time `json:"saved_at"`
+	ID       string   `json:"id"`
+	PIN      string   `json:"pin"`
+	PinHash  string   `json:"pin_hash,omitempty"`
+	Token    string   `json:"token,omitempty"`
+	Name     string   `json:"name,omitempty"`
+	Cwd      string   `json:"cwd,omitempty"`
+	Headless bool     `json:"headless,omitempty"`
+	Fg       string   `json:"fg,omitempty"`      // the coding agent in the foreground, by name
+	FgArgs   []string `json:"fg_args,omitempty"` // its command line
+	Conv     string   `json:"conv,omitempty"`    // its conversation id
+	// ConvSince is when this session first had Conv. Two records naming one
+	// conversation (an agent once started with "continue the latest here"
+	// picked up another session's) cannot both resume it; the one that had
+	// it first does. Zero in records from before it existed.
+	ConvSince time.Time `json:"conv_since,omitempty"`
+	SavedAt   time.Time `json:"saved_at"`
 }
 
 func restoreDir() (string, error) {
@@ -409,13 +415,28 @@ func WriteConv(id, conv string) error {
 
 // ReadConv is the last conversation id reported for a session, or "".
 func ReadConv(id string) string {
+	conv, _ := ReadConvAt(id)
+	return conv
+}
+
+// ReadConvAt is ReadConv with when it was reported.
+func ReadConvAt(id string) (string, time.Time) {
 	p, err := restorePath(id, ".conv")
 	if err != nil {
-		return ""
+		return "", time.Time{}
 	}
-	b, err := os.ReadFile(p)
+	f, err := os.Open(p)
 	if err != nil {
-		return ""
+		return "", time.Time{}
 	}
-	return strings.TrimSpace(string(b))
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return "", time.Time{}
+	}
+	b, err := io.ReadAll(io.LimitReader(f, 256))
+	if err != nil {
+		return "", time.Time{}
+	}
+	return strings.TrimSpace(string(b)), fi.ModTime()
 }

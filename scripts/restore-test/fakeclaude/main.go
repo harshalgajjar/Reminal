@@ -5,7 +5,11 @@
 // claude (as the real one is — a script would show as its interpreter on
 // macOS), whose conversations live in ~/.fake-claude/<id>.conv, resumed with
 // --resume <id> or --continue, and which — like claude's own hooks — reports
-// its conversation id through `reminal hook` on every turn.
+// its conversation id through `reminal hook` on every turn (not with
+// FAKE_CLAUDE_HOOKS=0, as for someone without reminal's hooks installed).
+// Like claude, it keeps ~/.claude/sessions/<pid>.json naming the
+// conversation the process is in. `--resume` alone stands for claude's list;
+// it starts a new conversation.
 package main
 
 import (
@@ -17,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -55,7 +60,15 @@ func main() {
 		_ = os.WriteFile(path(), nil, 0o600)
 		fmt.Println("fake-claude: new conversation " + conv)
 	}
+	sess := filepath.Join(home, ".claude", "sessions")
+	_ = os.MkdirAll(sess, 0o700)
+	_ = os.WriteFile(filepath.Join(sess, strconv.Itoa(os.Getpid())+".json"),
+		[]byte(fmt.Sprintf(`{"pid":%d,"sessionId":%q,"kind":"interactive"}`, os.Getpid(), conv)), 0o600)
+	hooks := os.Getenv("FAKE_CLAUDE_HOOKS") != "0"
 	hook := func(state, event string) {
+		if !hooks {
+			return
+		}
 		c := exec.Command("reminal", "hook", state)
 		c.Stdin = strings.NewReader(fmt.Sprintf(`{"session_id":%q,"hook_event_name":%q}`, conv, event))
 		_ = c.Run()

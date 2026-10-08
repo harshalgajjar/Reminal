@@ -125,6 +125,12 @@ type Agent struct {
 	// again — so a prompt now means it was quit, not that it is still coming
 	// back. Touched only by saveRestore, under restoreMu.
 	restoreAgentSeen bool
+	// agentLastSeen: when a save last found a coding agent in front. Its
+	// conversation and since when this session has had it: restoreConv,
+	// restoreConvSince. All touched only by saveRestore, under restoreMu.
+	agentLastSeen    time.Time
+	restoreConv      string
+	restoreConvSince time.Time
 	restoreRun       string
 	restoreNote      string
 	restorePlan      func() (run, note string)

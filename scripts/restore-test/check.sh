@@ -37,7 +37,10 @@ box "test -f /root/.reminal/restore/$K.sealed" && fail "killed session $K kept a
 
 docker restart $BOX >/dev/null
 ok "box rebooted — every process gone, no chance to clean up"
-sleep 6
+# The daemon restores at boot; the agent is typed in once the new shell is
+# quiet, after its --help has been read for the flags to keep.
+for i in $(seq 1 30); do box "grep -q -- '--resume' /root/.fake-claude/argv.log" 2>/dev/null && break; sleep 1; done
+sleep 2
 
 box "reminal list" | grep -q "$ID" && ok "the daemon brought $ID back at boot, same id" || fail "$ID not back: $(box 'cat /root/daemon.log; reminal restore')"
 box "reminal list" | grep -qE "$Q|$K" && fail "a session ended on purpose came back" || ok "the sessions ended on purpose stayed ended"
