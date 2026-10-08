@@ -790,6 +790,9 @@ func main() {
 		if hlName == "" {
 			hlName = os.Getenv("REMINAL_NEW_NAME")
 		}
+		// This session's, not its shell's: a `reminal new` run in it must not
+		// carry the name on.
+		_ = os.Unsetenv("REMINAL_NEW_NAME")
 		opts := client.AgentOptions{Headless: true, HandshakeFD: *handshakeFD, HandshakeAddr: *handshakeAddr, Name: hlName}
 		// Started by `reminal restore`: the session comes back as itself.
 		if id := client.RestoreEnvID(); id != "" {

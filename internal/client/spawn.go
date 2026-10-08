@@ -70,8 +70,14 @@ func Spawn(name, cwd string) (*SpawnedSession, error) {
 	// The user-chosen name rides along in REMINAL_NEW_NAME — the detached
 	// child has no argv we control after exec, so env is the clean channel
 	// for it. The headless agent reads it into AgentOptions.Name.
+	//
+	// What marks THIS process's session is never handed on (spawnEnv): a
+	// `reminal new` run inside a restored session would otherwise come up
+	// as that session again.
 	if name = strings.TrimSpace(name); name != "" {
-		cmd.Env = append(os.Environ(), "REMINAL_NEW_NAME="+name)
+		cmd.Env = spawnEnv(envNewName + "=" + name)
+	} else {
+		cmd.Env = spawnEnv()
 	}
 	cmd.Stdin = devnull
 	cmd.Stdout = devnull

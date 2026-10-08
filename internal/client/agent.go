@@ -732,12 +732,20 @@ func (a *Agent) Run() error {
 			a.name = prev.Name
 		}
 	}
+	// This session's id is this process's while it runs (restoreguard.go):
+	// nothing restores it meanwhile. Best effort — a Windows hot restart's
+	// successor starts while its predecessor still holds it.
+	_, _ = holdLive(a.sessionID)
+	a.forgetDeadHarness()
 	a.recordActive(0)
 	defer func() {
 		if !a.restarting.Load() {
-			_ = session.ClearActive(a.sessionID)
+			// Only this agent's own record: another serving the same id
+			// keeps its own (and the session coming back — settleRestore).
+			_ = session.ClearActiveIfOwn(a.sessionID, os.Getpid())
 			_ = session.ClearHookState(a.sessionID)
 			a.settleRestore()
+			releaseLive(a.sessionID)
 		}
 	}()
 	// During a Windows hot restart, Run winds down the moment the successor
@@ -2049,7 +2057,7 @@ func (a *Agent) pause() {
 	if !a.paused.CompareAndSwap(false, true) {
 		return // already paused
 	}
-	_ = session.ClearActive(a.sessionID)
+	_ = session.ClearActiveIfOwn(a.sessionID, os.Getpid())
 	_ = session.ClearHookState(a.sessionID)
 	_ = session.ClearRestore(a.sessionID) // stopped on purpose: not to come back
 	a.currentConnMu.Lock()
