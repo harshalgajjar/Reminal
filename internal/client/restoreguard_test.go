@@ -170,3 +170,25 @@ func TestAnEndingAgentLeavesAnotherAgentsRecord(t *testing.T) {
 		t.Fatal("a session ended on purpose, with no other agent, was kept to come back")
 	}
 }
+
+// A restored session starts with nothing its dead harness reported: a
+// "working" from a turn the restart cut short made the restored harness's
+// first idle ping read as "needs you" (hook.go: classifyNotify).
+func TestARestoredSessionForgetsWhatItsDeadHarnessSaid(t *testing.T) {
+	isolateHome(t)
+	if err := session.WriteHookState("CUT00001", "working"); err != nil {
+		t.Fatal(err)
+	}
+	a := &Agent{sessionID: "CUT00001", restoring: true}
+	a.forgetDeadHarness()
+	if hs := session.ReadHookStateAnyAge("CUT00001"); hs != nil {
+		t.Fatalf("a restored session kept its dead harness's %q", hs.State)
+	}
+	if err := session.WriteHookState("HOT00001", "working"); err != nil {
+		t.Fatal(err)
+	}
+	(&Agent{sessionID: "HOT00001"}).forgetDeadHarness()
+	if hs := session.ReadHookStateAnyAge("HOT00001"); hs == nil {
+		t.Fatal("a session that is not being restored lost what its running harness said")
+	}
+}

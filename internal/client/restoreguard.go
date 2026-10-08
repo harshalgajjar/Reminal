@@ -124,3 +124,16 @@ func spawnEnv(extra ...string) []string {
 }
 
 const envNewName = "REMINAL_NEW_NAME"
+
+// forgetDeadHarness drops, as a restored session starts, what its harness
+// last reported of itself (hook-<id>.state): that harness died with the
+// machine, and the one this restore starts says nothing until it acts. Left
+// in place, a "working" from a turn the restart cut short made the restored
+// harness's first idle ping read as "needs you" (classifyNotify), and the
+// new shell showed the dead harness's state meanwhile. A hot restart keeps
+// its harness running, and what it said stays true.
+func (a *Agent) forgetDeadHarness() {
+	if a.restoring {
+		_ = session.ClearHookState(a.sessionID)
+	}
+}

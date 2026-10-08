@@ -736,6 +736,7 @@ func (a *Agent) Run() error {
 	// nothing restores it meanwhile. Best effort — a Windows hot restart's
 	// successor starts while its predecessor still holds it.
 	_, _ = holdLive(a.sessionID)
+	a.forgetDeadHarness()
 	a.recordActive(0)
 	defer func() {
 		if !a.restarting.Load() {
