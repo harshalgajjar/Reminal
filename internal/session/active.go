@@ -218,7 +218,10 @@ func WriteActive(a Active) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0o600)
+	// Replaced whole, never rewritten in place: a reader (a restore deciding
+	// whether this session is still running) must see the old record or the
+	// new, never half of one.
+	return writeFileAtomic(p, data)
 }
 
 const kindActivePIN = "active-pin"
@@ -235,6 +238,66 @@ func ClearActive(id string) error {
 		return err
 	}
 	return nil
+}
+
+// ClearActiveIfOwn deletes a session's record only if it is pid's — or no
+// live process's. An agent ending must never take away the record of
+// another agent running under the same id: that one rewrites its record
+// only when something about it changes, and until then the session is
+// missing from every list and cannot be reached by id. A record that cannot
+// be read is left alone.
+func ClearActiveIfOwn(id string, pid int) error {
+	p, err := activePath(id)
+	if err != nil {
+		return err
+	}
+	a, err := readActiveRaw(p)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if a.PID != pid && pidAlive(a.PID) && !pidReused(a.PID, a.pidAnchor()) {
+		return nil
+	}
+	if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// Liveness is what a session's record says of whether it is running.
+type Liveness int
+
+const (
+	// Gone: no record, or one whose process has ended.
+	Gone Liveness = iota
+	// Running: a record whose process is alive.
+	Running
+	// Unknown: a record that cannot be read right now. Nothing that would
+	// start the session again may take this as gone.
+	Unknown
+)
+
+// ActiveState says whether a session is running, by its record and its
+// process — Unknown when the record is there but cannot be read.
+func ActiveState(id string) Liveness {
+	p, err := activePath(id)
+	if err != nil {
+		return Unknown
+	}
+	a, err := readActiveRaw(p)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Gone
+		}
+		return Unknown
+	}
+	if pidAlive(a.PID) && !pidReused(a.PID, a.pidAnchor()) {
+		return Running
+	}
+	return Gone
 }
 
 // ReadActiveByID returns one specific session's record if its PID is still
@@ -363,6 +426,19 @@ func ReadActive() (*Active, error) {
 		return nil, os.ErrNotExist
 	}
 	a := all[0]
+	return &a, nil
+}
+
+// readActiveRaw is a record as it is on disk: no PIN opened or asked for.
+func readActiveRaw(path string) (*Active, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var a Active
+	if err := json.Unmarshal(data, &a); err != nil {
+		return nil, err
+	}
 	return &a, nil
 }
 

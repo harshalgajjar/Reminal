@@ -193,6 +193,11 @@ func (a *Agent) settleRestore() {
 	if a.term != nil && a.term.EndedBySignal() {
 		return
 	}
+	// Another agent serving this id (its record still there after this one
+	// cleared only its own) keeps the session coming back.
+	if session.ActiveState(a.sessionID) != session.Gone {
+		return
+	}
 	_ = session.ClearRestore(a.sessionID)
 }
 
@@ -558,6 +563,10 @@ func shellJoin(argv []string) string {
 // many sessions at once took longer than the daemon waits for a restored
 // session to report that it started — and the daemon gave up on it.
 func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error) {
+	// The id is this process's from here on, or it does not come back.
+	if err := claimForRestore(id); err != nil {
+		return nil, nil, err
+	}
 	r, err := session.ReadRestore(id)
 	if err != nil {
 		return nil, nil, fmt.Errorf("no restore record for %s: %w", id, err)
@@ -628,22 +637,18 @@ func (a *Agent) restoreStart() {
 }
 
 // Restorable is a session that can be brought back: a record whose session
-// is not running. atrest.ErrLocked comes back WITH the records it could open
-// when the keystore would not give the key up for the rest yet.
+// is not running — checked one by one (runningElsewhere), so a record that
+// cannot be read, or an agent alive under its id, keeps it out. atrest.ErrLocked
+// comes back WITH the records it could open when the keystore would not give
+// the key up for the rest yet.
 func Restorable() ([]session.Restore, error) {
 	all, err := session.ReadRestores()
 	if err != nil && !errors.Is(err, atrest.ErrLocked) {
 		return nil, err
 	}
-	live := map[string]bool{}
-	if act, err := session.ReadAllActive(); err == nil {
-		for _, x := range act {
-			live[x.ID] = true
-		}
-	}
 	var out []session.Restore
 	for _, r := range all {
-		if !live[r.ID] {
+		if runningElsewhere(r.ID) == "" {
 			out = append(out, r)
 		}
 	}
@@ -663,7 +668,7 @@ func RestoreSession(r session.Restore) (*SpawnedSession, error) {
 	}
 	defer devnull.Close()
 	cmd := exec.Command(exe, "--headless")
-	cmd.Env = append(os.Environ(), envRestore+"="+r.ID)
+	cmd.Env = spawnEnv(envRestore + "=" + r.ID)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = devnull, devnull, devnull
 	if dir, err := resolveSpawnDir(r.Cwd); err == nil && dir != "" {
 		cmd.Dir = dir
@@ -692,7 +697,14 @@ func RestoreSession(r session.Restore) (*SpawnedSession, error) {
 }
 
 // RestoreEnvID is the session a headless agent was started to restore, or "".
-func RestoreEnvID() string { return strings.ToUpper(strings.TrimSpace(os.Getenv(envRestore))) }
+// It is taken out of the environment as it is read: the session's shell, and
+// everything started from it, inherit this process's environment, and a
+// `reminal new` run there would otherwise come up as this session again.
+func RestoreEnvID() string {
+	id := strings.ToUpper(strings.TrimSpace(os.Getenv(envRestore)))
+	_ = os.Unsetenv(envRestore)
+	return id
+}
 
 // restoreAtStart brings back every session a restart ended. REMINAL_NO_RESTORE=1
 // turns it off (they can still be restored by hand).
