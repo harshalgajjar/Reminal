@@ -33,45 +33,55 @@ func TestWriteHookStateIsNeverSeenHalfWritten(t *testing.T) {
 	// than coincidentally the right size.
 	states := []string{"working", "done"}
 
-	var wg sync.WaitGroup
-	stop := make(chan struct{})
+	// The record exists before anyone reads, so every read below is of a
+	// record. Reading first and writing second, the test once checked nothing
+	// at all: on a busy machine the reader could finish before any writer had
+	// run, and then the writers saw it was over and never wrote.
+	if err := WriteHookState(id, states[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	// Each writer writes a fixed number of records, whatever the reader does.
+	// Write errors are not the point here (Windows refuses to replace a file a
+	// reader has open; that write is lost, not torn).
+	var writers sync.WaitGroup
 	for i := 0; i < 4; i++ {
-		wg.Add(1)
+		writers.Add(1)
 		go func(i int) {
-			defer wg.Done()
+			defer writers.Done()
 			for n := 0; n < 300; n++ {
-				select {
-				case <-stop:
-					return
-				default:
-				}
 				_ = WriteHookState(id, states[(i+n)%len(states)])
 			}
 		}(i)
 	}
+	finished := make(chan struct{})
+	go func() { writers.Wait(); close(finished) }()
 
-	// Read as fast as they write; every record that exists has to parse.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer close(stop)
-		for n := 0; n < 1500; n++ {
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				continue // not written yet
-			}
-			var hs HookState
-			if err := json.Unmarshal(raw, &hs); err != nil {
-				t.Errorf("read a half-written record: %q", raw)
-				return
-			}
-			if hs.State != "working" && hs.State != "done" {
-				t.Errorf("read a record holding a state nobody wrote: %q", raw)
-				return
-			}
+	// Read for as long as anyone is writing, however the scheduler orders
+	// them, and once more after: every record read has to parse.
+	reads := 0
+	for done := false; !done; {
+		select {
+		case <-finished:
+			done = true
+		default:
 		}
-	}()
-	wg.Wait()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue // Windows: a read that met the replace; nothing torn
+		}
+		reads++
+		var hs HookState
+		if err := json.Unmarshal(raw, &hs); err != nil {
+			t.Fatalf("read a half-written record: %q", raw)
+		}
+		if hs.State != "working" && hs.State != "done" {
+			t.Fatalf("read a record holding a state nobody wrote: %q", raw)
+		}
+	}
+	if reads == 0 {
+		t.Fatal("never read the record")
+	}
 
 	// And nothing is left lying about in the state directory.
 	entries, err := os.ReadDir(filepath.Dir(path))
