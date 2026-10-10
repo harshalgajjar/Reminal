@@ -12,8 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/mdp/qrterminal/v3"
 )
 
 // spawnHandshakeTimeout bounds how long `reminal new` will wait for the
@@ -128,38 +126,39 @@ func Spawn(name, cwd string) (*SpawnedSession, error) {
 // recognises it instantly, plus a join-QR. The caller is expected to
 // print this and then exit (the spawned agent keeps running detached).
 func PrintSpawned(sp *SpawnedSession, name, version string) {
-	fmt.Println()
-	fmt.Printf("  reminal — new background session · v%s · %s\n", version, sp.ID)
-	fmt.Println()
+	out := bannerOut()
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "  reminal — new background session · v%s · %s\n", version, sp.ID)
+	fmt.Fprintln(out)
 	if name = strings.TrimSpace(name); name != "" {
-		fmt.Printf("  Name:     %s\n", name)
+		fmt.Fprintf(out, "  Name:     %s\n", name)
 	}
-	fmt.Printf("  Session:  %s\n", sp.ID)
-	fmt.Printf("  PIN:      %s\n", sp.PIN)
-	fmt.Printf("  Open:     %s\n", sp.OpenURL)
+	fmt.Fprintf(out, "  Session:  %s\n", sp.ID)
+	fmt.Fprintf(out, "  PIN:      %s\n", sp.PIN)
+	fmt.Fprintf(out, "  Open:     %s\n", sp.OpenURL)
 	// One-tap join link (PIN in the #p= fragment, auto-filled by the web
 	// client and never sent to the server) — tap it from a phone.
-	fmt.Printf("  Join:     %s#p=%s\n", sp.OpenURL, sp.PIN)
-	fmt.Printf("  Connect:  reminal connect %s %s\n", sp.ID, sp.PIN)
-	fmt.Printf("  PID:      %d  (detached — survives this terminal closing)\n", sp.PID)
-	fmt.Println()
-	// Half-block rendering, matching the foreground agent and `reminal info`
-	// (issue #85) so a QR looks identical whichever command printed it. Builds
-	// the join URL with the PIN in the fragment so the web client auto-fills.
+	fmt.Fprintf(out, "  Join:     %s#p=%s\n", sp.OpenURL, sp.PIN)
+	fmt.Fprintf(out, "  Connect:  reminal connect %s %s\n", sp.ID, sp.PIN)
+	fmt.Fprintf(out, "  PID:      %d  (detached — survives this terminal closing)\n", sp.PID)
+	fmt.Fprintln(out)
+	// The same QR as the foreground agent and `reminal info` (issue #85), plain
+	// ASCII when redirected (issue #198). Builds the join URL with the PIN in
+	// the fragment so the web client auto-fills.
 	qrURL := sp.OpenURL + "#p=" + sp.PIN
-	qrterminal.GenerateHalfBlock(qrURL, qrterminal.L, os.Stdout)
-	fmt.Println()
+	printJoinQR(out, qrURL)
+	fmt.Fprintln(out)
 	// Prefer the name in the hints when the user gave one — it's what
 	// they'll remember, and resolveActive accepts it anywhere an ID works.
 	ref := sp.ID
 	if n := strings.TrimSpace(name); n != "" {
 		ref = n
 	}
-	fmt.Println("  This session has no host terminal — to drive it from here, run:")
-	fmt.Printf("    reminal attach %s\n", ref)
-	fmt.Println("  To stop broadcasting:    reminal stop", ref)
-	fmt.Println("  To terminate completely: reminal kill", ref)
-	fmt.Println()
+	fmt.Fprintln(out, "  This session has no host terminal — to drive it from here, run:")
+	fmt.Fprintf(out, "    reminal attach %s\n", ref)
+	fmt.Fprintln(out, "  To stop broadcasting:    reminal stop", ref)
+	fmt.Fprintln(out, "  To terminate completely: reminal kill", ref)
+	fmt.Fprintln(out)
 }
 
 // ParseHandshakeFD returns the int value of --handshake-fd from os.Args
