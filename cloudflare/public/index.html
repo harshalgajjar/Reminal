@@ -2618,6 +2618,7 @@
     // old (or a platform without desktop capture) lists none — say so briefly.
     async function openDesktopPanes() {
       const wins = await nextWindowList();
+      if (!wins) return; // the session changed meanwhile
       // Only a hint that means capture would FAIL (macOS Screen Recording off →
       // black frames) blocks opening — surface it instead of dead panes. An
       // informational caveat (e.g. Wayland: the desktop view works but per-window
@@ -5623,6 +5624,14 @@
     function noteSessionHome(sid, machineB64) {
       if (sid && machineB64) sessionHomes.set(String(sid).toUpperCase(), b64URLToStd(machineB64));
     }
+    // A machine's directory naming its sessions only fills in what is not
+    // known: a session's verified machine (an owner connect's pin) is never
+    // moved by another machine's say-so, which could list any id at all.
+    function noteDirectorySessions(machineB64, sessions) {
+      for (const x of sessions || []) {
+        if (x && x.id && !sessionHomes.has(String(x.id).toUpperCase())) noteSessionHome(x.id, machineB64);
+      }
+    }
     function onSameMachine(a, b) {
       const x = a && sessionHomes.get(String(a).toUpperCase());
       const y = b && sessionHomes.get(String(b).toUpperCase());
@@ -5937,7 +5946,7 @@
           clearTimeout(timer);
           try { sock.close(); } catch (_) {}
           if (err) { reject(err); return; }
-          if (val && Array.isArray(val.sessions)) for (const x of val.sessions) if (x && x.id) noteSessionHome(x.id, machineB64Cmp);
+          if (val && Array.isArray(val.sessions)) noteDirectorySessions(machineB64Cmp, val.sessions);
           resolve(val);
         };
         const timer = setTimeout(() => done(new Error('timeout')), opts.timeout || 6000);
@@ -11491,7 +11500,10 @@
       if (sameMachine) return;
       winList = []; winHint = ''; winCaptureBlocked = false;
       appList = []; pendingLaunch = null;
-      winListWaiters = []; // they asked the machine being left: its answer is not this one's
+      // They asked the machine being left: told null (no answer), never the
+      // new machine's list, which would launch an app or open panes there.
+      const left = winListWaiters; winListWaiters = [];
+      left.forEach(fn => fn(null));
       hostDesktopHint = ''; hostDesktopErr = '';
       upgradeState = null; changelog = null;
       winListRoot.innerHTML = '<div class="windows-note">Loading windows…</div>';
@@ -11923,6 +11935,7 @@
     async function launchApp(a) {
       appsDetails.open = false;
       const base = await nextWindowList();               // accurate pre-launch baseline
+      if (!base) return;                                 // the session changed meanwhile
       pendingLaunch = {
         before: new Set(base.map(w => w.id)),
         appName: (a.name || '').toLowerCase(),
