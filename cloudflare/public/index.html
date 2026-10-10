@@ -12755,10 +12755,17 @@
       // Over any other picture it would be wrong (a frame lost or overtaken
       // on the way, a resize in between), so then nothing is drawn and the
       // host is asked for a whole frame.
-      const band = payload.bw ? {
-        x: payload.bx || 0, y: payload.by || 0, w: payload.bw, h: payload.bh,
-        fw: payload.fw, fh: payload.fh, base: payload.base,
+      // Any band field makes it a band; bx/by are left out when 0.
+      const band = ['bx', 'by', 'bw', 'bh', 'fw', 'fh', 'base'].some((k) => payload[k] !== undefined) ? {
+        x: payload.bx === undefined ? 0 : payload.bx, y: payload.by === undefined ? 0 : payload.by,
+        w: payload.bw, h: payload.bh, fw: payload.fw, fh: payload.fh, base: payload.base,
       } : null;
+      // A band is drawn only if it is whole numbers, lies inside its frame,
+      // and decodes to exactly the size it says: anything else is refused
+      // like a band against the wrong picture.
+      const bandSound = (b, sw, sh) => ['x', 'y', 'w', 'h', 'fw', 'fh', 'base'].every((k) => Number.isInteger(b[k]))
+        && b.x >= 0 && b.y >= 0 && b.w > 0 && b.h > 0 && b.x + b.w <= b.fw && b.y + b.h <= b.fh
+        && sw === b.w && sh === b.h;
       // Paint onto the canvas: drawImage is atomic and keeps the previous frame
       // until the new one is drawn, so no per-frame blank flicker. createImage-
       // Bitmap decodes off the main thread; fall back to <img> decode → canvas
@@ -12766,6 +12773,13 @@
       // ack fires after the draw, keeping the host's frame-pacing backpressure.
       const paint = (src, sw, sh) => {
         const cv = p.img;
+        // A band refused touches nothing: not the canvas, not the pane's
+        // size, not which frame the canvas holds.
+        if (band && (!bandSound(band, sw, sh) || p.canvasSeq !== band.base || cv.width !== band.fw || cv.height !== band.fh)) {
+          requestH264Key(p); // the same "send me a whole frame" ask
+          if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC);
+          return;
+        }
         // Keep the logical size current BEFORE the popped-out fit/aspect hooks
         // below — they derive the aspect from p.w, and running them against the
         // previous window's shape is exactly how a host-side resize ended up
@@ -12780,11 +12794,6 @@
         // window fights the user's own placement. It only matches aspect once,
         // at open (see popOutPane), then CSS owns it.
         if (band) {
-          if (p.canvasSeq !== band.base || cv.width !== band.fw || cv.height !== band.fh) {
-            requestH264Key(p); // the same "send me a whole frame" ask
-            if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC);
-            return;
-          }
           p.ctx.drawImage(src, band.x, band.y, band.w, band.h);
         } else {
           if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; }

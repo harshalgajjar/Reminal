@@ -236,3 +236,24 @@ func TestBandsNeedEveryViewer(t *testing.T) {
 		t.Fatal("an ended stream kept its pictures")
 	}
 }
+
+// A viewer that cannot draw bands may join between a capture and its send:
+// the frame that send cuts goes whole, or the newcomer — on the same relay
+// broadcast — would draw a band as the whole picture.
+func TestNoBandForAViewerJoiningMidFrame(t *testing.T) {
+	s, pw := bandStream(t)
+	ws := winSinks{ws: true}
+	if _, ok := s.captureBand(); !ok {
+		t.Fatal("fixture: bands off")
+	}
+	s.sendFrame(nil, ws, false)
+	pw.img.Set(5, 5, color.RGBA{9, 9, 9, 255})
+	if _, ok := s.captureBand(); !ok {
+		t.Fatal("fixture: bands off")
+	}
+	s.a.addWindowSub("w1", "viewerOld", false) // joins now, before the send
+	s.sendFrame(nil, ws, false)
+	if s.bands.sinceFull || s.bands.fullSum != s.bands.curSum {
+		t.Fatal("a band was cut with a viewer watching that cannot draw one")
+	}
+}

@@ -89,6 +89,32 @@ const out = await page.evaluate(async () => {
   res.behindSlowFull = { size: [p.img.width, p.img.height], corner: px(p, 4, 4) };
   res.behindSlowFull.ok = p.img.width === 1100 && near(res.behindSlowFull.corner, BLUE);
 
+  // A malformed band is refused: nothing drawn, the canvas still the frame it
+  // was, a whole frame asked for, and the next sound band against that frame
+  // still drawn (so the refused one did not take its place as the base).
+  const bad = {
+    outsideTheFrame: (b) => ({ ...b, bx: 56, bw: 16 }),
+    negativeOffset: (b) => ({ ...b, bx: -16 }),
+    hugeSize: (b) => ({ ...b, bw: 1e9, bh: 1e9 }),
+    decodedSizeDiffers: (b) => ({ ...b, bw: 32, bh: 32 }),
+    bigJpegSmallFrame: async (b) => ({ ...b, bw: 16, bh: 16, img: await jpeg(2000, 2000, BLUE) }),
+    nonNumericOffset: (b) => ({ ...b, bx: 'x', by: '8' }),
+  };
+  res.malformed = {};
+  for (const [name, spoil] of Object.entries(bad)) {
+    p = newPane();
+    onWindowFrame(await full(1, 64, 48, RED), false);
+    await settle();
+    onWindowFrame(await spoil(await band(2, 1, 16, 16, 16, 16, 64, 48, BLUE)), false);
+    await settle();
+    const r = { size: [p.img.width, p.img.height], corners: [px(p, 2, 2), px(p, 20, 20), px(p, 60, 44)], asked: asked(), canvasSeq: p.canvasSeq };
+    onWindowFrame(await band(3, 1, 32, 16, 16, 16, 64, 48, GREEN), false);
+    await settle();
+    r.nextDrawn = near(px(p, 36, 20), GREEN);
+    r.ok = p.img.width === 64 && p.img.height === 48 && r.corners.every((c) => near(c, RED)) && r.asked && r.nextDrawn;
+    res.malformed[name] = r;
+  }
+
   // Every frame is acked, drawn or not: acks pace the host.
   res.acks = sent.filter((m) => m.type === 'window_ack' && !m.key).map((m) => m.seq);
   return res;
@@ -97,5 +123,6 @@ console.log(JSON.stringify(out));
 const cases = ['inOrder', 'outOfOrder', 'afterResize', 'behindSlowFull'];
 let ok = true;
 for (const c of cases) { console.log((out[c].ok ? 'PASS  ' : 'FAIL  ') + c); ok = ok && out[c].ok; }
+for (const [c, r] of Object.entries(out.malformed)) { console.log((r.ok ? 'PASS  ' : 'FAIL  ') + 'malformed band refused: ' + c); ok = ok && r.ok; }
 await b.close(); srv.close();
 process.exit(ok ? 0 : 1);

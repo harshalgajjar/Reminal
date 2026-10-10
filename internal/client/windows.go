@@ -2469,7 +2469,10 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 	var band *image.Rectangle
 	if s.bands != nil {
 		var err error
-		if img, band, err = s.bands.payload(sinks, force); err != nil {
+		// Asked again here, not only at the capture: a viewer that cannot
+		// draw a band may have joined since, and shares the relay broadcast.
+		whole := force || !s.a.windowBandsOK(s.w.ID)
+		if img, band, err = s.bands.payload(sinks, whole); err != nil {
 			return
 		}
 	}
