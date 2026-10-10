@@ -2618,6 +2618,7 @@
     // old (or a platform without desktop capture) lists none — say so briefly.
     async function openDesktopPanes() {
       const wins = await nextWindowList();
+      if (!wins) return; // the session changed meanwhile
       // Only a hint that means capture would FAIL (macOS Screen Recording off →
       // black frames) blocks opening — surface it instead of dead panes. An
       // informational caveat (e.g. Wayland: the desktop view works but per-window
@@ -5611,8 +5612,43 @@
       return (await idbGet(db, 'mach:' + sid)) || null;
     }
     async function pinMachine(sid, pubB64) {
+      noteSessionHome(sid, pubB64);
       try { const db = await openOwnDB(); await idbPut(db, 'mach:' + sid, pubB64); } catch (_) {}
     }
+    // Which machine each session is on, by the machine's key, as far as this
+    // page has learned it: from a verified owner connect, or from a machine's
+    // own directory listing its sessions. A switch between two sessions known
+    // to be on the same machine keeps what the page knows of that machine (its
+    // windows, its apps); anything else, unknown included, starts it afresh.
+    const sessionHomes = new Map();
+    function noteSessionHome(sid, machineB64) {
+      if (sid && machineB64) sessionHomes.set(String(sid).toUpperCase(), b64URLToStd(machineB64));
+    }
+    // A machine's directory naming its sessions only fills in what is not
+    // known: a session's verified machine (an owner connect's pin) is never
+    // moved by another machine's say-so, which could list any id at all.
+    function noteDirectorySessions(machineB64, sessions) {
+      for (const x of sessions || []) {
+        if (x && x.id && !sessionHomes.has(String(x.id).toUpperCase())) noteSessionHome(x.id, machineB64);
+      }
+    }
+    function onSameMachine(a, b) {
+      const x = a && sessionHomes.get(String(a).toUpperCase());
+      const y = b && sessionHomes.get(String(b).toUpperCase());
+      return !!x && x === y;
+    }
+    (async () => {
+      try {
+        const db = await openOwnDB();
+        const keys = await new Promise((res, rej) => {
+          const t = db.transaction('keys', 'readonly').objectStore('keys').getAllKeys();
+          t.onsuccess = () => res(t.result || []); t.onerror = () => rej(t.error);
+        });
+        for (const k of keys) {
+          if (typeof k === 'string' && k.startsWith('mach:')) noteSessionHome(k.slice(5), (await idbGet(db, k)) || '');
+        }
+      } catch (_) {}
+    })();
     // Trust is held per machine, not per session. A machine this browser has
     // connected to as an owner is recognised by its key on any of its sessions.
     // A key it has not seen is accepted only when the session is not on one of
@@ -5622,6 +5658,7 @@
       const pinned = await getPinnedMachine(sid);
       if (pinned) {
         if (pinned !== machineB64) throw new Error('this machine’s identity changed since first connect — refusing');
+        noteSessionHome(sid, machineB64);
         return;
       }
       const owned = await loadOwnedMachines();
@@ -5908,7 +5945,9 @@
           settled = true;
           clearTimeout(timer);
           try { sock.close(); } catch (_) {}
-          if (err) reject(err); else resolve(val);
+          if (err) { reject(err); return; }
+          if (val && Array.isArray(val.sessions)) noteDirectorySessions(machineB64Cmp, val.sessions);
+          resolve(val);
         };
         const timer = setTimeout(() => done(new Error('timeout')), opts.timeout || 6000);
         const ch = { seal: null, key: null };
@@ -7380,6 +7419,7 @@
       // restore any panes this session had open (Recent → reopens its windows).
       pendingRestore = true;
       if (typeof sendWin === 'function') sendWin('window_list');
+      if (typeof refreshOpenApps === 'function') refreshOpenApps();
       // Ask the host about itself (name + basic stats) for the Host dropdown
       // and to label this session in Recent with its computer name.
       if (typeof sendWin === 'function') sendWin('host_info');
@@ -8323,6 +8363,10 @@
       // Switching to a different session invalidates the replay cursor and
       // any previously rendered output; start the terminal clean.
       if (s !== sessionId) {
+        // What the page shows of the machine it was on goes with it — another
+        // machine's windows, apps or banners are never shown for this one —
+        // unless the session it is going to is on that same machine.
+        const sameMachine = onSameMachine(sessionId, s);
         lastSeq = 0;
         sessionId = s;
         term.reset();
@@ -8332,6 +8376,7 @@
         // which cannot connect, and looks to whoever pastes it like the
         // machine hanging rather than a wrong credential.
         lastHostInfo = null;
+        if (typeof forgetHostState === 'function') forgetHostState(sameMachine);
       }
       if (lastSeq === 0) awaitingSnapshotUntil = Date.now() + 15000;
       pinValue = p;
@@ -11446,6 +11491,29 @@
       ws.send(JSON.stringify(frame));
     }
 
+    // forgetHostState: the session shown is about to change. Its windows'
+    // streams went with its connection either way; on another machine (or one
+    // not known to be the same) the lists, hints and anything waiting on them
+    // are that machine's, so they go too, and the panels say they are loading.
+    function forgetHostState(sameMachine) {
+      if (typeof closeAllPanes === 'function') { try { closeAllPanes(); } catch (_) {} }
+      if (sameMachine) return;
+      winList = []; winHint = ''; winCaptureBlocked = false;
+      appList = []; pendingLaunch = null;
+      // They asked the machine being left: told null (no answer), never the
+      // new machine's list, which would launch an app or open panes there.
+      const left = winListWaiters; winListWaiters = [];
+      left.forEach(fn => fn(null));
+      hostDesktopHint = ''; hostDesktopErr = '';
+      upgradeState = null; changelog = null;
+      winListRoot.innerHTML = '<div class="windows-note">Loading windows…</div>';
+      appsListRoot.innerHTML = '<div class="windows-note">Loading apps…</div>';
+      if (typeof renderHost === 'function') renderHost();
+    }
+    // An Apps list left open across a switch is asked for again, as the
+    // Windows one is on every connect.
+    function refreshOpenApps() { if (appsDetails.open) sendWin('app_list'); }
+
     function requestWindows() {
       // Show the last known list instantly (no flicker) and refresh in the
       // background; only flash "Loading…" the first time, when we have nothing.
@@ -11867,6 +11935,7 @@
     async function launchApp(a) {
       appsDetails.open = false;
       const base = await nextWindowList();               // accurate pre-launch baseline
+      if (!base) return;                                 // the session changed meanwhile
       pendingLaunch = {
         before: new Set(base.map(w => w.id)),
         appName: (a.name || '').toLowerCase(),
