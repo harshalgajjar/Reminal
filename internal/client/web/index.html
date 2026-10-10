@@ -12750,6 +12750,15 @@
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
       const blob = new Blob([bytes], { type: 'image/jpeg' });
+      // A changed band: only the part of the picture that changed, a bw×bh
+      // JPEG to draw at bx,by over the fw×fh frame `base` left on the canvas.
+      // Over any other picture it would be wrong (a frame lost or overtaken
+      // on the way, a resize in between), so then nothing is drawn and the
+      // host is asked for a whole frame.
+      const band = payload.bw ? {
+        x: payload.bx || 0, y: payload.by || 0, w: payload.bw, h: payload.bh,
+        fw: payload.fw, fh: payload.fh, base: payload.base,
+      } : null;
       // Paint onto the canvas: drawImage is atomic and keeps the previous frame
       // until the new one is drawn, so no per-frame blank flicker. createImage-
       // Bitmap decodes off the main thread; fall back to <img> decode → canvas
@@ -12770,8 +12779,18 @@
         // doesn't reshape either (it just letterboxes), and auto-growing the
         // window fights the user's own placement. It only matches aspect once,
         // at open (see popOutPane), then CSS owns it.
-        if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; }
-        p.ctx.drawImage(src, 0, 0, sw, sh);
+        if (band) {
+          if (p.canvasSeq !== band.base || cv.width !== band.fw || cv.height !== band.fh) {
+            requestH264Key(p); // the same "send me a whole frame" ask
+            if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC);
+            return;
+          }
+          p.ctx.drawImage(src, band.x, band.y, band.w, band.h);
+        } else {
+          if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; }
+          p.ctx.drawImage(src, 0, 0, sw, sh);
+        }
+        p.canvasSeq = payload.seq; // the frame now on the canvas: what a band is cut against
         if (p.placeCursor && p.cursor) p.placeCursor();
         if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC);
       };
@@ -12781,15 +12800,22 @@
       // wrongly conclude the viewer vanished (streamAckIdleTimeout) and END a live
       // stream. paint() acks on success; these handle the decode-failure paths.
       const ackDropped = () => { if (payload.seq != null) sendWindowAck(payload.id, payload.seq, viaDC); };
-      if (window.createImageBitmap) {
-        createImageBitmap(blob).then((bmp) => { paint(bmp, bmp.width, bmp.height); bmp.close(); }, ackDropped);
-      } else {
-        const url = URL.createObjectURL(blob);
-        const im = new Image();
-        im.onload = () => { paint(im, im.naturalWidth, im.naturalHeight); URL.revokeObjectURL(url); };
-        im.onerror = () => { URL.revokeObjectURL(url); ackDropped(); };
-        im.src = url;
-      }
+      // Decoded side by side, painted one after another in the order they
+      // came: a small frame decodes sooner than a big one ahead of it, and
+      // painting whichever is ready first put a band UNDER the frame it was
+      // cut against.
+      const decoded = window.createImageBitmap
+        ? createImageBitmap(blob).then((bmp) => ({ src: bmp, w: bmp.width, h: bmp.height, done: () => bmp.close() }))
+        : new Promise((resolve, reject) => {
+          const url = URL.createObjectURL(blob);
+          const im = new Image();
+          im.onload = () => resolve({ src: im, w: im.naturalWidth, h: im.naturalHeight, done: () => URL.revokeObjectURL(url) });
+          im.onerror = () => { URL.revokeObjectURL(url); reject(new Error('jpeg')); };
+          im.src = url;
+        });
+      p.paintChain = (p.paintChain || Promise.resolve()).then(() => decoded).then(
+        (d) => { try { paint(d.src, d.w, d.h); } finally { d.done(); } }, ackDropped,
+      ).catch(() => {});
     }
 
     // ---- H.264 frames over the DataChannel (WebCodecs) ----------------------
@@ -13074,6 +13100,7 @@
       const cv = p.img, sw = frame.displayWidth, sh = frame.displayHeight;
       if (cv.width !== sw || cv.height !== sh) { cv.width = sw; cv.height = sh; }
       p.ctx.drawImage(frame, 0, 0, sw, sh);
+      p.canvasSeq = null; // not a picture any band is cut against
       if (p.placeCursor && p.cursor) p.placeCursor();
       // Inter-paint spacing is what motion actually looks like, as distinct
       // from how many frames arrived — the two came apart badly once batching
@@ -13287,7 +13314,7 @@
     function sendPaneStart(pane) {
       const q = paneQualityProfile(pane);
       pane.qualityKey = q.max_width + ':' + q.quality;
-      sendWin('window_ctl', { action: 'start', id: pane.w.id, viewer: viewerId, ...q });
+      sendWin('window_ctl', { action: 'start', id: pane.w.id, viewer: viewerId, ...q, bands: 1 });
     }
     const netInfo = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
     if (netInfo && netInfo.addEventListener) netInfo.addEventListener('change', () => {

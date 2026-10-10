@@ -345,3 +345,19 @@ func xvfbRGBA(fb *xvfbFB, key string, r image.Rectangle, tw, th int) ([]byte, er
 		return shrinkTo(img, tw, th).Pix, nil
 	})
 }
+
+// xvfbRaw is r of the screen fit to a maxW×maxW box, as pixels, with the sum
+// of what was read; the pixels are nil when that sum is last (haveLast): the
+// picture has not changed since, and is neither shrunk nor copied.
+func xvfbRaw(fb *xvfbFB, r image.Rectangle, maxW int, last uint64, haveLast bool) (*image.RGBA, uint64, error) {
+	img, err := fb.read(r)
+	if err != nil {
+		return nil, 0, err
+	}
+	sum := maphash.Bytes(xvfbLast.seed, img.Pix)
+	if haveLast && sum == last {
+		return nil, sum, nil
+	}
+	w, h := fitBox(img.Rect.Dx(), img.Rect.Dy(), maxW)
+	return shrinkTo(img, w, h), sum, nil
+}

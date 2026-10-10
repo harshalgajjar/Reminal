@@ -54,6 +54,8 @@ type winFrame struct {
 	Data []byte
 	H264 bool
 	Key  bool
+	// Band: the picture is the stream's raw one (winbands.go), not Data.
+	Band bool
 }
 
 // winErrFrameMagic is a reserved length prefix marking an out-of-band error
