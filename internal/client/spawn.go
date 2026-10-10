@@ -96,6 +96,12 @@ func Spawn(name, cwd string) (*SpawnedSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	// On a machine that names a session user, the session runs as it, not
+	// as the root reminal runs as there (sessionuser_unix.go).
+	if err := asSessionUser(cmd); err != nil {
+		afterStart()
+		return nil, err
+	}
 
 	if err := cmd.Start(); err != nil {
 		afterStart()
