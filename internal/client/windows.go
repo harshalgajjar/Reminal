@@ -2148,8 +2148,15 @@ func (s *winStream) detectChange(img []byte) bool {
 	if s.capNative {
 		return true
 	}
+	// A backend whose frames change exactly when their pixels do (an Xvfb's
+	// framebuffer file: xvfbfb.go — its frames are the same bytes until then)
+	// needs no signature: new bytes are a change. No decode for any frame.
+	if e, ok := s.b.(interface{ exactFrames() bool }); ok && e.exactFrames() {
+		s.pendingSig, s.pendingSigOK, s.pendingImg = s.lastSig, true, img
+		return !s.haveSig || !bytes.Equal(img, s.sentImg)
+	}
 	// The very bytes of the frame last sent (a capture that gives back what
-	// it gave when nothing changed — xvfbfb.go): no change, and no decode.
+	// it gave when nothing changed): no change, and no decode.
 	if s.haveSig && bytes.Equal(img, s.sentImg) {
 		s.pendingSig, s.pendingSigOK, s.pendingImg = s.lastSig, true, img
 		return false

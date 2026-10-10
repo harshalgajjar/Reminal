@@ -962,6 +962,11 @@ func xpropExtents(id, atom string) (left, right, top, bottom int, ok bool) {
 		atoi(strings.TrimSpace(parts[2])), atoi(strings.TrimSpace(parts[3])), true
 }
 
+// exactFrames: on an Xvfb that keeps its screen in a file, a window's frame
+// is the same bytes until its pixels change (xvfbfb.go) — what the stream's
+// change detection then goes by, with no signature decoded.
+func (linuxWindows) exactFrames() bool { return !isWaylandSession() && currentXvfbFB() != nil }
+
 func (linuxWindows) capture(w winInfo) ([]byte, error) {
 	// Wayland: X11 root/window grabs come back black (see waylandcapture.go).
 	// Capture via a compositor screenshot tool instead — the whole screen for

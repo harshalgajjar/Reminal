@@ -187,3 +187,25 @@ func TestTheSameBytesAsLastSentAreNoChange(t *testing.T) {
 		t.Error("an unchanged frame left a different pending signature")
 	}
 }
+
+// exactBackend is a backend whose frames change exactly when their bytes do.
+type exactBackend struct{ windowBackend }
+
+func (exactBackend) exactFrames() bool { return true }
+
+// From such a backend, a frame is a change when its bytes are not the ones
+// last sent — no signature: these bytes are not even a JPEG.
+func TestExactFramesAreChangedByTheirBytesAlone(t *testing.T) {
+	s := &winStream{b: exactBackend{}}
+	a, b := []byte("frame one, not a jpeg"), []byte("frame two, not a jpeg")
+	if !s.detectChange(a) {
+		t.Fatal("the first frame is no change")
+	}
+	s.lastSig, s.haveSig, s.sentImg = s.pendingSig, s.pendingSigOK, s.pendingImg
+	if s.detectChange(a) {
+		t.Error("the bytes last sent read as a change")
+	}
+	if !s.detectChange(b) {
+		t.Error("new bytes read as no change")
+	}
+}
