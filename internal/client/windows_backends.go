@@ -4,6 +4,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"os"
@@ -1363,9 +1364,22 @@ func (linuxWindows) releaseInput() error {
 
 // runRaw executes a command and returns its raw stdout bytes (no trimming) so
 // binary output like a captured JPEG survives intact.
+// captureCeiling bounds one frame grab (import, grim). A frame that takes
+// longer than this is dead, and a hung import holds the X server grab, which
+// stalls every other X client (wmctrl then gives up after runCeiling). Killing
+// it releases the grab; the capture loop treats the error as a skipped frame.
+var captureCeiling = 10 * time.Second
+
 func runRaw(name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), captureCeiling)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// As in runTimeout: a grandchild holding stdout would keep Output() waiting.
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("%s: gave up after %s", name, captureCeiling)
+	}
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 			return nil, fmt.Errorf("%s: %s", name, strings.TrimSpace(string(ee.Stderr)))
