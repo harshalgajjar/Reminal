@@ -414,6 +414,9 @@ type Agent struct {
 	// winSubs maps a window id to the set of viewer ids that asked for it, so
 	// one viewer closing a pane cannot stop a stream another is watching.
 	winSubs map[string]map[string]bool
+	// winNoBands maps a window id to the viewers of it that cannot draw a
+	// changed band (winbands.go) — "" for one too old to name itself.
+	winNoBands map[string]map[string]bool
 	// winAck maps a streaming window's id to a channel the viewer's frame acks
 	// are delivered on, so streamWindow can pace to the viewer (see streamWindow).
 	// Guarded by winMu.

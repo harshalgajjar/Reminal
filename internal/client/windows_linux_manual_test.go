@@ -20,6 +20,7 @@ package client
 
 import (
 	"bytes"
+	"image"
 	"image/jpeg"
 	"os"
 	"strings"
@@ -296,6 +297,70 @@ func TestX11FramebufferFollowsAMovedWindow(t *testing.T) {
 	} else {
 		t.Logf("moved to %d,%d: framebuffer and import agree (%.2f)", moved.X, moved.Y, mean)
 	}
+}
+
+// TestX11FramebufferBands: the pixels a band is cut from are the frame capture
+// sends, unchanged pixels come back as none, and a keystroke in the xterm is a
+// band of a few rows, not the window.
+func TestX11FramebufferBands(t *testing.T) {
+	b := requireX11(t)
+	if currentXvfbFB() == nil {
+		t.Skip("this display keeps no framebuffer file (set XVFB_FBDIR for the test bed)")
+	}
+	w := findTestWindow(t, b)
+	if !strings.EqualFold(w.App, "xterm") {
+		t.Skip("needs the xterm test window to type into")
+	}
+	before, sum, err := b.capturePixels(w, 0, false)
+	if err != nil || before == nil {
+		t.Fatalf("capturePixels: %v, %v", before, err)
+	}
+	whole, err := b.capture(w)
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(whole))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Width != before.Rect.Dx() || cfg.Height != before.Rect.Dy() {
+		t.Fatalf("pixels %v, capture's frame %dx%d", before.Rect.Size(), cfg.Width, cfg.Height)
+	}
+	if again, _, err := b.capturePixels(w, sum, true); err != nil || again != nil {
+		t.Fatalf("an unchanged window gave pixels back (%v, %v)", again != nil, err)
+	}
+	if err := b.focus(w); err != nil {
+		t.Fatalf("focus: %v", err)
+	}
+	if err := b.typeText(w, "x"); err != nil {
+		t.Fatalf("typeText: %v", err)
+	}
+	var after *image.RGBA
+	for i := 0; i < 40 && after == nil; i++ {
+		time.Sleep(50 * time.Millisecond)
+		if after, _, err = b.capturePixels(w, sum, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if after == nil {
+		t.Fatal("a keystroke changed nothing in the window's pixels")
+	}
+	r := changedBand(before, after)
+	frame := after.Rect.Dx() * after.Rect.Dy()
+	if r.Empty() || r.Dx()*r.Dy()*4 > frame {
+		t.Fatalf("a keystroke is band %v of a %v frame", r, after.Rect.Size())
+	}
+	t0 := time.Now()
+	bandJPEG, err := encodeBand(after.SubImage(r))
+	tBand := time.Since(t0)
+	t0 = time.Now()
+	fullJPEG, err2 := encodeBand(after)
+	tFull := time.Since(t0)
+	if err != nil || err2 != nil {
+		t.Fatal(err, err2)
+	}
+	t.Logf("a keystroke: band %v of %v — %d bytes in %v, the whole frame %d bytes in %v",
+		r, after.Rect.Size(), len(bandJPEG), tBand, len(fullJPEG), tFull)
 }
 
 // dumpFrame writes a captured frame to $REMINAL_X11_DUMP so a human can confirm

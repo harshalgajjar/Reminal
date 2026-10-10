@@ -393,13 +393,15 @@ func (a *Agent) handleWindowCtl(encData string) {
 		Viewer   string `json:"viewer"`
 		MaxWidth int    `json:"max_width"`
 		Quality  int    `json:"quality"`
+		// Bands: 1 from a viewer that can draw a changed band (winbands.go).
+		Bands int `json:"bands"`
 	}
 	if json.Unmarshal(plaintext, &req) != nil {
 		return
 	}
 	switch req.Action {
 	case "start":
-		a.startWindowStream(req.ID, req.Viewer)
+		a.startWindowStream(req.ID, req.Viewer, req.Bands == 1)
 		// Old/official viewers omit these fields. Leave those streams in host-side
 		// auto mode so they still sharpen when WebRTC becomes direct.
 		if req.MaxWidth != 0 || req.Quality != 0 {
@@ -678,12 +680,29 @@ func absInt(n int) int {
 // addWindowSub records that a viewer wants this window. Anonymous viewers (an
 // older build, which sends no id) are not tracked: nothing can be attributed to
 // them, so they keep the behaviour they were written against.
-func (a *Agent) addWindowSub(id, viewer string) {
+//
+// bands says whether it can draw a changed band (winbands.go); an anonymous
+// one is taken as not, for as long as the stream runs.
+func (a *Agent) addWindowSub(id, viewer string, bands bool) {
+	a.winMu.Lock()
+	defer a.winMu.Unlock()
+	if !bands || viewer == "" {
+		if a.winNoBands == nil {
+			a.winNoBands = map[string]map[string]bool{}
+		}
+		if a.winNoBands[id] == nil {
+			a.winNoBands[id] = map[string]bool{}
+		}
+		a.winNoBands[id][viewer] = true
+	} else if nb := a.winNoBands[id]; nb != nil {
+		delete(nb, viewer) // the same viewer, reloaded as one that can
+		if len(nb) == 0 {
+			delete(a.winNoBands, id)
+		}
+	}
 	if viewer == "" {
 		return
 	}
-	a.winMu.Lock()
-	defer a.winMu.Unlock()
 	if a.winSubs == nil {
 		a.winSubs = map[string]map[string]bool{}
 	}
@@ -708,11 +727,19 @@ func (a *Agent) dropWindowSub(id, viewer string) bool {
 		// Unattributable, so it has to be taken at face value: stop, and forget
 		// everyone, since we cannot know who is left.
 		delete(a.winSubs, id)
+		delete(a.winNoBands, id)
 		return false
 	}
 	delete(subs, viewer)
+	if nb := a.winNoBands[id]; nb != nil {
+		delete(nb, viewer)
+		if len(nb) == 0 {
+			delete(a.winNoBands, id)
+		}
+	}
 	if len(subs) == 0 {
 		delete(a.winSubs, id)
+		delete(a.winNoBands, id)
 		return false
 	}
 	return true
@@ -723,17 +750,18 @@ func (a *Agent) dropWindowSub(id, viewer string) bool {
 func (a *Agent) forgetWindowSubs(id string) {
 	a.winMu.Lock()
 	if id == "" {
-		a.winSubs = nil
+		a.winSubs, a.winNoBands = nil, nil
 	} else {
 		delete(a.winSubs, id)
+		delete(a.winNoBands, id)
 	}
 	a.winMu.Unlock()
 }
 
 // startWindowStream launches a capture goroutine for the given window unless
 // one is already running for it. Multiple windows can stream concurrently.
-func (a *Agent) startWindowStream(id, viewer string) {
-	a.addWindowSub(id, viewer)
+func (a *Agent) startWindowStream(id, viewer string, bands bool) {
+	a.addWindowSub(id, viewer, bands)
 	b := a.windows()
 	if b.unsupported() != "" {
 		return
@@ -1625,6 +1653,7 @@ type winStream struct {
 	lastGeoCheck time.Time // window liveness / geometry poll
 	geoFails     int       // consecutive failed geometry lookups (transient osascript errors)
 	lastImg      []byte    // newest frame — lets a probe go out while idle
+	bands        *winBands // while sending changed bands (winbands.go); else nil
 	fails        int       // consecutive capture failures while the window exists
 }
 
@@ -1645,6 +1674,7 @@ func (a *Agent) streamWindow(w winInfo, stop <-chan struct{}, ack <-chan uint64,
 // be re-streamed, drops any right-click region-capture entry, releases the
 // keep-awake inhibitor when this was the last stream, and stops the helper.
 func (s *winStream) cleanup() {
+	s.bands = nil // its pictures are a window's worth of pixels each
 	s.flushWSBatch(s.a.liveConn())
 	if s.helper != nil {
 		s.helper.stop()
@@ -1709,7 +1739,7 @@ func (s *winStream) run() {
 		start := time.Now()
 		f, err := s.capture()
 		switch {
-		case err != nil || (len(f.Data) == 0 && !s.capNative):
+		case err != nil || (len(f.Data) == 0 && !s.capNative && !f.Band):
 			// No pixels from the subprocess path: closed window, or capture
 			// genuinely broken (permissions). The helper path never lands here —
 			// an empty helper read just means "no change this interval".
@@ -1741,7 +1771,12 @@ func (s *winStream) run() {
 			// forceSend stays raised until a frame actually goes out (see
 			// dispatch): a viewer with nothing on screen is not served by a
 			// send that the pacing throttle then drops.
-			changed := s.detectChange(f.Data) || s.forceSend
+			var changed bool
+			if f.Band {
+				changed = s.bands.changed() || s.forceSend
+			} else {
+				changed = s.detectChange(f.Data) || s.forceSend
+			}
 			if len(f.Data) > 0 {
 				s.lastImg = f.Data
 			}
@@ -1757,6 +1792,13 @@ func (s *winStream) run() {
 			// any miss to a second of staleness by re-sending the newest frame
 			// after a second of silence (see winMinFrameInterval).
 			refresh := len(s.lastImg) > 0 && time.Since(s.lastSent) >= winMinFrameInterval
+			if f.Band {
+				// Read from a framebuffer, a change is never missed: what
+				// is owed instead is a whole frame now and then, in case a
+				// band went astray where nobody could tell.
+				refresh = s.bands.refreshDue()
+				s.bands.wantFull = refresh
+			}
 			s.dispatch(conn, changed || refresh)
 		}
 		// Floor the loop period so a cheap subprocess capture with instant acks
@@ -2106,6 +2148,9 @@ func (s *winStream) capture() (f winFrame, err error) {
 	menu, menuActive := s.a.activeMenu(s.w.ID)
 	s.ensureHelper()
 	if s.helper != nil && !menuActive {
+		// Frames not from bands' pictures: a band cut later against the
+		// picture before these would be drawn over what they showed.
+		s.bands = nil
 		s.capNative = true
 		f, _ = s.helper.next(s.stop, winHeartbeat)
 		if s.codec == "h264" {
@@ -2115,6 +2160,7 @@ func (s *winStream) capture() (f winFrame, err error) {
 	}
 	s.capNative = false
 	if menuActive {
+		s.bands = nil
 		if runtime.GOOS == "darwin" {
 			// Region-capture (for the right-click menu) also runs in the daemon.
 			img, rerr := mirrorCaptureRegion(menu.x, menu.y, menu.w, menu.h)
@@ -2122,6 +2168,9 @@ func (s *winStream) capture() (f winFrame, err error) {
 		}
 		img, rerr := s.b.captureRegion(menu.x, menu.y, menu.w, menu.h)
 		return winFrame{Data: img}, rerr
+	}
+	if f, ok := s.captureBand(); ok {
+		return f, nil
 	}
 	if runtime.GOOS == "darwin" {
 		// No local screencapture fallback on macOS: capture must run in the daemon
@@ -2387,10 +2436,11 @@ func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
 		sinks = winSinks{probe: probing}
 	}
 
-	if sinks.any() && len(s.lastImg) > 0 {
+	if sinks.any() && (len(s.lastImg) > 0 || s.bands != nil && s.bands.cur != nil) {
 		// Served. Anything still waiting will raise the flag again.
+		force := s.forceSend
 		s.forceSend = false
-		s.sendFrame(conn, sinks)
+		s.sendFrame(conn, sinks, force)
 		return
 	}
 	// A changed frame with every sink throttled out this instant is simply
@@ -2412,7 +2462,20 @@ func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
 const winDCMaxMsg = 192 << 10
 
 // sendFrame stamps and ships the newest frame to exactly the resolved sinks.
-func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
+//
+// force: somebody needs a whole picture (joined, or lost its place).
+func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) {
+	img := s.lastImg
+	var band *image.Rectangle
+	if s.bands != nil {
+		var err error
+		// Asked again here, not only at the capture: a viewer that cannot
+		// draw a band may have joined since, and shares the relay broadcast.
+		whole := force || !s.a.windowBandsOK(s.w.ID)
+		if img, band, err = s.bands.payload(sinks, whole); err != nil {
+			return
+		}
+	}
 	// Capture source, shown in the (i) popover. "shot" means the slow
 	// per-frame path and invites the question "why"; the answer lives in
 	// capErr. Windows is neither: its in-process GDI capture IS the native
@@ -2446,7 +2509,21 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
 		Cap    string `json:"cap,omitempty"`     // capture source, shown in the (i) popover
 		CapErr string `json:"cap_err,omitempty"` // why the native path is unavailable
 		Img    string `json:"img"`               // base64 JPEG
-	}{ID: s.w.ID, W: s.w.W, H: s.w.H, Seq: s.seq + 1, Cap: capSrc, CapErr: capErr, Img: base64.StdEncoding.EncodeToString(s.lastImg)}
+		// A changed band (winbands.go): img is the rectangle bx,by,bw×bh of
+		// an fw×fh picture, to draw over the one frame base left.
+		Base uint64 `json:"base,omitempty"`
+		BX   int    `json:"bx,omitempty"`
+		BY   int    `json:"by,omitempty"`
+		BW   int    `json:"bw,omitempty"`
+		BH   int    `json:"bh,omitempty"`
+		FW   int    `json:"fw,omitempty"`
+		FH   int    `json:"fh,omitempty"`
+	}{ID: s.w.ID, W: s.w.W, H: s.w.H, Seq: s.seq + 1, Cap: capSrc, CapErr: capErr, Img: base64.StdEncoding.EncodeToString(img)}
+	if band != nil {
+		frame.Base = s.bands.sentSeq
+		frame.BX, frame.BY, frame.BW, frame.BH = band.Min.X, band.Min.Y, band.Dx(), band.Dy()
+		frame.FW, frame.FH = s.bands.cur.Rect.Dx(), s.bands.cur.Rect.Dy()
+	}
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		return
@@ -2481,7 +2558,9 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
 	if sinks.expectsAck() {
 		s.sentSinceAck++
 	}
-	if !s.capNative {
+	if s.bands != nil {
+		s.bands.commit(sinks, s.seq, band == nil)
+	} else if !s.capNative {
 		s.lastSig, s.haveSig, s.sentImg = s.pendingSig, s.pendingSigOK, s.pendingImg
 	}
 	s.lastSent = time.Now()

@@ -677,8 +677,8 @@ func TestStopOnlyEndsAStreamNobodyElseWants(t *testing.T) {
 
 	t.Run("another watcher keeps it alive", func(t *testing.T) {
 		a.winSubs = nil
-		a.addWindowSub("w1", "viewerA")
-		a.addWindowSub("w1", "viewerB")
+		a.addWindowSub("w1", "viewerA", false)
+		a.addWindowSub("w1", "viewerB", false)
 		if keep := a.dropWindowSub("w1", "viewerB"); !keep {
 			t.Fatal("stream ended while viewerA was still watching")
 		}
@@ -689,7 +689,7 @@ func TestStopOnlyEndsAStreamNobodyElseWants(t *testing.T) {
 
 	t.Run("the same viewer stopping twice does not strand it", func(t *testing.T) {
 		a.winSubs = nil
-		a.addWindowSub("w1", "viewerA")
+		a.addWindowSub("w1", "viewerA", false)
 		a.dropWindowSub("w1", "viewerA")
 		if keep := a.dropWindowSub("w1", "viewerA"); keep {
 			t.Fatal("a repeated stop reported a watcher that had already gone")
@@ -698,8 +698,8 @@ func TestStopOnlyEndsAStreamNobodyElseWants(t *testing.T) {
 
 	t.Run("windows are tracked apart", func(t *testing.T) {
 		a.winSubs = nil
-		a.addWindowSub("w1", "viewerA")
-		a.addWindowSub("w2", "viewerA")
+		a.addWindowSub("w1", "viewerA", false)
+		a.addWindowSub("w2", "viewerA", false)
 		if keep := a.dropWindowSub("w1", "viewerA"); keep {
 			t.Fatal("closing w1 was held open by an interest in w2")
 		}
@@ -710,13 +710,13 @@ func TestStopOnlyEndsAStreamNobodyElseWants(t *testing.T) {
 
 	t.Run("a viewer too old to identify itself keeps the old behaviour", func(t *testing.T) {
 		a.winSubs = nil
-		a.addWindowSub("w1", "") // records nothing
+		a.addWindowSub("w1", "", false) // records nothing
 		if keep := a.dropWindowSub("w1", ""); keep {
 			t.Fatal("an unattributable stop must be taken at face value")
 		}
 		// And it must not be able to strand a stream that others do want:
 		// nothing can be attributed, so the set is cleared with it.
-		a.addWindowSub("w1", "viewerA")
+		a.addWindowSub("w1", "viewerA", false)
 		if keep := a.dropWindowSub("w1", ""); keep {
 			t.Fatal("an unattributable stop left the stream running")
 		}

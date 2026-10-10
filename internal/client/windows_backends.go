@@ -1028,6 +1028,21 @@ func (linuxWindows) capture(w winInfo) ([]byte, error) {
 	return linuxWindows{}.captureImport(w)
 }
 
+// capturePixels is capture as pixels rather than a JPEG, for a stream that
+// sends only the part of a frame that changed (winbands.go): from an Xvfb's
+// framebuffer file, the same rect and size capture reads. nil pixels: the
+// same as the frame whose sum was last. An error: capture as usual instead.
+func (linuxWindows) capturePixels(w winInfo, last uint64, haveLast bool) (*image.RGBA, uint64, error) {
+	fb := currentXvfbFB()
+	if isWaylandSession() || fb == nil {
+		xvfbExact.Store(false)
+		return nil, 0, errNoRawFrames
+	}
+	img, sum, err := xvfbRaw(fb, image.Rect(w.X, w.Y, w.X+w.W, w.Y+w.H), winMaxWidth, last, haveLast)
+	xvfbExact.Store(err == nil)
+	return img, sum, err
+}
+
 // captureImport is capture by ImageMagick's import: any X11 display.
 func (linuxWindows) captureImport(w winInfo) ([]byte, error) {
 	if !have("import") {

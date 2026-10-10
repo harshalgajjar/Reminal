@@ -234,10 +234,14 @@ const (
 	// TypeWindowCtl is viewer→agent. Data = encrypted JSON
 	// {"action":"start"|"stop","id":"<window id>"}. "start" begins streaming
 	// periodic JPEG frames of that window; "stop" ends the current stream.
+	// "bands":1 on a start: this viewer can draw a changed band.
 	TypeWindowCtl MessageType = "window_ctl"
 	// TypeWindowFrame is agent→viewer. Data = encrypted JSON
 	// {"id","w","h","img":"<base64 JPEG>"} — one captured frame of the
-	// window the viewer asked to stream.
+	// window the viewer asked to stream. With "bw" it is a changed band
+	// instead: img is the rectangle bx,by,bw×bh of an fw×fh picture, to draw
+	// over the frame whose seq is "base" (sent only to viewers that said
+	// "bands":1).
 	TypeWindowFrame MessageType = "window_frame"
 	// TypeWindowInput is viewer→agent. Data = encrypted JSON describing a
 	// mouse/keyboard event to inject into the streamed window, e.g.
