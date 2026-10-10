@@ -25,7 +25,6 @@ import (
 
 	"github.com/charmbracelet/x/vt"
 	"github.com/gorilla/websocket"
-	"github.com/mdp/qrterminal/v3"
 	xterm "golang.org/x/term"
 	"reminal/internal/config"
 	"reminal/internal/crypto"
@@ -2113,11 +2112,12 @@ func sizeLog(format string, args ...interface{}) {
 // fragment (#p=...). The fragment never leaves the phone — it's read by the
 // page's JS to autofill the PIN field, giving a one-tap join from mobile.
 func (a *Agent) printQR() {
+	out := bannerOut()
 	joinURL := fmt.Sprintf("%s/?s=%s#p=%s", a.webURL, a.sessionID, a.pin)
-	fmt.Println("  Scan to join from your phone:")
-	fmt.Println()
-	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
-	fmt.Println()
+	fmt.Fprintln(out, "  Scan to join from your phone:")
+	fmt.Fprintln(out)
+	printJoinQR(out, joinURL)
+	fmt.Fprintln(out)
 }
 
 // pumpPTY reads the PTY forever, encrypts each chunk and stores it in the

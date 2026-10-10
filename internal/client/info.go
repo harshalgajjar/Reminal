@@ -9,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/mdp/qrterminal/v3"
 	"reminal/internal/session"
 )
 
@@ -51,13 +50,14 @@ func ShowActiveInfo() error {
 		// Old agent that didn't inject PIN/URL into env. Fall back to
 		// the previous stub display so the user at least sees the
 		// session id.
-		fmt.Println()
-		fmt.Println("  reminal — remote terminal")
-		fmt.Println()
-		fmt.Printf("  Session:  %s\n", envID)
-		fmt.Println("  (this session's host is on another machine — run `reminal info` there")
-		fmt.Println("   for its PIN)")
-		fmt.Println()
+		out := bannerOut()
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "  reminal — remote terminal")
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "  Session:  %s\n", envID)
+		fmt.Fprintln(out, "  (this session's host is on another machine — run `reminal info` there")
+		fmt.Fprintln(out, "   for its PIN)")
+		fmt.Fprintln(out)
 		return nil
 	}
 
@@ -70,14 +70,15 @@ func ShowActiveInfo() error {
 }
 
 func printActiveBanner(a *session.Active) {
-	fmt.Println()
-	fmt.Println("  reminal — remote terminal")
+	out := bannerOut()
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "  reminal — remote terminal")
 	printActiveDetails(a)
-	fmt.Println("  Scan to join from your phone:")
-	fmt.Println()
+	fmt.Fprintln(out, "  Scan to join from your phone:")
+	fmt.Fprintln(out)
 	joinURL := fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN)
-	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
-	fmt.Println()
+	printJoinQR(out, joinURL)
+	fmt.Fprintln(out)
 }
 
 // printActiveDetails prints every textual field for a session — name, creds,
@@ -85,41 +86,42 @@ func printActiveBanner(a *session.Active) {
 // shared body of the single-session banner and `reminal info --all`, so both
 // surface the same information per session.
 func printActiveDetails(a *session.Active) {
-	fmt.Println()
+	out := bannerOut()
+	fmt.Fprintln(out)
 	if a.Name != "" {
-		fmt.Printf("  Name:     %s\n", a.Name)
+		fmt.Fprintf(out, "  Name:     %s\n", a.Name)
 	}
-	fmt.Printf("  Session:  %s\n", a.ID)
-	fmt.Printf("  PIN:      %s\n", a.PIN)
-	fmt.Printf("  Open:     %s\n", a.OpenURL)
+	fmt.Fprintf(out, "  Session:  %s\n", a.ID)
+	fmt.Fprintf(out, "  PIN:      %s\n", a.PIN)
+	fmt.Fprintf(out, "  Open:     %s\n", a.OpenURL)
 	// One-tap join link with the PIN in the URL fragment (#p=…). The fragment
 	// never leaves the device (browsers don't send it to the server); the web
 	// client reads it to auto-fill the PIN. Ideal for tapping on a phone.
-	fmt.Printf("  Join:     %s#p=%s\n", a.OpenURL, a.PIN)
-	fmt.Printf("  Connect:  reminal connect %s %s\n", a.ID, a.PIN)
+	fmt.Fprintf(out, "  Join:     %s#p=%s\n", a.OpenURL, a.PIN)
+	fmt.Fprintf(out, "  Connect:  reminal connect %s %s\n", a.ID, a.PIN)
 	// Where it's running / what's running — so iterating many sessions tells
 	// you which is which without attaching to each.
 	if a.Cwd != "" {
-		fmt.Printf("  Dir:      %s\n", a.Cwd)
+		fmt.Fprintf(out, "  Dir:      %s\n", a.Cwd)
 	}
 	if a.Title != "" {
-		fmt.Printf("  Running:  %s\n", a.Title)
+		fmt.Fprintf(out, "  Running:  %s\n", a.Title)
 	}
 	// PID + StartedAt are only known on the host machine. Skip them
 	// gracefully when we're reconstructing the banner from env vars
 	// on a remote (no local active record).
 	if a.PID > 0 && !a.StartedAt.IsZero() {
-		fmt.Printf("  Started:  %s (PID %d)\n", a.StartedAt.Format(time.RFC3339), a.PID)
+		fmt.Fprintf(out, "  Started:  %s (PID %d)\n", a.StartedAt.Format(time.RFC3339), a.PID)
 		if !a.LastActivity.IsZero() {
-			fmt.Printf("  Idle:     %s\n", time.Since(a.LastActivity).Round(time.Second))
+			fmt.Fprintf(out, "  Idle:     %s\n", time.Since(a.LastActivity).Round(time.Second))
 		}
 		if a.Viewers > 0 {
-			fmt.Printf("  Viewers:  %d currently attached\n", a.Viewers)
+			fmt.Fprintf(out, "  Viewers:  %d currently attached\n", a.Viewers)
 		} else {
-			fmt.Println("  Viewers:  none currently attached")
+			fmt.Fprintln(out, "  Viewers:  none currently attached")
 		}
 	}
-	fmt.Println()
+	fmt.Fprintln(out)
 }
 
 // ShowActiveInfoJSON prints the active session as a one-line JSON object on
@@ -138,12 +140,13 @@ func ShowActiveInfoJSON() error {
 // banner. Handy for showing on a second monitor or in a video call without
 // the rest of the session details cluttering the frame.
 func ShowActiveQR() error {
+	out := bannerOut()
 	a, err := resolveActiveForInfo()
 	if err != nil {
 		return err
 	}
 	joinURL := fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN)
-	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
+	printJoinQR(out, joinURL)
 	return nil
 }
 
@@ -155,8 +158,9 @@ func ShowInfoFor(a *session.Active) { printActiveBanner(a) }
 // ShowQRFor prints just the join QR for an already-resolved session. Used by
 // `reminal qr <id|name>`.
 func ShowQRFor(a *session.Active) {
+	out := bannerOut()
 	joinURL := fmt.Sprintf("%s#p=%s", a.OpenURL, a.PIN)
-	qrterminal.GenerateHalfBlock(joinURL, qrterminal.L, os.Stdout)
+	printJoinQR(out, joinURL)
 }
 
 // ShowInfoDetails prints the full per-session detail block (everything the

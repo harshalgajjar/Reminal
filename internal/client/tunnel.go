@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/mdp/qrterminal/v3"
 	"reminal/internal/config"
 	"reminal/internal/protocol"
 	"reminal/internal/session"
@@ -1980,34 +1979,34 @@ func SpawnTunnel(port int, public bool, name string) (*SpawnedSession, error) {
 // user's calling shell. Distinct from PrintSpawned (shell sessions)
 // because the URL shape and the "what is this?" copy differ.
 func PrintSpawnedTunnel(sp *SpawnedSession, port int, public bool, version string) {
-	fmt.Println()
+	out := bannerOut()
+	fmt.Fprintln(out)
 	mode := "PIN-protected"
 	if public {
 		mode = "public (no PIN required)"
 	}
-	fmt.Printf("  reminal — exposing localhost:%d · %s · v%s\n", port, mode, version)
-	fmt.Println()
-	fmt.Printf("  Public URL:  %s\n", sp.OpenURL)
+	fmt.Fprintf(out, "  reminal — exposing localhost:%d · %s · v%s\n", port, mode, version)
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "  Public URL:  %s\n", sp.OpenURL)
 	if !public {
-		fmt.Printf("  PIN:         %s\n", sp.PIN)
-		fmt.Printf("  Quick link:  %s#p=%s   (one-tap auth for you)\n", sp.OpenURL, sp.PIN)
+		fmt.Fprintf(out, "  PIN:         %s\n", sp.PIN)
+		fmt.Fprintf(out, "  Quick link:  %s#p=%s   (one-tap auth for you)\n", sp.OpenURL, sp.PIN)
 	}
-	fmt.Printf("  PID:         %d  (detached — survives this terminal closing)\n", sp.PID)
-	fmt.Println()
+	fmt.Fprintf(out, "  PID:         %d  (detached — survives this terminal closing)\n", sp.PID)
+	fmt.Fprintln(out)
 	qrURL := sp.OpenURL
 	if !public {
 		qrURL = sp.OpenURL + "#p=" + sp.PIN
 	}
-	// Half-block rendering to match `reminal info` / `reminal qr` (issue #85):
-	// same compact style everywhere so a QR looks identical whichever command
-	// printed it, and it's easier to scan / copy-paste.
-	qrterminal.GenerateHalfBlock(qrURL, qrterminal.L, os.Stdout)
-	fmt.Println()
+	// The same QR as `reminal info` / `reminal qr` (issue #85), plain ASCII when
+	// redirected (issue #198).
+	printJoinQR(out, qrURL)
+	fmt.Fprintln(out)
 	if public {
-		fmt.Println("  This URL is open to anyone who finds it.")
+		fmt.Fprintln(out, "  This URL is open to anyone who finds it.")
 	}
-	fmt.Printf("  To stop forwarding: reminal stop %d\n", port)
-	fmt.Println()
+	fmt.Fprintf(out, "  To stop forwarding: reminal stop %d\n", port)
+	fmt.Fprintln(out)
 }
 
 // ResolveLocalPort looks up a port-forward by either session ID or port
