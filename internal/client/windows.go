@@ -1608,6 +1608,9 @@ type winStream struct {
 	// silently drop its content.
 	lastSig, pendingSig   frameSig
 	haveSig, pendingSigOK bool
+	// sentImg is the frame last sent, pendingImg the one last detected:
+	// committed with the signature, at the send.
+	sentImg, pendingImg []byte
 
 	// Cadence stamps.
 	lastSent       time.Time // last frame OR heartbeat (paces both)
@@ -2145,8 +2148,14 @@ func (s *winStream) detectChange(img []byte) bool {
 	if s.capNative {
 		return true
 	}
+	// The very bytes of the frame last sent (a capture that gives back what
+	// it gave when nothing changed — xvfbfb.go): no change, and no decode.
+	if s.haveSig && bytes.Equal(img, s.sentImg) {
+		s.pendingSig, s.pendingSigOK, s.pendingImg = s.lastSig, true, img
+		return false
+	}
 	sig, ok := frameSignature(img)
-	s.pendingSig, s.pendingSigOK = sig, ok
+	s.pendingSig, s.pendingSigOK, s.pendingImg = sig, ok, img
 	return !ok || !s.haveSig || sigDiffers(s.lastSig, sig)
 }
 
@@ -2440,7 +2449,7 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks) {
 		s.sentSinceAck++
 	}
 	if !s.capNative {
-		s.lastSig, s.haveSig = s.pendingSig, s.pendingSigOK
+		s.lastSig, s.haveSig, s.sentImg = s.pendingSig, s.pendingSigOK, s.pendingImg
 	}
 	s.lastSent = time.Now()
 }

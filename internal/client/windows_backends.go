@@ -973,6 +973,16 @@ func (linuxWindows) capture(w winInfo) ([]byte, error) {
 		r := image.Rect(w.X, w.Y, w.X+w.W, w.Y+w.H)
 		return waylandCapture(&r)
 	}
+	// An Xvfb that keeps its screen in a file: read from it (xvfbfb.go) —
+	// the window's content rect, as it lies on the screen.
+	if fb := currentXvfbFB(); fb != nil {
+		return xvfbJPEG(fb, w.ID, image.Rect(w.X, w.Y, w.X+w.W, w.Y+w.H), winMaxWidth, 55)
+	}
+	return linuxWindows{}.captureImport(w)
+}
+
+// captureImport is capture by ImageMagick's import: any X11 display.
+func (linuxWindows) captureImport(w winInfo) ([]byte, error) {
 	if !have("import") {
 		return nil, fmt.Errorf("install imagemagick (provides `import`) to capture windows")
 	}
@@ -1007,6 +1017,9 @@ func (linuxWindows) captureRegion(x, y, w, h int) ([]byte, error) {
 		r := image.Rect(x, y, x+w, y+h)
 		return waylandCapture(&r)
 	}
+	if fb := currentXvfbFB(); fb != nil {
+		return xvfbJPEG(fb, "region", image.Rect(x, y, x+w, y+h), winMaxWidth, 55)
+	}
 	if !have("import") {
 		return nil, fmt.Errorf("install imagemagick (provides `import`) to capture windows")
 	}
@@ -1033,6 +1046,9 @@ func (linuxWindows) captureRaw(w winInfo, tw, th int) ([]byte, error) {
 		}
 		r := image.Rect(w.X, w.Y, w.X+w.W, w.Y+w.H)
 		return waylandCaptureRaw(&r, tw, th)
+	}
+	if fb := currentXvfbFB(); fb != nil {
+		return xvfbRGBA(fb, w.ID, image.Rect(w.X, w.Y, w.X+w.W, w.Y+w.H), tw, th)
 	}
 	if !have("import") {
 		return nil, fmt.Errorf("install imagemagick (provides `import`) to capture windows")
