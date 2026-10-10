@@ -8,7 +8,14 @@ set -e
 
 SCREEN="${SCREEN:-1280x800x24}"
 
-Xvfb "$DISPLAY" -screen 0 "$SCREEN" -nolisten tcp >/tmp/xvfb.log 2>&1 &
+# XVFB_FBDIR: the screen kept in a file there (-fbdir), which the window
+# backend then reads frames from instead of running import (xvfbfb.go).
+FBDIR_ARGS=""
+if [ -n "${XVFB_FBDIR:-}" ]; then
+    mkdir -p "$XVFB_FBDIR"
+    FBDIR_ARGS="-fbdir $XVFB_FBDIR"
+fi
+Xvfb "$DISPLAY" -screen 0 "$SCREEN" -nolisten tcp $FBDIR_ARGS >/tmp/xvfb.log 2>&1 &
 # Wait for the server to accept connections rather than sleeping a guess —
 # openbox exits immediately if it starts first, and then nothing has a window
 # manager, which makes wmctrl report zero windows for reasons unrelated to the

@@ -19,6 +19,8 @@ package client
 // can use, JPEG bytes the viewer can decode, an app list the launcher can show.
 
 import (
+	"bytes"
+	"image/jpeg"
 	"os"
 	"strings"
 	"testing"
@@ -154,6 +156,146 @@ func TestX11Capture(t *testing.T) {
 	}
 	t.Logf("capture ok: %d bytes for %dx%d window", len(img), w.W, w.H)
 	dumpFrame(t, "capture.jpg", img)
+}
+
+// On an Xvfb that keeps its screen in a file (the test bed with XVFB_FBDIR),
+// a frame read from that file shows what import shows of the same window —
+// same size, same pixels within JPEG's give — and costs a fraction of it.
+func TestX11FramebufferMatchesImport(t *testing.T) {
+	b := requireX11(t)
+	fb := currentXvfbFB()
+	if fb == nil {
+		if os.Getenv("XVFB_FBDIR") != "" {
+			t.Fatal("XVFB_FBDIR is set, and no framebuffer file was found for this display")
+		}
+		t.Skip("this display keeps no framebuffer file (set XVFB_FBDIR for the test bed)")
+	}
+	w := findTestWindow(t, b)
+	fromFB, err := b.capture(w)
+	if err != nil {
+		t.Fatalf("framebuffer capture: %v", err)
+	}
+	fromImport, err := b.captureImport(w)
+	if err != nil {
+		t.Fatalf("import capture: %v", err)
+	}
+	a, errA := jpeg.Decode(bytes.NewReader(fromFB))
+	c, errC := jpeg.Decode(bytes.NewReader(fromImport))
+	if errA != nil || errC != nil {
+		t.Fatalf("decode: %v / %v", errA, errC)
+	}
+	if a.Bounds().Size() != c.Bounds().Size() {
+		t.Fatalf("framebuffer frame %v, import's %v", a.Bounds().Size(), c.Bounds().Size())
+	}
+	var diff, n uint64
+	lo, hi := uint32(0xffff), uint32(0)
+	for y := 0; y < a.Bounds().Dy(); y++ {
+		for x := 0; x < a.Bounds().Dx(); x++ {
+			r1, g1, b1, _ := a.At(x, y).RGBA()
+			if l := (r1 + g1 + b1) / 3; l < lo {
+				lo = l
+			} else if l > hi {
+				hi = l
+			}
+			r2, g2, b2, _ := c.At(x, y).RGBA()
+			for _, d := range [][2]uint32{{r1, r2}, {g1, g2}, {b1, b2}} {
+				if d[0] > d[1] {
+					diff += uint64(d[0]-d[1]) >> 8
+				} else {
+					diff += uint64(d[1]-d[0]) >> 8
+				}
+				n++
+			}
+		}
+	}
+	// A blank frame agrees with a blank frame: the window shows something
+	// (the test bed's xterm, its prompt), dark on light.
+	if hi < lo || (hi-lo)>>8 < 50 {
+		t.Fatalf("the framebuffer frame is flat (luminance %d to %d): nothing of the window in it", lo>>8, hi>>8)
+	}
+	if mean := float64(diff) / float64(n); mean > 6 {
+		t.Errorf("the frames differ by %.1f a channel on average: the framebuffer frame is not the window", mean)
+	} else {
+		t.Logf("framebuffer and import frames agree: %.2f a channel on average", mean)
+	}
+	dumpFrame(t, "capture-fb.jpg", fromFB)
+	// What each costs a frame (the framebuffer's encoded fresh each time).
+	const n2 = 10
+	t0 := time.Now()
+	for i := 0; i < n2; i++ {
+		xvfbLast.mu.Lock()
+		xvfbLast.m = nil
+		xvfbLast.mu.Unlock()
+		if _, err := b.capture(w); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fbEach := time.Since(t0) / n2
+	t0 = time.Now()
+	for i := 0; i < n2; i++ {
+		if _, err := b.captureImport(w); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Logf("a %dx%d window: %v a frame from the framebuffer, %v by import", w.W, w.H, fbEach, time.Since(t0)/n2)
+}
+
+// A window moved is found where it went (windowGeom, what a stream reading
+// the framebuffer polls), and a frame read at its new rect is the window —
+// as import, which follows the window by its id, shows it.
+func TestX11FramebufferFollowsAMovedWindow(t *testing.T) {
+	b := requireX11(t)
+	if currentXvfbFB() == nil {
+		t.Skip("this display keeps no framebuffer file (set XVFB_FBDIR for the test bed)")
+	}
+	w := findTestWindow(t, b)
+	if _, err := run("xdotool", "windowmove", w.ID, "300", "250"); err != nil {
+		t.Fatalf("xdotool windowmove: %v", err)
+	}
+	defer run("xdotool", "windowmove", w.ID, "60", "40")
+	var moved winInfo
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		g, err := b.windowGeom(w)
+		if err == nil && (g.X != w.X || g.Y != w.Y) {
+			moved = g
+			break
+		}
+	}
+	if moved.ID == "" {
+		t.Fatalf("windowGeom never saw the window move from %d,%d", w.X, w.Y)
+	}
+	fromFB, err := b.capture(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromImport, err := b.captureImport(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := jpeg.Decode(bytes.NewReader(fromFB))
+	c, _ := jpeg.Decode(bytes.NewReader(fromImport))
+	if a == nil || c == nil || a.Bounds() != c.Bounds() {
+		t.Fatalf("frames %v / %v", a, c)
+	}
+	var diff, n uint64
+	for y := 0; y < a.Bounds().Dy(); y += 2 {
+		for x := 0; x < a.Bounds().Dx(); x += 2 {
+			r1, _, _, _ := a.At(x, y).RGBA()
+			r2, _, _, _ := c.At(x, y).RGBA()
+			if r1 > r2 {
+				diff += uint64(r1-r2) >> 8
+			} else {
+				diff += uint64(r2-r1) >> 8
+			}
+			n++
+		}
+	}
+	if mean := float64(diff) / float64(n); mean > 6 {
+		t.Errorf("at its new place (%d,%d) the framebuffer frame is not the window: %.1f apart", moved.X, moved.Y, mean)
+	} else {
+		t.Logf("moved to %d,%d: framebuffer and import agree (%.2f)", moved.X, moved.Y, mean)
+	}
 }
 
 // dumpFrame writes a captured frame to $REMINAL_X11_DUMP so a human can confirm
