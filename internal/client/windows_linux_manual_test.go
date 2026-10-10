@@ -240,6 +240,64 @@ func TestX11FramebufferMatchesImport(t *testing.T) {
 	t.Logf("a %dx%d window: %v a frame from the framebuffer, %v by import", w.W, w.H, fbEach, time.Since(t0)/n2)
 }
 
+// A window moved is found where it went (windowGeom, what a stream reading
+// the framebuffer polls), and a frame read at its new rect is the window —
+// as import, which follows the window by its id, shows it.
+func TestX11FramebufferFollowsAMovedWindow(t *testing.T) {
+	b := requireX11(t)
+	if currentXvfbFB() == nil {
+		t.Skip("this display keeps no framebuffer file (set XVFB_FBDIR for the test bed)")
+	}
+	w := findTestWindow(t, b)
+	if _, err := run("xdotool", "windowmove", w.ID, "300", "250"); err != nil {
+		t.Fatalf("xdotool windowmove: %v", err)
+	}
+	defer run("xdotool", "windowmove", w.ID, "60", "40")
+	var moved winInfo
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		g, err := b.windowGeom(w)
+		if err == nil && (g.X != w.X || g.Y != w.Y) {
+			moved = g
+			break
+		}
+	}
+	if moved.ID == "" {
+		t.Fatalf("windowGeom never saw the window move from %d,%d", w.X, w.Y)
+	}
+	fromFB, err := b.capture(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromImport, err := b.captureImport(moved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := jpeg.Decode(bytes.NewReader(fromFB))
+	c, _ := jpeg.Decode(bytes.NewReader(fromImport))
+	if a == nil || c == nil || a.Bounds() != c.Bounds() {
+		t.Fatalf("frames %v / %v", a, c)
+	}
+	var diff, n uint64
+	for y := 0; y < a.Bounds().Dy(); y += 2 {
+		for x := 0; x < a.Bounds().Dx(); x += 2 {
+			r1, _, _, _ := a.At(x, y).RGBA()
+			r2, _, _, _ := c.At(x, y).RGBA()
+			if r1 > r2 {
+				diff += uint64(r1-r2) >> 8
+			} else {
+				diff += uint64(r2-r1) >> 8
+			}
+			n++
+		}
+	}
+	if mean := float64(diff) / float64(n); mean > 6 {
+		t.Errorf("at its new place (%d,%d) the framebuffer frame is not the window: %.1f apart", moved.X, moved.Y, mean)
+	} else {
+		t.Logf("moved to %d,%d: framebuffer and import agree (%.2f)", moved.X, moved.Y, mean)
+	}
+}
+
 // dumpFrame writes a captured frame to $REMINAL_X11_DUMP so a human can confirm
 // it shows the window and not, say, a black rectangle — which is what a broken
 // `import -window` produces, and which passes every byte-level assertion.

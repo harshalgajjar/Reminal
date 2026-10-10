@@ -965,7 +965,47 @@ func xpropExtents(id, atom string) (left, right, top, bottom int, ok bool) {
 // exactFrames: on an Xvfb that keeps its screen in a file, a window's frame
 // is the same bytes until its pixels change (xvfbfb.go) — what the stream's
 // change detection then goes by, with no signature decoded.
-func (linuxWindows) exactFrames() bool { return !isWaylandSession() && currentXvfbFB() != nil }
+func (linuxWindows) exactFrames() bool { return !isWaylandSession() && xvfbExact.Load() }
+
+// windowGeom is one window's geometry as list() gives it (its content rect,
+// its CSD shadow), without listing every window — what keeps a stream that
+// reads a framebuffer file at the window's rect current (checkWindow).
+func (linuxWindows) windowGeom(cur winInfo) (winInfo, error) {
+	if isDisplayID(cur.ID) {
+		x, y, w, h, ok := xrootGeom()
+		if !ok {
+			return winInfo{}, fmt.Errorf("the screen could not be measured")
+		}
+		cur.X, cur.Y, cur.W, cur.H = x, y, w, h
+		return cur, nil
+	}
+	x, y, w, h := linuxGeom(cur.ID)
+	if w < 40 || h < 40 {
+		return winInfo{}, fmt.Errorf("window no longer open")
+	}
+	cur.CropL, cur.CropT = 0, 0
+	if l, r, t, b, ok := gtkFrameExtents(cur.ID); ok && w > l+r && h > t+b {
+		x, y, w, h = x+l, y+t, w-l-r, h-t-b
+		cur.CropL, cur.CropT = l, t
+	}
+	cur.X, cur.Y, cur.W, cur.H = x, y, w, h
+	return cur, nil
+}
+
+// fromXvfb is a frame from this display's framebuffer file when it has one
+// and it can be read (xvfbfb.go); ok false, and the frame is captured as on
+// any X server — the file gone, unreadable, or not what it should be is
+// never a frame lost.
+func fromXvfb(get func(*xvfbFB) ([]byte, error)) ([]byte, bool) {
+	if fb := currentXvfbFB(); fb != nil {
+		if out, err := get(fb); err == nil {
+			xvfbExact.Store(true)
+			return out, true
+		}
+	}
+	xvfbExact.Store(false)
+	return nil, false
+}
 
 func (linuxWindows) capture(w winInfo) ([]byte, error) {
 	// Wayland: X11 root/window grabs come back black (see waylandcapture.go).
@@ -980,8 +1020,10 @@ func (linuxWindows) capture(w winInfo) ([]byte, error) {
 	}
 	// An Xvfb that keeps its screen in a file: read from it (xvfbfb.go) —
 	// the window's content rect, as it lies on the screen.
-	if fb := currentXvfbFB(); fb != nil {
+	if out, ok := fromXvfb(func(fb *xvfbFB) ([]byte, error) {
 		return xvfbJPEG(fb, w.ID, image.Rect(w.X, w.Y, w.X+w.W, w.Y+w.H), winMaxWidth, 55)
+	}); ok {
+		return out, nil
 	}
 	return linuxWindows{}.captureImport(w)
 }
@@ -1022,8 +1064,10 @@ func (linuxWindows) captureRegion(x, y, w, h int) ([]byte, error) {
 		r := image.Rect(x, y, x+w, y+h)
 		return waylandCapture(&r)
 	}
-	if fb := currentXvfbFB(); fb != nil {
+	if out, ok := fromXvfb(func(fb *xvfbFB) ([]byte, error) {
 		return xvfbJPEG(fb, "region", image.Rect(x, y, x+w, y+h), winMaxWidth, 55)
+	}); ok {
+		return out, nil
 	}
 	if !have("import") {
 		return nil, fmt.Errorf("install imagemagick (provides `import`) to capture windows")
@@ -1052,8 +1096,10 @@ func (linuxWindows) captureRaw(w winInfo, tw, th int) ([]byte, error) {
 		r := image.Rect(w.X, w.Y, w.X+w.W, w.Y+w.H)
 		return waylandCaptureRaw(&r, tw, th)
 	}
-	if fb := currentXvfbFB(); fb != nil {
+	if out, ok := fromXvfb(func(fb *xvfbFB) ([]byte, error) {
 		return xvfbRGBA(fb, w.ID, image.Rect(w.X, w.Y, w.X+w.W, w.Y+w.H), tw, th)
+	}); ok {
+		return out, nil
 	}
 	if !have("import") {
 		return nil, fmt.Errorf("install imagemagick (provides `import`) to capture windows")

@@ -2181,7 +2181,14 @@ type geoResult struct {
 }
 
 func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
-	if s.capNative {
+	// A frame read from a framebuffer file is read at the window's rect (an
+	// Xvfb's: xvfbfb.go) — not, as an import does, by the window — so its
+	// geometry is kept up to date as the helper path's is, a move included.
+	exact := false
+	if e, ok := s.b.(interface{ exactFrames() bool }); ok {
+		exact = e.exactFrames()
+	}
+	if s.capNative || exact {
 		// Resolving a window enumerates every window on the system through an
 		// osascript — measured at ~114ms. Running that inline stalled the
 		// capture loop for the length of it every couple of seconds, which at
@@ -2193,11 +2200,27 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		if s.geoCh == nil {
 			s.geoCh = make(chan geoResult, 1)
 		}
-		if !s.geoBusy && time.Since(s.lastGeoCheck) >= 2*winLiveCheck {
+		every := 2 * winLiveCheck
+		if exact && !s.capNative {
+			every = winLiveCheck // its frames are read at its rect: a move shows at once
+		}
+		if !s.geoBusy && time.Since(s.lastGeoCheck) >= every {
 			s.lastGeoCheck = time.Now()
 			s.geoBusy = true
-			id, b, ch := s.w.ID, s.b, s.geoCh
-			go func() { w, err := findWindow(b, id); ch <- geoResult{w, err} }()
+			id, b, ch, w0 := s.w.ID, s.b, s.geoCh, s.w
+			go func() {
+				// One window's geometry where the backend can say it alone
+				// (Linux: a couple of X queries, not one for every window).
+				if g, ok := b.(interface {
+					windowGeom(winInfo) (winInfo, error)
+				}); ok && exact {
+					w, err := g.windowGeom(w0)
+					ch <- geoResult{w, err}
+					return
+				}
+				w, err := findWindow(b, id)
+				ch <- geoResult{w, err}
+			}()
 		}
 		var res geoResult
 		select {
@@ -2223,8 +2246,11 @@ func (s *winStream) checkWindow(conn *websocket.Conn, changed bool) bool {
 		}
 		s.geoFails = 0
 		resized := absInt(cur.W-s.w.W) > 8 || absInt(cur.H-s.w.H) > 8
+		// A helper reading a framebuffer file reads at the rect it started
+		// with: a move needs it started again as much as a resize does.
+		moved := exact && (cur.X != s.w.X || cur.Y != s.w.Y || cur.W != s.w.W || cur.H != s.w.H)
 		s.w = cur
-		if resized && s.helper != nil {
+		if (resized || moved) && s.helper != nil {
 			s.helper.stop()
 			s.helper = nil
 			if h, err := s.startCaptureHelper(s.captureFPS(), s.codec); err == nil {

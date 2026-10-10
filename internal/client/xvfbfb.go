@@ -11,11 +11,14 @@ import (
 	"hash/maphash"
 	"image"
 	"image/jpeg"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,14 +30,24 @@ import (
 // hash. Any other display (a desktop's own X server, Wayland) captures as
 // before (import, a compositor's screenshot).
 
-// xvfbFB is one Xvfb screen's framebuffer file, as its header describes it.
+// xvfbFB is an Xvfb's framebuffer file, and the uid it must be owned by (its
+// X server's). What it holds is read from its header at every frame.
 type xvfbFB struct {
-	path     string
+	path  string
+	owner uint32
+}
+
+// xvfbScreen is a framebuffer file's screen, as its header says.
+type xvfbScreen struct {
 	off      int64 // where its pixels start
 	w, h     int
-	stride   int  // bytes a row
+	stride   int  // bytes a row: w*4, nothing else is read
 	msbFirst bool // pixels XRGB in memory, not BGRX
 }
+
+// xvfbMaxSide bounds a screen's width and height: a header that says more is
+// not a screen this reads (its rows would be read into memory).
+const xvfbMaxSide = 8192
 
 var xvfbFBState struct {
 	mu      sync.Mutex
@@ -48,50 +61,67 @@ var xvfbFBState struct {
 // seen within it.
 const xvfbFBRecheck = 10 * time.Second
 
-// currentXvfbFB is this process's DISPLAY's framebuffer file, or nil.
+// currentXvfbFB is this process's DISPLAY's framebuffer file, or nil. Its
+// lock is never held over the file system: a /proc walk that is slow holds
+// nobody else up.
 func currentXvfbFB() *xvfbFB {
 	disp := os.Getenv("DISPLAY")
 	s := &xvfbFBState
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if disp == s.display && time.Since(s.at) < xvfbFBRecheck {
-		return s.fb
+	if disp == s.display && !s.at.IsZero() && time.Since(s.at) < xvfbFBRecheck {
+		fb := s.fb
+		s.mu.Unlock()
+		return fb
 	}
-	s.display, s.at, s.fb = disp, time.Now(), nil
-	if path := xvfbFBPath("/proc", disp); path != "" {
-		if fb, err := openXvfbFB(path); err == nil {
-			s.fb = fb
-		}
-	}
-	return s.fb
+	s.mu.Unlock()
+	fb := findXvfbFB("/proc", disp)
+	s.mu.Lock()
+	s.display, s.at, s.fb = disp, time.Now(), fb
+	s.mu.Unlock()
+	return fb
 }
 
-// xvfbFBPath finds, under proc, an Xvfb serving display (":99", ":99.0",
+// findXvfbFB finds, under proc, an Xvfb serving display (":99", ":99.0";
 // "localhost:99" is not one: a local Xvfb only) with a framebuffer directory
-// (-fbdir DIR), and returns its screen's file: DIR/Xvfb_screenN.
-func xvfbFBPath(proc, display string) string {
+// (-fbdir DIR) — run by root or by this process's own user, never another's
+// (trustedUID) — and returns its screen's file, DIR/Xvfb_screenN. Processes
+// are looked at in pid order.
+func findXvfbFB(proc, display string) *xvfbFB {
 	if !strings.HasPrefix(display, ":") {
-		return ""
+		return nil
 	}
 	num, screen, _ := strings.Cut(display[1:], ".")
 	if _, err := strconv.Atoi(num); err != nil {
-		return ""
+		return nil
 	}
 	if screen == "" {
 		screen = "0"
 	}
 	if _, err := strconv.Atoi(screen); err != nil {
-		return ""
+		return nil
 	}
 	ents, err := os.ReadDir(proc)
 	if err != nil {
-		return ""
+		return nil
 	}
+	var pids []int
 	for _, e := range ents {
-		if _, err := strconv.Atoi(e.Name()); err != nil {
+		if pid, err := strconv.Atoi(e.Name()); err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	sort.Ints(pids)
+	for _, pid := range pids {
+		dirPath := filepath.Join(proc, strconv.Itoa(pid))
+		fi, err := os.Stat(dirPath)
+		if err != nil {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(proc, e.Name(), "cmdline"))
+		uid, ok := ownerOf(fi)
+		if !ok || !trustedUID(uid) {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dirPath, "cmdline"))
 		if err != nil || len(raw) == 0 {
 			continue
 		}
@@ -108,76 +138,86 @@ func xvfbFBPath(proc, display string) string {
 				dir = args[i+2]
 			}
 		}
-		if mine && dir != "" {
-			return filepath.Join(dir, "Xvfb_screen"+screen)
+		if mine && dir != "" && filepath.IsAbs(dir) {
+			return &xvfbFB{path: filepath.Join(dir, "Xvfb_screen"+screen), owner: uid}
 		}
 	}
-	return ""
+	return nil
 }
 
-// openXvfbFB reads a framebuffer file's header: 32-bit TrueColor pixels in a
-// ZPixmap only (what Xvfb keeps at depth 24); anything else is not read.
-func openXvfbFB(path string) (*xvfbFB, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
+// screenOf reads and checks a framebuffer file's header: 32-bit TrueColor
+// pixels in a ZPixmap, rows of exactly w*4 bytes, a screen no larger than
+// xvfbMaxSide a side, in a file of the size that makes — anything else is not
+// read (a header can say anything; its rows are read into memory).
+func screenOf(f *os.File, size int64) (xvfbScreen, error) {
 	var h [25]uint32 // XWDFileHeader, big-endian
-	if err := binary.Read(f, binary.BigEndian, &h); err != nil {
-		return nil, err
+	if err := binary.Read(io.NewSectionReader(f, 0, 100), binary.BigEndian, &h); err != nil {
+		return xvfbScreen{}, err
 	}
 	headerSize, version, format, width, height := h[0], h[1], h[2], h[4], h[5]
 	byteOrder, bpp, stride, visual := h[7], h[11], h[12], h[13]
 	red, green, blue, ncolors := h[14], h[15], h[16], h[19]
 	switch {
 	case version != 7 || format != 2:
-		return nil, fmt.Errorf("%s: not an XWD ZPixmap (version %d, format %d)", path, version, format)
+		return xvfbScreen{}, fmt.Errorf("not an XWD ZPixmap (version %d, format %d)", version, format)
 	case bpp != 32 || visual != 4 || red != 0xff0000 || green != 0xff00 || blue != 0xff:
-		return nil, fmt.Errorf("%s: not 32-bit TrueColor (%d bpp, visual %d)", path, bpp, visual)
-	case width == 0 || height == 0 || width > 1<<15 || height > 1<<15 || stride < width*4:
-		return nil, fmt.Errorf("%s: a %dx%d screen of %d bytes a row", path, width, height, stride)
+		return xvfbScreen{}, fmt.Errorf("not 32-bit TrueColor (%d bpp, visual %d)", bpp, visual)
+	case width == 0 || height == 0 || width > xvfbMaxSide || height > xvfbMaxSide || stride != width*4:
+		return xvfbScreen{}, fmt.Errorf("a %dx%d screen of %d bytes a row", width, height, stride)
+	case headerSize < 100 || headerSize > 4096 || ncolors > 65536:
+		return xvfbScreen{}, fmt.Errorf("a header of %d bytes and %d colors", headerSize, ncolors)
 	}
-	fb := &xvfbFB{path: path, off: int64(headerSize) + int64(ncolors)*12, w: int(width), h: int(height), stride: int(stride), msbFirst: byteOrder == 1}
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
+	sc := xvfbScreen{off: int64(headerSize) + int64(ncolors)*12, w: int(width), h: int(height), stride: int(stride), msbFirst: byteOrder == 1}
+	if want := sc.off + int64(sc.stride)*int64(sc.h); size < want || size > want+4096 {
+		return xvfbScreen{}, fmt.Errorf("%d bytes, not the %d its screen takes", size, want)
 	}
-	if fi.Size() < fb.off+int64(fb.stride)*int64(fb.h) {
-		return nil, fmt.Errorf("%s: %d bytes, shorter than its screen", path, fi.Size())
-	}
-	return fb, nil
+	return sc, nil
 }
 
-// read is r of the screen (clipped to it) as RGBA.
+// read is r of the screen as RGBA, r's own size whatever of it is off the
+// screen (black there): a frame's pixels line up with the window's rect,
+// which clicks are mapped against.
 func (fb *xvfbFB) read(r image.Rectangle) (*image.RGBA, error) {
-	r = r.Intersect(image.Rect(0, 0, fb.w, fb.h))
-	if r.Empty() {
-		return nil, errors.New("the window is not on the screen")
+	if r.Empty() || r.Dx() > xvfbMaxSide || r.Dy() > xvfbMaxSide {
+		return nil, fmt.Errorf("a %v window", r)
 	}
-	f, err := os.Open(fb.path)
+	f, fi, err := openFramebuffer(fb.path, fb.owner)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	// Its rows in one read: from its first pixel to its last, the screen's
-	// own stride between them.
-	n := (r.Dy()-1)*fb.stride + r.Dx()*4
+	sc, err := screenOf(f, fi.Size())
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", fb.path, err)
+	}
+	on := r.Intersect(image.Rect(0, 0, sc.w, sc.h))
+	if on.Empty() {
+		return nil, errors.New("the window is not on the screen")
+	}
+	// Its rows in one read: from its first pixel on the screen to its last,
+	// the screen's own stride between them.
+	n := (on.Dy()-1)*sc.stride + on.Dx()*4
 	bp := xvfbReadBuf.Get().(*[]byte)
 	defer xvfbReadBuf.Put(bp)
 	if cap(*bp) < n {
 		*bp = make([]byte, n)
 	}
 	block := (*bp)[:n]
-	if _, err := f.ReadAt(block, fb.off+int64(r.Min.Y)*int64(fb.stride)+int64(r.Min.X)*4); err != nil {
+	if _, err := f.ReadAt(block, sc.off+int64(on.Min.Y)*int64(sc.stride)+int64(on.Min.X)*4); err != nil {
 		return nil, err
 	}
 	img := image.NewRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
-	for y := 0; y < r.Dy(); y++ {
-		row := block[y*fb.stride : y*fb.stride+r.Dx()*4]
-		dst := img.Pix[y*img.Stride : y*img.Stride+len(row)]
+	if on != r { // partly off the screen: black, opaque, where it is not
+		for i := 3; i < len(img.Pix); i += 4 {
+			img.Pix[i] = 0xff
+		}
+	}
+	dx, dy := on.Min.X-r.Min.X, on.Min.Y-r.Min.Y
+	for y := 0; y < on.Dy(); y++ {
+		row := block[y*sc.stride : y*sc.stride+on.Dx()*4]
+		dst := img.Pix[(dy+y)*img.Stride+dx*4:]
 		for i := 0; i < len(row); i += 4 {
-			if fb.msbFirst { // X R G B
+			if sc.msbFirst { // X R G B
 				dst[i], dst[i+1], dst[i+2] = row[i+1], row[i+2], row[i+3]
 			} else { // B G R X
 				dst[i], dst[i+1], dst[i+2] = row[i+2], row[i+1], row[i]
@@ -239,6 +279,10 @@ func fitBox(w, h, box int) (int, int) {
 	}
 	return max(1, w*box/h), box
 }
+
+// xvfbExact says the last frame captured came from a framebuffer file (and
+// so is the same bytes until its pixels change): what exactFrames answers.
+var xvfbExact atomic.Bool
 
 // xvfbLast is the last frame of each thing captured (a window, a region),
 // by what was asked: unchanged pixels give back the same bytes, unencoded.
