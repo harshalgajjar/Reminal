@@ -4,6 +4,7 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"os"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"reminal/internal/procgroup"
 )
 
 // This file holds the concrete windowBackend implementations. They only shell
@@ -1363,9 +1366,23 @@ func (linuxWindows) releaseInput() error {
 
 // runRaw executes a command and returns its raw stdout bytes (no trimming) so
 // binary output like a captured JPEG survives intact.
+// captureCeiling bounds one frame grab (import, grim). Captures run about
+// once a second, so a grab still going after a few seconds is dead: closing a
+// window mid-grab leaves `import -window <id>` asleep in poll forever, holding
+// the X server grab, and every other X client (wmctrl) stalls behind it.
+// Killing it, with its process group so no child keeps the grab, releases the
+// server; the capture loop treats the error as a skipped frame.
+var captureCeiling = 5 * time.Second
+
 func runRaw(name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), captureCeiling)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	procgroup.Bound(cmd)
 	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("%s: gave up after %s", name, captureCeiling)
+	}
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 			return nil, fmt.Errorf("%s: %s", name, strings.TrimSpace(string(ee.Stderr)))
