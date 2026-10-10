@@ -11454,15 +11454,27 @@
       sendWin('window_list');
     }
 
+    // resolveWinListWaiters answers everyone awaiting the next window list
+    // (nextWindowList) with the list as it now is — none, when the host cannot
+    // list windows or failed to: a caller is never left waiting for a reply
+    // that has come.
+    function resolveWinListWaiters() {
+      if (!winListWaiters.length) return;
+      const waiters = winListWaiters; winListWaiters = [];
+      waiters.forEach(fn => fn(winList));
+    }
+
     function onWindowList(payload) {
       if (payload.unsupported) {
         winList = [];
         winListRoot.innerHTML = '<div class="windows-note">' + escapeHtml(payload.unsupported) + '</div>';
+        resolveWinListWaiters();
         return;
       }
       if (payload.error) {
         winList = [];
         winListRoot.innerHTML = '<div class="windows-note">Couldn\'t list windows: ' + escapeHtml(payload.error) + '</div>';
+        resolveWinListWaiters();
         return;
       }
       winList = payload.windows || [];
@@ -11487,10 +11499,7 @@
       }
       // Resolve anyone awaiting a fresh window list (app-launch baseline), then
       // see if a just-launched app's window has appeared.
-      if (winListWaiters.length) {
-        const waiters = winListWaiters; winListWaiters = [];
-        waiters.forEach(fn => fn(winList));
-      }
+      resolveWinListWaiters();
       checkLaunch();
     }
 
