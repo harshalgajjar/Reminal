@@ -14,13 +14,81 @@ import (
 // noticed, because the mistake is invisible on GitHub, where the same text
 // renders correctly. This is the check that would have caught it.
 func TestChangelogsCarryNoInlineMarkdown(t *testing.T) {
-	dir := filepath.Join("..", "..", "changelog")
+	dirs := changelogDirs(t, filepath.Join("..", ".."))
+	if len(dirs) == 0 {
+		t.Skip("no changelog dir")
+	}
+	for _, dir := range dirs {
+		for _, p := range inlineMarkdown(t, dir) {
+			t.Error(p)
+		}
+	}
+}
+
+// Every changelog directory at the root is checked, whatever follows the
+// word: a tree with another (changelog-beta/, say) beside changelog/ has both
+// read, with no code naming either. Here a **bold** line in changelog-beta/
+// is caught, while its README.md and a directory not named changelog* are
+// left alone.
+func TestChangelogCheckReadsEveryChangelogDir(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"changelog/1.0.0.md":       "# 1.0.0\n\nFixed\n- A plain line.\n",
+		"changelog-beta/2.0.0.md":  "# 2.0.0\n\nImproved\n- A **bold** claim.\n",
+		"changelog-beta/README.md": "Rules: no **bold** in the notes.\n",
+		"notes/0.1.0.md":           "- Not a changelog, **bold** or not.\n",
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for _, dir := range changelogDirs(t, root) {
+		got = append(got, inlineMarkdown(t, dir)...)
+	}
+	// The bold line, and only it (its asterisks are counted as italics too).
+	bold := false
+	for _, p := range got {
+		if !strings.HasPrefix(p, "changelog-beta/2.0.0.md:4: ") {
+			t.Errorf("a problem outside the bold line: %q", p)
+		}
+		bold = bold || strings.HasPrefix(p, "changelog-beta/2.0.0.md:4: **bold**")
+	}
+	if !bold {
+		t.Fatalf("the bold line in changelog-beta/2.0.0.md was not caught; got %q", got)
+	}
+}
+
+// changelogDirs lists the directories at root whose name starts "changelog".
+func changelogDirs(t *testing.T, root string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dirs []string
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "changelog") {
+			dirs = append(dirs, filepath.Join(root, e.Name()))
+		}
+	}
+	return dirs
+}
+
+// inlineMarkdown is what in dir's notes would render literally in the Host
+// panel, one line each, named <dir>/<file>:<line>.
+func inlineMarkdown(t *testing.T, dir string) []string {
+	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Skipf("no changelog dir: %v", err)
+		t.Fatal(err)
 	}
-
 	link := regexp.MustCompile(`\[[^\]]*\]\([^)]*\)`)
+	var out []string
 	for _, e := range entries {
 		name := e.Name()
 		// README.md documents these rules and is read on GitHub, not in the panel.
@@ -33,21 +101,22 @@ func TestChangelogsCarryNoInlineMarkdown(t *testing.T) {
 		}
 		for i, line := range strings.Split(string(b), "\n") {
 			where := func(what string) string {
-				return name + ":" + itoa(i+1) + ": " + what + " renders literally in the Host panel — " + strings.TrimSpace(line)
+				return filepath.Base(dir) + "/" + name + ":" + itoa(i+1) + ": " + what + " renders literally in the Host panel — " + strings.TrimSpace(line)
 			}
 			if strings.Contains(line, "**") {
-				t.Error(where("**bold**"))
+				out = append(out, where("**bold**"))
 			}
 			if link.MatchString(line) {
-				t.Error(where("[a](link)"))
+				out = append(out, where("[a](link)"))
 			}
 			// A lone * is italics; a bullet's leading "- " is fine, and so is a
 			// literal * inside a code span, which the panel does render.
 			if stripped := stripCode(line); strings.Contains(stripped, "*") {
-				t.Error(where("*italics*"))
+				out = append(out, where("*italics*"))
 			}
 		}
 	}
+	return out
 }
 
 // stripCode removes `code` spans, whose contents the panel renders verbatim.
