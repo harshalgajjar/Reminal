@@ -18,10 +18,11 @@ import (
 func TestTheRelayServesItsViewerCompressed(t *testing.T) {
 	srv := httptest.NewServer(relayMux())
 	defer srv.Close()
-	want, err := webIndex.ReadFile("web/index.html")
+	page, err := viewerPage()
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := page.HTML
 	get := func(ae string) *http.Response {
 		req, _ := http.NewRequest("GET", srv.URL+"/", nil)
 		if ae != "" {

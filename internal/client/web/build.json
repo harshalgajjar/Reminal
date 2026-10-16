@@ -1,0 +1,10 @@
+{
+  "_": "How the viewer page is built from this directory: by the binary as it starts (internal/viewerbuild, from what it embeds) and for the Worker by cloudflare/scripts/build-viewer.mjs. Both read this file and nothing else for the rule, and a test holds their output byte for byte the same.",
+  "scripts": ["header", "app"],
+  "name": "assets/{script}.{sha256:16}.js",
+  "sri": "sha384",
+  "template": "<script data-build=\"{script}\"></script>",
+  "tag": "<script src=\"/assets/{name}\" integrity=\"{sri}\" crossorigin=\"anonymous\"></script>",
+  "keep": 3,
+  "copy": ["index.html", "sw.js", "manifest.webmanifest", "icons", "vendor"]
+}

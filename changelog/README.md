@@ -25,7 +25,7 @@ already uses. These files are the source; the release body is the transport.
 
 A heading, bullets, and optional plain-line subheadings. Deliberately not full
 markdown: the viewer renders these in about thirty lines (`renderNotes` in
-`cloudflare/public/index.html`), and the format is chosen so nobody reaches for
+`internal/client/web/app.js`), and the format is chosen so nobody reaches for
 a table or an image and has it silently break on a phone. Wrapped bullet
 continuations are indented and get folded back into their bullet.
 

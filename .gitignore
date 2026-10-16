@@ -30,3 +30,10 @@
 # signed release bundle staged by scripts/build-app.sh
 /dist-signed/
 __pycache__/
+
+# The viewer's built page (internal/client/web/build.json): the binary
+# renders it as it starts; cloudflare/scripts/build-viewer.mjs builds the
+# Worker's copy at every wrangler run. Only internal/client/web is source.
+/internal/client/web/assets/
+/cloudflare/public/*
+!/cloudflare/public/_headers

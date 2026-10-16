@@ -1,57 +1,76 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Harshal Gajjar
 
-// Package viewerbuild makes the viewer's scripts cacheable: each source,
-// internal/client/web/<name>.js, is written to assets/<name>.<hash>.js
-// beside both copies of the page (internal/client/web, which the binary
-// embeds, and cloudflare/public, which the Worker serves), and the page's
-// one script tag for it is stamped with that name and its SRI hash. The name is
-// the content's, so the file can be cached for good: a page names exactly
-// the script it was built with, and a new script is a new name.
-//
-// The last Keep builds stay in assets/ (assets/builds.txt, newest first),
-// so a page still loading from just before a deploy finds its own script.
-// Run by `go run ./cmd/viewerbuild`; the tree is checked by a test that
-// runs it with write false.
+// Package viewerbuild makes the viewer's page from its sources: each script,
+// internal/client/web/<name>.js, served as assets/<name>.<hash>.js — named by
+// its content, so it can be cached for good — and the page's tag for it
+// stamped with that name and its SRI hash. Nothing it makes is committed: the
+// binary renders the page from what it embeds as it starts, and the Worker's
+// copy is built by cloudflare/scripts/build-viewer.mjs at every wrangler run.
+// Both follow internal/client/web/build.json, and a test holds them to the
+// same output byte for byte.
 package viewerbuild
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
 
-// Keep is how many builds' scripts stay served.
-const Keep = 3
-
-// Scripts are the page's scripts by name: <name>.js beside the page is the
-// source of assets/<name>.<hash>.js. app is the page's program; header
-// fits the header before the page is first drawn, so it loads where it was.
-var Scripts = []string{"header", "app"}
-
-// Source is a script's source, relative to the repository root.
-func Source(name string) string { return "internal/client/web/" + name + ".js" }
-
-// Trees are the page's copies, relative to the repository root; each gets
-// an assets/ of its own, the same.
-var Trees = []string{"internal/client/web", "cloudflare/public"}
-
-// tagRE matches the page's tag for a script, whatever build it names.
-func tagRE(script string) *regexp.Regexp {
-	return regexp.MustCompile(`<script src="/assets/` + regexp.QuoteMeta(script) + `\.[0-9a-f]{16}\.js" integrity="sha384-[A-Za-z0-9+/=]+" crossorigin="anonymous"></script>`)
+// Spec is build.json: the rule both builders follow.
+type Spec struct {
+	Scripts  []string `json:"scripts"`
+	Name     string   `json:"name"`
+	SRI      string   `json:"sri"`
+	Template string   `json:"template"`
+	Tag      string   `json:"tag"`
+	Keep     int      `json:"keep"`
+	Copy     []string `json:"copy"`
 }
 
-// ErrNoSource is returned when there is no app.js: the page still carries
-// its script inline, and there is nothing to build.
-var ErrNoSource = errors.New("viewerbuild: no " + Source("app"))
+// The rule this code knows. A build.json saying anything else is refused,
+// never half followed: changing the rule is changing both builders.
+const (
+	knownName = "assets/{script}.{sha256:16}.js"
+	knownSRI  = "sha384"
+)
+
+// ReadSpec reads and checks build.json.
+func ReadSpec(b []byte) (Spec, error) {
+	var s Spec
+	if err := json.Unmarshal(b, &s); err != nil {
+		return s, fmt.Errorf("viewerbuild: build.json: %w", err)
+	}
+	switch {
+	case len(s.Scripts) == 0:
+		return s, errors.New("viewerbuild: build.json names no scripts")
+	case s.Name != knownName:
+		return s, fmt.Errorf("viewerbuild: build.json names its assets %q; this build knows only %q", s.Name, knownName)
+	case s.SRI != knownSRI:
+		return s, fmt.Errorf("viewerbuild: build.json's SRI is %q; this build knows only %q", s.SRI, knownSRI)
+	case !strings.Contains(s.Template, "{script}"):
+		return s, errors.New("viewerbuild: build.json's template does not name {script}")
+	case !strings.Contains(s.Tag, "{name}") || !strings.Contains(s.Tag, "{sri}"):
+		return s, errors.New("viewerbuild: build.json's tag does not carry {name} and {sri}")
+	case s.Keep < 1:
+		return s, errors.New("viewerbuild: build.json keeps no builds")
+	}
+	for _, sc := range s.Scripts {
+		if sc == "" || strings.ContainsAny(sc, "/\\.") {
+			return s, fmt.Errorf("viewerbuild: build.json's script %q is not a plain name", sc)
+		}
+	}
+	return s, nil
+}
 
 // Name is the asset name of a script's build.
 func Name(script string, js []byte) string {
@@ -65,100 +84,109 @@ func SRI(js []byte) string {
 	return "sha384-" + base64.StdEncoding.EncodeToString(sum[:])
 }
 
-// Tag is the page's script tag for a script's build.
-func Tag(script string, js []byte) string {
-	return `<script src="/assets/` + Name(script, js) + `" integrity="` + SRI(js) + `" crossorigin="anonymous"></script>`
+// Page is the page as it is served: its HTML, and its scripts by asset path
+// ("assets/app.<hash>.js").
+type Page struct {
+	HTML   []byte
+	Assets map[string][]byte
+	// Build is this build's line in builds.txt: its scripts' names, in order.
+	Build string
 }
 
-// Build brings the tree under root up to date with its scripts' sources,
-// and returns the files that were (write) or would be (!write) changed,
-// relative to root.
-func Build(root string, write bool) ([]string, error) {
-	srcs := map[string][]byte{}
-	for _, sc := range Scripts {
-		js, err := os.ReadFile(filepath.Join(root, Source(sc)))
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, ErrNoSource
+// Render stamps index (its sources' page) with each script's tag.
+func Render(s Spec, index []byte, src map[string][]byte) (Page, error) {
+	p := Page{Assets: map[string][]byte{}}
+	html := string(index)
+	var names []string
+	for _, sc := range s.Scripts {
+		js, ok := src[sc]
+		if !ok {
+			return p, fmt.Errorf("viewerbuild: no %s.js", sc)
 		}
-		if err != nil {
-			return nil, err
+		marker := strings.ReplaceAll(s.Template, "{script}", sc)
+		if n := strings.Count(html, marker); n != 1 {
+			return p, fmt.Errorf("viewerbuild: index.html has %d of %s, want exactly 1", n, marker)
 		}
-		srcs[sc] = js
+		name := Name(sc, js)
+		tag := strings.NewReplacer("{name}", name, "{sri}", SRI(js)).Replace(s.Tag)
+		html = strings.Replace(html, marker, tag, 1)
+		p.Assets["assets/"+name] = js
+		names = append(names, name)
 	}
-	var changed []string
-	note := func(rel string, want []byte) error {
-		p := filepath.Join(root, rel)
-		if got, err := os.ReadFile(p); err == nil && bytes.Equal(got, want) {
-			return nil
+	p.HTML = []byte(html)
+	p.Build = strings.Join(names, " ")
+	return p, nil
+}
+
+// FromFS renders the page in dir of fsys (internal/client/web: build.json,
+// index.html and the scripts).
+func FromFS(fsys fs.FS, dir string) (Spec, Page, error) {
+	read := func(name string) ([]byte, error) { return fs.ReadFile(fsys, path.Join(dir, name)) }
+	b, err := read("build.json")
+	if err != nil {
+		return Spec{}, Page{}, err
+	}
+	s, err := ReadSpec(b)
+	if err != nil {
+		return s, Page{}, err
+	}
+	index, err := read("index.html")
+	if err != nil {
+		return s, Page{}, err
+	}
+	src := map[string][]byte{}
+	for _, sc := range s.Scripts {
+		if src[sc], err = read(sc + ".js"); err != nil {
+			return s, Page{}, err
 		}
-		changed = append(changed, rel)
-		if !write {
-			return nil
-		}
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	}
+	p, err := Render(s, index, src)
+	return s, p, err
+}
+
+// Write puts the page, as served, in out: what the spec copies from web (a
+// directory), then the stamped index.html, its scripts and builds.txt (this
+// build alone). For rigs that serve a directory, and the parity check.
+func Write(web, out string) error {
+	s, p, err := FromFS(os.DirFS(web), ".")
+	if err != nil {
+		return err
+	}
+	for _, c := range s.Copy {
+		if err := copyTree(filepath.Join(web, c), filepath.Join(out, c)); err != nil {
 			return err
 		}
-		return os.WriteFile(p, want, 0o644)
 	}
-	for _, tree := range Trees {
-		assets := filepath.Join(tree, "assets")
-		// The builds kept: this one first, then those before it, at most
-		// Keep — a build being the set of its scripts' names, one line.
-		var this []string
-		for _, sc := range Scripts {
-			this = append(this, Name(sc, srcs[sc]))
+	files := map[string][]byte{"index.html": p.HTML, "assets/builds.txt": []byte(p.Build + "\n")}
+	for k, v := range p.Assets {
+		files[k] = v
+	}
+	for rel, b := range files {
+		f := filepath.Join(out, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			return err
 		}
-		line := strings.Join(this, " ")
-		builds := []string{line}
-		if b, err := os.ReadFile(filepath.Join(root, assets, "builds.txt")); err == nil {
-			for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
-				if l = strings.TrimSpace(l); l != "" && l != line && len(builds) < Keep {
-					builds = append(builds, l)
-				}
-			}
+		if err := os.WriteFile(f, b, 0o644); err != nil {
+			return err
 		}
-		for _, sc := range Scripts {
-			if err := note(filepath.Join(assets, Name(sc, srcs[sc])), srcs[sc]); err != nil {
-				return nil, err
-			}
-		}
-		if err := note(filepath.Join(assets, "builds.txt"), []byte(strings.Join(builds, "\n")+"\n")); err != nil {
-			return nil, err
-		}
-		// Any other script in assets/ is past Keep: removed.
-		keep := map[string]bool{"builds.txt": true}
-		for _, b := range builds {
-			for _, n := range strings.Fields(b) {
-				keep[n] = true
-			}
-		}
-		es, _ := os.ReadDir(filepath.Join(root, assets))
-		for _, e := range es {
-			if !keep[e.Name()] && strings.HasSuffix(e.Name(), ".js") {
-				changed = append(changed, filepath.Join(assets, e.Name()))
-				if write {
-					if err := os.Remove(filepath.Join(root, assets, e.Name())); err != nil {
-						return nil, err
-					}
-				}
-			}
-		}
-		// The page's tags, stamped: exactly one for each script, in each copy.
-		page := filepath.Join(tree, "index.html")
-		html, err := os.ReadFile(filepath.Join(root, page))
+	}
+	return nil
+}
+
+func copyTree(from, to string) error {
+	return filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil, err
+			return err
 		}
-		for _, sc := range Scripts {
-			re := tagRE(sc)
-			if n := len(re.FindAllIndex(html, -1)); n != 1 {
-				return nil, fmt.Errorf("viewerbuild: %s has %d script tags for its assets/%s.*.js, want exactly 1", page, n, sc)
-			}
-			html = re.ReplaceAllLiteral(html, []byte(Tag(sc, srcs[sc])))
+		rel, _ := filepath.Rel(from, p)
+		dst := filepath.Join(to, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dst, 0o755)
 		}
-		if err := note(page, html); err != nil {
-			return nil, err
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
 		}
-	}
-	return changed, nil
+		return os.WriteFile(dst, b, 0o644)
+	})
 }

@@ -6,7 +6,9 @@
 set -u
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq iproute2 python3 >/dev/null 2>&1
-cp -r /cf /w && cd /w && rm -rf node_modules
+# The Worker beside the viewer's source, as in the tree: wrangler builds the
+# page from it (wrangler.toml [build]).
+mkdir -p /x/internal/client && cp -r /web /x/internal/client/web && cp -r /cf /x/cloudflare && cd /x/cloudflare && rm -rf node_modules
 # wrangler dev hands the Worker the Host of the routes in wrangler.toml, and
 # builds its containers (if it has any): this copy has neither.
 python3 - <<'PY'

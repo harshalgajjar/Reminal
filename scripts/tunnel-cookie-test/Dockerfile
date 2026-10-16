@@ -15,6 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 curl &&
 COPY cloudflare/package.json cloudflare/package-lock.json /w/cloudflare/
 RUN cd /w/cloudflare && npm ci --silent
 COPY cloudflare /w/cloudflare
+# The viewer's source: wrangler builds the Worker's page from it (wrangler.toml [build]).
+COPY internal/client/web /w/internal/client/web
 COPY --from=build /out/reminal /usr/local/bin/reminal
 COPY scripts/tunnel-cookie-test/backend.py scripts/tunnel-cookie-test/test.sh /t/
 CMD ["sh", "/t/test.sh"]

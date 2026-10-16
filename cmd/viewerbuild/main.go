@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (C) 2026 Harshal Gajjar
 
-// Command viewerbuild writes the viewer's script, internal/client/web/app.js,
-// to its content-named asset beside both copies of the page and stamps the
-// page's tag for it (see internal/viewerbuild). Run from the repository root
-// after changing app.js:
+// Command viewerbuild writes the viewer page as the binary serves it —
+// rendered from internal/client/web by internal/viewerbuild — into a
+// directory, for a rig that serves one and for the check that the Worker's
+// build (cloudflare/scripts/build-viewer.mjs) is the same. Nothing it
+// writes is committed. Run from the repository root:
 //
-//	go run ./cmd/viewerbuild
-//
-// With -check it changes nothing and fails if anything is out of date.
+//	go run ./cmd/viewerbuild -out /tmp/viewer
 package main
 
 import (
@@ -20,18 +19,15 @@ import (
 )
 
 func main() {
-	check := flag.Bool("check", false, "change nothing; fail if the build is out of date")
+	out := flag.String("out", "", "the directory to write the page into")
+	web := flag.String("web", "internal/client/web", "the page's sources")
 	flag.Parse()
-	changed, err := viewerbuild.Build(".", !*check)
-	if err != nil {
+	if *out == "" {
+		fmt.Fprintln(os.Stderr, "usage: viewerbuild -out DIR [-web internal/client/web]")
+		os.Exit(2)
+	}
+	if err := viewerbuild.Write(*web, *out); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	for _, f := range changed {
-		fmt.Println(f)
-	}
-	if *check && len(changed) > 0 {
-		fmt.Fprintln(os.Stderr, "viewerbuild: out of date — run `go run ./cmd/viewerbuild`")
 		os.Exit(1)
 	}
 }

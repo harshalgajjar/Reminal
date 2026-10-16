@@ -21,4 +21,4 @@ trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$BIN"' EXIT
 docker run --rm -v "$TREE":/src:ro -v "$BIN":/out -e GOFLAGS=-buildvcs=false golang:1.26-bookworm \
   sh -c 'cp -r /src /w && cd /w && go build -o /out/reminal ./cmd/reminal'
 docker run --rm --name "$NAME" --cap-add NET_ADMIN -e DELAY="$DELAY" -e RATE="$RATE" \
-  -v "$TREE/cloudflare":/cf:ro -v "$BIN":/b:ro -v "$PWD":/t:ro "$PW" bash /t/worker-inside.sh
+  -v "$TREE/cloudflare":/cf:ro -v "$TREE/internal/client/web":/web:ro -v "$BIN":/b:ro -v "$PWD":/t:ro "$PW" bash /t/worker-inside.sh

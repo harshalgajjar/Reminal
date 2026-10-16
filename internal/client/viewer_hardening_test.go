@@ -4,7 +4,6 @@
 package client
 
 import (
-	"bytes"
 	"crypto/sha512"
 	"encoding/base64"
 	"os"
@@ -55,25 +54,21 @@ func TestEveryExternalScriptAndStylesheetIsPinned(t *testing.T) {
 }
 
 // What the page says the handshake library hashes to must be what the file
-// actually hashes to, in both copies — otherwise the browser refuses to load
-// it and nobody can connect with a PIN.
+// actually hashes to — otherwise the browser refuses to load it and nobody
+// can connect with a PIN. One file: the Worker's copy is built from it.
 func TestVendoredRistrettoMatchesItsPinnedHash(t *testing.T) {
 	page := viewerText(t, hostedPublic)
 	m := regexp.MustCompile(`RISTRETTO_SRI = 'sha384-([^']+)'`).FindStringSubmatch(page)
 	if m == nil {
 		t.Fatal("RISTRETTO_SRI not found in the page")
 	}
-	hosted := readHosted(t, "vendor/ristretto255.js")
-	sum := sha512.Sum384(hosted)
-	if got := base64.StdEncoding.EncodeToString(sum[:]); got != m[1] {
-		t.Fatalf("vendor/ristretto255.js hashes to sha384-%s, the page pins sha384-%s", got, m[1])
-	}
-	embedded, err := os.ReadFile("web/vendor/ristretto255.js")
+	lib, err := os.ReadFile("web/vendor/ristretto255.js")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(hosted, embedded) {
-		t.Fatal("the hosted and embedded copies of vendor/ristretto255.js differ")
+	sum := sha512.Sum384(lib)
+	if got := base64.StdEncoding.EncodeToString(sum[:]); got != m[1] {
+		t.Fatalf("vendor/ristretto255.js hashes to sha384-%s, the page pins sha384-%s", got, m[1])
 	}
 }
 

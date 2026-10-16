@@ -32,9 +32,9 @@ release flow — one at a time, never a side effect of feature work.
 - **Changelog format is stricter than GitHub markdown** (the in-app "What's new" panel renders it): NO `**bold**`/`*italic*`/`[links]` (they show literal `**`/`[]` — only `` `code` `` works), and every non-bullet line is an UPPERCASED subheading, so use short labels (`Improved`/`Fixed`/`Added`) + plain bullets, never prose sentences or an intro paragraph. See `changelog/README.md`.
 
 ## Project-specific gotchas
-- **Two viewer copies must stay byte-identical:** `cloudflare/public/index.html` and `internal/client/web/index.html`. Edit one, copy to the other (a test enforces it).
+- **The viewer has one source: `internal/client/web`.** Edit `app.js`, `header.js`, `index.html` (a template: its `<script data-build>` markers are stamped) and the rest there. Nothing built from it is committed: the binary renders the page from what it embeds as it starts, and `cloudflare/public` (all but `_headers`) is built by `cloudflare/scripts/build-viewer.mjs` before every `wrangler dev` / `wrangler deploy`. Both follow `internal/client/web/build.json`; `cloudflare/viewer_build_test.go` holds them byte-identical. A rig that serves the page from a directory gets one from `scripts/viewer-page.sh`.
 - **New agent↔viewer message types** must be added in three places or they silently drop: the dispatch in `internal/client/agent.go`, `machineAccepts` in `machineagent.go`, and `forwardableTypes` in `internal/relay/server.go`.
-- The web viewer deploys separately from the binary: `wrangler deploy` from `cloudflare/`. A binary release does **not** update the hosted viewer.
+- The web viewer deploys separately from the binary: `wrangler deploy` from `cloudflare/`. A binary release does **not** update the hosted viewer. To keep pages already open working, a deploy first runs `node scripts/build-viewer.mjs --previous https://<live host>`: it keeps the live Worker's newest builds (each checked against its name), and fails if it cannot read them unless `--first-deploy`.
 
 ## Signing (do not improvise)
 - Canonical macOS cert: **`reminal-signing`** (self-signed, CN `reminal-signing`). Releases are signed by CI from the `MACOS_CERT_*` GitHub secrets. Backup `.p12` + password live in the owner's OneDrive / password manager, not here.

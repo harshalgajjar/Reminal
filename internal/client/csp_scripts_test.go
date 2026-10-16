@@ -45,25 +45,28 @@ func TestCSPNamesEveryCDNScriptThePageLoads(t *testing.T) {
 	}
 }
 
-// viewerText is the viewer as a browser runs it: the page in dir, then each
-// script it loads from its own assets/, in the page's order. What the static
-// checks look for in the page's code is in those scripts now, not the page.
-func viewerText(t *testing.T, dir string) string {
+// viewerText is the viewer as a browser runs it: the page as served, then
+// each script it loads from its own assets/, in the page's order. What the
+// static checks look for in the page's code is in those scripts, not the
+// page. It is the page both the binary and the Worker serve: the binary
+// renders it from what it embeds, and the Worker's build is held to the same
+// bytes (cloudflare/viewer_build_test.go).
+func viewerText(t *testing.T, _ string) string {
 	t.Helper()
-	page, err := os.ReadFile(dir + "/index.html")
+	page, err := viewerPage()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var b strings.Builder
-	b.Write(page)
-	srcs := regexp.MustCompile(`<script src="/(assets/[^"/]+\.js)"`).FindAllStringSubmatch(string(page), -1)
+	b.Write(page.HTML)
+	srcs := regexp.MustCompile(`<script src="/(assets/[^"/]+\.js)"`).FindAllStringSubmatch(string(page.HTML), -1)
 	if len(srcs) == 0 {
-		t.Fatalf("%s/index.html loads no script of its own from assets/", dir)
+		t.Fatal("the page loads no script of its own from assets/")
 	}
 	for _, m := range srcs {
-		js, err := os.ReadFile(dir + "/" + m[1])
-		if err != nil {
-			t.Fatal(err)
+		js, ok := page.Assets[m[1]]
+		if !ok {
+			t.Fatalf("the page names %s, which it does not have", m[1])
 		}
 		b.WriteString("\n")
 		b.Write(js)

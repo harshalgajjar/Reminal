@@ -17,6 +17,7 @@ import (
 
 	"reminal/internal/config"
 	"reminal/internal/relay"
+	"reminal/internal/viewerbuild"
 )
 
 // viewerCSP must stay the same as the Content-Security-Policy line in
@@ -26,8 +27,17 @@ import (
 // CDNs (TestCSPNamesEveryCDNScriptThePageLoads keeps the list true).
 const viewerCSP = "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"
 
-//go:embed web/index.html web/sw.js web/manifest.webmanifest web/icons web/vendor web/assets
+//go:embed web/index.html web/build.json web/app.js web/header.js web/sw.js web/manifest.webmanifest web/icons web/vendor
 var webIndex embed.FS
+
+// viewerPage is the page this binary serves, rendered once from the sources
+// it embeds (internal/viewerbuild, by web/build.json): the page and its
+// scripts always come from the same build, so a binary can never serve a
+// page that names a script it does not have.
+var viewerPage = sync.OnceValues(func() (viewerbuild.Page, error) {
+	_, p, err := viewerbuild.FromFS(webIndex, "web")
+	return p, err
+})
 
 func RunRelay(port string) error {
 	if port == "" {
@@ -101,13 +111,14 @@ func relayMux() *http.ServeMux {
 	// so kept for good — a page names exactly the build it was made with,
 	// and a new build is a new name. As the Worker serves them (_headers).
 	mux.HandleFunc("GET /assets/{name}", func(w http.ResponseWriter, r *http.Request) {
-		name := "web/assets/" + path.Base(r.PathValue("name"))
-		if !strings.HasSuffix(name, ".js") {
-			http.NotFound(w, r)
+		name := "assets/" + path.Base(r.PathValue("name"))
+		page, err := viewerPage()
+		if err != nil {
+			http.Error(w, "web UI unavailable", http.StatusInternalServerError)
 			return
 		}
-		data, err := webIndex.ReadFile(name)
-		if err != nil {
+		data, ok := page.Assets[name]
+		if !ok {
 			http.NotFound(w, r)
 			return
 		}
@@ -126,11 +137,12 @@ func relayMux() *http.ServeMux {
 		_, _ = w.Write(data)
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		data, err := webIndex.ReadFile("web/index.html")
+		page, err := viewerPage()
 		if err != nil {
 			http.Error(w, "web UI unavailable", http.StatusInternalServerError)
 			return
 		}
+		data := page.HTML
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		// The same protections the hosted viewer is served with
 		// (cloudflare/public/_headers): not framable, no type sniffing, no
