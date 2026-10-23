@@ -1053,8 +1053,27 @@
       })().finally(() => { alertTokensBusy = null; });
       return alertTokensBusy;
     }
+    // A notification tapped while this page is open (sw.js): where it points,
+    // a path on this site. Each handler (onNotificationURL) is given it as a
+    // URL and returns true when it took it; when none does, the page stays as
+    // it is, as it does for a machine's alert ('/').
+    const notificationURLHandlers = [];
+    function onNotificationURL(fn) { notificationURLHandlers.push(fn); }
+    function routeNotificationURL(url) {
+      if (typeof url !== 'string' || !url.startsWith('/') || url.startsWith('//')) return false;
+      let u;
+      try { u = new URL(url, location.origin); } catch (_) { return false; }
+      if (u.origin !== location.origin) return false;
+      for (const fn of notificationURLHandlers) {
+        try { if (fn(u)) return true; } catch (_) {}
+      }
+      return false;
+    }
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.addEventListener('message', e => { if (e.data && e.data.type === 'alert-token') deliverAlertTokens(); });
+      navigator.serviceWorker.addEventListener('message', e => {
+        if (e.data && e.data.type === 'alert-token') deliverAlertTokens();
+        if (e.data && e.data.type === 'notification-url') routeNotificationURL(e.data.url);
+      });
     }
     // Which machines this phone's alerts are on without a token, by asking
     // each that is on (only while the sheet is open).

@@ -68,7 +68,13 @@ self.addEventListener('notificationclick', (e) => {
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const w of wins) {
-      if ('focus' in w) return w.focus();
+      if ('focus' in w) {
+        // An open page is told where the notification points, and goes there
+        // itself (routeNotificationURL in app.js); one that has no use for it
+        // stays as it is.
+        w.postMessage({ type: 'notification-url', url });
+        return w.focus();
+      }
     }
     return self.clients.openWindow(url);
   })());
