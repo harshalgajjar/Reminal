@@ -1649,11 +1649,19 @@
 
     // Meme
     const TEMPLATES = [['caption', 'Caption'], ['twopanel', 'Asked / got'], ['quote', 'Quote'], ['achievement', 'Achievement']];
+    // The line a meme shows with nothing of the session's own to use, and the
+    // tour's example (sampleMeme).
+    const SAMPLE_QUOTE = 'You’re absolutely right! I apologize for the confusion.';
+    // sampleMeme is an example meme card, drawn as a real one is: for the tour.
+    function sampleMeme() {
+      const k = MOMENT_KINDS.find(x => x.kind === 'right');
+      return drawMeme({ template: 'caption', quote: SAMPLE_QUOTE, top: k.top, bottom: k.bottom, at: Date.now() });
+    }
     function memeDefaults() {
       const s = cur();
       const m = s && s.moments.length ? s.moments[s.moments.length - 1] : null;
       const sel = recentSelection();
-      const quote = sel || (m ? m.text : 'You’re absolutely right! I apologize for the confusion.');
+      const quote = sel || (m ? m.text : SAMPLE_QUOTE);
       const k = MOMENT_KINDS.find(x => x.kind === (m && !sel ? m.kind : 'right'));
       return { quote, top: k.top, bottom: k.bottom, at: m ? m.at : Date.now() };
     }
@@ -1795,5 +1803,5 @@
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
     const isOpen = () => !!(sheet && sheet.classList.contains('open'));
-    window.reminalMoments = { output, attn, input, open, isOpen, scrub };
+    window.reminalMoments = { output, attn, input, open, isOpen, scrub, sampleMeme };
   })();

@@ -13247,6 +13247,8 @@
         info: svg('<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>'),
         search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
         check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
+        moon: svg('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
+        spark: svg('<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/>'),
       };
       // Small inline glyphs for naming controls inside a sentence, drawn as
       // key caps instead of emoji so they match the rest of the UI.
@@ -13259,6 +13261,7 @@
         snip: svg('<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>'),
         menu: svg('<path d="M4 7h16M4 12h16M4 17h16"/>'),
         bell: svg('<path d="M6 9a6 6 0 0 1 12 0c0 6.5 2.5 8 2.5 8h-17S6 15.5 6 9z"/><path d="M10.3 20.5a2 2 0 0 0 3.4 0"/>'),
+        moon: svg('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
       };
       const k = (name) => '<span class="tour-k">' + G[name] + '</span>';
 
@@ -13313,8 +13316,11 @@
       };
       const tag = '<div class="tm-tag">Example</div>';
       const acts = '<span class="tm-acts">' + G.plus + G.pen + G.x + '</span>';
+      // A session row as Machines draws it: its state, and on one awake the
+      // moon that puts it to sleep (its place kept on one asleep, so the rows line up).
       const sess = (name, meta, state, cur) => '<div class="tm-sess' + (cur ? ' cur' : '') + '"><div><div class="tm-name">' + name + '</div><div class="tm-meta">' + meta + '</div></div>' +
-        (state ? '<span class="tm-state ' + state[0] + '">' + state[1] + '</span>' : '') + '</div>';
+        (state ? '<span class="tm-state ' + state[0] + '">' + state[1] + '</span>' : '') +
+        (state && state[0] === 'sleep' ? '<span class="tm-sleep off">' + G.moon + '</span>' : '<span class="tm-sleep" data-mock="moon">' + G.moon + '</span>') + '</div>';
       const MOCK = {
         machines: () => tag +
           '<div class="tm-bar"><div class="tm-search">' + I.search + 'Search machines &amp; sessions…</div><div class="tm-bell" data-mock="bell">' + G.bell + '</div></div>' +
@@ -13322,6 +13328,7 @@
           sess('claude', '~/projects/webapp', ['work', 'Working'], true) +
           sess('dev-server', 'npm run dev · idle 2m') +
           sess('codex', '~/projects/api', ['ask', 'Needs you']) +
+          sess('docs', '~/projects/docs · asleep 3h', ['sleep', 'Asleep']) +
           '<div class="tm-mach"><span class="tm-dot on"></span><b>home-server</b><span class="tm-sub">4% · 2</span>' + acts + '</div>' +
           sess('backups', 'restic · idle 1h', ['done', 'Done']) +
           '<div class="tm-mach off"><span class="tm-dot"></span><b>Work laptop</b><span class="tm-sub">offline · 2h ago</span></div>',
@@ -13343,13 +13350,20 @@
           '<div class="tm-meter"><div><span>Battery</span><b>82% · 4h 10m left</b></div><i style="--v:82%"></i></div>' +
           '<div class="tm-btn">' + G.plus + 'New session on this host</div><div class="tm-btn">View full desktop</div>' +
           '<div class="tm-own">' + I.check + 'You own this machine</div>',
+        // A meme card, drawn as a real one is (moments.js), from an example line.
+        meme: () => {
+          let src = '';
+          try { src = window.reminalMoments.sampleMeme().toDataURL('image/png'); } catch (_) {}
+          return tag + (src ? '<img class="tm-meme" alt="" src="' + src + '">' : '<div class="tm-meme-text">You’re absolutely right! I apologize for the confusion.</div>');
+        },
       };
-      const MOCK_W = { machines: 340, windows: 320, apps: 312, host: 290 };
+      const MOCK_W = { machines: 340, windows: 320, apps: 312, host: 290, meme: 260 };
       const NOTE = {
         machines: 'Placeholder data. Yours will list your own machines and sessions.',
         windows: 'Placeholder data. Yours will list the windows open on your computer.',
         apps: 'Placeholder data. Yours will list the apps on your computer.',
         host: 'Placeholder numbers. Yours are live from your computer.',
+        meme: 'An example. Yours is made from what your agent says.',
       };
       const exampleNote = (name) => '<div class="tour-note"><span class="tour-chip">Example</span><span>' + NOTE[name] + '</span></div>';
 
@@ -13388,6 +13402,12 @@
           body: () => 'Get a notification when a machine’s CPU runs hot, its battery gets low, or the charger is unplugged, even with this page closed.',
         },
         {
+          id: 'sleep', icon: I.moon, anchor: () => summary('recents'), mock: 'machines', focus: '[data-mock="moon"]',
+          title: 'Put a session to sleep',
+          body: () => 'On your own machines, ' + k('moon') + ' on a session puts it to sleep: its programs stop and their memory is freed. Open it again and it wakes as itself, with the same link, PIN and conversation.',
+          tips: () => ['If something would be lost, like a job still running, it asks first', 'From a terminal: reminal sleep, and reminal wake'],
+        },
+        {
           id: 'windows', icon: I.win, when: connected, anchor: () => summary('windows'), mock: 'windows',
           title: 'Any window, right here',
           body: () => 'Every app window on the computer. Pick one and it opens as a live pane you can click, type into, drag and resize, like it was running here.',
@@ -13406,6 +13426,12 @@
           id: 'share', icon: I.share, when: connected, target: () => $('share-btn'),
           title: 'Bring someone in',
           body: () => 'A link and a QR code for this exact terminal. <b>Copy for an AI agent</b> gives an agent everything it needs to join and work alongside you.',
+        },
+        {
+          id: 'moments', icon: I.spark, when: connected, anchor: () => $('share-btn'), mock: 'meme',
+          title: 'Moments worth sharing',
+          body: () => 'Share also turns this session into cards: a <b>receipt</b> of what the agent did, a sped-up <b>timelapse</b>, a <b>meme</b> of its best line, a phone shot, and your week as stories.',
+          tips: () => ['When the agent says something meme-worthy, a ✦ note offers to make the meme', (touchUI() ? 'Select text and tap Meme' : 'Select text, then Share, then Meme') + ' to make one from any line', 'Made on this device: secrets, names and this machine are hidden before anything is shared'],
         },
         {
           id: 'leave', icon: I.exit, when: connected, target: () => $('connect-btn'),
@@ -13536,7 +13562,7 @@
       function targetsOf(step) {
         let t;
         if (step.mock) {
-          if (step.focus) t = mockEl ? [mockEl.querySelector(step.focus)] : [];
+          if (step.focus) t = mockEl ? [...mockEl.querySelectorAll(step.focus)] : [];
           else t = [step.anchor(), mockEl];
         } else if (step.target) t = step.target();
         else return [];
