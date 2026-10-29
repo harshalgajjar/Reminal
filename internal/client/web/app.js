@@ -2142,6 +2142,7 @@
       // but not live (its link dropped, its agent gone, a relay that said
       // no): opened again.
       if (sessionId && e.id === sessionId && sessdockDialing()) return;
+      if (wakeIfAsleep(e.id)) return; // asleep: woken first
       if (e.owned) connectOwned(e.id);
       else connectToSession(e.id, e.pin);
     }
@@ -5016,11 +5017,26 @@
     // Render a machine's session list into its card. Shared by the instant cached
     // paint (renderMachines, from rec.sessions) and the fresh list from a
     // completed query (fillMachineSessions) so the two never drift.
+    // sleepingOwned are the sessions asleep on owned machines, as their
+    // listings last said (id → its machine and row): opened from the session
+    // dock too, one is woken first, as from Machines.
+    const sleepingOwned = new Map();
+    function wakeIfAsleep(id) {
+      const k = sleepingOwned.get(String(id || '').toUpperCase());
+      if (!k) return false;
+      wakeOwned(k.b64, k.s);
+      return true;
+    }
+
     function renderMachineSessions(box, list, b64) {
       const sessions = box.querySelector('.machine-sessions');
       const countEl = box.querySelector('.machine-count');
       if (!sessions) return;
       list = (Array.isArray(list) ? list : []).filter(s => !killedSessionIds.has(s.id));
+      for (const s of list) {
+        if (s.kind === 'port') continue;
+        if (s.asleep) sleepingOwned.set(s.id.toUpperCase(), { b64, s }); else sleepingOwned.delete(s.id.toUpperCase());
+      }
       if (countEl) countEl.textContent = list.length ? String(list.length) : '';
       syncMachineTight(box);
       if (list.length === 0) {
@@ -5539,7 +5555,7 @@
     function showSleepWakeScreen(name, screen) {
       const el = document.getElementById('wake-screen');
       if (!el) return;
-      el.querySelector('.wake-title').textContent = 'Waking ' + name + '… (usually a few seconds)';
+      el.querySelector('.wake-title').textContent = 'Waking ' + name + '…';
       el.querySelector('.wake-rows').textContent = screen || '';
       el.hidden = false;
     }
@@ -5555,13 +5571,21 @@
         const r = await queryDirectory(base64ToU8(b64URLToStd(b64)), { sleep: { id: s.id, act: 'wake' }, timeout: DIR_SPAWN_TIMEOUT_MS });
         if (r && r.screen) showSleepWakeScreen(name, r.screen);
         wakeGate = { id: s.id.toUpperCase(), agent: !!s.fg, since: Date.now() };
+        sleepingOwned.delete(s.id.toUpperCase());
         setTimeout(updateHeldChip, WAKE_SLOW_MS + 100); // the chip says when it is taking long
         connectOwned(s.id);
         renderMachines();
       } catch (e) {
         hideSleepWakeScreen();
-        setStatus('Could not wake ' + s.id + ' (' + (e.message || 'error') + ')', 'error');
+        setStatus('Could not wake ' + s.id + ': ' + dirActionError(e), 'error');
       }
+    }
+    // dirActionError is why an action on an owned machine failed, in words a
+    // person can act on: a machine whose reminal is older than the action is
+    // told to update.
+    function dirActionError(e) {
+      if (e && e.reply && e.reply.unsupported) return 'reminal on that computer is too old for this · run reminal upgrade there';
+      return (e && e.message) || 'error';
     }
     // sleepOnMachine puts one of an owned machine's sessions to sleep. Refused
     // for what it would end (a job running in it, an unfinished turn), it says
@@ -5581,7 +5605,7 @@
         setStatus(s.id + ' is asleep · open it to wake it', 'info');
         renderMachines();
       } catch (e) {
-        setStatus('Could not sleep ' + s.id + ' (' + (e.message || 'error') + ')', 'error');
+        setStatus('Could not sleep ' + s.id + ': ' + dirActionError(e), 'error');
       }
     }
 

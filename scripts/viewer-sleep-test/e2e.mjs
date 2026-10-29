@@ -101,6 +101,29 @@ check(dialogs.some(d => /sleep, running in it/.test(d) && /Sleep anyway/.test(d)
 check(await until(async () => (await row(sid))?.asleep, 20), 'said yes: it sleeps', JSON.stringify(await row(sid)));
 check(((await row(sid))?.dropped || []).some(d => /sleep, running in it/.test(d)), 'the listing says what it let go of', JSON.stringify(await row(sid)));
 
+// A machine whose reminal is older than sleep says to update it.
+check(await p.evaluate(() => dirActionError(Object.assign(new Error('this reminal does not answer dir_sleep'), { reply: { unsupported: true } }))) === 'reminal on that computer is too old for this · run reminal upgrade there', 'an older machine is told to upgrade, not "does not answer dir_sleep"', '');
+
+// Opened from the session dock, a sleeping session is woken first, as from
+// Machines: never dialled asleep, where nothing answers.
+{
+  sh('mkdir -p /root/fromdock');
+  const m = sh('cd /root/fromdock && reminal new fromdock');
+  const rid = m.match(/Session:\s+([A-Z0-9]+)/)[1];
+  await p.evaluate(s => connectOwned(s), rid);
+  await until(() => p.evaluate((s) => document.body.classList.contains('connected') && sessionId === s, rid), 20);
+  await sleep(800);
+  dialogs = [];
+  await p.evaluate(async ([k, s]) => sleepOnMachine(k, s), [key, await row(rid)]);
+  check(await until(async () => (await row(rid))?.asleep, 20), 'a session in the dock sleeps', JSON.stringify(await row(rid)));
+  await p.evaluate((s) => sessdockConnect({ id: s, owned: true }), rid);
+  check(await until(() => p.evaluate(() => !document.getElementById('wake-screen').hidden), 10), 'opened from the session dock, it shows "waking"', 'no wake screen');
+  const pill = await p.evaluate(() => { const t = document.querySelector('#wake-screen .wake-title'); const cs = getComputedStyle(t); return { text: t.textContent, pos: cs.position, border: cs.borderTopWidth, radius: cs.borderTopLeftRadius }; });
+  check(/^Waking .+…$/.test(pill.text) && pill.pos === 'absolute' && pill.border !== '0px' && pill.radius !== '0px', '"Waking …" is a pill in the middle, as "Connecting…" is', JSON.stringify(pill));
+  check(await until(async () => !(await row(rid))?.asleep, 30), '…and it wakes', JSON.stringify(await row(rid)));
+  check(await until(() => p.evaluate(() => document.getElementById('wake-screen').hidden), 30), '…and the live terminal replaces its saved screen', 'wake screen still up');
+}
+
 // A wake whose agent never comes back (here: no claude to start any more):
 // the page keeps taking keys. What was held is sent to the shell on Send, or
 // dropped on Discard; either way what is typed next runs there.
