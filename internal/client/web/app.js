@@ -13455,7 +13455,7 @@
           id: 'moments', icon: I.spark, when: connected, anchor: () => $('share-btn'), mock: 'meme',
           title: 'Moments worth sharing',
           body: () => 'Share also turns this session into cards: a <b>receipt</b> of what the agent did, a sped-up <b>timelapse</b>, a <b>meme</b> of its best line, a phone shot, and your week as stories.',
-          tips: () => ['When the agent says something meme-worthy, a ✦ note offers to make the meme', (touchUI() ? 'Select text and tap Meme' : 'Select text, then Share, then Meme') + ' to make one from any line', 'Made on this device: secrets, names and this machine are hidden before anything is shared'],
+          tips: () => ['When the agent says something meme-worthy, a ✦ note offers to make the meme', (touchUI() ? 'Select text and tap Meme' : 'Select text, then Share, then Meme') + ' to make one from any line', 'Made on this device, with secrets, user names and this machine’s name hidden. Look before you post.'],
         },
         {
           id: 'leave', icon: I.exit, when: connected, target: () => $('connect-btn'),
