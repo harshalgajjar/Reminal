@@ -229,7 +229,8 @@
        what it is doing, until the live terminal replaces it. */
     #wake-screen { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; background: #0d1117; padding: 14px; overflow: hidden; }
     #wake-screen[hidden] { display: none; }
-    #wake-screen .wake-title { color: #e6edf3; font-size: 13px; padding: 2px 0 10px; }
+    /* What it is doing, as the connecting overlay says it: a pill in the middle. */
+    #wake-screen .wake-title { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 1; color: #e6edf3; font-size: 14px; max-width: calc(100% - 32px); text-align: center; }
     #wake-screen .wake-rows { margin: 0; flex: 1; color: #6e7681; font: 12.5px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
     /* Keys typed while the session is not live yet (connecting, or its
        machine not answering yet): their count, never the keys (one may be a
@@ -267,7 +268,7 @@
     .up-skip { grid-column: 2; color: #d29922; font-size: 11.5px; overflow-wrap: anywhere; }
     .up-dismiss { grid-column: 2; justify-self: start; font: inherit; font-size: 12px; color: #e6edf3; background: #21262d; border: 1px solid #30363d; border-radius: 5px; padding: 3px 10px; cursor: pointer; }
     @media (prefers-reduced-motion: reduce) { .up-spin, .up-fill.wait { animation: none; } .up-toast { transition: none; } }
-    #overlay span { background: #161b22; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; }
+    #overlay span, #wake-screen .wake-title { background: #161b22; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; }
 
     /* ---- Mobile text-selection handles + copy bar ----
        xterm renders the selection highlight itself; these are just the two
@@ -2010,6 +2011,12 @@
     .tm-state.work { color: #58a6ff; border-color: rgba(88,166,255,.4); }
     .tm-state.ask { color: #d29922; border-color: rgba(210,153,34,.4); }
     .tm-state.done { color: #3fb950; border-color: rgba(63,185,80,.4); }
+    .tm-state.sleep { color: #8b949e; border-color: rgba(139,148,158,.4); }
+    .tm-sleep { display: flex; margin-left: 8px; padding: 3px; border-radius: 5px; color: #8b949e; }
+    .tm-sleep svg { width: 13px; height: 13px; }
+    .tm-sleep.off { visibility: hidden; }
+    .tm-meme { display: block; width: 100%; border-radius: 8px; margin-top: 4px; }
+    .tm-meme-text { padding: 18px 12px; text-align: center; font-weight: 700; color: #fff; background: #111; border-radius: 8px; }
     .tm-win { display: flex; align-items: center; gap: 10px; padding: 6px; border-radius: 6px; }
     .tm-app {
       flex: none; width: 28px; height: 28px; display: grid; place-items: center; color: #c9d1d9;
