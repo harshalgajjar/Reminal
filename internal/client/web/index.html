@@ -1536,6 +1536,9 @@
     }
     .machine-session .ms-btn:hover { background: #262c36; color: #e6edf3; }
     .machine-session .ms-kill:hover { background: rgba(248,81,73,0.15); color: #f85149; }
+    .machine-session .ms-btn.busy { cursor: default; background: transparent; }
+    .machine-session .ms-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(139, 148, 158, .3); border-top-color: #58a6ff; animation: up-spin .8s linear infinite; }
+    @media (prefers-reduced-motion: reduce) { .machine-session .ms-spin { animation: none; } }
     .machine-session .ms-kill:hover { background: rgba(248,81,73,0.15); color: #f85149; }
     /* Divider label separating the Machines cards from the Recent-sessions list. */
     .section-label {

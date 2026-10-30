@@ -5021,6 +5021,15 @@
     // listings last said (id → its machine and row): opened from the session
     // dock too, one is woken first, as from Machines.
     const sleepingOwned = new Map();
+    // sleepsInFlight are the sessions a sleep was asked for here and has not
+    // yet answered: one ask at a time, however often the button is pressed.
+    const sleepsInFlight = new Set();
+    function sleepButtonBusy(btn) {
+      btn.disabled = true;
+      btn.classList.add('busy');
+      btn.title = 'Going to sleep…';
+      btn.innerHTML = '<span class="ms-spin"></span>';
+    }
     function wakeIfAsleep(id) {
       const k = sleepingOwned.get(String(id || '').toUpperCase());
       if (!k) return false;
@@ -5145,7 +5154,10 @@
             sl.className = 'ms-btn';
             sl.title = 'Sleep: end its processes and free their memory; it wakes as itself when opened';
             sl.innerHTML = mIcon('moon');
-            sl.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); sleepOnMachine(b64, s); });
+            // A sleep takes a few seconds: the button says so at once, and takes
+            // no second press (a list redrawn meanwhile draws it busy again).
+            if (sleepsInFlight.has(s.id)) sleepButtonBusy(sl);
+            sl.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); sleepButtonBusy(sl); sleepOnMachine(b64, s); });
             actions.appendChild(sl);
           }
         } else {
@@ -5591,6 +5603,16 @@
     // for what it would end (a job running in it, an unfinished turn), it says
     // what, and sleeps only if you say so.
     async function sleepOnMachine(b64, s) {
+      if (sleepsInFlight.has(s.id)) return;
+      sleepsInFlight.add(s.id);
+      try {
+        await sleepOnMachineOnce(b64, s);
+      } finally {
+        sleepsInFlight.delete(s.id);
+        renderMachines(); // asleep, or the button back as it was
+      }
+    }
+    async function sleepOnMachineOnce(b64, s) {
       const machine = base64ToU8(b64URLToStd(b64));
       const ask = async (act) => queryDirectory(machine, { sleep: { id: s.id, act }, timeout: DIR_SPAWN_TIMEOUT_MS });
       try {
@@ -5603,7 +5625,6 @@
           await ask('sleep_anyway');
         }
         setStatus(s.id + ' is asleep · open it to wake it', 'info');
-        renderMachines();
       } catch (e) {
         setStatus('Could not sleep ' + s.id + ': ' + dirActionError(e), 'error');
       }

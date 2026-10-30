@@ -163,6 +163,31 @@ check(await until(async () => (await screenOf(p)).includes('after-discard-63'), 
 check(!(await screenOf(p)).includes('never-sent'), '…and what was discarded never ran', (await screenOf(p)).slice(-300));
 sh('mv /usr/local/bin/claude.away /usr/local/bin/claude');
 
+// The moon, pressed: at once a spinner and no second press; pressed twice
+// fast, still one sleep asked for.
+{
+  sh('mkdir -p /root/twice');
+  const m = sh('cd /root/twice && reminal new twice');
+  const tid = m.match(/Session:\s+([A-Z0-9]+)/)[1];
+  await p.evaluate(() => {
+    window.__sleepAsks = 0;
+    const real = queryDirectory;
+    // A sleep's first ask is counted; sleep_anyway follows a yes to it.
+    queryDirectory = async (mach, req) => { if (req && req.sleep && req.sleep.act === 'sleep') window.__sleepAsks++; return real(mach, req); };
+    document.getElementById('recents').open = true;
+    renderMachines();
+  });
+  const moon = (id) => p.locator('.machine-session').filter({ hasText: id }).locator('.ms-btn[title^="Sleep"], .ms-btn.busy');
+  check(await until(async () => (await moon(tid).count()) === 1, 20), 'its row has the moon', 'no moon');
+  await moon(tid).click();
+  const st = await p.evaluate((id) => { const r = [...document.querySelectorAll('.machine-session')].find(x => x.textContent.includes(id)); const b = r && r.querySelector('.ms-btn.busy'); return { busy: !!b, disabled: !!(b && b.disabled), spin: !!(b && b.querySelector('.ms-spin')) }; }, tid);
+  check(st.busy && st.disabled && st.spin, 'pressed, the moon turns into a spinner and takes no more presses', JSON.stringify(st));
+  await p.evaluate((id) => { const r = [...document.querySelectorAll('.machine-session')].find(x => x.textContent.includes(id)); r.querySelector('.ms-btn.busy, .ms-btn[title^="Sleep"]')?.click(); }, tid); // pressed again, whatever it shows
+  check(await until(async () => (await row(tid))?.asleep, 20), '…and it sleeps', JSON.stringify(await row(tid)));
+  check(await p.evaluate(() => window.__sleepAsks) === 1, 'pressed twice, one sleep was asked for', String(await p.evaluate(() => window.__sleepAsks)));
+  await p.evaluate(() => { document.getElementById('recents').open = false; });
+}
+
 // Kill on a sleeping session forgets it.
 await p.evaluate(async ([k, id]) => queryDirectory(base64ToU8(b64URLToStd(k)), { kill: id }), [key, sid]);
 check(await until(async () => !(await row(sid)), 10), 'kill on a sleeping session forgets it', JSON.stringify(await row(sid)));
