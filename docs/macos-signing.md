@@ -53,8 +53,10 @@ Repo → Settings → Secrets and variables → Actions → New repository secre
 | `MACOS_CERT_IDENTITY` | `reminal-signing` — the cert's Common Name |
 
 That's it. The next tagged release signs with this cert. If the secrets are
-absent the release still builds (binaries stay ad-hoc signed) — signing is
-best-effort, see the "Sign (macOS…)" step in `.github/workflows/release.yml`.
+absent, or the signed app's Designated Requirement differs from the one every
+release has shipped, the macOS build fails and nothing is published for it:
+see the "Assemble & sign reminal.app (macOS)" step in
+`.github/workflows/release.yml`.
 
 ## Keeping it stable
 

@@ -204,11 +204,13 @@ jobs:
           # (sh.reminal) the user grants once, which then covers the background
           # daemon's ("+"-spawned) sessions too. build-app.sh signs the nested
           # helper as sh.reminal.capture and seals the bundle as sh.reminal.
+          # Never shipped ad-hoc: an ad-hoc app has a different Designated
+          # Requirement, so every user would be asked for Screen Recording
+          # again. This job runs only in the public repository (it needs test),
+          # so an empty secret here is a real release missing its cert.
           if [ -z "${MACOS_CERT_P12}" ]; then
-            echo "No signing cert (secret MACOS_CERT_P12 empty) — assembling reminal.app ad-hoc."
-            echo "macOS Screen Recording grants won't persist across versions until a cert is set."
-            VERSION="$VERSION" bash scripts/build-app.sh . . -
-            exit 0
+            echo "::error title=No signing cert::secret MACOS_CERT_P12 is empty; reminal.app is never released ad-hoc signed."
+            exit 1
           fi
           # Self-signed cert => STABLE Designated Requirement (fixed identifier +
           # this cert), so a user's grant persists across every upgrade. Not
