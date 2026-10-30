@@ -101,11 +101,11 @@ jobs:
           # ScreenCaptureKit capture helper (reminal-capture) and bundle it.
           - goos: darwin
             goarch: arm64
-            os: macos-14
+            os: macos-15
             swift_target: arm64-apple-macos12.3
           - goos: darwin
             goarch: amd64
-            os: macos-14
+            os: macos-15
             swift_target: x86_64-apple-macos12.3
           # linux cross-compiles fine on ubuntu; no helper (uses screencapture
           # equivalent / X11 path).
@@ -229,6 +229,17 @@ jobs:
           echo "--- signature ---"
           codesign -dvvv reminal.app 2>&1 | grep -Ei "Identifier|Authority|Signature" || true
           codesign --verify --deep --strict --verbose=2 reminal.app
+          # The Designated Requirement is what a user's Screen Recording grant
+          # is keyed to. A new runner image or toolchain must never change it:
+          # if it did, every user would be asked to grant it again.
+          want='designated => identifier "sh.reminal" and certificate leaf = H"b7778da4b70cbadc7fb9c85290b7928126574a14"'
+          got="$(codesign -d -r- reminal.app 2>&1 | grep '^designated' || true)"
+          if [ "$got" != "$want" ]; then
+            echo "::error title=Designated Requirement changed::got: $got"
+            echo "want: $want"
+            exit 1
+          fi
+          echo "Designated Requirement unchanged."
 
       - name: Azure login for Trusted Signing (Windows)
         if: matrix.goos == 'windows'
@@ -302,7 +313,7 @@ jobs:
         # Co-authored-by and Co-Authored-By occur in this history — the old
         # filter pinned one casing and silently shipped the other, which is how
         # v3.5.0 through v3.5.2 published a Cursor trailer.
-        # awk, not sed: this step runs on every matrix leg including macos-14,
+        # awk, not sed: this step runs on every matrix leg including the macOS ones,
         # and BSD sed has no case-insensitive address flag. tolower() is POSIX.
         run: |
           version="${GITHUB_REF_NAME#v}"
