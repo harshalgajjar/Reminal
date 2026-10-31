@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/term"
+
 	"reminal/internal/client"
 	"reminal/internal/protocol"
 )
@@ -130,7 +132,25 @@ func listMachines() error {
 	if len(remote) == 0 {
 		fmt.Println("  " + cDim("Just this machine so far. To reach another here, run ") + cBold("reminal own"))
 		fmt.Println("  " + cDim("on it, then ") + cBold("sudo reminal add owner <id>") + cDim(" — it'll show up once you owner-connect."))
+		return nil
 	}
+	// How to act on what's listed — a dim heading over the commands, the same
+	// shape as the hints under `reminal list`, including its phone-width form.
+	fmt.Println("  " + cDim("Hints:"))
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 20 && w < 76 {
+		// Phone width: drop the "reminal " prefix (implied) and put the gloss on
+		// its own line so no command wraps mid-word.
+		fmt.Println("  machines rename <id|name> <new-name>")
+		fmt.Println("    " + cDim("rename a machine"))
+		fmt.Println("  new [name] --machine <id|name>")
+		fmt.Println("    " + cDim("start a session on that machine"))
+		fmt.Println("  kill <session-id> --machine <id|name>")
+		fmt.Println("    " + cDim("end a session on that machine"))
+		return nil
+	}
+	fmt.Println("  reminal machines rename <id|name> <new-name>   " + cDim("rename a machine"))
+	fmt.Println("  reminal new [name] --machine <id|name>         " + cDim("start a session on that machine"))
+	fmt.Println("  reminal kill <session-id> --machine <id|name>  " + cDim("end a session on that machine"))
 	return nil
 }
 

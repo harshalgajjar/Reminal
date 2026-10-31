@@ -47,12 +47,14 @@ func MachineID(pub ed25519.PublicKey) string {
 
 // ShortMachineID is a compact form for tables — the prefix plus the first 8
 // id characters, enough to disambiguate by eye without wrapping a terminal.
+// No trailing ellipsis: it reads as "only part of the id", when this short form
+// is itself accepted anywhere a machine id is (it matches as a prefix).
 func ShortMachineID(pub ed25519.PublicKey) string {
 	enc := base64.RawURLEncoding.EncodeToString(pub)
 	if len(enc) > 8 {
 		enc = enc[:8]
 	}
-	return MachineIDPrefix + enc + "…"
+	return MachineIDPrefix + enc
 }
 
 type ownedMachineRec struct {
@@ -159,6 +161,26 @@ func ListOwnedMachines() ([]OwnedMachine, error) {
 	return out, nil
 }
 
+// selectableMachines is every machine a selector may name: the owned machines
+// plus this one. `reminal machines` always lists this machine with its id, so
+// that id has to resolve too, even though nothing records it as owned.
+func selectableMachines() ([]OwnedMachine, error) {
+	list, err := ListOwnedMachines()
+	if err != nil {
+		return nil, err
+	}
+	local, _ := MachinePub()
+	if local == nil {
+		return list, nil
+	}
+	for _, om := range list {
+		if om.Key.Equal(local) {
+			return list, nil
+		}
+	}
+	return append(list, OwnedMachine{Key: local}), nil
+}
+
 // findOwnedMachineKey resolves a user-supplied selector to a stored machine key.
 // It matches (in order) an exact name, a full/short mach_ id, or a base64url key
 // prefix. Returns the matched key, or an error naming the ambiguity/miss.
@@ -167,7 +189,7 @@ func findOwnedMachineKey(selector string) (ed25519.PublicKey, error) {
 	if sel == "" {
 		return nil, fmt.Errorf("no machine given")
 	}
-	list, err := ListOwnedMachines()
+	list, err := selectableMachines()
 	if err != nil {
 		return nil, err
 	}
@@ -185,14 +207,14 @@ func findOwnedMachineKey(selector string) (ed25519.PublicKey, error) {
 		return nil, fmt.Errorf("more than one machine is named %q — use its mach_ id instead", sel)
 	}
 	// Otherwise treat it as an id/key prefix (tolerate the mach_ prefix and a
-	// trailing … from ShortMachineID).
+	// trailing … that older versions printed after the short id).
 	needle := strings.TrimPrefix(sel, MachineIDPrefix)
 	needle = strings.TrimSuffix(needle, "…")
 	// An empty needle (e.g. a bare "mach_" or "…") must match NOTHING — otherwise
 	// HasPrefix(key, "") matches every machine and a partial selector would
 	// silently rename/resolve an arbitrary one.
 	if needle == "" {
-		return nil, fmt.Errorf("no owned machine matches %q (see `reminal machines`)", selector)
+		return nil, noMachineMatch(selector, list)
 	}
 	var byID []OwnedMachine
 	for _, om := range list {
@@ -204,10 +226,50 @@ func findOwnedMachineKey(selector string) (ed25519.PublicKey, error) {
 	case 1:
 		return byID[0].Key, nil
 	case 0:
-		return nil, fmt.Errorf("no owned machine matches %q (see `reminal machines`)", selector)
+		return nil, noMachineMatch(selector, list)
 	default:
-		return nil, fmt.Errorf("%q matches more than one machine — use a longer id", selector)
+		// The short ids printed elsewhere are what collided, so give the full ones.
+		full := make([]string, 0, len(byID))
+		for _, om := range byID {
+			full = append(full, MachineID(om.Key))
+		}
+		return nil, fmt.Errorf("%q matches more than one machine\nUse more of its id:%s", selector, choiceLines(full))
 	}
+}
+
+// noMachineMatch is the error for a selector that matched nothing. It lists
+// what would have matched — each machine's set name and short id — so the next
+// try doesn't need a trip back to `reminal machines`.
+func noMachineMatch(selector string, list []OwnedMachine) error {
+	if len(list) == 0 {
+		return fmt.Errorf("no owned machine matches %q\nNo other machines owned yet (see `reminal own`)", selector)
+	}
+	local, _ := MachinePub()
+	choices := make([]string, 0, len(list))
+	for _, om := range list {
+		switch {
+		case om.Name != "" && local != nil && om.Key.Equal(local):
+			choices = append(choices, fmt.Sprintf("%s (%s, this machine)", om.Name, ShortMachineID(om.Key)))
+		case local != nil && om.Key.Equal(local):
+			choices = append(choices, fmt.Sprintf("%s (this machine)", ShortMachineID(om.Key)))
+		case om.Name != "":
+			choices = append(choices, fmt.Sprintf("%s (%s)", om.Name, ShortMachineID(om.Key)))
+		default:
+			choices = append(choices, ShortMachineID(om.Key))
+		}
+	}
+	return fmt.Errorf("no owned machine matches %q\nUse a name or id from this list:%s", selector, choiceLines(choices))
+}
+
+// choiceLines puts each choice on its own indented line. A phone-width
+// terminal would otherwise break one long line in the middle of an id.
+func choiceLines(choices []string) string {
+	var b strings.Builder
+	for _, c := range choices {
+		b.WriteString("\n  ")
+		b.WriteString(c)
+	}
+	return b.String()
 }
 
 // ResolveOwnedMachine resolves a selector — a machine name or a mach_ id (or id
@@ -248,7 +310,14 @@ func RenameOwnedMachine(selector, name string) (OwnedMachine, error) {
 	k := base64.RawURLEncoding.EncodeToString(key)
 	rec, ok := m[k]
 	if !ok {
-		return OwnedMachine{}, fmt.Errorf("machine not found")
+		// This machine resolves without being recorded as owned; naming it is
+		// what first records it.
+		local, _ := MachinePub()
+		if local == nil || !key.Equal(local) {
+			return OwnedMachine{}, fmt.Errorf("machine not found")
+		}
+		now := time.Now()
+		rec = ownedMachineRec{FirstOwned: now, LastSeen: now}
 	}
 	rec.Name = label
 	m[k] = rec

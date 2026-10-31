@@ -56,9 +56,7 @@ func CompleteMachines() {
 	}
 	clean := strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace
 	for _, om := range list {
-		// The id without the trailing ellipsis, so the completed token is a clean
-		// prefix the resolver accepts as-is.
-		short := strings.TrimSuffix(ShortMachineID(om.Key), "…")
+		short := ShortMachineID(om.Key)
 		if om.Name != "" {
 			fmt.Printf("%s\t%s\n", clean(om.Name), short)
 			fmt.Printf("%s\t%s\n", short, clean(om.Name))

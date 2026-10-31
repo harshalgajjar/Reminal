@@ -618,6 +618,7 @@ func sessionMatches(s protocol.DirSession, sel string) bool {
 }
 
 func machineMatches(m client.FleetMachine, sel string) bool {
+	sel = strings.TrimSuffix(sel, "…") // short ids used to be printed with one
 	if sel == "" {
 		return true
 	}
@@ -631,6 +632,7 @@ func machineMatches(m client.FleetMachine, sel string) bool {
 }
 
 func machineLooksLocal(sel string) bool {
+	sel = strings.TrimSuffix(sel, "…") // short ids used to be printed with one
 	if sel == "" || strings.EqualFold(sel, "local") {
 		return true
 	}
