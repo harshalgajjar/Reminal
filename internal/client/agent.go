@@ -411,12 +411,12 @@ type Agent struct {
 	// over the control socket and mirrored to viewers. Nil until first use.
 	notes *noteStore
 
-	// outageSaid is whether this relay outage has been told to the terminal
-	// yet. A session retries every 30s for as long as the relay is out of
-	// reach, and a line printed on every try scrolls away what the person
-	// had there: an outage is said once, and its end once. Only the Run
-	// loop touches it.
-	outageSaid bool
+	// outage decides when a relay outage, and its end, are told to the
+	// terminal. A session retries every 30s for as long as the relay is out
+	// of reach, and a line printed on every try, or on every drop of a
+	// flapping link, scrolls away what the person had there: an outage is
+	// said once, and its end once (see outageNotice).
+	outage outageNotice
 
 	// currentConnMu guards currentConn so the SIGUSR1 handler can close
 	// the live WS the moment a pause is requested, instead of waiting up
@@ -1270,8 +1270,7 @@ func (a *Agent) serveRelay(shellExit <-chan struct{}) error {
 			if wait < rateLimitMinWait {
 				wait = rateLimitMinWait
 			}
-			if !a.outageSaid {
-				a.outageSaid = true
+			if a.outage.failed(time.Now(), true) {
 				agentNotify("  reminal: %s\n", humanize(err))
 			}
 			select {
@@ -1285,8 +1284,7 @@ func (a *Agent) serveRelay(shellExit <-chan struct{}) error {
 			continue
 		}
 
-		if !a.outageSaid {
-			a.outageSaid = true
+		if a.outage.failed(time.Now(), false) {
 			agentNotify("  reminal: %s Retrying until it is back.\n", humanize(err))
 		}
 
@@ -3282,10 +3280,14 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 		a.currentConnMu.Unlock()
 	}()
 	a.signalRegistered()
-	if a.outageSaid {
-		a.outageSaid = false
-		agentNotify("  reminal: back online.\n")
-	}
+	// Back online only once this connection has held: one that drops again
+	// within stableThresh is the same outage.
+	steady := time.AfterFunc(stableThresh, func() {
+		if a.outage.steady() {
+			agentNotify("  reminal: back online.\n")
+		}
+	})
+	defer steady.Stop()
 	a.viewerSizeMu.Lock()
 	a.viewerCount = 0
 	a.viewerSizeMu.Unlock()
