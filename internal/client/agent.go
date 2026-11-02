@@ -3280,6 +3280,7 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 		a.currentConnMu.Unlock()
 	}()
 	a.signalRegistered()
+	a.outage.up()
 	// Back online only once this connection has held: one that drops again
 	// within stableThresh is the same outage.
 	steady := time.AfterFunc(stableThresh, func() {

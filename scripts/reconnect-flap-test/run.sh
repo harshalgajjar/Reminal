@@ -6,7 +6,8 @@
 # says so in its terminal once, and that it is back once, not a pair of lines
 # for every drop; a single drop that comes straight back says nothing. A real
 # session, a real relay, and a proxy between them that resets the socket. In
-# Docker.
+# Docker. And a session started with the relay out of reach says so within
+# a few seconds.
 #
 #   run.sh [REF]   REF: build reminal from that git ref instead of this tree
 #                  (a control: origin/main must fail the flapping case).

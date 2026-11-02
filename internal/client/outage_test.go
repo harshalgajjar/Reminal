@@ -9,6 +9,7 @@ import (
 // back, is one outage: said once, and its end once, after a connection holds.
 func TestOutageNoticeFlappingLinkSaysOnce(t *testing.T) {
 	var o outageNotice
+	o.up()
 	t0 := time.Unix(1_000_000, 0)
 	said := 0
 	// Twenty drops 3s apart, each followed by a connection that held for
@@ -32,6 +33,7 @@ func TestOutageNoticeFlappingLinkSaysOnce(t *testing.T) {
 // A drop that comes straight back is not worth a line at all.
 func TestOutageNoticeBlipIsQuiet(t *testing.T) {
 	var o outageNotice
+	o.up()
 	t0 := time.Unix(1_000_000, 0)
 	for round := 0; round < 5; round++ {
 		at := t0.Add(time.Duration(round) * time.Hour)
@@ -48,6 +50,7 @@ func TestOutageNoticeBlipIsQuiet(t *testing.T) {
 // said once it passes, and a fresh outage after a steady spell starts anew.
 func TestOutageNoticeLongOutage(t *testing.T) {
 	var o outageNotice
+	o.up()
 	t0 := time.Unix(1_000_000, 0)
 	if o.failed(t0, false) {
 		t.Fatal("said at the first failure")
@@ -74,5 +77,26 @@ func TestOutageNoticeNowSaysAtOnce(t *testing.T) {
 	}
 	if o.failed(t0.Add(time.Minute), true) {
 		t.Fatal("a forced outage was said twice")
+	}
+}
+
+// A session started while the relay is out of reach says so at once: there
+// is no link to have blipped, and its join link would otherwise sit there
+// unexplained.
+func TestOutageNoticeNeverReachedSaysAtOnce(t *testing.T) {
+	var o outageNotice
+	t0 := time.Unix(1_000_000, 0)
+	if !o.failed(t0, false) {
+		t.Fatal("a session that never reached the relay did not say so at once")
+	}
+	if o.failed(t0.Add(time.Second), false) {
+		t.Fatal("said twice")
+	}
+	o.up()
+	if !o.steady() {
+		t.Fatal("back online not said once it reached the relay and held")
+	}
+	if o.failed(t0.Add(time.Hour), false) {
+		t.Fatal("a drop after the relay was reached was said at once: it should get the grace")
 	}
 }

@@ -10,6 +10,10 @@
 //            and the link then has to hold for 30s)
 //   140s     one reset, straight back
 //   140-185s steady
+//
+// Alongside, from 0s, a second session whose relay is out of reach from the
+// start: it must say so within a few seconds, not leave its join link
+// unexplained.
 import { spawn } from "node:child_process";
 import net from "node:net";
 import fs from "node:fs";
@@ -41,6 +45,13 @@ const sess = spawn("script", ["-qfec", "reminal", log], {
   stdio: ["pipe", "ignore", "ignore"],
   env: { ...process.env, REMINAL_RELAY: "ws://127.0.0.1:18081/ws", REMINAL_WEB: "http://127.0.0.1:18080" },
 });
+const offLog = "/tmp/offline.log";
+const offHome = fs.mkdtempSync("/tmp/home-");
+const offline = spawn("script", ["-qfec", "reminal", offLog], {
+  stdio: ["pipe", "ignore", "ignore"],
+  env: { ...process.env, HOME: offHome, REMINAL_RELAY: "ws://127.0.0.1:1/ws", REMINAL_WEB: "http://127.0.0.1:1" },
+});
+setTimeout(() => offline.kill(), 8000);
 const size = () => { try { return fs.statSync(log).size; } catch { return 0; } };
 const between = (a, b) => fs.readFileSync(log).subarray(a, b).toString();
 
@@ -61,7 +72,9 @@ sess.kill(); relay.kill();
 const count = (s, re) => (s.match(re) || []).length;
 const down = /Retrying until it is back/g, back = /back online/g;
 const flap = between(mFlap, mBlip), blip = between(mBlip, mEnd);
+const off = fs.existsSync(offLog) ? fs.readFileSync(offLog).toString() : "";
 const res = [
+  ["started offline: said within 8s", count(off, down) === 1, `${count(off, down)} outage lines`],
   ["flapping minute: outage said at most once", count(flap, down) <= 1, `${count(flap, down)} outage lines`],
   ["flapping minute: back online at most once", count(flap, back) <= 1, `${count(flap, back)} back-online lines`],
   ["flapping minute: an outage said is ended once the link holds", count(flap, down) === count(flap, back), `${count(flap, down)} down, ${count(flap, back)} back`],
