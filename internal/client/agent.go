@@ -594,6 +594,8 @@ type Agent struct {
 	// into the frame. Cleared on the next click (menu dismissed / item chosen) or
 	// on timeout. Guarded by winMu. See streamWindow / handleWindowInput.
 	winMenu map[string]winMenuState
+	// axWatch starts the agent-desktop trace watcher once (watchAgentDesktop).
+	axWatch sync.Once
 	// ownerNonces remembers the one-time proofs spent on privileged actions,
 	// so a guest who decrypts an owner's request cannot replay it.
 	ownerNonces ownerNonces
@@ -3592,6 +3594,10 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 		case protocol.TypeWindowInput:
 			d := msg.Data
 			a.enqueueWinOp(func() { a.handleWindowInput(d) })
+		case protocol.TypeWindowAX:
+			// Off the winOps worker: a first snapshot of an app can take seconds,
+			// and pixel input queued behind it would stall for as long.
+			go a.handleWindowAX(conn, msg.Data)
 		case protocol.TypeWindowAck:
 			// Acks pace the frame streams (see streamWindow). Handle them
 			// directly rather than via the serialized winOps queue so a pending

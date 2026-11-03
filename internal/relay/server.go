@@ -178,8 +178,8 @@ var forwardableTypes = map[protocol.MessageType]bool{
 	protocol.TypeDirRevokeSelf: true, protocol.TypeDirKill: true, protocol.TypeDirSleep: true, protocol.TypeDirIntegrate: true,
 	protocol.TypeWindowList: true, protocol.TypeWindowCtl: true,
 	protocol.TypeWindowFrame: true, protocol.TypeWindowInput: true, protocol.TypeWindowAck: true,
-	protocol.TypeWindowClose: true,
-	protocol.TypeAppList:     true, protocol.TypeAppOpen: true,
+	protocol.TypeWindowClose: true, protocol.TypeWindowAX: true,
+	protocol.TypeAppList: true, protocol.TypeAppOpen: true,
 	protocol.TypeHostInfo: true, protocol.TypeNewSession: true,
 	// File transfer and notices ride the session socket too: `reminal send`
 	// and `reminal notify` push to viewers, a viewer uploads back, and the

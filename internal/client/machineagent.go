@@ -150,6 +150,7 @@ var machineAccepts = map[protocol.MessageType]bool{
 	protocol.TypeWindowInput:   true,
 	protocol.TypeWindowAck:     true,
 	protocol.TypeWindowClose:   true,
+	protocol.TypeWindowAX:      true,
 	protocol.TypeAppList:       true,
 	protocol.TypeAppOpen:       true,
 	protocol.TypeWebRTCHello:   true,

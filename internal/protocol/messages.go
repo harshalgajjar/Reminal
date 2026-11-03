@@ -309,6 +309,11 @@ const (
 	// "save changes?" chance rather than being killed. Best-effort; a stale id
 	// no-ops. Distinct from window_ctl{stop}, which only ends the local stream.
 	TypeWindowClose MessageType = "window_close"
+	// TypeWindowAX is bidirectional, Data = encrypted JSON. Viewer→agent: one
+	// element-level request on a mirrored window (tree, tap or act; see axReq in
+	// internal/client/desktopax.go). Agent→viewer: its answer (axReply). Served
+	// through agent-desktop, which reads the OS accessibility tree.
+	TypeWindowAX MessageType = "window_ax"
 
 	// TypeHostInfo is bidirectional. Viewer→agent: an empty-Data request ("tell
 	// me about the machine you're on"). Agent→viewer: the reply, Data =

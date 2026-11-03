@@ -116,6 +116,9 @@ func handleMirrorConn(conn net.Conn) {
 	case "input":
 		mirrorServeInput(conn, rest)
 		_ = conn.Close()
+	case "ax":
+		mirrorServeAX(conn, rest)
+		_ = conn.Close()
 	case "release":
 		_ = darwinWindows{}.releaseInput() // unstick any held mouse button
 		fmt.Fprintln(conn, "ok")
@@ -964,4 +967,44 @@ func mirrorCaptureRegion(x, y, w, h int) ([]byte, error) {
 		return nil, err
 	}
 	return img, nil
+}
+
+// mirrorServeAX answers one forwarded window_ax request in the daemon, where
+// agent-desktop inherits reminal's Accessibility grant, and writes the reply as
+// one JSON line.
+func mirrorServeAX(conn net.Conn, payload string) {
+	var req axReq
+	if json.Unmarshal([]byte(payload), &req) != nil {
+		fmt.Fprintln(conn, `{"error":"bad request"}`)
+		return
+	}
+	rep := desktopAX.serve(darwinWindows{}, req)
+	raw, _ := json.Marshal(rep)
+	_, _ = conn.Write(append(raw, '\n'))
+}
+
+// mirrorForwardAX (session side) asks the daemon to serve one window_ax
+// request. Its deadline allows for an app's slow first snapshot.
+func mirrorForwardAX(req axReq) axReply {
+	fail := func(msg string) axReply { return axReply{ID: req.ID, Op: req.Op, Seq: req.Seq, Error: msg} }
+	sock, err := mirrorSockPath()
+	if err != nil {
+		return fail(err.Error())
+	}
+	conn, err := net.DialTimeout("unix", sock, mirrorDialTimeout)
+	if err != nil {
+		return fail("reminal's background service is not running")
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(axCeiling + 5*time.Second))
+	raw, _ := json.Marshal(req)
+	if _, err := fmt.Fprintf(conn, "ax %s\n", raw); err != nil {
+		return fail(err.Error())
+	}
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	var rep axReply
+	if err != nil || json.Unmarshal(line, &rep) != nil {
+		return fail("no answer from reminal's background service")
+	}
+	return rep
 }

@@ -285,8 +285,11 @@ func (a *Agent) handleWindowList(conn *websocket.Conn) {
 		Hint        string    `json:"hint,omitempty"`
 		// CaptureBlocked is sent unconditionally (no omitempty) so the viewer can
 		// tell a fresh agent's explicit "false" from an old agent that omits it.
-		CaptureBlocked bool                    `json:"capture_blocked"`
-		Notes          map[string][]windowNote `json:"notes,omitempty"`
+		CaptureBlocked bool `json:"capture_blocked"`
+		// Controls says agent-desktop is here, so the viewer can offer
+		// element-level control (window_ax) on these windows.
+		Controls bool                    `json:"controls,omitempty"`
+		Notes    map[string][]windowNote `json:"notes,omitempty"`
 	}
 	// Notes ride with the list rather than being pushed on connect. Pushing at
 	// connect raced the viewer's key exchange — it had no cryptoKey yet and
@@ -304,6 +307,8 @@ func (a *Agent) handleWindowList(conn *websocket.Conn) {
 		payload.Windows = wins
 		payload.Hint = b.permissionHint() // e.g. Screen Recording is off
 		payload.CaptureBlocked = b.captureBlocked()
+		payload.Controls = axAvailable()
+		a.watchAgentDesktop()
 	}
 	a.sendWindowMsg(conn, protocol.TypeWindowList, payload)
 }

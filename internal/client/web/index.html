@@ -1767,6 +1767,50 @@
       box-shadow: 0 6px 22px rgba(0, 0, 0, 0.5); cursor: default;
     }
     .wpane-info.show { display: block; }
+    /* Controls (element-level control, see axAttach): a mode like the keyboard
+       toggle. Outlines mark each control the host's accessibility tree knows;
+       a pressed control flashes with what was done to it. */
+    button.wpane-axbtn[aria-pressed="true"] { background: #1f6feb; border-color: #388bfd; color: #fff; }
+    .wpane-axlayer { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+    .wpane-axbox { position: absolute; border: 1px solid rgba(88, 166, 255, 0.55); border-radius: 3px; background: rgba(88, 166, 255, 0.06); }
+    .wpane-axbox.edit { border-color: rgba(63, 185, 80, 0.7); background: rgba(63, 185, 80, 0.07); }
+    .wpane-axhit, .wpane-axpeek {
+      position: absolute; pointer-events: none; z-index: 4; border-radius: 4px;
+      border: 2px solid #f0883e; background: rgba(240, 136, 62, 0.18);
+      box-shadow: 0 0 0 3px rgba(240, 136, 62, 0.25);
+    }
+    .wpane.wpane-agent { border-color: #f0883e; box-shadow: 0 10px 34px rgba(240, 136, 62, 0.45); }
+    .wpane-axhit { animation: wpane-axhit 1.4s ease-out forwards; }
+    @keyframes wpane-axhit { 0% { transform: scale(1.15); opacity: 1; } 15% { transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; } }
+    .wpane-axhit span {
+      position: absolute; left: 0; top: 100%; margin-top: 4px; white-space: nowrap;
+      font: 600 11px/1.3 -apple-system, system-ui, sans-serif; color: #fff;
+      background: #f0883e; border-radius: 4px; padding: 2px 6px;
+    }
+    .wpane-axedit {
+      position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 5;
+      display: flex; gap: 6px; align-items: center; flex-wrap: wrap; line-height: normal;
+      background: rgba(22, 27, 34, 0.97); border: 1px solid #388bfd; border-radius: 8px; padding: 8px;
+    }
+    .wpane-axedit[hidden], .wpane-axdrawer[hidden] { display: none; }
+    .wpane-axedit-label { width: 100%; font-size: 11px; color: #8b949e; }
+    .wpane-axedit input, .wpane-axrow input {
+      flex: 1; min-width: 0; font-size: 16px; color: #e6edf3; background: #0d1117;
+      border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px;
+    }
+    .wpane-axgo { background: #238636; border: 1px solid #2ea043; color: #fff; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+    .wpane-axdrawer { border-top: 1px solid #30363d; background: #0d1117; max-height: 38vh; display: flex; flex-direction: column; }
+    .wpane-axstatus { font-size: 11px; color: #8b949e; padding: 5px 9px; border-bottom: 1px solid #21262d; }
+    .wpane-axlist { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 4px 6px 6px; touch-action: pan-y; }
+    .wpane-axrow { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+    .wpane-axrow.off { opacity: 0.45; }
+    .wpane-axrole { flex: 0 0 74px; font-size: 10.5px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.03em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .wpane-axact {
+      flex: 1; text-align: left; font-size: 14px; color: #e6edf3; background: #21262d;
+      border: 1px solid #30363d; border-radius: 6px; padding: 7px 10px; cursor: pointer;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-height: 34px;
+    }
+    .wpane-axact:active { background: #1f6feb; }
     .wpane-info .row { display: flex; justify-content: space-between; gap: 16px; padding: 2px 0; }
     .wpane-info .k { color: #8b949e; }
     .wpane-info .v { color: #e6edf3; font-weight: 500; }

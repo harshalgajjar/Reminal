@@ -563,6 +563,7 @@ func mcpToolList() []map[string]any {
 			}, "session"),
 		},
 		mcpIssueTool(obj, str),
+		mcpDesktopTool(obj, str),
 		{
 			"name": "list_windows",
 			"description": "List the windows open on the user's screen with the window_id the other tools need. " +
@@ -671,6 +672,8 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 			argStr(args, "machine", ""),
 			argStr(args, "pin", argStr(args, "PIN", "")),
 		)
+	case "desktop":
+		return mcpDesktop(args)
 	case "send_keys":
 		return mcpSendKeys(
 			argStr(args, "session", argStr(args, "id", "")),

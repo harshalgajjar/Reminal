@@ -7827,6 +7827,14 @@
           } catch (_) {}
           break;
         }
+        case 'window_ax': {
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            onWindowAX(JSON.parse(new TextDecoder().decode(bytes)));
+          } catch (_) {}
+          break;
+        }
         case 'window_notes': {
           if (!cryptoKey) break;
           try {
@@ -10710,6 +10718,7 @@
     // ⧉ as an SVG so the button's metrics match its SVG siblings — a raw text
     // glyph inherits the page font and renders a taller, mismatched button.
     const ICON_POPOUT = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="8.5" width="12" height="12" rx="1.5"/><path d="M8.5 4.5h10a1 1 0 0 1 1 1v10"/></svg>';
+    const ICON_CONTROLS = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="14" width="8" height="6" rx="1.5"/><path d="M15 15.5l5 1.8-2.2.9-.9 2.2z"/></svg>';
     const ICON_INFO = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 11v5"/><path d="M12 7.6h0"/></svg>';
     // Which transport delivered the most recent window frame — shown in the pane
     // (i) popover. Set by onWindowFrame; 'webrtc' means the P2P DataChannel,
@@ -10925,6 +10934,191 @@
       waiters.forEach(fn => fn(winList));
     }
 
+    // ── Controls: element-level control of a mirrored window ──
+    // When the host has agent-desktop (window_list says controls), a pane can
+    // switch to Controls. A tap then presses the real control under the finger
+    // through the host's accessibility tree, without moving the host's pointer
+    // or raising the window; a text field asks for its text here and sets it in
+    // one go. The drawer under the pixels lists the window's controls as native
+    // buttons and fields. A spot with no control gets an ordinary pixel click.
+    let winControls = false;
+    let axSeq = 0;
+    const AX_ROLE_LABEL = { button: 'Button', checkbox: 'Checkbox', switch: 'Switch', textfield: 'Text field', textarea: 'Text', searchfield: 'Search', combobox: 'Combo box', securetextfield: 'Password', link: 'Link', menuitem: 'Menu item', menubutton: 'Menu', popupbutton: 'Pop-up', radiobutton: 'Option', tab: 'Tab', slider: 'Slider', cell: 'Cell', row: 'Row', incrementor: 'Stepper' };
+    function axLabel(e) { return e.name || e.value || AX_ROLE_LABEL[e.role] || e.role; }
+    function sendAX(pane, m) {
+      m.id = pane.w.id; m.seq = ++axSeq;
+      pane.axPending = pane.axPending || new Map();
+      pane.axPending.set(m.seq, m);
+      sendWin('window_ax', m);
+      return m.seq;
+    }
+    function onWindowAX(r) {
+      if (r && r.op === 'agent') { axAgentStep(r); return; }
+      const pane = r && panes.get(r.id);
+      if (!pane || !pane.axPending) return;
+      const req = pane.axPending.get(r.seq);
+      if (!req) return;
+      pane.axPending.delete(r.seq);
+      if (r.op === 'tree') {
+        if (!r.ok) { axStatus(pane, r.error || 'Couldn\'t read this window\'s controls'); return; }
+        pane.axEls = r.els || [];
+        axStatus(pane, pane.axEls.length + ' controls · ' + r.ms + ' ms');
+        axRenderList(pane);
+        axPlace(pane);
+        return;
+      }
+      if (r.op === 'tap') {
+        if (r.pixel || !r.ok) {
+          // Nothing with a control here: an ordinary click on the pixels.
+          sendWin('window_input', { id: pane.w.id, kind: 'click', x: req.x, y: req.y });
+          axStatus(pane, r.error && !r.pixel ? r.error : 'No control there · sent a click');
+          return;
+        }
+        axFlash(pane, r.hit, (r.did === 'edit' ? 'Edit ' : (r.did === 'toggle' ? 'Toggled ' : 'Pressed ')) + axLabel(r.hit), r.ms);
+        if (r.did === 'edit') axEdit(pane, r.hit);
+        else setTimeout(() => axRefresh(pane), 350);
+        return;
+      }
+      if (r.op === 'act') {
+        const e = (pane.axEls || []).find(x => x.ref === req.ref);
+        if (!r.ok) { axStatus(pane, r.error || 'That didn\'t work'); if (e) axFlash(pane, e, 'Failed: ' + axLabel(e)); }
+        else if (e) axFlash(pane, e, (req.action === 'set-value' ? 'Set ' : 'Pressed ') + axLabel(e), r.ms);
+        setTimeout(() => axRefresh(pane), 350);
+      }
+    }
+    // An agent on the host is driving this window through agent-desktop: open
+    // the window if it isn't, and mark what it reads and presses as it goes.
+    const AX_AGENT_VERB = { click: 'clicks', 'double-click': 'double-clicks', 'right-click': 'right-clicks', toggle: 'toggles', check: 'checks', uncheck: 'unchecks', 'set-value': 'fills', type: 'types into', focus: 'focuses', select: 'selects in', expand: 'expands', collapse: 'collapses', scroll: 'scrolls', 'scroll-to': 'scrolls to' };
+    function axAgentStep(r) {
+      let pane = panes.get(r.id);
+      if (!pane) {
+        const w = winList.find(x => x.id === r.id);
+        if (!w) { sendWin('window_list'); return; }
+        openWinView(w);
+        pane = panes.get(r.id);
+        if (!pane) return;
+      }
+      focusPane(r.id);
+      pane.el.classList.add('wpane-agent');
+      clearTimeout(pane.agentTimer);
+      pane.agentTimer = setTimeout(() => pane.el.classList.remove('wpane-agent'), 4000);
+      if (r.did === 'look' || !r.hit) {
+        axFlash(pane, { x: 0, y: 0, w: 1, h: 1 }, r.did === 'look' ? 'Agent is reading this window' : 'Agent ' + (AX_AGENT_VERB[r.did] || r.did));
+        return;
+      }
+      axFlash(pane, r.hit, 'Agent ' + (AX_AGENT_VERB[r.did] || r.did) + ' ' + axLabel(r.hit));
+    }
+    function axStatus(pane, text) { if (pane.axStatusEl) pane.axStatusEl.textContent = text; }
+    function axRefresh(pane) { if (pane.axMode) sendAX(pane, { op: 'tree' }); }
+    // Element boxes are fractions of the window; the frame is letterboxed and
+    // may be zoomed, so place them from the canvas's on-screen rect each time.
+    function axBox(pane, e) {
+      const fr = frameRect(pane.img.getBoundingClientRect(), pane.img.width, pane.img.height);
+      const br = pane.body.getBoundingClientRect();
+      return { left: fr.left - br.left + e.x * fr.width, top: fr.top - br.top + e.y * fr.height, width: e.w * fr.width, height: e.h * fr.height };
+    }
+    function axSetBox(el, b) { el.style.left = b.left + 'px'; el.style.top = b.top + 'px'; el.style.width = b.width + 'px'; el.style.height = b.height + 'px'; }
+    function axPlace(pane) {
+      if (!pane.axLayer) return;
+      pane.axLayer.textContent = '';
+      if (!pane.axMode) return;
+      for (const e of pane.axEls || []) {
+        const o = document.createElement('div');
+        o.className = 'wpane-axbox' + (e.tap === 'edit' ? ' edit' : '');
+        o.dataset.label = axLabel(e);
+        axSetBox(o, axBox(pane, e));
+        pane.axLayer.append(o);
+      }
+    }
+    function axFlash(pane, e, text, ms) {
+      if (!e) return;
+      const h = document.createElement('div');
+      h.className = 'wpane-axhit';
+      axSetBox(h, axBox(pane, e));
+      const tag = document.createElement('span');
+      tag.textContent = text + (ms ? ' · ' + ms + ' ms' : '');
+      h.append(tag);
+      pane.body.append(h);
+      setTimeout(() => h.remove(), 1400);
+      axStatus(pane, tag.textContent);
+    }
+    // A text control: ask for its text here, then set it whole on the host.
+    function axEdit(pane, e) {
+      const sheet = pane.axEditEl;
+      sheet.textContent = '';
+      const lab = document.createElement('div'); lab.className = 'wpane-axedit-label'; lab.textContent = axLabel(e);
+      const inp = document.createElement('input'); inp.type = e.secret ? 'password' : 'text';
+      inp.value = e.secret ? '' : (e.value || ''); inp.placeholder = 'Text for ' + axLabel(e);
+      const ok = document.createElement('button'); ok.className = 'wpane-axgo'; ok.textContent = 'Set';
+      const done = () => { sheet.hidden = true; sheet.textContent = ''; };
+      const send = () => { sendAX(pane, { op: 'act', ref: e.ref, action: 'set-value', value: inp.value }); done(); };
+      ok.addEventListener('click', (ev) => { ev.stopPropagation(); send(); });
+      inp.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') send(); if (ev.key === 'Escape') done(); });
+      sheet.append(lab, inp, ok);
+      sheet.hidden = false;
+      inp.focus();
+    }
+    function axRenderList(pane) {
+      const list = pane.axListEl;
+      list.textContent = '';
+      // Reading order: top to bottom, then left to right, as the window shows them.
+      const els = (pane.axEls || []).slice().sort((a, b) => (Math.abs(a.y - b.y) > 0.01 ? a.y - b.y : a.x - b.x));
+      for (const e of els) {
+        const row = document.createElement('div'); row.className = 'wpane-axrow' + (e.enabled ? '' : ' off');
+        const role = document.createElement('span'); role.className = 'wpane-axrole'; role.textContent = AX_ROLE_LABEL[e.role] || e.role;
+        row.append(role);
+        if (e.tap === 'edit') {
+          const inp = document.createElement('input'); inp.type = e.secret ? 'password' : 'text';
+          inp.value = e.secret ? '' : (e.value || ''); inp.placeholder = e.name || 'Text';
+          inp.addEventListener('keydown', (ev) => { ev.stopPropagation(); if (ev.key === 'Enter') sendAX(pane, { op: 'act', ref: e.ref, action: 'set-value', value: inp.value }); });
+          const go = document.createElement('button'); go.className = 'wpane-axgo'; go.textContent = 'Set';
+          go.addEventListener('click', () => sendAX(pane, { op: 'act', ref: e.ref, action: 'set-value', value: inp.value }));
+          row.append(inp, go);
+        } else {
+          const b = document.createElement('button'); b.className = 'wpane-axact';
+          const on = (e.states || []).includes('checked');
+          b.textContent = (e.tap === 'toggle' ? (on ? '☑ ' : '☐ ') : '') + axLabel(e);
+          b.disabled = !e.enabled;
+          b.addEventListener('click', () => sendAX(pane, { op: 'act', ref: e.ref, action: e.tap === 'toggle' ? 'toggle' : 'click' }));
+          row.append(b);
+        }
+        // Pointing at a row shows where that control is on the pixels. A touch
+        // has no leave, so the mark also goes by itself.
+        const unpeek = () => { if (row._peek) { row._peek.remove(); row._peek = null; } };
+        row.addEventListener('pointerenter', () => { unpeek(); const o = document.createElement('div'); o.className = 'wpane-axpeek'; axSetBox(o, axBox(pane, e)); pane.body.append(o); row._peek = o; setTimeout(unpeek, 1200); });
+        row.addEventListener('pointerleave', unpeek);
+        list.append(row);
+      }
+    }
+    function axSetMode(pane, on) {
+      pane.axMode = on;
+      pane.axBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      pane.axBtn.title = on ? 'Controls: on (taps press the real control)' : 'Controls: off';
+      pane.axDrawer.hidden = !on;
+      if (!on) { pane.axEditEl.hidden = true; pane.axEls = []; axPlace(pane); return; }
+      axStatus(pane, 'Reading controls…');
+      axRefresh(pane);
+    }
+    // Builds the Controls button, drawer, overlay layer and edit sheet for a pane.
+    function axAttach(pane, bar, before) {
+      const btn = document.createElement('button');
+      btn.className = 'wpane-btn wpane-axbtn'; btn.innerHTML = ICON_CONTROLS;
+      btn.setAttribute('role', 'switch'); btn.setAttribute('aria-pressed', 'false');
+      btn.hidden = !winControls;
+      bar.insertBefore(btn, before);
+      const layer = document.createElement('div'); layer.className = 'wpane-axlayer';
+      const edit = document.createElement('div'); edit.className = 'wpane-axedit'; edit.hidden = true;
+      pane.body.append(layer, edit);
+      const drawer = document.createElement('div'); drawer.className = 'wpane-axdrawer'; drawer.hidden = true;
+      const status = document.createElement('div'); status.className = 'wpane-axstatus';
+      const list = document.createElement('div'); list.className = 'wpane-axlist';
+      drawer.append(status, list);
+      pane.body.after(drawer);
+      Object.assign(pane, { axBtn: btn, axLayer: layer, axEditEl: edit, axDrawer: drawer, axStatusEl: status, axListEl: list, axMode: false, axEls: [] });
+      btn.addEventListener('click', (e) => { e.stopPropagation(); axSetMode(pane, !pane.axMode); });
+      new ResizeObserver(() => axPlace(pane)).observe(pane.body);
+    }
+
     function onWindowList(payload) {
       if (payload.unsupported) {
         winList = [];
@@ -10939,6 +11133,8 @@
         return;
       }
       winList = payload.windows || [];
+      winControls = !!payload.controls;
+      for (const p of panes.values()) if (p.axBtn) p.axBtn.hidden = !winControls;
       winHint = payload.hint || ''; // e.g. macOS Screen Recording is off
       // Fresh agents send capture_blocked explicitly; an old agent that omits it
       // falls back to the previous behaviour (treat any hint as blocking).
@@ -11576,6 +11772,7 @@
       paneDrag(pane, bar);
       paneResize(pane, rz);
       paneInput(pane, img);
+      axAttach(pane, bar, kbdBtn);
       // A pane is its own gesture surface. Stop bubbling pointer/touch/wheel
       // events into page-level docks, terminal selection and scroll handlers.
       // Target handlers still run first; this fence is on the pane's bubble
@@ -11590,7 +11787,7 @@
           // The pane currently owns every touch gesture. If native scrollable
           // or selectable controls are added inside it later, exempt those
           // targets here before preventing touchmove's browser default.
-          if (type === 'touchmove') e.preventDefault();
+          if (type === 'touchmove' && !(e.target.closest && e.target.closest('.wpane-axdrawer'))) e.preventDefault();
         }, { passive: false });
       }
       for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
@@ -12954,6 +13151,9 @@
         return clickRun;
       }
       function click(f, button) {
+        // Controls on: a plain tap presses the control under it (onWindowAX
+        // falls back to this same pixel click where there is none).
+        if (button !== 'right' && pane.axMode) { sendAX(pane, { op: 'tap', x: f.fx, y: f.fy }); return; }
         const m = { id: pane.w.id, kind: 'click', x: f.fx, y: f.fy };
         if (button === 'right') {
           m.button = 'right';
@@ -13123,6 +13323,10 @@
         if (g === 'drag') return;               // a real drag-and-drop completed
         // A quick tap, or a long-press that never dragged, is a click.
         if (g === 'tap' || (!moved && dur <= 600)) {
+          // With Controls on, a tap means the control under the finger, the
+          // way a phone's own buttons work; the cursor jumps there to show it.
+          // Otherwise the finger is a trackpad and a tap clicks at the cursor.
+          if (pane.axMode && !moved) { pane.cursor = fracAt(e.clientX, e.clientY); place(); }
           click(pane.cursor || { fx: 0.5, fy: 0.5 });
           flash();
           // Armed, a tap means "put me in this field": the click above already
