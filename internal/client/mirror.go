@@ -795,6 +795,7 @@ func mirrorServeInput(conn net.Conn, payload string) {
 	// The daemon has no Agent to hang state on, so it keeps its own record of
 	// the front window, its own run of clicks and its own drag watchdog.
 	applyWindowInput(darwinWindows{}, &mirrorInput, ev, nil)
+	desktopAX.forget(ev.ID) // the window may have scrolled or changed under its snapshot
 	fmt.Fprintln(conn, "ok")
 }
 

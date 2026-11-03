@@ -586,6 +586,7 @@ func (a *Agent) applyInputPayload(plaintext []byte) {
 		return
 	}
 	a.noteInputBlocked(inputBlocker(ev.ID))
+	desktopAX.forget(ev.ID) // the window may have scrolled or changed under its snapshot
 	a.noteWindowFlush(ev.ID)
 	applyWindowInput(b, &a.winInput, ev, func(w winInfo, right bool) {
 		// A right-click opens a context menu drawn as its own window (missed by
