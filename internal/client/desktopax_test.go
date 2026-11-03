@@ -218,3 +218,89 @@ func TestAXLookupRefReadsTheSnapshotRefmap(t *testing.T) {
 		t.Error("a malformed ref resolved")
 	}
 }
+
+// A window whose tree shows only its frame until --force-electron-a11y.
+const axTestSparse = `{"ok":true,"data":{"tree":{"role":"window","children":[
+ {"role":"button","name":"Close","ref_id":"@s2:e1","bounds":{"x":105,"y":55,"width":12,"height":12}}]}}}`
+
+// fakeElectronDesktop answers a snapshot with axTestSnapshot only when asked
+// with --force-electron-a11y (and when rich is set), else with axTestSparse.
+func fakeElectronDesktop(t *testing.T, rich bool) (log string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in is a shell script")
+	}
+	dir := t.TempDir()
+	log = filepath.Join(dir, "calls")
+	full, sparse := filepath.Join(dir, "full.json"), filepath.Join(dir, "sparse.json")
+	if !rich {
+		full = sparse
+	}
+	_ = os.WriteFile(filepath.Join(dir, "full.json"), []byte(axTestSnapshot), 0o600)
+	_ = os.WriteFile(sparse, []byte(axTestSparse), 0o600)
+	script := "#!/bin/sh\necho \"$*\" >> " + log + "\n" +
+		"case \"$*\" in *--force-electron-a11y*) cat " + full + ";; *) cat " + sparse + ";; esac\n"
+	bin := filepath.Join(dir, "agent-desktop")
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REMINAL_AGENT_DESKTOP", bin)
+	old := axForceSupported
+	axForceSupported = func() bool { return true }
+	t.Cleanup(func() { axForceSupported = old })
+	return log
+}
+
+func axCalls(t *testing.T, log string) []string {
+	raw, _ := os.ReadFile(log)
+	return strings.Split(strings.TrimSpace(string(raw)), "\n")
+}
+
+func TestAXSparseTreeRetriesWithElectronAccessibilityOnce(t *testing.T) {
+	log := fakeElectronDesktop(t, true)
+	var d axDesktop
+	els, err := d.snapshot(axTestWin, true)
+	if err != nil || len(els) < 5 {
+		t.Fatalf("snapshot = %d controls, %v; want the full tree (5) after the retry", len(els), err)
+	}
+	// The app is now known to need it: the next read asks once, with the flag.
+	if _, err := d.snapshot(axTestWin, true); err != nil {
+		t.Fatal(err)
+	}
+	calls := axCalls(t, log)
+	if len(calls) != 3 || strings.Contains(calls[0], "--force-electron-a11y") ||
+		!strings.Contains(calls[1], "--force-electron-a11y") || !strings.Contains(calls[2], "--force-electron-a11y") {
+		t.Fatalf("calls = %q; want plain, forced, then forced only", calls)
+	}
+}
+
+func TestAXGenuinelySparseAppIsNotRetriedEveryTime(t *testing.T) {
+	log := fakeElectronDesktop(t, false)
+	var d axDesktop
+	for i := 0; i < 3; i++ {
+		if _, err := d.snapshot(axTestWin, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// One plain read, one forced retry that gained nothing, then plain reads.
+	if calls := axCalls(t, log); len(calls) != 4 {
+		t.Fatalf("calls = %q; want 4 (the retry happens once per app)", calls)
+	}
+}
+
+func TestAXElectronBundleIsForcedFromTheFirstRead(t *testing.T) {
+	log := fakeElectronDesktop(t, true)
+	app := filepath.Join(t.TempDir(), "Slack.app")
+	if err := os.MkdirAll(filepath.Join(app, "Contents", "Frameworks", "Electron Framework.framework"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	w := axTestWin
+	w.AppPath = app
+	var d axDesktop
+	if _, err := d.snapshot(w, true); err != nil {
+		t.Fatal(err)
+	}
+	if calls := axCalls(t, log); len(calls) != 1 || !strings.Contains(calls[0], "--force-electron-a11y") {
+		t.Fatalf("calls = %q; want one forced read", calls)
+	}
+}

@@ -116,6 +116,9 @@ type axSnap struct {
 type axDesktop struct {
 	mu    sync.Mutex
 	snaps map[string]axSnap
+	// electron records, per app, whether its tree needs agent-desktop's
+	// --force-electron-a11y to show (true) or was tried without gain (false).
+	electron map[string]bool
 }
 
 var desktopAX axDesktop
@@ -317,18 +320,25 @@ func (d *axDesktop) snapshot(w winInfo, fresh bool) ([]axEl, error) {
 	if ok && !fresh && time.Since(s.at) < axSnapTTL && s.win.X == w.X && s.win.Y == w.Y && s.win.W == w.W && s.win.H == w.H {
 		return s.els, nil
 	}
-	args := append([]string{"snapshot", "-i", "--include-bounds", "--compact"}, axScope(w)...)
-	env, err := axRun(args...)
+	force, known := d.electronFor(w)
+	els, err := axRead(w, force)
 	if err != nil {
 		return nil, err
 	}
-	var data struct {
-		Tree axNode `json:"tree"`
+	// Next to nothing came back: an Electron app (Slack, VS Code, Figma's
+	// shell) keeps its web UI out of the tree until a client asks for it.
+	// Ask once per app, and remember the answer either way.
+	if !force && !known && len(els) <= axSparse && axForceSupported() {
+		if more, err := axRead(w, true); err == nil && len(more) > len(els) {
+			els, force = more, true
+		}
+		d.mu.Lock()
+		if d.electron == nil {
+			d.electron = map[string]bool{}
+		}
+		d.electron[w.App] = force
+		d.mu.Unlock()
 	}
-	if err := json.Unmarshal(env.Data, &data); err != nil {
-		return nil, err
-	}
-	els := axFlatten(data.Tree, w, nil)
 	d.mu.Lock()
 	if d.snaps == nil {
 		d.snaps = map[string]axSnap{}
@@ -465,4 +475,55 @@ func (a *Agent) handleWindowAX(conn *websocket.Conn, encData string) {
 		a.noteWindowFlush(req.ID) // ship the frame that shows the result
 	}
 	a.sendWindowMsg(conn, protocol.TypeWindowAX, rep)
+}
+
+// axSparse is how few controls make a tree look empty: a window's own frame
+// buttons and little else.
+const axSparse = 6
+
+// axForceSupported reports whether agent-desktop's --force-electron-a11y means
+// anything here. It sets macOS's AXManualAccessibility on the app.
+var axForceSupported = func() bool { return runtime.GOOS == "darwin" }
+
+// electronFor says whether w's app gets --force-electron-a11y, and whether that
+// is already known (from its bundle, or from an earlier sparse snapshot).
+func (d *axDesktop) electronFor(w winInfo) (force, known bool) {
+	if !axForceSupported() {
+		return false, true
+	}
+	if axIsElectron(w.AppPath) {
+		return true, true
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	force, known = d.electron[w.App]
+	return force, known
+}
+
+// axIsElectron reports whether an app bundle is built on Electron.
+func axIsElectron(appPath string) bool {
+	if appPath == "" {
+		return false
+	}
+	st, err := os.Stat(filepath.Join(appPath, "Contents", "Frameworks", "Electron Framework.framework"))
+	return err == nil && st.IsDir()
+}
+
+// axRead takes one snapshot of w and places its controls in the window.
+func axRead(w winInfo, forceElectron bool) ([]axEl, error) {
+	args := append([]string{"snapshot", "-i", "--include-bounds", "--compact"}, axScope(w)...)
+	if forceElectron {
+		args = append(args, "--force-electron-a11y")
+	}
+	env, err := axRun(args...)
+	if err != nil {
+		return nil, err
+	}
+	var data struct {
+		Tree axNode `json:"tree"`
+	}
+	if err := json.Unmarshal(env.Data, &data); err != nil {
+		return nil, err
+	}
+	return axFlatten(data.Tree, w, nil), nil
 }
