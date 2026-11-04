@@ -2,6 +2,7 @@ package client
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -319,8 +320,7 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// counts only what it shows, the hook what it lists; each kind the
 		// larger of the two (attn_background.go).
 		shells, agents, other := attnBackground(attnShellsOnScreen(agentActive, render), attnOtherOnScreen(prog, agentActive, render), attnHookBackground(agentActive, hs, fgAt))
-		a.noteShells(shells, agents)
-		a.noteOther(other)
+		a.noteShells(shells, agents, other)
 		// Whether the agent here can work at all — its login. Read from the
 		// same screen, before the attention state, because a logged-out agent
 		// takes a message, ends its turn and looks done; by the program that
@@ -576,12 +576,12 @@ func attnHookBackground(agentActive bool, hs *session.HookState, fgAt time.Time)
 }
 
 // noteShells records how many shells and subagents the harness still has
-// running, and flushes the record when that changes so `reminal list` sees it
-// within a tick.
-func (a *Agent) noteShells(n, agents int) {
+// running, and the rest of its background work by kind (other), and flushes
+// the record when any of it changes so `reminal list` sees it within a tick.
+func (a *Agent) noteShells(n, agents int, other map[string]int) {
 	a.metaMu.Lock()
-	changed := n != a.attnShells || agents != a.attnAgents
-	a.attnShells, a.attnAgents = n, agents
+	changed := n != a.attnShells || agents != a.attnAgents || !maps.Equal(other, a.attnOther)
+	a.attnShells, a.attnAgents, a.attnOther = n, agents, other
 	a.metaMu.Unlock()
 	if !changed {
 		return

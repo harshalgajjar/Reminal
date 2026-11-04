@@ -33,6 +33,7 @@ type sleepFacts struct {
 	Attn      string   // its agent's attention state
 	Shells    int      // background shells its agent said it left running
 	Agents    int      // background subagents
+	Other     int      // the rest of its background work, in all (monitors, background tasks, ...)
 	BgSaid    bool     // what its agent left running is known (none, too): said by its hook, or seen on its terminal
 	Draft     bool     // something typed on its input line, not sent
 	Jobs      []string // other programs running in its shell
@@ -77,7 +78,7 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 		losses = append(losses, "the question it was waiting on you for")
 	}
 	switch {
-	case f.Shells > 0 || f.Agents > 0:
+	case f.Shells > 0 || f.Agents > 0 || f.Other > 0:
 		losses = append(losses, "its agent's background work")
 	case f.Fg != "" && !f.NoTurn && f.Turned && !f.BgSaid:
 		// An agent that ran a turn and never said what it left running may
@@ -157,6 +158,7 @@ func (a *Agent) sleepNow(anyway bool) error {
 	f := sleepFacts{
 		Pinned: session.AwakePinned(a.sessionID), Headless: a.headless,
 		Attn: a.attnState, Shells: a.attnShells, Agents: a.attnAgents,
+		Other: session.CountOther(a.attnOther),
 		Draft: a.typing.draft,
 	}
 	fgAt := a.attnFGAt

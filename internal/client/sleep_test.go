@@ -34,6 +34,7 @@ func TestSleepVerdict(t *testing.T) {
 		{"a turn under way", with(func(f *sleepFacts) { f.Attn = "working" }), "", []string{"the agent's unfinished turn"}},
 		{"a question to the person", with(func(f *sleepFacts) { f.Attn = "input" }), "", []string{"the question it was waiting on you for"}},
 		{"background shells", with(func(f *sleepFacts) { f.Shells = 1 }), "", []string{"its agent's background work"}},
+		{"other background work (a monitor)", with(func(f *sleepFacts) { f.Other = 1 }), "", []string{"its agent's background work"}},
 		{"a job in its shell", with(func(f *sleepFacts) { f.Jobs = []string{"npm"} }), "", []string{"npm, running in it"}},
 		{"a terminal attached", with(func(f *sleepFacts) { f.Attached = 1 }), "", []string{"the terminal attached to it"}},
 		{"a plain shell", with(func(f *sleepFacts) { f.Fg, f.Conv = "", "" }), "", []string{"what was typed into its shell by hand (variables, aliases)"}},

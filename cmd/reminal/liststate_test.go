@@ -8,7 +8,7 @@ import "testing"
 // On a narrow terminal the shell count folds into the state word, and the row
 // must stay the width it was: the state column is padded, never truncated, so
 // anything longer than stateCol pushes the whole row out and wraps on a phone.
-func TestNarrowStateWithShells(t *testing.T) {
+func TestNarrowStateWithBackground(t *testing.T) {
 	cases := []struct {
 		state  string
 		shells int
@@ -25,12 +25,12 @@ func TestNarrowStateWithShells(t *testing.T) {
 		{"logged out", 99, "logged out"},
 	}
 	for _, c := range cases {
-		got := narrowStateWithShells(c.state, c.shells)
+		got := narrowStateWithBackground(c.state, c.shells)
 		if got != c.want {
-			t.Errorf("narrowStateWithShells(%q, %d) = %q, want %q", c.state, c.shells, got, c.want)
+			t.Errorf("narrowStateWithBackground(%q, %d) = %q, want %q", c.state, c.shells, got, c.want)
 		}
 		if visLen(got) > stateCol {
-			t.Errorf("narrowStateWithShells(%q, %d) = %q is %d wide, over the %d-column budget",
+			t.Errorf("narrowStateWithBackground(%q, %d) = %q is %d wide, over the %d-column budget",
 				c.state, c.shells, got, visLen(got), stateCol)
 		}
 	}

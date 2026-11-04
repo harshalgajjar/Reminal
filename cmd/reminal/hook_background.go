@@ -69,10 +69,7 @@ func hookBackground(payload []byte, except string) *session.Background {
 		case k == "subagent" || (k == "" && t.AgentType != ""):
 			bg.Agents++
 		default:
-			if kind == "" {
-				kind = "background task"
-			}
-			bg.AddOther(kind, 1)
+			bg.AddOther(kind, 1) // an empty kind is session.BackgroundTask
 		}
 	}
 	return bg
