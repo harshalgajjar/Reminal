@@ -15,7 +15,7 @@
 //
 // Its options are <option> children, as a select's (an <optgroup> is a
 // heading over its options), kept as the element's model: what finds a
-// select's options (el.options, el.selectedIndex, option[selected],
+// select's options (el.options, el.selectedIndex, el.selectedOptions, option[selected],
 // querySelectorAll('option')) finds these. A sub may carry a few lines; an
 // option may be disabled.
 //
@@ -159,6 +159,7 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
       if (this._choices().some((c) => c.value === was)) this.value = was; else this._draw();
     }
     get selectedIndex() { return this.options.findIndex((el) => el.selected); }
+    get selectedOptions() { return this.options.filter((el) => el.selected); }
     get selectedOption() { const c = this._choices().find((o) => o.el.selected); return c ? { value: c.value, label: c.label, sub: c.sub } : null; }
     // The options one may choose, read.
     _choices() { return this.options.map(read); }
