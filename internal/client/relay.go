@@ -70,8 +70,6 @@ var copiedHeaders = map[string]map[string]string{
 	// The page's guard for its own scripts: at a fixed path, unhashed, so it
 	// loads even when the build the page names is gone.
 	"reload.js": {"Cache-Control": "no-cache"},
-	// The dropdown (web/pick.js): the viewer loads it at its fixed path too.
-	"pick.js": {"Cache-Control": "no-cache"},
 	// The phone-alert service worker. Served so the page can register it here
 	// too; subscribing still needs a relay with push keys (the hosted one), and
 	// the page says so rather than failing silently.

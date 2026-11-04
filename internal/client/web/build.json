@@ -1,11 +1,11 @@
 {
   "_": "How the viewer page is built from this directory: by the binary when its relay's routes are made (internal/viewerbuild, from what it embeds) and for the Worker by cloudflare/scripts/build-viewer.mjs. Both read this file and nothing else for the rule, refuse a key or a version they do not know, and a test holds their output byte for byte the same. copy is what is served as it is, each at its path.",
   "version": 1,
-  "scripts": ["header", "app", "moments"],
+  "scripts": ["header", "app", "moments", "pick"],
   "name": "assets/{script}.{sha256:16}.js",
   "sri": "sha384",
   "template": "<script data-build=\"{script}\"></script>",
   "tag": "<script src=\"/assets/{name}\" integrity=\"{sri}\" crossorigin=\"anonymous\"></script>",
   "keep": 3,
-  "copy": ["reload.js", "sw.js", "manifest.webmanifest", "icons", "vendor", "pick.js"]
+  "copy": ["reload.js", "sw.js", "manifest.webmanifest", "icons", "vendor"]
 }
