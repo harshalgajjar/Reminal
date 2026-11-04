@@ -22,6 +22,8 @@ function web(app = "console.log('one')\n") {
   writeFileSync(join(d, "app.js"), app);
   writeFileSync(join(d, "sw.js"), "// sw\n");
   writeFileSync(join(d, "reload.js"), "// guard\n");
+  // The dropdown (pick.js), copied as it is.
+  writeFileSync(join(d, "pick.js"), "// pick\n");
   writeFileSync(join(d, "manifest.webmanifest"), "{}");
   for (const sub of ["icons", "vendor"]) { mkdirSync(join(d, sub)); writeFileSync(join(d, sub, "x"), "x"); }
   return d;
