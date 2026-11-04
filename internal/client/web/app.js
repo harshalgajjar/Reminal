@@ -10999,7 +10999,22 @@
     document.addEventListener('toggle', () => {
       const sf = document.getElementById('session-form');
       if (sf) sf.classList.toggle('menu-open', !!sf.querySelector('details[open]'));
+      fitOpenMenus();
     }, true);
+
+    // An open header menu ends at the bottom of the window, wherever the
+    // (possibly wrapped) header put its top: a list longer than that scrolls
+    // inside it instead of running off screen.
+    const MENU_GAP = 8; // px kept clear below a menu
+    function fitOpenMenus() {
+      const vh = window.visualViewport ? visualViewport.height : window.innerHeight;
+      for (const list of document.querySelectorAll('#session-form details[open] > .recents-list')) {
+        const room = Math.max(120, Math.floor(vh - list.getBoundingClientRect().top - MENU_GAP));
+        list.style.setProperty('--menu-room', room + 'px');
+      }
+    }
+    window.addEventListener('resize', fitOpenMenus);
+    if (window.visualViewport) visualViewport.addEventListener('resize', fitOpenMenus);
 
     // ---- Window notes: what an agent pinned on a window ---------------------
     // The same annotations the desktop badge shows, mirrored here so a phone
