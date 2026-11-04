@@ -37,7 +37,7 @@ const viewerCSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; 
 // The page's sources and what build.json copies (a test holds every copy
 // entry embedded).
 //
-//go:embed web/index.html web/build.json web/app.js web/moments.js web/header.js web/reload.js web/sw.js web/manifest.webmanifest web/icons web/vendor
+//go:embed web/index.html web/build.json web/app.js web/moments.js web/header.js web/pick.js web/reload.js web/sw.js web/manifest.webmanifest web/icons web/vendor
 var webIndex embed.FS
 
 // viewer is the page this binary serves, rendered once from the sources it
@@ -70,6 +70,8 @@ var copiedHeaders = map[string]map[string]string{
 	// The page's guard for its own scripts: at a fixed path, unhashed, so it
 	// loads even when the build the page names is gone.
 	"reload.js": {"Cache-Control": "no-cache"},
+	// The dropdown (web/pick.js): the viewer loads it at its fixed path too.
+	"pick.js": {"Cache-Control": "no-cache"},
 	// The phone-alert service worker. Served so the page can register it here
 	// too; subscribing still needs a relay with push keys (the hosted one), and
 	// the page says so rather than failing silently.

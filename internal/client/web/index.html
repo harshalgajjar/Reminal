@@ -1074,13 +1074,13 @@
     .al-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #6e7681; margin: 0 10px 0 10px; }
     .al-dot.on { background: #3fb950; box-shadow: 0 0 0 2px rgba(63,185,80,.18); }
     .al-dot.warn { background: #d29922; }
-    .al-chip { -webkit-appearance: none; appearance: none; font: inherit; font-size: 12.5px; font-weight: 600;
-               color: #e6edf3; background: #21262d url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238b949e' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'><path d='M6 9l6 6 6-6'/></svg>") no-repeat right 6px center / 11px 11px;
-               border: 1px solid #30363d; border-radius: 999px; padding: 1px 21px 1px 9px; margin: 0;
-               line-height: 1.5; cursor: pointer; vertical-align: baseline; }
-    .al-chip:hover { border-color: #3d444d; background-color: #262c34; }
-    .al-chip:focus-visible { outline: 2px solid #1f6feb; outline-offset: 1px; }
-    .al-chip:disabled { opacity: .5; cursor: default; }
+    /* A rule's numbers: dropdowns (pick.js) shaped as chips in the sentence. */
+    .al-chip { display: inline-block; width: auto; vertical-align: baseline; --pick-radius: 999px; --pick-size: 12.5px; --pick-min: 0; --pick-bg: #21262d; }
+    .al-chip .pk-btn { padding: 1px 7px 1px 9px; gap: 3px; font-weight: 600; line-height: 1.5; }
+    .al-chip .pk-chev { width: 12px; height: 12px; }
+    .al-chip .pk-btn:hover { border-color: #3d444d; background-color: #262c34; }
+    .al-chip .pk-btn:focus-visible { outline: 2px solid #1f6feb; outline-offset: 1px; box-shadow: none; border-color: #30363d; }
+    .al-chip[disabled] .pk-btn { opacity: .5; cursor: default; }
     .al-switch { flex: none; position: relative; width: 36px; height: 20px; padding: 0; border-radius: 999px; cursor: pointer;
                  background: #30363d; border: 1px solid #3d444d; transition: background .15s ease, border-color .15s ease; }
     .al-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
@@ -1160,7 +1160,7 @@
     .al-mrow:focus-visible { outline: 2px solid #1f6feb; outline-offset: -2px; }
     .al-chev { flex: none; color: #6e7681; display: inline-flex; margin-left: -4px; }
     .al-list.ro .al-tile, .al-list.ro .al-text, .al-list.ro .al-switch { opacity: .55; }
-    .al-list.ro .al-chip:disabled, .al-list.ro .al-switch:disabled { opacity: 1; }
+    .al-list.ro .al-chip[disabled] .pk-btn, .al-list.ro .al-switch:disabled { opacity: 1; }
     .al-seg { display: flex; margin: 0 16px; padding: 2px; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; }
     .al-seg button { flex: 1 1 0; height: 30px; padding: 0; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer;
                      background: transparent; border: 0; border-radius: 6px; color: #8b949e; }
@@ -2170,6 +2170,7 @@
     }
   </style>
   <script src="/reload.js"></script>
+  <script src="/pick.js"></script>
 </head>
 <body>
   <header>

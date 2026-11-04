@@ -7,5 +7,5 @@
   "template": "<script data-build=\"{script}\"></script>",
   "tag": "<script src=\"/assets/{name}\" integrity=\"{sri}\" crossorigin=\"anonymous\"></script>",
   "keep": 3,
-  "copy": ["reload.js", "sw.js", "manifest.webmanifest", "icons", "vendor"]
+  "copy": ["reload.js", "sw.js", "manifest.webmanifest", "icons", "vendor", "pick.js"]
 }
