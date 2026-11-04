@@ -218,7 +218,12 @@ var harnessLimitNotices = map[string][]limitNotice{
 		`automaticcontinuestoppedafterrepeatedusagelimithits(?:·thistaskwillnotresumeonitsown\(/rate-limit-optionstotryagain\))?`,
 		`paused·usagelimit`,
 		`fastlimitreachedandtemporarilydisabled`,
-		`goalpaused·usagelimitreached`,
+		// Claude Code 2.1.317: a goal paused at its limit, waiting for a
+		// message after the reset or going on by itself then.
+		`goalpaused·usagelimitreached(?:·sendamessageafteritresetstocontinue|·continuesautomaticallywhenitresets)?`,
+		// Claude Code 2.1.317: a group's pooled budget on the Claude apps
+		// gateway, with the day and time it resets (UTC).
+		`thisrequestexceedsyourgroup.?sbudget\.askyourorganization.?sadminstoraiseit,ortryagainafteritresetson`+limitWhen,
 	)...),
 		// Bare words that could end any sentence: only on the notice's own row.
 		// "Usage limit reached · continuing automatically at 3pm · esc to
@@ -248,6 +253,9 @@ var harnessLimitNotices = map[string][]limitNotice{
 			`|askyourworkspaceownertoaddmore(?:\.notifyowner\?)?|askyourworkspaceownertorefillinordertocontinue)`,
 		`you.?vereachedyourworkspacecreditlimit`,
 		`yourincludedusageisexhausted(?:\.chooseanoptionbelowtocontinue)?`,
+		// Codex 0.166: a workspace member at its limit, asked to request
+		// more from its owner.
+		`requestalimitincreasefromyourownertocontinueusingcodex(?:\.requestincrease\?)?`,
 		`quotaexceeded\.checkyourplanandbillingdetails`,
 	),
 	// Gemini CLI 0.64–0.66: "Usage limit reached for gemini-2.5-pro.", then

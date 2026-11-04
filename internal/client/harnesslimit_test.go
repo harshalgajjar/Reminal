@@ -68,7 +68,16 @@ var limitScreens = []struct {
 	// Held until the time it says, then going on by itself.
 	{"claude", "  ⎿  Usage limit reached · continuing automatically at 3pm · esc to cancel\n❯ ", limitLA(2026, 10, 19, 15, 0)},
 	{"claude", "  ⎿  Usage limit reached again · continuing automatically in 2h 5m · esc to cancel\n❯ ", limitLA(2026, 10, 19, 12, 5)},
+	// Claude Code 2.1.317–318: a goal paused at
+	// its limit, and a group's pooled budget on the Claude apps gateway,
+	// with when it resets.
+	{"claude", "  ⎿  Goal paused · usage limit reached · send a message after it resets to continue\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Goal paused · usage limit reached · continues automatically when it resets\n❯ ", time.Time{}},
+	{"claude", "  ⎿  This request exceeds your group's budget. Ask your organization's admins to raise it, or try again after it resets on November 3 at 14:00 UTC.\n❯ ", time.Date(2026, 11, 3, 14, 0, 0, 0, time.UTC)},
 	{"codex", "■ Your workspace is out of credits. Add credits to continue.\n› ", time.Time{}},
+	// Codex 0.166.0: a workspace member at its
+	// limit, asked to request more from its owner.
+	{"codex", "■ Request a limit increase from your owner to continue using codex. Request increase?\n› ", time.Time{}},
 	{"codex", "■ You're out of credits. Your workspace is out of credits. Add credits to continue using Codex.\n› ", time.Time{}},
 	{"codex", "■ Your workspace is out of credits. Ask your workspace owner to refill in order to continue.\n› ", time.Time{}},
 	{"codex", "■ You've reached your workspace credit limit\n› ", time.Time{}},
@@ -957,6 +966,11 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"codex", "■ ", "Your workspace is out of credits. Ask your workspace owner to refill in order to continue.", false},
 		{"codex", "■ ", "You've reached your workspace credit limit", false},
 		{"codex", "■ ", "Your included usage is exhausted. Choose an option below to continue.", false},
+		{"codex", "■ ", "Request a limit increase from your owner to continue using codex. Request increase?", false},
+		{"codex", "■ ", "Request a limit increase from your owner to continue using codex.", false},
+		{"claude", "⎿  ", "Goal paused · usage limit reached · send a message after it resets to continue", false},
+		{"claude", "⎿  ", "Goal paused · usage limit reached · continues automatically when it resets", false},
+		{"claude", "⎿  ", "This request exceeds your group's budget. Ask your organization's admins to raise it, or try again after it resets on November 3 at 14:00 UTC.", false},
 		{"codex", "■ ", "You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.", false},
 		{"gemini", "✕ ", "Rate limit exceeded. Try again later.", false},
 		{"gemini", "✕ ", "Rate limit exceeded", true},
