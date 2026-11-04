@@ -41,10 +41,38 @@ type HookState struct {
 
 // Background is how many shells and subagents a harness still has running in
 // the background, as its own hooks said: a turn that ended with them going is
-// done, and its session is still at work.
+// done, and its session is still at work. Other is the rest of it, by kind as
+// the harness names it ("monitor", "workflow", "MCP task", …): work running
+// all the same.
 type Background struct {
-	Shells int `json:"shells,omitempty"`
-	Agents int `json:"agents,omitempty"`
+	Shells int            `json:"shells,omitempty"`
+	Agents int            `json:"agents,omitempty"`
+	Other  map[string]int `json:"other,omitempty"`
+}
+
+// BackgroundWork is work a harness says is running without saying what or
+// how much (Antigravity's Stop, fullyIdle false): one of it, until anything
+// gives a count.
+const BackgroundWork = "background work"
+
+// AddOther counts n more of kind.
+func (b *Background) AddOther(kind string, n int) {
+	if n <= 0 {
+		return
+	}
+	if b.Other == nil {
+		b.Other = map[string]int{}
+	}
+	b.Other[kind] += n
+}
+
+// OtherCount is how much of Other there is, in all.
+func (b *Background) OtherCount() int {
+	n := 0
+	for _, k := range b.Other {
+		n += k
+	}
+	return n
 }
 
 // HookStateTTL bounds how long a hook state is trusted without a fresh event. A
