@@ -15,9 +15,9 @@
 //
 // Its options are <option> children, as a select's (an <optgroup> is a
 // heading over its options), kept as the element's model: what finds a
-// select's options (el.options, el.selectedIndex, el.selectedOptions, option[selected],
-// querySelectorAll('option')) finds these. A sub may carry a few lines; an
-// option may be disabled.
+// select's options (el.options, el.selectedIndex, el.selectedOptions,
+// option[selected], querySelectorAll('option')) finds these. A sub may
+// carry a few lines; an option may be disabled.
 //
 //   el.options = [{ value: '', label: 'Not on leave', sub: '…' }, { head: 'Beside you' }, …]
 //                                  // written from code: the <option>s made here
@@ -28,14 +28,16 @@
 //   Pick.make(options, value, attrs)   // a <ui-pick> built from code
 //   Pick.html(options, value, attrs)   // the same as HTML, escaped, for a page that writes its forms as strings
 //
-// Opened, the list is a popover under (or over) the control; on a narrow
-// screen, a sheet from the bottom with the control's label as its title.
-// Keys as a listbox's: Space, Enter or the arrows open it; the arrows,
-// Home and End move; typed letters find a label; Enter or Space pick;
-// Escape closes, the keyboard back on the control; Tab leaves it. A tap
-// outside closes it. Its colours come from the page's --pick-* variables,
-// with the viewer's dark ones as the defaults; its text a size under the
-// page's (13px, the meaning 12px: --pick-size sets it).
+// The element itself is the control, as a select is: it takes the keyboard
+// (tabindex 0), it is the combobox a screen reader names (role, aria-label,
+// aria-expanded, aria-activedescendant), and el.focus() lands on it. Opened,
+// the list is a popover under (or over) it; on a narrow screen, a sheet from
+// the bottom with the control's label as its title. Keys as a select-only
+// combobox's: Space, Enter or the arrows open it; the arrows, Home and End
+// move; typed letters find a label; Enter or Space pick; Escape closes; Tab
+// leaves it. A tap outside closes it. Its colours come from the page's
+// --pick-* variables, with the viewer's dark ones as the defaults; its text
+// a size under the page's (13px, the meaning 12px: --pick-size sets it).
 //
 // data-compact: the control shows the chosen label alone (a pill, a chip);
 // the list still says what each means.
@@ -44,22 +46,21 @@
   if (customElements.get('ui-pick')) return;
 
   const CSS = `
-ui-pick { display: block; width: 100%; min-width: 0; }
-ui-pick > option, ui-pick > optgroup { display: none; }
 ui-pick, .pk-list { --pk-min: var(--pick-min, 40px); --pk-bg: var(--pick-bg, #0d1117); --pk-fg: var(--pick-fg, #e6edf3); --pk-sub: var(--pick-sub, #8b949e); --pk-line: var(--pick-line, #30363d); --pk-focus: var(--pick-focus, #388bfd); --pk-ring: var(--pick-ring, rgba(56,139,253,.18)); --pk-list: var(--pick-list, #161b22); --pk-hover: var(--pick-hover, #21262d); --pk-radius: var(--pick-radius, 8px); --pk-size: var(--pick-size, 13px); }
+ui-pick { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: var(--pk-min); box-sizing: border-box; padding: 8px 11px; border-radius: var(--pk-radius); border: 1px solid var(--pk-line); background: var(--pk-bg); color: var(--pk-fg); font: inherit; font-size: var(--pk-size); text-align: left; cursor: pointer; outline: none; -webkit-user-select: none; user-select: none; }
+ui-pick > option, ui-pick > optgroup { display: none; }
 ui-pick[hidden] { display: none; }
-ui-pick .pk-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: var(--pk-min); box-sizing: border-box; padding: 8px 11px; border-radius: var(--pk-radius); border: 1px solid var(--pk-line); background: var(--pk-bg); color: var(--pk-fg); font: inherit; font-size: var(--pk-size); text-align: left; cursor: pointer; }
-ui-pick .pk-btn:focus-visible { outline: none; border-color: var(--pk-focus); box-shadow: 0 0 0 3px var(--pk-ring); }
-ui-pick .pk-btn[aria-expanded="true"] { border-color: var(--pk-focus); }
-ui-pick .pk-btn:disabled { opacity: .55; cursor: default; }
+ui-pick:focus-visible { border-color: var(--pk-focus); box-shadow: 0 0 0 3px var(--pk-ring); }
+ui-pick[aria-expanded="true"] { border-color: var(--pk-focus); }
+ui-pick[disabled] { opacity: .55; cursor: default; }
 ui-pick .pk-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 ui-pick .pk-label { font-weight: 500; line-height: 1.3; overflow-wrap: anywhere; }
 ui-pick .pk-sub { font-size: calc(var(--pk-size) - 1px); line-height: 1.35; color: var(--pk-sub); white-space: pre-line; }
 ui-pick .pk-sub:empty { display: none; }
-ui-pick[data-compact] .pk-btn { min-height: 0; padding: 4px 8px; gap: 6px; }
+ui-pick[data-compact] { min-height: 0; padding: 4px 8px; gap: 6px; }
 ui-pick[data-compact] .pk-sub { display: none; }
 ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); }
-.pk-list { position: fixed; z-index: 1000; box-sizing: border-box; max-height: min(60vh, 420px); overflow: auto; padding: 5px; margin: 0; background: var(--pk-list); color: var(--pk-fg); border: 1px solid var(--pk-line); border-radius: 10px; box-shadow: 0 14px 34px rgba(0,0,0,.45); font-size: var(--pk-size); outline: none; overscroll-behavior: contain; }
+.pk-list { position: fixed; z-index: 1000; box-sizing: border-box; max-height: min(60vh, 420px); overflow: auto; padding: 5px; margin: 0; background: var(--pk-list); color: var(--pk-fg); border: 1px solid var(--pk-line); border-radius: 10px; box-shadow: 0 14px 34px rgba(0,0,0,.45); font-size: var(--pk-size); overscroll-behavior: contain; }
 .pk-list .pk-head { padding: 9px 11px 4px; font-size: calc(var(--pk-size) - 2px); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--pk-sub); }
 .pk-list .pk-head:not(:first-child) { margin-top: 4px; border-top: 1px solid var(--pk-line); padding-top: 9px; }
 .pk-list .pk-opt { display: flex; align-items: flex-start; gap: 10px; padding: 9px 11px; border-radius: 7px; cursor: pointer; }
@@ -83,7 +84,7 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
   const TICK = '<svg class="pk-tick" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
   const SHEET_WIDTH = 600; // below this, the list is a sheet from the bottom
 
-  let style = null;
+  let style = null, ids = 0;
   const ensureCSS = () => { if (!style) { style = document.createElement('style'); style.id = 'pk-css'; style.textContent = CSS; document.head.appendChild(style); } };
   const str = (v) => (v == null ? '' : String(v));
   const span = (cls) => { const t = document.createElement('span'); t.className = cls; return t; };
@@ -114,33 +115,29 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
   window.addEventListener('scroll', () => { if (open) open.place(); }, true);
 
   class Pick extends HTMLElement {
-    static get observedAttributes() { return ['disabled', 'aria-label']; }
+    static get observedAttributes() { return ['disabled']; }
     connectedCallback() {
       ensureCSS();
-      if (!this.btn) {
-        this.btn = document.createElement('button');
-        this.btn.type = 'button';
-        this.btn.className = 'pk-btn';
-        this.btn.setAttribute('aria-haspopup', 'listbox');
-        this.btn.setAttribute('aria-expanded', 'false');
-        this.btn.appendChild(text(null));
-        this.btn.insertAdjacentHTML('beforeend', CHEV);
-        this.btn.addEventListener('click', () => (open && open.pick === this ? this.close() : this.open()));
-        this.btn.addEventListener('keydown', (e) => {
-          if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === ' ' || e.key === 'Enter') { e.preventDefault(); this.open(); }
-        });
+      if (!this.face) {
+        // The control: what it shows (the chosen option, a chevron), after
+        // its options; the combobox a screen reader names.
+        this.face = text(null);
+        const c = document.createElement('span');
+        c.innerHTML = CHEV;
+        this.chev = c.firstElementChild;
+        this.setAttribute('role', 'combobox');
+        this.setAttribute('aria-haspopup', 'listbox');
+        this.setAttribute('aria-expanded', 'false');
+        this.addEventListener('click', () => (open && open.pick === this ? this.close() : this.open()));
+        this.addEventListener('keydown', (e) => this._key(e));
       }
-      // After its options (written as children), where it is drawn.
-      this.appendChild(this.btn);
+      this.appendChild(this.face);
+      this.appendChild(this.chev);
       // No option chosen yet: the first is, as a select's.
       if (!this.selectedOption && this._choices().length) this._choices()[0].el.selected = true;
       this._draw();
     }
-    attributeChangedCallback(name) {
-      if (!this.btn) return;
-      if (name === 'disabled') this.btn.disabled = this.hasAttribute('disabled');
-      if (name === 'aria-label') this.btn.setAttribute('aria-label', this.getAttribute('aria-label') || '');
-    }
+    attributeChangedCallback() { this._draw(); }
     // Its <option>s, in order, as a select's `options` (headings are the
     // <optgroup>s they sit in).
     get options() { return [...this.querySelectorAll('option')]; }
@@ -148,11 +145,12 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
       const was = this.value;
       for (const el of [...this.children]) if (el.tagName === 'OPTION' || el.tagName === 'OPTGROUP') el.remove();
       let into = this, first = true;
+      const before = this.face || null;
       for (const o of Array.isArray(list) ? list : []) {
         if (!o) continue;
-        if (o.head) { into = document.createElement('optgroup'); into.label = str(o.head); this.insertBefore(into, this.btn || null); continue; }
+        if (o.head) { into = document.createElement('optgroup'); into.label = str(o.head); this.insertBefore(into, before); continue; }
         const el = option(o);
-        if (into === this) this.insertBefore(el, this.btn || null); else into.appendChild(el);
+        if (into === this) this.insertBefore(el, before); else into.appendChild(el);
         if (first) { el.selected = true; first = false; }
       }
       // Kept where the new options have it.
@@ -173,21 +171,49 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
     }
     get disabled() { return this.hasAttribute('disabled'); }
     set disabled(v) { if (v) this.setAttribute('disabled', ''); else this.removeAttribute('disabled'); }
-    // The chosen option: what the control shows.
+    // The chosen option: what the control shows; whether it takes the keyboard.
     _draw() {
-      if (!this.btn) return;
-      this.btn.replaceChild(text(this.selectedOption), this.btn.querySelector('.pk-text'));
-      this.btn.disabled = this.hasAttribute('disabled');
-      if (this.hasAttribute('aria-label')) this.btn.setAttribute('aria-label', this.getAttribute('aria-label'));
+      if (!this.face) return;
+      const f = text(this.selectedOption);
+      this.replaceChild(f, this.face);
+      this.face = f;
+      const off = this.hasAttribute('disabled');
+      this.tabIndex = off ? -1 : 0;
+      if (off) this.setAttribute('aria-disabled', 'true'); else this.removeAttribute('aria-disabled');
       if (open && open.pick === this) open.mark();
     }
-    // Chosen by the person: the value, the control, a change event (as a
-    // select fires one), and the keyboard back on the control.
+    // Chosen by the person: the list closed, the keyboard on the control
+    // (before the change is said: what hears it may move the keyboard on),
+    // the value, a change event (as a select fires one).
     _choose(v) {
       const was = this.value;
       this.close();
+      this.focus();
       if (v !== was) { this.value = v; this.dispatchEvent(new Event('change', { bubbles: true })); }
-      this.btn.focus();
+    }
+    // The keys, on the control: closed, Space, Enter or the arrows open it;
+    // open, the arrows, Home and End move, typed letters find a label,
+    // Enter or Space pick, Escape closes, Tab leaves it.
+    _key(e) {
+      const st = open && open.pick === this ? open : null;
+      if (!st) {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === ' ' || e.key === 'Enter') { e.preventDefault(); this.open(); }
+        return;
+      }
+      if (e.key === 'ArrowDown') { e.preventDefault(); st.step(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); st.step(-1); }
+      else if (e.key === 'Home') { e.preventDefault(); st.activate(0); }
+      else if (e.key === 'End') { e.preventDefault(); st.activate(st.opts.length - 1); }
+      else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const o = st.choices[st.active]; if (o && !o.disabled) this._choose(o.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.close(); }
+      else if (e.key === 'Tab') { this.close(); }
+      else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        const now = Date.now();
+        st.typed = (now - st.typedAt < 800 ? st.typed : '') + e.key.toLowerCase(); st.typedAt = now;
+        const from = st.typed.length === 1 ? st.active + 1 : st.active;
+        for (let n = 0; n < st.opts.length; n++) { const i = (from + n) % st.opts.length; if (st.choices[i].label.toLowerCase().startsWith(st.typed)) { st.activate(i); break; } }
+      }
     }
     open() {
       const choices = this._choices();
@@ -195,11 +221,13 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
       closeOpen();
       const list = document.createElement('div');
       list.className = 'pk-list';
+      list.id = 'pk-list-' + (++ids);
       list.setAttribute('role', 'listbox');
-      list.tabIndex = -1;
       const label = this.getAttribute('aria-label') || '';
       if (label) list.setAttribute('aria-label', label);
       list.appendChild(Object.assign(document.createElement('div'), { className: 'pk-title', textContent: label }));
+      // A press in the list leaves the keyboard on the control.
+      list.addEventListener('pointerdown', (e) => e.preventDefault());
       let group = null;
       const opts = choices.map((o, i) => {
         // Its heading, where it starts a group.
@@ -208,7 +236,7 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
         group = g;
         const b = document.createElement('div');
         b.className = 'pk-opt';
-        b.id = 'pk-opt-' + Math.random().toString(36).slice(2, 8) + '-' + i;
+        b.id = list.id + '-' + i;
         b.setAttribute('role', 'option');
         b.dataset.v = o.value;
         if (o.disabled) b.setAttribute('aria-disabled', 'true');
@@ -224,13 +252,13 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
       if (sheet) { back = document.createElement('div'); back.className = 'pk-back'; list.classList.add('pk-sheet'); document.body.appendChild(back); }
       document.body.appendChild(list);
       const state = {
-        pick: this, list, back, active: -1,
+        pick: this, list, back, opts, choices, active: -1, typed: '', typedAt: 0,
         mark: () => { const v = this.value; opts.forEach((b) => b.setAttribute('aria-selected', b.dataset.v === v ? 'true' : 'false')); },
         activate: (i, scroll) => {
           if (i < 0 || i >= opts.length) return;
           state.active = i;
           opts.forEach((b, k) => b.classList.toggle('pk-active', k === i));
-          list.setAttribute('aria-activedescendant', opts[i].id);
+          this.setAttribute('aria-activedescendant', opts[i].id);
           if (scroll !== false) opts[i].scrollIntoView({ block: 'nearest' });
         },
         step: (d) => {
@@ -240,7 +268,7 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
         },
         place: () => {
           if (sheet) return;
-          const r = this.btn.getBoundingClientRect(), vh = window.innerHeight, vw = window.innerWidth;
+          const r = this.getBoundingClientRect(), vh = window.innerHeight, vw = window.innerWidth;
           const width = Math.min(Math.max(r.width, 260), vw - 16);
           list.style.width = width + 'px';
           list.style.left = Math.max(8, Math.min(r.left, vw - width - 8)) + 'px';
@@ -254,37 +282,21 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
           open = null;
           list.remove();
           if (back) back.remove();
-          this.btn.setAttribute('aria-expanded', 'false');
+          this.setAttribute('aria-expanded', 'false');
+          this.removeAttribute('aria-controls');
+          this.removeAttribute('aria-activedescendant');
         },
       };
       open = state;
-      this.btn.setAttribute('aria-expanded', 'true');
+      this.setAttribute('aria-expanded', 'true');
+      this.setAttribute('aria-controls', list.id);
       state.mark();
       state.place();
       state.activate(Math.max(0, choices.findIndex((o) => o.el.selected)));
-      // Typed letters find the next label starting so.
-      let typed = '', typedAt = 0;
-      list.addEventListener('keydown', (e) => {
-        if (e.key === 'ArrowDown') { e.preventDefault(); state.step(1); }
-        else if (e.key === 'ArrowUp') { e.preventDefault(); state.step(-1); }
-        else if (e.key === 'Home') { e.preventDefault(); state.activate(0); }
-        else if (e.key === 'End') { e.preventDefault(); state.activate(opts.length - 1); }
-        else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const o = choices[state.active]; if (o && !o.disabled) this._choose(o.value); }
-        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.close(); this.btn.focus(); }
-        else if (e.key === 'Tab') { this.close(); }
-        else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-          const now = Date.now();
-          typed = (now - typedAt < 800 ? typed : '') + e.key.toLowerCase(); typedAt = now;
-          const from = typed.length === 1 ? state.active + 1 : state.active;
-          for (let n = 0; n < opts.length; n++) { const i = (from + n) % opts.length; if (choices[i].label.toLowerCase().startsWith(typed)) { state.activate(i); break; } }
-        }
-      });
       if (back) back.addEventListener('click', () => this.close());
-      list.focus({ preventScroll: true });
+      this.focus({ preventScroll: true });
     }
     close() { if (open && open.pick === this) open.close(); }
-    // The keyboard on the control (a page's el.focus(), as a select's).
-    focus(o) { if (this.btn) this.btn.focus(o); }
   }
   customElements.define('ui-pick', Pick);
 
