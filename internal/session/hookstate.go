@@ -67,9 +67,12 @@ func (b *Background) AddOther(kind string, n int) {
 }
 
 // OtherCount is how much of Other there is, in all.
-func (b *Background) OtherCount() int {
+func (b *Background) OtherCount() int { return CountOther(b.Other) }
+
+// CountOther is how much background work a by-kind count holds, in all.
+func CountOther(other map[string]int) int {
 	n := 0
-	for _, k := range b.Other {
+	for _, k := range other {
 		n += k
 	}
 	return n

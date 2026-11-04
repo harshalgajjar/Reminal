@@ -121,22 +121,13 @@ func attnBackground(screenShells int, screenOther map[string]int, bg *session.Ba
 			}
 		}
 	}
-	if other[session.BackgroundWork] > 0 && shells+agents+attnOtherCount(other)-other[session.BackgroundWork] > 0 {
+	if other[session.BackgroundWork] > 0 && shells+agents+session.CountOther(other)-other[session.BackgroundWork] > 0 {
 		delete(other, session.BackgroundWork)
 	}
 	if len(other) == 0 {
 		other = nil
 	}
 	return shells, agents, other
-}
-
-// attnOtherCount is how much other background work there is, in all.
-func attnOtherCount(other map[string]int) int {
-	n := 0
-	for _, k := range other {
-		n += k
-	}
-	return n
 }
 
 // noteOther records the background work besides shells and subagents the
