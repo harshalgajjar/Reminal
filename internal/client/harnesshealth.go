@@ -46,7 +46,7 @@ const harnessLoggedOut = "logged-out"
 // waiting for an approval.
 var harnessLoginRefused = regexp.MustCompile(`^(please)?run/login[·:.,\-]*apierror:40[13]([^0-9]|$)`)
 
-var harnessLoginNotice = regexp.MustCompile(`(loginexpired|notloggedin|invalidapikey|oauthtoken(has)?(expired|revoked))[·:.,\-]*(please)?run/login`)
+var harnessLoginNotice = regexp.MustCompile(`(loginexpired|loginreacheditstimelimit|notloggedin|invalidapikey|oauthtoken(has)?(expired|revoked))[·:.,\-]*(please)?run/login`)
 
 // loginRow is one way a CLI says it cannot run for want of a login, as its
 // row reads with all whitespace removed, in lower case.
@@ -140,10 +140,17 @@ func loginAll(rs ...[]loginRow) []loginRow {
 var harnessLoginScreens = map[string][]loginRow{
 	// Antigravity CLI: its sign-in screen's heading ("Welcome to the
 	// Antigravity CLI. You are currently not signed in."), and its status.
+	// 1.5: a sign-in that lapsed mid-session, and its sign-in steps: the
+	// link to open, then the code to paste (a message typed there is taken
+	// as the code).
 	"agy": loginAll(loginRows(
 		`(?:welcometotheantigravitycli\.|welcomeback!|noauthenticationmethodsavailable\.+)youarecurrentlynotsignedin`,
+		`authenticationexpired\.pleaselogbackin`,
+		`openthisurlinyourlocalbrowsertosignin:?`,
+		`openthislinkinabrowsertologinwithgoogle:?`,
 	), loginBottom(
 		`signinrequired`,
+		`thenpastetheauthorizationcode,orthefullurlofthepageyoulandon,andpressenter:?`,
 	)),
 	// Gemini CLI: no way to sign in chosen yet; its Google sign-in waiting
 	// for the code; its API key dialog; no key at all; and a key it cannot
@@ -182,6 +189,11 @@ var harnessLoginScreens = map[string][]loginRow{
 		`finishsigninginviayourbrowser`,
 		`signinwithchatgpttousecodexaspartofyourpaidplan`,
 		`youraccesstokencouldnotberefreshedbecause(?:youhavesinceloggedoutorsignedintoanotheraccount|yourrefreshtoken(?:hasexpired|wasalreadyused|wasrevoked))\.please(?:logoutand)?signinagain`,
+		// 0.166: the same said without why, its sign-in that could not be
+		// recovered, and a ChatGPT login with no account in it.
+		`youraccesstokencouldnotberefreshed\.pleaselogoutandsigninagain`,
+		`yourauthenticationsessioncouldnotberefreshedautomatically\.pleaselogoutandsigninagain`,
+		"chatgptaccountidnotavailable,pleasere-run`?codexlogin`?",
 	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`), loginMarked("■",
 		`yoursessionhasexpired\.pleasereauthenticate`,
 	)),
@@ -276,12 +288,17 @@ var harnessLoginScreens = map[string][]loginRow{
 		`(?:\d\.)?claudeaccountwithsubscription·(?:,|or|pro|max|team|enterprise|free|plus|business|education)+`,
 		`(?:\d\.)?anthropicconsoleaccount·apiusagebilling`,
 		`pastecodehereifprompted>?`,
-		`openingbrowsertosignin`,
+		`openingbrowsertosignin(?:withyourclaudeaccount)?`,
 		`browserdidn.?topen\?usetheurl(?:belowtosignin)?(?:\(c(?:to)?(?:copy)?\)?)?`,
 	), loginMarked("●⎿",
 		`loginexpired·run/logintosigninagain,orre-authenticateyouranthropicprofile`,
 		`notsignedintoclaude\.run/loginfirst`,
 		`failedtoauthenticate:(?:oauthtokenrevoked\.pleaseloginagainorcontactyouradministrator|oauthsessionexpiredandcouldnotberefreshed)`,
+		// 2.1.317: a login at the end of its time, and the Cloud gateway's
+		// own sign-in missing or its token lapsed.
+		"failedtoauthenticate:thisloginreacheditstimelimit(?:·signinagaintocontinue|andcannotberenewed\\.run`?claudeauthlogin`?tosigninagain,oruse`?claudesetup-token`?andsetclaude_code_oauth_tokenforunattendedjobs)?",
+		`notsignedintothecloudgateway—run/login`,
+		`cloudgatewaytokenexpired—refreshanthropic_auth_tokenandrestart`,
 	)),
 }
 

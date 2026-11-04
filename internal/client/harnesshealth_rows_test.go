@@ -21,12 +21,25 @@ type loginRowCase struct {
 var loginRowCases = []loginRowCase{
 	{prog: "agy", row: " Welcome to the Antigravity CLI. You are currently not signed in."},
 	{prog: "agy", row: " Sign in required", bottom: true},
+	// Antigravity 1.5.0: a sign-in that lapsed mid-session, and its sign-in
+	// steps.
+	{prog: "agy", row: " Authentication expired. Please log back in."},
+	{prog: "agy", row: " Open this URL in your local browser to sign in:"},
+	{prog: "agy", row: " Open this link in a browser to log in with Google:"},
+	{prog: "agy", row: " Then paste the authorization code, or the full URL of the page you land on, and press Enter:", bottom: true},
 
 	{prog: "codex", row: "  Sign in with ChatGPT to use Codex as part of your paid plan"},
 	{prog: "codex", row: "■ Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again."},
 	{prog: "codex", row: "■ Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again."},
 	{prog: "codex", row: "■ Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again."},
 	{prog: "codex", row: "■ Your session has expired. Please reauthenticate."},
+	// Codex 0.166.0: a token it could not
+	// refresh, said without why, its sign-in that could not be recovered,
+	// and a ChatGPT login with no account in it.
+	{prog: "codex", row: "■ Your access token could not be refreshed. Please log out and sign in again."},
+	{prog: "codex", row: "■ Your authentication session could not be refreshed automatically. Please log out and sign in again."},
+	{prog: "codex", row: "■ ChatGPT account ID not available, please re-run `codex login`"},
+	{prog: "codex", row: "■ ChatGPT account ID not available, please re-run codex login"},
 
 	{prog: "amp", row: "Would you like to log in to Amp? [(y)es, (n)o]: "},
 	{prog: "amp", row: "No API key found. Starting login flow..."},
@@ -47,6 +60,16 @@ var loginRowCases = []loginRowCase{
 	{prog: "claude", row: "  ⎿  Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator."},
 	{prog: "claude", row: "  ⎿  Failed to authenticate: OAuth session expired and could not be refreshed"},
 	{prog: "claude", row: "● Invalid API key · Fix external API key", refused: true},
+	// Claude Code 2.1.317–318: a login that
+	// reached the end of its time, the Cloud gateway's own, and the sign-in
+	// step's new words.
+	{prog: "claude", row: "● Login reached its time limit · Please run /login", notice: true},
+	{prog: "claude", row: "  ⎿  Failed to authenticate: this login reached its time limit"},
+	{prog: "claude", row: "  ⎿  Failed to authenticate: this login reached its time limit · Sign in again to continue"},
+	{prog: "claude", row: "  ⎿  Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs"},
+	{prog: "claude", row: "  ⎿  Not signed in to the Cloud gateway — run /login."},
+	{prog: "claude", row: "  ⎿  Cloud gateway token expired — refresh ANTHROPIC_AUTH_TOKEN and restart."},
+	{prog: "claude", row: " ✢ Opening browser to sign in with your Claude account…"},
 
 	{prog: "gemini", row: "✕ Gemini API key is missing or not configured."},
 
