@@ -34,7 +34,8 @@
 // Home and End move; typed letters find a label; Enter or Space pick;
 // Escape closes, the keyboard back on the control; Tab leaves it. A tap
 // outside closes it. Its colours come from the page's --pick-* variables,
-// with the viewer's dark ones as the defaults.
+// with the viewer's dark ones as the defaults; its text a size under the
+// page's (13px, the meaning 12px: --pick-size sets it).
 //
 // data-compact: the control shows the chosen label alone (a pill, a chip);
 // the list still says what each means.
@@ -45,7 +46,7 @@
   const CSS = `
 ui-pick { display: block; width: 100%; min-width: 0; }
 ui-pick > option, ui-pick > optgroup { display: none; }
-ui-pick, .pk-list { --pk-min: var(--pick-min, 40px); --pk-bg: var(--pick-bg, #0d1117); --pk-fg: var(--pick-fg, #e6edf3); --pk-sub: var(--pick-sub, #8b949e); --pk-line: var(--pick-line, #30363d); --pk-focus: var(--pick-focus, #388bfd); --pk-ring: var(--pick-ring, rgba(56,139,253,.18)); --pk-list: var(--pick-list, #161b22); --pk-hover: var(--pick-hover, #21262d); --pk-radius: var(--pick-radius, 8px); --pk-size: var(--pick-size, 14px); }
+ui-pick, .pk-list { --pk-min: var(--pick-min, 40px); --pk-bg: var(--pick-bg, #0d1117); --pk-fg: var(--pick-fg, #e6edf3); --pk-sub: var(--pick-sub, #8b949e); --pk-line: var(--pick-line, #30363d); --pk-focus: var(--pick-focus, #388bfd); --pk-ring: var(--pick-ring, rgba(56,139,253,.18)); --pk-list: var(--pick-list, #161b22); --pk-hover: var(--pick-hover, #21262d); --pk-radius: var(--pick-radius, 8px); --pk-size: var(--pick-size, 13px); }
 ui-pick[hidden] { display: none; }
 ui-pick .pk-btn { display: flex; align-items: center; gap: 10px; width: 100%; min-height: var(--pk-min); box-sizing: border-box; padding: 8px 11px; border-radius: var(--pk-radius); border: 1px solid var(--pk-line); background: var(--pk-bg); color: var(--pk-fg); font: inherit; font-size: var(--pk-size); text-align: left; cursor: pointer; }
 ui-pick .pk-btn:focus-visible { outline: none; border-color: var(--pk-focus); box-shadow: 0 0 0 3px var(--pk-ring); }
@@ -53,7 +54,7 @@ ui-pick .pk-btn[aria-expanded="true"] { border-color: var(--pk-focus); }
 ui-pick .pk-btn:disabled { opacity: .55; cursor: default; }
 ui-pick .pk-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 ui-pick .pk-label { font-weight: 500; line-height: 1.3; overflow-wrap: anywhere; }
-ui-pick .pk-sub { font-size: calc(var(--pk-size) - 1.5px); line-height: 1.35; color: var(--pk-sub); white-space: pre-line; }
+ui-pick .pk-sub { font-size: calc(var(--pk-size) - 1px); line-height: 1.35; color: var(--pk-sub); white-space: pre-line; }
 ui-pick .pk-sub:empty { display: none; }
 ui-pick[data-compact] .pk-btn { min-height: 0; padding: 4px 8px; gap: 6px; }
 ui-pick[data-compact] .pk-sub { display: none; }
@@ -64,7 +65,7 @@ ui-pick .pk-chev { flex: none; width: 16px; height: 16px; color: var(--pk-sub); 
 .pk-list .pk-opt { display: flex; align-items: flex-start; gap: 10px; padding: 9px 11px; border-radius: 7px; cursor: pointer; }
 .pk-list .pk-opt .pk-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .pk-list .pk-opt .pk-label { font-weight: 500; line-height: 1.3; }
-.pk-list .pk-opt .pk-sub { font-size: calc(var(--pk-size) - 1.5px); line-height: 1.35; color: var(--pk-sub); white-space: pre-line; }
+.pk-list .pk-opt .pk-sub { font-size: calc(var(--pk-size) - 1px); line-height: 1.35; color: var(--pk-sub); white-space: pre-line; }
 .pk-list .pk-opt .pk-sub:empty { display: none; }
 .pk-list .pk-opt[aria-selected="true"] .pk-label { color: var(--pk-focus); }
 .pk-list .pk-opt.pk-active, .pk-list .pk-opt:hover { background: var(--pk-hover); }
