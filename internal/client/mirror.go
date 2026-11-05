@@ -320,6 +320,19 @@ type captureMux struct {
 	// future and waits again instead of retiring a helper that has been busy
 	// since.
 	idleDeadline time.Time
+	// stallAfter is how long every stream may go without a frame before the
+	// helper is replaced (watchFrames); zero means captureStallAfter. Tests
+	// shorten it.
+	stallAfter time.Duration
+	// refreshes says whether the helper sends a static window's picture
+	// on its own; nil means helperRefreshes. Tests set it.
+	refreshes func() bool
+	// restartAt is the soonest the helper may be replaced again, and
+	// restartWait how long the last replacement made the next one wait:
+	// doubled by each replacement, up to captureRestartMax, and cleared by
+	// the first frame after one.
+	restartAt   time.Time
+	restartWait time.Duration
 }
 
 // idleHelperGrace is how long the capture helper is kept alive after its last
@@ -353,6 +366,9 @@ type muxConn struct {
 	quit     chan struct{}
 	endOnce  sync.Once
 	quitOnce sync.Once
+	// heard is when the stream started or last got a frame, under the
+	// mux's lock (watchFrames).
+	heard time.Time
 }
 
 // end closes the frame queue; writeLoop drains what's left and closes the conn.
@@ -411,7 +427,7 @@ func (m *captureMux) serve(conn net.Conn, helper, id, w, q, fps, codec string) b
 	}
 	m.nextSID++ // never reused across helper restarts, so stale commands can't cross streams
 	sid := m.nextSID
-	mc := &muxConn{conn: conn, frames: make(chan []byte, 64), quit: make(chan struct{})}
+	mc := &muxConn{conn: conn, frames: make(chan []byte, 64), quit: make(chan struct{}), heard: time.Now()}
 	m.conns[sid] = mc
 	m.mu.Unlock()
 
@@ -563,6 +579,7 @@ func (m *captureMux) startLocked(helper string) bool {
 	case <-ready:
 		m.stdin = stdin
 		m.dead = dead
+		go m.watchFrames(stdin, cmd.Process, dead)
 		m.idleGen++ // a pending retirement belongs to the helper this replaces
 		if m.conns == nil {
 			m.conns = make(map[uint32]*muxConn)
@@ -615,6 +632,10 @@ func (m *captureMux) demux(stdout io.Reader, cmd *exec.Cmd, stdin io.WriteCloser
 		}
 		m.mu.Lock()
 		mc := m.conns[sid]
+		if mc != nil && !isErrFrame(buf) {
+			mc.heard = time.Now()
+			m.restartWait = 0
+		}
 		m.mu.Unlock()
 		if mc == nil {
 			continue // the hello (sid 0), or a stopped stream's late frames
@@ -964,4 +985,83 @@ func mirrorCaptureRegion(x, y, w, h int) ([]byte, error) {
 		return nil, err
 	}
 	return img, nil
+}
+
+// isErrFrame reports whether an inner frame is the out-of-band error frame
+// (errFrameBytes) rather than a picture.
+func isErrFrame(b []byte) bool {
+	return len(b) >= 4 && binary.BigEndian.Uint32(b[0:4]) == winErrFrameMagic
+}
+
+// captureStallAfter is how long every stream of the helper may go without a
+// frame before the helper is replaced. A working helper sends even a static
+// window's picture once a second (its idle refresh), so seconds of nothing
+// from every stream at once is a helper that has stopped working. One whose
+// connection to the capture service broke as it started has been seen to send
+// nothing for as long as it ran, while a fresh process captured the same
+// windows at once.
+const captureStallAfter = 5 * time.Second
+
+// captureRestartMax caps the wait between replacements: where no helper can
+// get a picture (nothing on screen to capture, permission gone), it is asked
+// again once a minute, never in a loop.
+const captureRestartMax = time.Minute
+
+// watchFrames replaces the helper when none of its streams has had a frame
+// for stallAfter: it is killed, its demux fails every stream it was serving
+// ("capture service restarted"), and each session reconnects to a fresh one,
+// exactly as after a crash. Every stream, not any: one window that gives no
+// picture (minimized, gone) while another streams is that window, not the
+// helper. Runs for the life of one helper.
+func (m *captureMux) watchFrames(stdin io.WriteCloser, proc *os.Process, dead <-chan struct{}) {
+	refreshes := m.refreshes
+	if refreshes == nil {
+		refreshes = helperRefreshes
+	}
+	if !refreshes() {
+		return // a static window sends nothing here, so silence proves nothing
+	}
+	t := time.NewTicker(min(time.Second, m.stallWait()/2))
+	defer t.Stop()
+	for {
+		select {
+		case <-dead:
+			return
+		case <-t.C:
+		}
+		if m.stalled(stdin, time.Now()) {
+			_ = proc.Kill()
+			return
+		}
+	}
+}
+
+// stalled reports whether the helper whose command channel is stdin has gone
+// stallAfter with no frame on any of its streams, and may be replaced now;
+// saying so counts as a replacement, for the wait before the next.
+func (m *captureMux) stalled(stdin io.WriteCloser, now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stdin != stdin || len(m.conns) == 0 || now.Before(m.restartAt) {
+		return false
+	}
+	after := m.stallWait()
+	for _, mc := range m.conns {
+		if now.Sub(mc.heard) < after {
+			return false
+		}
+	}
+	m.restartWait = min(max(2*m.restartWait, after), captureRestartMax)
+	m.restartAt = now.Add(m.restartWait)
+	fmt.Fprintf(os.Stderr, "reminal: capture: no frame on any of %d stream(s) for %s; starting a fresh capture helper (the next no sooner than %s from now)\n",
+		len(m.conns), after, m.restartWait)
+	return true
+}
+
+// stallWait is stallAfter, or captureStallAfter when unset.
+func (m *captureMux) stallWait() time.Duration {
+	if m.stallAfter > 0 {
+		return m.stallAfter
+	}
+	return captureStallAfter
 }

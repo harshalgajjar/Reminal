@@ -976,20 +976,81 @@ final class H264Encoder {
 
 
 
+// RateLimitedLog says a recurring problem on stderr (the daemon's log) the
+// first time, then at most once an interval, with how many times it happened
+// in between: never silent, and never a line per second for a night. Not
+// thread-safe; each owner keeps it on one queue.
+final class RateLimitedLog {
+    private let interval: UInt64
+    private var lastSaid: UInt64 = 0
+    private var unsaid = 0
+
+    init(every seconds: Int) { interval = UInt64(seconds) * 1_000_000_000 }
+
+    func say(_ line: String) {
+        let now = DispatchTime.now().uptimeNanoseconds
+        if lastSaid != 0 && now &- lastSaid < interval {
+            unsaid += 1
+            return
+        }
+        let more = unsaid > 0 ? " (and \(unsaid) more like it since)" : ""
+        FileHandle.standardError.write(Data((line + more + "\n").utf8))
+        lastSaid = now
+        unsaid = 0
+    }
+}
+
+// TestHooks are what a helper built with -D REMINAL_TEST_HOOKS can be told to
+// do, for tests of what happens around it; a release build has none.
+enum TestHooks {
+    // stalled: this process gets no picture at all, as a helper whose
+    // connection to the capture service is broken: frames are dropped and a
+    // screenshot never answers. Set by REMINAL_CAPTURE_STALL naming a file
+    // that exists when the process first asks: holding "once", the file is
+    // removed, so only this process stalls and the one after it does not;
+    // anything else, every process stalls. Static, so set on first use.
+    static let stalled: Bool = {
+        #if REMINAL_TEST_HOOKS
+        guard let path = ProcessInfo.processInfo.environment["REMINAL_CAPTURE_STALL"], !path.isEmpty,
+              let what = try? String(contentsOfFile: path, encoding: .utf8) else { return false }
+        if what.trimmingCharacters(in: .whitespacesAndNewlines) == "once" {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        FileHandle.standardError.write(Data("capture: test hook: this helper stalls\n".utf8))
+        return true
+        #else
+        return false
+        #endif
+    }()
+}
+
 // ---- stream output: encode changed frames to JPEG and emit them ----
 final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
+    private let spec: String // the target, for what is logged about it
     private let quality: Double
     private let encoder: H264Encoder? // set = h264 mode; frames bypass JPEG
     private let emit: (Data, UInt8?) -> Void // one JPEG frame (flag nil)
     private let stopped: (String) -> Void // the stream ended, with the reason
 
-    init(quality: Double, encoder: H264Encoder?,
+    init(spec: String, quality: Double, encoder: H264Encoder?,
          emit: @escaping (Data, UInt8?) -> Void, stopped: @escaping (String) -> Void) {
+        self.spec = spec
         self.quality = quality
         self.encoder = encoder
         self.emit = emit
         self.stopped = stopped
     }
+
+    // refreshTrouble says what went wrong with the idle refresh: a screenshot
+    // that failed, came back empty or never answered. Each is otherwise
+    // invisible, and together they are how a static window ends up with no
+    // picture. Sample-queue confined.
+    private let refreshTrouble = RateLimitedLog(every: 30)
+    // refreshGen numbers each screenshot, so a late answer to one already
+    // given up on is told apart from the current one. Sample-queue confined.
+    private var refreshGen: UInt64 = 0
+    // refreshAnswerWait is how long a screenshot has to answer.
+    static let refreshAnswerWait: DispatchTimeInterval = .seconds(2)
 
     // lastIngestAt stamps every frame handed to the encoder, live or refresh —
     // it is what the idle refresh consults to decide the stream has gone quiet.
@@ -1003,7 +1064,7 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     private let refreshLock = NSLock()
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen else { return }
+        guard type == .screen, !TestHooks.stalled else { return }
 
         // Emit only frames that actually changed. SCStream tags each buffer with a
         // status; .complete means new content, .idle/.blank mean "nothing changed"
@@ -1045,14 +1106,35 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
                   DispatchTime.now().uptimeNanoseconds &- self.lastIngestAt.uptimeNanoseconds > 900_000_000
             else { return }
             self.refreshInFlight = true
+            self.refreshGen &+= 1
+            let gen = self.refreshGen
+            // A screenshot that never answers must not end the refresh for
+            // good: refreshInFlight would stay set and every later tick skip,
+            // leaving a static window with no picture and nothing said. Given
+            // up on after refreshAnswerWait, it is tried again on the next tick.
+            queue.asyncAfter(deadline: .now() + FrameOutput.refreshAnswerWait) {
+                guard self.refreshInFlight, self.refreshGen == gen else { return }
+                self.refreshInFlight = false
+                self.refreshTrouble.say("capture \(self.spec): a screenshot gave no answer in 2s; trying again")
+            }
+            if TestHooks.stalled { return } // stands in for a screenshot that never answers
             SCScreenshotManager.captureSampleBuffer(contentFilter: filter, configuration: config) { sampleBuffer, error in
                 // Hop to the sample handler queue: every encoder submission must
                 // share it (VTCompressionSessionEncodeFrame is not thread-safe).
                 // ARC keeps the pixel buffer alive across the hop.
                 queue.async {
+                    // An answer to a screenshot already given up on: a newer
+                    // one may be in flight, and this one's picture is old.
+                    guard self.refreshInFlight, self.refreshGen == gen else { return }
                     self.refreshInFlight = false
-                    guard error == nil, let sampleBuffer,
-                          let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+                    if let error {
+                        self.refreshTrouble.say("capture \(self.spec): a screenshot failed: \(error.localizedDescription)")
+                        return
+                    }
+                    guard let sampleBuffer, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                        self.refreshTrouble.say("capture \(self.spec): a screenshot came back empty")
+                        return
+                    }
                     // A live frame may have landed while the screenshot was in
                     // flight — its picture is newer; sending the screenshot now
                     // would step content backwards.
@@ -1211,7 +1293,7 @@ if useH264 {
     h264Encoder = enc
 }
 
-let output = FrameOutput(quality: quality, encoder: h264Encoder,
+let output = FrameOutput(spec: targetSpec, quality: quality, encoder: h264Encoder,
                          emit: { writeFramed($0, flag: $1) },
                          stopped: { die($0) })
 let stream = SCStream(filter: target.filter, configuration: config, delegate: output)
@@ -1373,7 +1455,7 @@ final class MuxStream {
             }
             encoder = enc
         }
-        let fo = FrameOutput(quality: quality, encoder: encoder,
+        let fo = FrameOutput(spec: spec, quality: quality, encoder: encoder,
                              emit: { [weak self] d, f in self?.emit(d, f) },
                              stopped: { [weak self] m in self?.fail(m) })
         output = fo

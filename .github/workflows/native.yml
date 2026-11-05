@@ -10,10 +10,18 @@ on:
     branches: [main]
     paths:
       - "native/**"
+      - "scripts/capture-stall-test/**"
+      - "scripts/capture-recovery-e2e/**"
+      - "internal/client/mirror.go"
+      - "internal/client/vdisplay*.go"
       - ".github/workflows/native.yml"
   pull_request:
     paths:
       - "native/**"
+      - "scripts/capture-stall-test/**"
+      - "scripts/capture-recovery-e2e/**"
+      - "internal/client/mirror.go"
+      - "internal/client/vdisplay*.go"
       - ".github/workflows/native.yml"
   workflow_dispatch:
 
@@ -47,3 +55,17 @@ jobs:
             '{"t":"bogus"}' | ./reminal-capture keys)
           echo "$out"
           [ "$out" = "$(printf 'ok\nok\nerror')" ]
+      - name: A window that never changes keeps streaming, and a stalled helper says so
+        if: startsWith(matrix.swift_target, 'arm64')
+        run: |
+          swiftc -O -target ${{ matrix.swift_target }} -D REMINAL_TEST_HOOKS -o reminal-capture-hooks native/reminal-capture/main.swift
+          scripts/capture-stall-test/check.sh ./reminal-capture ./reminal-capture-hooks
+      - uses: actions/setup-go@v5
+        if: startsWith(matrix.swift_target, 'arm64')
+        with:
+          go-version-file: go.mod
+      - name: The daemon's capture recovers, end to end
+        if: startsWith(matrix.swift_target, 'arm64')
+        run: |
+          go build -o reminal-dev ./cmd/reminal
+          scripts/capture-recovery-e2e/check.sh ./reminal-dev ./reminal-capture-hooks

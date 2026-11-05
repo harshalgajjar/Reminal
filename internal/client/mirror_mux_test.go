@@ -59,7 +59,8 @@ func fakeHelperLogged(t *testing.T, mode, logPath string) string {
 // when this binary is re-exec'd by fakeHelper's wrapper. Modes: "usage" acts
 // like a pre-serve binary (usage + exit 2); "serve" speaks the serve protocol
 // — frames tagged with their sid so the test can prove no cross-stream mixups,
-// target "errwin" fails in-band, a "key" command emits a "KEY<sid>" frame.
+// target "errwin" fails in-band, target "silent" never sends a
+// frame, a "key" command emits a "KEY<sid>" frame.
 func TestFakeCaptureHelperMain(t *testing.T) {
 	mode := os.Getenv("GO_FAKE_CAPTURE_HELPER")
 	if mode == "" {
@@ -121,6 +122,9 @@ func TestFakeCaptureHelperMain(t *testing.T) {
 			mu.Lock()
 			stops[sid] = stop
 			mu.Unlock()
+			if target == "silent" {
+				continue // a stream that never gets a picture
+			}
 			go func() {
 				tick := time.NewTicker(5 * time.Millisecond)
 				defer tick.Stop()
@@ -629,4 +633,126 @@ func TestCaptureMuxGraceBelongsToTheLastStream(t *testing.T) {
 	if lived := time.Since(lastEnded); lived < m.idleAfter*3/4 {
 		t.Fatalf("helper retired %s after the last stream ended, want about %s — an older countdown cut the grace short", lived, m.idleAfter)
 	}
+}
+
+// openMuxStream starts one stream of target on m and returns what it got once
+// it ended, and a way to end it.
+func openMuxStream(m *captureMux, helper, target string) (<-chan []string, <-chan string, func()) {
+	client, server := net.Pipe()
+	bodies, errs := make(chan []string, 1), make(chan string, 1)
+	go m.serve(server, helper, target, "400", "45", "5", "")
+	go func() {
+		b, e := readFrames(client)
+		bodies <- b
+		errs <- e
+	}()
+	return bodies, errs, func() { _ = client.Close() }
+}
+
+// A helper that sends no frame on any of its streams is replaced: the
+// stream ends as after a crash, so its session reconnects, and the next
+// stream runs on a fresh process.
+func TestCaptureMuxReplacesHelperThatSendsNothing(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "helper.log")
+	helper := fakeHelperLogged(t, "serve", logPath)
+	m := &captureMux{stallAfter: 300 * time.Millisecond, refreshes: func() bool { return true }}
+
+	_, errs, closeA := openMuxStream(m, helper, "silent")
+	defer closeA()
+	select {
+	case e := <-errs:
+		if e != "capture service restarted" {
+			t.Fatalf("stream ended with %q, want the restart", e)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stream with no frames was never ended")
+	}
+
+	bodies, _, closeB := openMuxStream(m, helper, "333")
+	time.Sleep(300 * time.Millisecond)
+	closeB()
+	if got := <-bodies; len(got) == 0 {
+		t.Fatal("the stream after the replacement got no frames")
+	}
+	if starts := strings.Count(readFile(t, logPath), "start "); starts != 2 {
+		t.Fatalf("%d helpers started, want the first and its replacement", starts)
+	}
+}
+
+// One window with no picture while another streams is that window, not the
+// helper: nothing is replaced.
+func TestCaptureMuxKeepsHelperWhileAnyStreamGetsFrames(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "helper.log")
+	helper := fakeHelperLogged(t, "serve", logPath)
+	m := &captureMux{stallAfter: 200 * time.Millisecond, refreshes: func() bool { return true }}
+
+	_, silentErrs, closeSilent := openMuxStream(m, helper, "silent")
+	live, _, closeLive := openMuxStream(m, helper, "444")
+	time.Sleep(time.Second)
+	closeLive()
+	closeSilent()
+	if e := <-silentErrs; e != "" {
+		t.Fatalf("the silent stream was ended with %q while another streamed", e)
+	}
+	if got := <-live; len(got) == 0 {
+		t.Fatal("the live stream got no frames")
+	}
+	if starts := strings.Count(readFile(t, logPath), "start "); starts != 1 {
+		t.Fatalf("%d helpers started, want one", starts)
+	}
+}
+
+// Without the idle refresh (before macOS 14) a static window sends nothing,
+// so silence is no sign of a broken helper and nothing is replaced.
+func TestCaptureMuxKeepsHelperWithoutRefresh(t *testing.T) {
+	helper := fakeHelper(t, "serve")
+	m := &captureMux{stallAfter: 200 * time.Millisecond, refreshes: func() bool { return false }}
+	_, errs, closeA := openMuxStream(m, helper, "silent")
+	time.Sleep(800 * time.Millisecond)
+	closeA()
+	if e := <-errs; e != "" {
+		t.Fatalf("ended with %q, with no refresh to expect frames from", e)
+	}
+}
+
+// Replacements back off, doubling from stallAfter to captureRestartMax, and
+// a frame after one starts the count again.
+func TestCaptureMuxStallBacksOff(t *testing.T) {
+	stdin := nopWriteCloser{io.Discard}
+	m := &captureMux{stallAfter: 5 * time.Second, stdin: stdin}
+	t0 := time.Now()
+	m.conns = map[uint32]*muxConn{1: {heard: t0}}
+	if m.stalled(stdin, t0.Add(4*time.Second)) {
+		t.Fatal("replaced before stallAfter")
+	}
+	now := t0.Add(5 * time.Second)
+	var waits []time.Duration
+	for i := 0; i < 6; i++ {
+		if !m.stalled(stdin, now) {
+			t.Fatalf("replacement %d not allowed at its time", i+1)
+		}
+		waits = append(waits, m.restartWait)
+		if m.stalled(stdin, now.Add(m.restartWait-time.Millisecond)) {
+			t.Fatalf("replacement %d came before its wait was up", i+2)
+		}
+		now = now.Add(m.restartWait)
+	}
+	want := []time.Duration{5 * time.Second, 10 * time.Second, 20 * time.Second, 40 * time.Second, time.Minute, time.Minute}
+	if fmt.Sprint(waits) != fmt.Sprint(want) {
+		t.Fatalf("waits %v, want %v", waits, want)
+	}
+	m.restartWait = 0 // what a frame does
+	m.stalled(stdin, now)
+	if m.restartWait != 5*time.Second {
+		t.Fatalf("after a frame the wait is %v, want it to start again at 5s", m.restartWait)
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }

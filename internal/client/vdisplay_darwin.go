@@ -40,10 +40,6 @@ var vdisplayPoll = 12 * time.Second
 // owner is replaced before anyone notices the display is gone.
 const censusLeaseTTL = 30 * time.Second
 
-// vdisplayName must match the descriptor name in reminal-capture's vdisplay
-// subcommand — it's how the census tells our software display from real ones.
-const vdisplayName = "reminal"
-
 // vdisplayLockPath coordinates multiple agents on one machine: only one needs
 // to (and should) hold a virtual display. The file holds the helper child's
 // PID; a live PID means someone else already provides the display.
@@ -56,33 +52,64 @@ func vdisplayLockPath() string {
 }
 
 // displayCensus returns how many REAL displays are attached (ours excluded)
-// and the point size of the first real one (0,0 when none) — remembered so the
+// and the point size of the first one (0,0 when none) — remembered so the
 // virtual display can match the layout the windows were living in.
+//
+// A MacBook's own panel behind a shut lid is not real. With sleep disabled
+// macOS keeps listing it, online and main, with the lid shut and nothing
+// else attached; counted, it stood for a display and closed-lid mode never
+// made the one it promises while no monitor is attached.
 func displayCensus() (real int, w, h int, err error) {
 	out, err := run("osascript", "-l", "JavaScript", "-e",
-		`ObjC.import("AppKit");
+		`ObjC.import("AppKit"); ObjC.import("CoreGraphics");
 var s = $.NSScreen.screens, out = [];
 for (var i = 0; i < s.count; i++) {
-  var sc = s.objectAtIndex(i), name = "";
+  var sc = s.objectAtIndex(i), name = "", builtin = 0;
   try { name = ObjC.unwrap(sc.localizedName); } catch (e) {}
+  try { builtin = $.CGDisplayIsBuiltin(ObjC.unwrap(sc.deviceDescription.objectForKey("NSScreenNumber"))) ? 1 : 0; } catch (e) {}
   var f = sc.frame;
-  out.push(name + "\t" + Math.round(f.size.width) + "\t" + Math.round(f.size.height));
+  out.push(name + "\t" + Math.round(f.size.width) + "\t" + Math.round(f.size.height) + "\t" + builtin);
 }
 out.join("\n");`)
 	if err != nil {
 		return 0, 0, 0, err
 	}
+	var screens []censusScreen
 	for _, line := range strings.Split(out, "\n") {
 		f := strings.Split(strings.TrimSpace(line), "\t")
-		if len(f) != 3 || f[0] == vdisplayName {
+		if len(f) < 3 {
 			continue
 		}
-		if real == 0 {
-			w, h = atoi(f[1]), atoi(f[2])
-		}
-		real++
+		screens = append(screens, censusScreen{name: f[0], w: atoi(f[1]), h: atoi(f[2]), builtin: len(f) > 3 && f[3] == "1"})
 	}
+	lid, fake := readLid()
+	if fake {
+		// The stand-in lid is over the first screen that is not ours.
+		for i := range screens {
+			if !screens[i].ours() {
+				screens[i].builtin = true
+				break
+			}
+		}
+	}
+	real, w, h = countRealScreens(screens, lid)
 	return real, w, h, nil
+}
+
+// readLid reads the lid (AppleClamshellState, as the dimmer does).
+// REMINAL_FAKE_LID names a file standing in for a lid over the first screen
+// not ours, for a Mac with none (a VM, in tests): shut while it holds "1".
+// fake says the stand-in is in use.
+func readLid() (lid censusLid, fake bool) {
+	if p := os.Getenv("REMINAL_FAKE_LID"); p != "" {
+		b, _ := os.ReadFile(p)
+		return censusLid{has: true, shut: strings.TrimSpace(string(b)) == "1"}, true
+	}
+	out, err := run("ioreg", "-r", "-k", "AppleClamshellState", "-d", "1")
+	if err != nil {
+		return censusLid{}, false
+	}
+	return censusLid{has: strings.Contains(out, `"AppleClamshellState"`), shut: strings.Contains(out, `"AppleClamshellState" = Yes`)}, false
 }
 
 // vdisplayLoop keeps the closed-lid promise: while settings.ClosedLid is on
@@ -196,8 +223,10 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		if os.Getenv("REMINAL_FORCE_VDISPLAY") == "1" {
 			real = 0 // test hook: behave headless with a monitor attached
 		}
-		if real > 0 {
+		if w > 0 {
 			lastW, lastH = w, h
+		}
+		if real > 0 {
 			reap()
 			continue
 		}
