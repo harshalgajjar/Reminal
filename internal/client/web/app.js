@@ -12080,8 +12080,10 @@
     // NO_PICTURE_MS is how long a pane that has had no picture at all says
     // Connecting before it says why. Counted from when the pane opened, not
     // from the last word from the host: heartbeats keep coming while no
-    // picture does. The host replaces a capture that sends nothing within
-    // seconds and keeps trying, and the first frame takes the message away.
+    // picture does. The first frame takes the message away. What it says holds
+    // whatever the cause: the host replaces a capture that sends nothing only
+    // on macOS 14 and later, and no replacement helps a minimized window or a
+    // Mac where Screen Recording is off.
     const NO_PICTURE_MS = 10000;
     function updatePaneOverlay(p) {
       const stale = performance.now() - (p.lastAliveAt || 0) > STALL_MS;
@@ -12093,7 +12095,7 @@
         // No frame ever → show the spinner; after a while, say why.
         loading = true;
         p.loadMsg.innerHTML = performance.now() - p.openedAt > NO_PICTURE_MS
-          ? 'No picture from this window yet <span class="sub">reminal is restarting the capture and will keep trying. A minimized window shows no picture.</span>'
+          ? 'No picture from this window yet <span class="sub">reminal keeps trying. A minimized window shows no picture, and none comes while Screen Recording is off for reminal on that Mac.</span>'
           : 'Connecting…';
       } else if (stale) {
         html = '<span class="dot"></span><span>Waiting for host… <span class="sub">screen may be locked or asleep</span></span>';
