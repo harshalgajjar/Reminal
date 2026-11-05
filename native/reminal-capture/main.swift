@@ -34,6 +34,7 @@ import CoreVideo
 import Foundation
 import ImageIO
 import IOKit
+import IOKit.pwr_mgt
 import ScreenCaptureKit
 import VideoToolbox
 
@@ -1298,6 +1299,80 @@ final class ServeOut {
     func end(_ sid: UInt32) { send(sid, Data()) }
 }
 
+// ---- a display to capture -------------------------------------------------
+//
+// ScreenCaptureKit captures what a display shows, and a display asleep shows
+// nothing. A stream started while it sleeps (a MacBook left running with its
+// lid shut, its screen asleep on the idle timer) starts with no error and
+// never sends a frame, while one already running when it sleeps goes on. So a
+// stream starting says the Mac is in use, which wakes a sleeping display the
+// way a key press does, and while any stream runs the display is kept from
+// idling back to sleep. Closed-lid mode's dimmer keeps a screen behind a shut
+// lid dark all the same: it turns the brightness down again within seconds
+// (liddim, above).
+
+// noDisplayAwake reports whether every display is asleep, or there is none.
+func noDisplayAwake() -> Bool {
+    var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+    var n: UInt32 = 0
+    guard CGGetOnlineDisplayList(16, &ids, &n) == .success else { return false }
+    return ids.prefix(Int(n)).allSatisfy { CGDisplayIsAsleep($0) != 0 }
+}
+
+// DisplayWake wakes the display for a starting stream and holds it awake
+// while any runs. Confined to serve mode's control queue.
+final class DisplayWake {
+    // Statics, not top-level lets: serve mode starts before execution reaches
+    // the top-level lets written below its call, and a static is set on first
+    // use.
+    private static let reason = "reminal is showing this Mac's screen" as CFString
+    // wakeWait is how long a stream waits for a display to wake before it
+    // starts anyway.
+    static let wakeWait: DispatchTimeInterval = .seconds(3)
+    // firstFrameWait is how long a stream may go without its first frame
+    // before a sleeping display is said to be why.
+    static let firstFrameWait: DispatchTimeInterval = .seconds(10)
+    // asleepMessage is what the viewer shows for it.
+    static let asleepMessage = "This Mac's screen is asleep and did not wake, so there is no picture to show."
+    private var held: IOPMAssertionID = 0
+
+    // wake says the Mac is in use, then runs then on q once a display is
+    // awake, or after wakeWait if none wakes.
+    func wake(on q: DispatchQueue, _ then: @escaping () -> Void) {
+        // A display that will not wake, for the test of what the viewer is
+        // told then (scripts/display-wake-test).
+        #if REMINAL_TEST_HOOKS
+        let declare = ProcessInfo.processInfo.environment["REMINAL_NO_DISPLAY_WAKE"] == nil
+        #else
+        let declare = true
+        #endif
+        if declare {
+            var activity: IOPMAssertionID = 0
+            _ = IOPMAssertionDeclareUserActivity(DisplayWake.reason, kIOPMUserActiveLocal, &activity)
+        }
+        let until = DispatchTime.now() + DisplayWake.wakeWait
+        func look() {
+            if !noDisplayAwake() || DispatchTime.now() >= until {
+                then()
+                return
+            }
+            q.asyncAfter(deadline: .now() + .milliseconds(100), execute: look)
+        }
+        look()
+    }
+
+    // hold keeps the display from idling to sleep while on, and lets it go.
+    func hold(_ on: Bool) {
+        if on, held == 0 {
+            _ = IOPMAssertionCreateWithName("PreventUserIdleDisplaySleep" as CFString,
+                                            IOPMAssertionLevel(kIOPMAssertionLevelOn), DisplayWake.reason, &held)
+        } else if !on, held != 0 {
+            _ = IOPMAssertionRelease(held)
+            held = 0
+        }
+    }
+}
+
 // MuxStream is one live capture inside the serve process: its SCStream, its
 // optional encoder, and a dead-latch so late sample callbacks and duplicate
 // teardowns (helper error racing a daemon stop) are harmless.
@@ -1318,6 +1393,8 @@ final class MuxStream {
     // (startCapture's completion), and SCStream does not promise anything
     // about being stopped twice at once. One of them does it.
     private var capStopped = false
+    // framed: whether a frame has gone out yet (expectFrame).
+    private var framed = false
 
     init(sid: UInt32, spec: String, out: ServeOut, onEnd: @escaping (UInt32) -> Void) {
         self.sid = sid
@@ -1418,8 +1495,31 @@ final class MuxStream {
         }
     }
 
+    // expectFrame ends the stream if no frame has gone out firstFrameWait from
+    // now while every display is asleep: the display did not wake
+    // (DisplayWake), and the viewer is told so rather than left waiting. From
+    // when the stream is asked for, not from begin: with the display asleep,
+    // looking the target up can wait without an answer, and begin never come.
+    // The session starts the stream again, which wakes the display again.
+    func expectFrame() {
+        queue.asyncAfter(deadline: .now() + DisplayWake.firstFrameWait) { [weak self] in
+            guard let self, !self.hasFramed, noDisplayAwake() else { return }
+            self.fail(DisplayWake.asleepMessage)
+        }
+    }
+
+    private var hasFramed: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return framed
+    }
+
     private func emit(_ payload: Data, _ flag: UInt8?) {
-        if isDead { return }
+        lock.lock()
+        let gone = dead
+        framed = framed || !gone
+        lock.unlock()
+        if gone { return }
         out.frame(sid, payload, flag: flag)
     }
 
@@ -1448,6 +1548,10 @@ func runServeMode() -> Never {
     let out = ServeOut()
     let control = DispatchQueue(label: "reminal.capture.serve")
     var streams: [UInt32: MuxStream] = [:] // control-queue confined
+    let display = DisplayWake()
+    // streamsChanged follows every change to streams: the display is held
+    // awake while any runs.
+    func streamsChanged() { display.hold(!streams.isEmpty) }
 
     // handle runs on the control queue. Unknown commands are ignored, so future
     // daemon verbs and this helper stay compatible in both directions.
@@ -1461,23 +1565,29 @@ func runServeMode() -> Never {
             let fps = max(1, min(120, Int(fields[5]) ?? 60))
             let h264 = fields[6] == "h264"
             let ms = MuxStream(sid: sid, spec: spec, out: out,
-                               onEnd: { sid in control.async { streams.removeValue(forKey: sid) } })
+                               onEnd: { sid in control.async { streams.removeValue(forKey: sid); streamsChanged() } })
             streams[sid] = ms
-            resolveCaptureTarget(spec) { result in
-                control.async {
-                    guard streams[sid] === ms else { return } // stopped while resolving
-                    switch result {
-                    case .failure(let e):
-                        ms.fail(e.message)
-                    case .success(let t):
-                        ms.begin(filter: t.filter, srcW: t.srcW, srcH: t.srcH,
-                                 maxWidth: maxWidth, quality: quality, fps: fps, h264: h264)
+            streamsChanged()
+            ms.expectFrame()
+            display.wake(on: control) {
+                guard streams[sid] === ms else { return } // stopped while waking
+                resolveCaptureTarget(spec) { result in
+                    control.async {
+                        guard streams[sid] === ms else { return } // stopped while resolving
+                        switch result {
+                        case .failure(let e):
+                            ms.fail(e.message)
+                        case .success(let t):
+                            ms.begin(filter: t.filter, srcW: t.srcW, srcH: t.srcH,
+                                     maxWidth: maxWidth, quality: quality, fps: fps, h264: h264)
+                        }
                     }
                 }
             }
         case "stop":
             guard fields.count >= 2, let sid = UInt32(fields[1]) else { return }
             streams.removeValue(forKey: sid)?.shutdown()
+            streamsChanged()
         case "key":
             guard fields.count >= 2, let sid = UInt32(fields[1]) else { return }
             streams[sid]?.encoder?.requestKey()

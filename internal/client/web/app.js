@@ -11585,7 +11585,7 @@
       el.append(bar, body, infoEl, rz);
       document.body.appendChild(el);
 
-      const pane = { el, img, ctx, body, cursorEl, notesSlot, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false, kbdMode: false };
+      const pane = { el, img, ctx, body, cursorEl, notesSlot, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), openedAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false, kbdMode: false };
       panes.set(w.id, pane);
       refreshPaneNotes(w.id, pane);
       paneDrag(pane, bar);
@@ -12084,10 +12084,12 @@
         html = '<span class="dot"></span><span>' + escapeHtml(p.errorMsg) + '</span>';
         isErr = true;
       } else if (!p.gotFrame) {
-        // No frame ever → show the spinner; after a while, hint at why.
+        // No frame ever → show the spinner; after a while, hint at why. A
+        // while since the pane opened, not since the host was last heard
+        // from: heartbeats keep coming while no picture does.
         loading = true;
-        p.loadMsg.innerHTML = stale
-          ? 'No video yet <span class="sub">the window may be minimized, or capture is blocked</span>'
+        p.loadMsg.innerHTML = performance.now() - p.openedAt > STALL_MS
+          ? 'No picture yet <span class="sub">the window may be minimized, the screen asleep, or capture blocked</span>'
           : 'Connecting…';
       } else if (stale) {
         html = '<span class="dot"></span><span>Waiting for host… <span class="sub">screen may be locked or asleep</span></span>';

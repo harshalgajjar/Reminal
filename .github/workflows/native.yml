@@ -10,10 +10,12 @@ on:
     branches: [main]
     paths:
       - "native/**"
+      - "scripts/display-wake-test/**"
       - ".github/workflows/native.yml"
   pull_request:
     paths:
       - "native/**"
+      - "scripts/display-wake-test/**"
       - ".github/workflows/native.yml"
   workflow_dispatch:
 
@@ -47,3 +49,8 @@ jobs:
             '{"t":"bogus"}' | ./reminal-capture keys)
           echo "$out"
           [ "$out" = "$(printf 'ok\nok\nerror')" ]
+      - name: A stream started while the display sleeps gets a picture
+        if: startsWith(matrix.swift_target, 'arm64')
+        run: |
+          swiftc -O -target ${{ matrix.swift_target }} -D REMINAL_TEST_HOOKS -o reminal-capture-hooks native/reminal-capture/main.swift
+          scripts/display-wake-test/check.sh ./reminal-capture ./reminal-capture-hooks
