@@ -22,6 +22,7 @@ import (
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/experimental"
 )
 
 //go:embed ghostty-vt.wasm
@@ -105,7 +106,8 @@ func New(cols, rows, maxLines int) (*Terminal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vtwasm: compiling: %w", err)
 	}
-	ctx := context.Background()
+	// Its memory is reserved whole and committed as it grows (mem.go).
+	ctx := experimental.WithMemoryAllocator(context.Background(), experimental.MemoryAllocatorFunc(allocate))
 	mod, err := rt.InstantiateModule(ctx, cm, wazero.NewModuleConfig().WithName(""))
 	if err != nil {
 		return nil, fmt.Errorf("vtwasm: instantiating: %w", err)
@@ -117,9 +119,12 @@ func New(cols, rows, maxLines int) (*Terminal, error) {
 		return nil, fmt.Errorf("vtwasm: ghostty_terminal_new: %d", int32(rc))
 	}
 	v.t = v.call("ghostty_wasm_take_opaque", slot)
-	// Lines, not bytes, bound the scrollback: libghostty's default byte limit
-	// keeps a few hundred rows.
-	v.setSize(optScrollbackMaxBytes, sizeMax)
+	// Lines bound the scrollback: libghostty's default byte limit keeps a
+	// few hundred rows. Its bytes are bounded too, at half the instance's
+	// memory (mem.go): past that it prunes its oldest pages itself, before
+	// the memory is full, so formatting the rest still has room (at a full
+	// memory the formatter's buffer is refused and a join has nothing).
+	v.setSize(optScrollbackMaxBytes, min(sizeMax, memoryMax/2))
 	v.setSize(optScrollbackMaxLines, uint64(maxLines))
 	return v, nil
 }

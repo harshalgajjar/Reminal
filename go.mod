@@ -14,7 +14,7 @@ require (
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/pion/interceptor v0.1.45
 	github.com/pion/webrtc/v4 v4.2.16
-	github.com/tetratelabs/wazero v1.9.0
+	github.com/tetratelabs/wazero v1.12.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.60.0
 	golang.org/x/sys v0.48.0
