@@ -64,13 +64,21 @@ const BackgroundTask = "background task"
 // list` prints it.
 const maxKindLen = 40
 
-// AddOther counts n more of kind. kind is the harness's own word, printed in
-// a terminal later, so it is kept to printable text of a sane length; an
-// empty one is BackgroundTask.
+// AddOther counts n more of kind (CleanKind).
 func (b *Background) AddOther(kind string, n int) {
 	if n <= 0 {
 		return
 	}
+	if b.Other == nil {
+		b.Other = map[string]int{}
+	}
+	b.Other[CleanKind(kind)] += n
+}
+
+// CleanKind is a kind of background work as it may be shown. It is the
+// harness's own word, printed in a terminal and handed to agents later, so it
+// is kept to printable text of a sane length; an empty one is BackgroundTask.
+func CleanKind(kind string) string {
 	kind = strings.TrimSpace(strings.Map(func(r rune) rune {
 		if unicode.IsPrint(r) {
 			return r
@@ -83,10 +91,18 @@ func (b *Background) AddOther(kind string, n int) {
 	if kind == "" {
 		kind = BackgroundTask
 	}
-	if b.Other == nil {
-		b.Other = map[string]int{}
+	return kind
+}
+
+// CleanOther is a by-kind count as it may be shown, read from wherever it
+// came (another machine's record among them): each kind CleanKind, kinds
+// that clean to the same one added up, none of nothing. nil when it is empty.
+func CleanOther(other map[string]int) map[string]int {
+	var b Background
+	for kind, n := range other {
+		b.AddOther(kind, n)
 	}
-	b.Other[kind] += n
+	return b.Other
 }
 
 // OtherCount is how much of Other there is, in all.

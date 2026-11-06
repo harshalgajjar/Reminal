@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"regexp"
 	"strings"
 	"testing"
@@ -203,4 +204,24 @@ func TestSendKeysToolNamesItsControlKeys(t *testing.T) {
 		return
 	}
 	t.Fatal("no send_keys tool")
+}
+
+// list_sessions says the background work a session's harness still has
+// running as `reminal list` does: subagents, and the rest by kind. A kind from
+// another machine's record is shown under the same bounds as one counted here.
+func TestFleetMachineRowCarriesBackground(t *testing.T) {
+	m := client.FleetMachine{ID: "mach_abc", Name: "box", Online: true, Sessions: []protocol.DirSession{{
+		ID: "VW65K9YU", Attn: "done", Shells: 1, Agents: 2,
+		Other: map[string]int{"background terminal": 1, "moni\x1b[2Jtor": 2, "none": 0},
+	}}}
+	s := fleetMachineRow(m, "").Sessions[0]
+	if want := map[string]int{"background terminal": 1, "moni[2Jtor": 2}; s.Shells != 1 || s.Agents != 2 || !maps.Equal(s.Other, want) {
+		t.Fatalf("row = %+v, want 1 shell, 2 agents, %v", s, want)
+	}
+	body, _ := json.Marshal(fleetMachineRow(client.FleetMachine{ID: "m", Sessions: []protocol.DirSession{{ID: "QUIET123"}}}, ""))
+	for _, f := range []string{`"agents"`, `"other"`} {
+		if strings.Contains(string(body), f) {
+			t.Fatalf("a session with none should carry no %s: %s", f, body)
+		}
+	}
 }

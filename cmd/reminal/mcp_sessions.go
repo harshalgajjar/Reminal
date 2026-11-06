@@ -38,8 +38,13 @@ type mcpSessionRow struct {
 	ResetsAt string `json:"resets_at,omitempty"`
 	// Shells is how many shells the session's harness still has running — a
 	// finished turn that left a build going reads "done" and is not finished.
-	Shells  int  `json:"shells,omitempty"`
-	Current bool `json:"current,omitempty"`
+	Shells int `json:"shells,omitempty"`
+	// Agents is how many subagents of its own it still has running in the
+	// background, and Other the rest of its background work by kind as the
+	// harness names it ("monitor": 2): as `reminal list` says them.
+	Agents  int            `json:"agents,omitempty"`
+	Other   map[string]int `json:"other,omitempty"`
+	Current bool           `json:"current,omitempty"`
 	// Asleep: the session sleeps (its processes ended, its record kept).
 	// read_transcript and search_sessions answer from what it saved;
 	// send_keys wakes it first. SleptAt is when (RFC3339); Dropped, what the
@@ -213,6 +218,8 @@ func fleetMachineRow(m client.FleetMachine, currentID string) mcpMachineRow {
 			Attn:     s.Attn,
 			ResetsAt: resetsAtRFC3339(s.ResetsAt),
 			Shells:   s.Shells,
+			Agents:   s.Agents,
+			Other:    session.CleanOther(s.Other),
 			Current:  currentID != "" && strings.EqualFold(s.ID, currentID),
 			Asleep:   s.Asleep,
 			SleptAt:  resetsAtRFC3339(s.SleptAt),

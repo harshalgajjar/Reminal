@@ -5,6 +5,7 @@ package session
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,5 +181,19 @@ func TestBackgroundAddOtherKeepsKindPrintable(t *testing.T) {
 	}
 	if b.OtherCount() != 4 {
 		t.Errorf("OtherCount = %d, want 4", b.OtherCount())
+	}
+}
+
+// A by-kind count read from elsewhere (another machine's record) is shown
+// under the same bounds as one counted here: kinds that clean to the same
+// one are added up, nothing of a kind is dropped, and none is nil.
+func TestCleanOtherBoundsWhatItShows(t *testing.T) {
+	got := CleanOther(map[string]int{"moni\x1b[2Jtor": 1, "moni[2Jtor": 2, "": 1, "gone": 0, "less": -3, strings.Repeat("w", 60): 1})
+	want := map[string]int{"moni[2Jtor": 3, BackgroundTask: 1, strings.Repeat("w", maxKindLen): 1}
+	if !maps.Equal(got, want) {
+		t.Errorf("CleanOther = %v, want %v", got, want)
+	}
+	if got := CleanOther(map[string]int{"gone": 0}); got != nil {
+		t.Errorf("nothing to show: %v, want nil", got)
 	}
 }

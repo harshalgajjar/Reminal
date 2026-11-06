@@ -479,6 +479,7 @@ func localDirSessions() []protocol.DirSession {
 			Fg:       a.Fg,
 			Shells:   a.Shells,
 			Agents:   a.Agents,
+			Other:    a.Other,
 		}
 		if !a.FgSince.IsZero() {
 			ds.FgSince = a.FgSince.Unix()
