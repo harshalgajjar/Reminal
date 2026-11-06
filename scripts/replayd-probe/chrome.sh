@@ -46,7 +46,7 @@ case_() {
   sleep 2; kill $lp $rp 2>/dev/null; wait $lp $rp 2>/dev/null
   echo "== $tag (idle chrome: $idle, playwright chromes: $shooters $how)"
   echo "  serve (pid $cp): $(perl "$HERE/../capture-stall-test/frames.pl" < "$W/$tag.out" | cut -c1-80)  INTERRUPTED=$(grep -c "\[$cp:" "$W/$tag.log")"
-  for i in $(seq 1 "$shooters"); do echo "  shooter $i:"; head -4 "$W/$tag.shot$i" | sed "s/^/    /"; done
+  for i in $(seq 1 "$shooters"); do echo "  shooter $i:"; grep -E "SHOT|shots=" "$W/$tag.shot$i" | head -2 | sed "s/^/    /"; done
   echo "  INTERRUPTED by process: $(sed -nE 's/.* ([^ ]+\[[0-9]+):.*/\1/p' "$W/$tag.log" | sort | uniq -c | sort -rn | head -8 | tr '\n' ' ')"
   echo "  replayd: $(grep -c 'accepted client' "$W/$tag.rlog") accepts, $(grep -c 'xpc_connection_cancel' "$W/$tag.rlog") cancels"
   head -2 "$W/$tag.err" | sed 's/^/  serve err: /'
@@ -74,5 +74,5 @@ mkbundle "$W/One.app" test.one; mkbundle "$W/Two.app" test.two
 cp "$SRC" "$W/plainA"; cp "$SRC" "$W/plainB"
 case_ C3-two-shooters none 2 plain
 case_ C4-all-three exec 2 plain
-case_ C5-all-three-open-disclaimed open 2 disclaim
+case_ C5-open-idle-and-shooters open 2 plain
 case_ C6-serve-alone-after none 0 plain

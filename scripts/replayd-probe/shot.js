@@ -1,7 +1,7 @@
 // Playwright Chrome taking CDP screenshots in a loop for argv[2] seconds.
 const { chromium } = require('playwright');
 (async () => {
-  const b = await chromium.launch({ channel: 'chrome', headless: false,
+  const b = await chromium.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: false,
     args: ['--enable-features=CDPScreenshotNewSurface'] });
   const p = await b.newPage();
   await p.setContent('<div id=t style="font:40px sans-serif"></div><script>setInterval(()=>t.textContent=Date.now(),50)</script>');
@@ -10,4 +10,4 @@ const { chromium } = require('playwright');
   while (Date.now() < end) { await p.screenshot(); n++; }
   console.log(`shots=${n} browser_pid=${b.process ? '' : ''}`);
   await b.close();
-})();
+})().catch(e => { console.log('SHOT ERROR: ' + String(e && e.message || e).split('\n').slice(0, 3).join(' | ')); process.exit(1); });
