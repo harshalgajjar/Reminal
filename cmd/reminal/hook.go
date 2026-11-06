@@ -64,6 +64,9 @@ func runHook(args []string) error {
 		// agent is in, kept so a restart can resume that one and not "the
 		// latest" (see session.Restore).
 		payload := readCappedStdin()
+		if subagentTurn(payload) {
+			return nil
+		}
 		if conv := convFromPayload(payload); conv != "" && id != "" && convOwnSession(id) {
 			_ = session.WriteConv(id, conv)
 			// A turn began in it, asked something in it, or ended in it:
@@ -157,6 +160,17 @@ func runHook(args []string) error {
 		_, _ = sendControl(rec.PID, "attn", hookNudgeWait)
 	}
 	return nil
+}
+
+// subagentTurn says a payload is one of the agent's own subagents taking a
+// turn, not the session's: Copilot CLI fires a subagent's prompt and its
+// stop on the same hooks as the session's, naming the agent it was started
+// by. Its start is not the session working, nor its end the session done.
+func subagentTurn(payload []byte) bool {
+	var p struct {
+		ParentAgentID string `json:"parentAgentId"`
+	}
+	return json.Unmarshal(payload, &p) == nil && p.ParentAgentID != ""
 }
 
 // hookFailure is the error a StopFailure payload names, as a short word

@@ -272,6 +272,11 @@ var harnessLoginScreens = map[string][]loginRow{
 		`(?:error:)?authenticationfailedfor"[a-z0-9.\-_/]{1,48}"\.credentialsmayhaveexpiredornetworkisunavailable\.run'/login[a-z0-9.\-_/]{1,48}'tore-authenticate`,
 		`error:yoursessionhasexpired\.pleasereauthenticate`,
 	),
+	// Copilot CLI 1.0.106 with no login: it opens to its input box, with this
+	// row over it.
+	"copilot": loginRows(
+		`pleaseuse/logintosignintousecopilot`,
+	),
 	// Claude Code's own login menu (a fresh machine shows it before anything
 	// else), and its sign-in step once a way is picked: "Opening browser to
 	// sign in…" under a spinner first, then the link. Its own rows, from
