@@ -1,0 +1,13 @@
+name: replayd probe
+on:
+  push:
+    branches: [public/replayd-probe]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swiftc -O -o reminal-capture native/reminal-capture/main.swift
+      - run: bash scripts/replayd-probe/run.sh ./reminal-capture
