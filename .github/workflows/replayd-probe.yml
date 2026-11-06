@@ -9,9 +9,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, macos-15]
+        os: [macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - run: swiftc -O -o reminal-capture native/reminal-capture/main.swift
-      - run: bash scripts/replayd-probe/run.sh ./reminal-capture
+      - run: bash scripts/replayd-probe/resp.sh ./reminal-capture
