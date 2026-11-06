@@ -1,6 +1,7 @@
 // A window pane whose host keeps sending heartbeats but no picture says
-// Connecting, then after 10 seconds says why, in plain words; the first frame
-// takes the message away (run.sh).
+// Connecting, then after 10 seconds says why, in plain words (a minimized
+// window, Screen Recording off); the first frame takes the message away
+// (run.sh).
 import { chromium } from 'playwright';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
@@ -33,7 +34,7 @@ const got = await page.evaluate(async () => {
 console.log(JSON.stringify(got));
 const bad = [];
 if (got.six !== 'Connecting…') bad.push('at 6s it says ' + JSON.stringify(got.six) + ', not Connecting');
-if (!/^No picture from this window yet/.test(got.twelve) || /…/.test(got.twelve)) bad.push('at 12s it says ' + JSON.stringify(got.twelve));
+if (!/^No picture from this window yet/.test(got.twelve) || !/minimized/.test(got.twelve) || !/Screen Recording/.test(got.twelve) || /…/.test(got.twelve)) bad.push('at 12s it says ' + JSON.stringify(got.twelve));
 if (got.framed !== '') bad.push('a frame left ' + JSON.stringify(got.framed) + ' showing');
 console.log(bad.length ? 'FAIL  ' + bad.join('; ') : 'PASS  Connecting, then after 10s of no picture a plain reason, and the first frame clears it');
 await b.close(); srv.close();
