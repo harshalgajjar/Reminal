@@ -46,7 +46,7 @@ case_() {
   sleep 2; kill $lp $rp 2>/dev/null; wait $lp $rp 2>/dev/null
   echo "== $tag (idle chrome: $idle, playwright chromes: $shooters $how)"
   echo "  serve (pid $cp): $(perl "$HERE/../capture-stall-test/frames.pl" < "$W/$tag.out" | cut -c1-80)  INTERRUPTED=$(grep -c "\[$cp:" "$W/$tag.log")"
-  for i in $(seq 1 "$shooters"); do echo "  shooter $i: $(tail -1 "$W/$tag.shot$i")"; done
+  for i in $(seq 1 "$shooters"); do echo "  shooter $i:"; head -4 "$W/$tag.shot$i" | sed "s/^/    /"; done
   echo "  INTERRUPTED by process: $(sed -nE 's/.* ([^ ]+\[[0-9]+):.*/\1/p' "$W/$tag.log" | sort | uniq -c | sort -rn | head -8 | tr '\n' ' ')"
   echo "  replayd: $(grep -c 'accepted client' "$W/$tag.rlog") accepts, $(grep -c 'xpc_connection_cancel' "$W/$tag.rlog") cancels"
   head -2 "$W/$tag.err" | sed 's/^/  serve err: /'
@@ -72,13 +72,7 @@ mkbundle() { # mkbundle <dir> <bundle id>
 }
 mkbundle "$W/One.app" test.one; mkbundle "$W/Two.app" test.two
 cp "$SRC" "$W/plainA"; cp "$SRC" "$W/plainB"
-pair K0-two-plain-paths "$W/plainA" "$W/plainB"
-pair K1-two-different-bundles "$W/One.app/Contents/MacOS/helper" "$W/Two.app/Contents/MacOS/helper"
-pair K2-bundled-and-plain "$W/One.app/Contents/MacOS/helper" "$W/plainA"
-case_ C0-serve-alone none 0 plain
 case_ C3-two-shooters none 2 plain
-case_ C1-idle-exec exec 0 plain
 case_ C4-all-three exec 2 plain
-case_ C2-idle-open open 0 plain
 case_ C5-all-three-open-disclaimed open 2 disclaim
 case_ C6-serve-alone-after none 0 plain

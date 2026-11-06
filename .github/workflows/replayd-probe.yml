@@ -11,5 +11,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: swiftc -O -o reminal-capture native/reminal-capture/main.swift
-      - run: npm install --no-save --prefix scripts/replayd-probe playwright@1.48.2
+      - run: npm install --no-save playwright@1.48.2 && node -e "require('playwright'); console.log('playwright ok')"
       - run: bash scripts/replayd-probe/chrome.sh ./reminal-capture
