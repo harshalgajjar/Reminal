@@ -6,12 +6,10 @@ permissions:
   contents: read
 jobs:
   probe:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15]
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - run: swiftc -O -o reminal-capture native/reminal-capture/main.swift
-      - run: bash scripts/replayd-probe/resp.sh ./reminal-capture
+      - run: npm install --no-save --prefix scripts/replayd-probe playwright@1.48.2
+      - run: bash scripts/replayd-probe/chrome.sh ./reminal-capture
