@@ -72,7 +72,12 @@ mkbundle() { # mkbundle <dir> <bundle id>
 }
 mkbundle "$W/One.app" test.one; mkbundle "$W/Two.app" test.two
 cp "$SRC" "$W/plainA"; cp "$SRC" "$W/plainB"
-case_ C3-two-shooters none 2 plain
-case_ C4-all-three exec 2 plain
-case_ C5-open-idle-and-shooters open 2 plain
-case_ C6-serve-alone-after none 0 plain
+# Run one case: chrome.sh <helper> <case args...>, killed after 100s.
+shift
+( case_ "$@" ) &
+CP=$!
+( sleep 100; echo "!! $1 hit the 100s limit"; pkill -P $CP; kill -9 $CP; pkill -f "$HERE/shot.js"; pkill -f "remote-debugging-port=9333"; pkill -x log ) &
+WD=$!
+wait $CP
+kill $WD 2>/dev/null
+exit 0

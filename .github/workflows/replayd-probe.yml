@@ -7,9 +7,32 @@ permissions:
 jobs:
   probe:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - run: swiftc -O -o reminal-capture native/reminal-capture/main.swift
       - run: npm install --no-save playwright@1.48.2 && node -e "require('playwright'); console.log('playwright ok')"
-      - run: bash scripts/replayd-probe/chrome.sh ./reminal-capture
+      - name: control, serve alone
+        timeout-minutes: 3
+        continue-on-error: true
+        run: bash scripts/replayd-probe/chrome.sh ./reminal-capture C0-serve-alone none 0 plain
+      - name: one Playwright Chrome taking CDP screenshots
+        timeout-minutes: 3
+        continue-on-error: true
+        run: bash scripts/replayd-probe/chrome.sh ./reminal-capture C7-one-shooter none 1 plain
+      - name: two Playwright Chromes taking CDP screenshots
+        timeout-minutes: 3
+        continue-on-error: true
+        run: bash scripts/replayd-probe/chrome.sh ./reminal-capture C3-two-shooters none 2 plain
+      - name: idle Chrome with a debugging port
+        timeout-minutes: 3
+        continue-on-error: true
+        run: bash scripts/replayd-probe/chrome.sh ./reminal-capture C1-idle-exec exec 0 plain
+      - name: all three Chromes
+        timeout-minutes: 3
+        continue-on-error: true
+        run: bash scripts/replayd-probe/chrome.sh ./reminal-capture C4-all-three exec 2 plain
+      - name: control, serve alone after
+        timeout-minutes: 3
+        continue-on-error: true
+        run: bash scripts/replayd-probe/chrome.sh ./reminal-capture C6-serve-alone-after none 0 plain
