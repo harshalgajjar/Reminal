@@ -61,7 +61,7 @@ run() { # run <tag> <via: app|shell> <bin1> <bin2>
   log stream --style compact --info --predicate 'process == "replayd" AND (eventMessage CONTAINS "uniqueClientIdentifier" OR eventMessage CONTAINS "accepted client" OR eventMessage CONTAINS "xpc_connection_cancel")' > "$W/$tag.rlog" 2>/dev/null &
   local rp=$!
   sleep 2
-  if [ "$via" = app ]; then echo "$tag $b1 $b2" > "$W/args"; open -n "$APP"; else "$W/kids.sh" "$tag" "$b1" "$b2" & fi
+  if [ "$via" = app ]; then echo "$tag $b1 $b2" > "$W/args"; open -n "$APP"; elif [ "$via" = shellr ]; then "$W/disclaim" /bin/bash "$W/kids.sh" "$tag" "$b1" "$b2" & else "$W/kids.sh" "$tag" "$b1" "$b2" & fi
   sleep 6
   for i in 1 2; do p=$(cat "$W/$tag.$i.pid" 2>/dev/null); echo "  $tag.$i pid $p resp: $(sudo launchctl procinfo "$p" 2>/dev/null | grep -i 'responsible pid' | head -1)"; done
   for _ in $(seq 30); do [ -f "$W/$tag.done" ] && break; sleep 1; done
@@ -75,10 +75,20 @@ run() { # run <tag> <via: app|shell> <bin1> <bin2>
   sleep 2
 }
 
+cc -o "$W/disclaim" "$HERE/disclaim.c" || exit 1
+cp "$SRC" "$W/capB"; codesign -f -s - --identifier sh.reminal.capture "$W/capB" 2>/dev/null
+for n in A B C; do printf '#!/bin/bash\nexec "%s" "%s" "$@"\n' "$W/disclaim" "$W/cap$n" > "$W/d$n"; chmod +x "$W/d$n"; done
+grantpath() {
+  sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" "INSERT OR REPLACE INTO access (service,client,client_type,auth_value,auth_reason,auth_version,flags) VALUES ('kTCCServiceScreenCapture','$1',1,2,4,1,0);" && echo "granted $1"
+}
+# shellr <tag> <bin1> <bin2>: kids.sh run as its own responsible process, so
+# both clients share that one responsible process.
 run R0-shell-same-id shell "$W/capA" "$W/capA"
-run R1-app-same-id-nogrant app "$W/capA" "$W/capA"
-grant
-run R2-app-same-id app "$W/capA" "$W/capA"
-run R3-app-two-identities app "$W/capA" "$W/capC"
-run R4-shell-two-identities shell "$W/capA" "$W/capC"
-run R5-app-one-client app "$W/capA" /usr/bin/true
+run R4-shell-two-paths shell "$W/capA" "$W/capC"
+run R6-own-resp-same-path-denied shell "$W/dA" "$W/dA"
+run R7-own-resp-two-paths-denied shell "$W/dA" "$W/dB"
+grantpath "$W/capA"; grantpath "$W/capB"; grantpath "$W/capC"
+run R8-own-resp-same-path-granted shell "$W/dA" "$W/dA"
+run R9-own-resp-two-paths-granted shell "$W/dA" "$W/dC"
+run R11-shared-own-resp-two-paths shellr "$W/capA" "$W/capC"
+run R12-shared-own-resp-same-path shellr "$W/capA" "$W/capA"
