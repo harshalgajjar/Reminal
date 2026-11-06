@@ -113,6 +113,7 @@ var limitScreens = []struct {
 	{"copilot", "  You've reached your weekly rate limit. Learn More (https://docs.github.com/copilot/concepts/rate-limits).\n", time.Time{}},
 	{"copilot", "  You've hit the rate limit for this model. Please switch models or wait for your limit to reset\n", time.Time{}},
 	{"copilot", "  You've been rate limited on the current model. Would you like to switch to auto to continue?\n", time.Time{}},
+	{"copilot", "  You've used all your Copilot Free chat requests for the month.\n", time.Time{}},
 	// With the hint the CLI draws under it, in lower case (review).
 	{"claude", "  ⎿  You've hit your session limit · resets 3pm\n     run /usage-credits to ask your admin for more\n❯ ", limitLA(2026, 10, 19, 15, 0)},
 	{"codex", "■ You’ve hit your usage limit. Visit https://chatgpt.com/settings/usage to purchase more credits or try again at 3:05 PM.\nesc to interrupt\n› ", limitLA(2026, 10, 19, 15, 5)},
@@ -1008,6 +1009,7 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"copilot", "", "You've reached your weekly rate limit.", false},
 		{"copilot", "", "You've hit the rate limit for this model. Please switch models or wait for your limit to reset", false},
 		{"copilot", "", "You've been rate limited on the current model. Would you like to switch to gpt-5.1 to continue?", false},
+		{"copilot", "", "You've used all your Copilot Free chat requests for the month.", false},
 		{"pi", "", "Hugging Face rate limit reached; retry in 30s", false},
 		{"agy", "", "AI: Out of credits", false},
 	} {
