@@ -45,9 +45,12 @@ func hookBackground(payload []byte, except string) *session.Background {
 	sched := hookScheduled(payload, time.Now())
 	if p.Tasks == nil {
 		switch {
-		case p.FullyIdle == nil && sched == nil:
+		case p.FullyIdle == nil:
+			// It says nothing of what runs: whatever else it lists is not
+			// taken as "nothing runs" (Claude Code and Qwen Code send their
+			// jobs with background_tasks, always).
 			return nil
-		case p.FullyIdle == nil || *p.FullyIdle:
+		case *p.FullyIdle:
 			return &session.Background{Scheduled: sched}
 		}
 		return &session.Background{Other: map[string]int{session.BackgroundWork: 1}, Scheduled: sched}

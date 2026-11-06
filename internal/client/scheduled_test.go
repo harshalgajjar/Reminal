@@ -61,7 +61,7 @@ func TestInfoAndDirectoryCarryScheduled(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := localDirSessions()
-	if len(rows) != 1 || rows[0].Scheduled != 2 || rows[0].ScheduledNext != next.Unix() || rows[0].Other != nil {
+	if len(rows) != 1 || rows[0].Scheduled != 2 || rows[0].ScheduledNext != next.Unix() || rows[0].ScheduledAt != at.Unix() || rows[0].Other != nil {
 		t.Fatalf("directory: %+v", rows)
 	}
 }
