@@ -129,11 +129,3 @@ func attnBackground(screenShells int, screenOther map[string]int, bg *session.Ba
 	}
 	return shells, agents, other
 }
-
-// noteOther records the background work besides shells and subagents the
-// harness still has running.
-func (a *Agent) noteOther(other map[string]int) {
-	a.metaMu.Lock()
-	a.attnOther = other
-	a.metaMu.Unlock()
-}

@@ -1948,19 +1948,20 @@ func runNew(name, cwd string) error {
 // around — the one budget the narrow layout must not exceed.
 const stateCol = 12
 
-// narrowStateWithShells folds a count of still-running shells into the state
-// word, for terminals too narrow to carry it in a column of its own.
+// narrowStateWithBackground folds a count of still-running background work
+// (shells, monitors, …; listBackground) into the state word, for terminals
+// too narrow to carry it in a column of its own.
 //
 // Only when it still fits: padCol pads but never truncates, so "logged out ·1"
 // or "needs you ·12" would push the row past its budget and wrap on the phone
 // this layout exists for. The count is worth knowing; the row keeping its
 // width is the promise.
-func narrowStateWithShells(state string, shells int) string {
-	if shells <= 0 {
+func narrowStateWithBackground(state string, n int) string {
+	if n <= 0 {
 		return state
 	}
-	if withShells := fmt.Sprintf("%s ·%d", state, shells); visLen(withShells) <= stateCol {
-		return withShells
+	if withCount := fmt.Sprintf("%s ·%d", state, n); visLen(withCount) <= stateCol {
+		return withCount
 	}
 	return state
 }
@@ -2158,17 +2159,22 @@ func runList(args []string) error {
 		}
 		// Presence marker: dim, orthogonal to activity. Wide terminals only —
 		// on a phone the activity state is what matters; watchers can wait.
-		// Shells still running are activity, not presence, so they show at every
-		// width — but a phone has no room for a column of its own. Wide, they sit
-		// beside the watcher count; narrow, the number folds into the state word
-		// itself, which the state column already has room for. Either way the row
-		// stays the width it was.
-		if !a.IsPort() && narrow {
-			state = narrowStateWithShells(state, a.Shells)
-		}
+		// Background work still running (shells, monitors, …) is activity, not
+		// presence, so it shows at every width — but a phone has no room for a
+		// column of its own. Wide, it sits beside the watcher count, kind by
+		// kind; narrow, its count folds into the state word itself, which the
+		// state column already has room for. Either way the row stays the width
+		// it was.
 		var parts []string
-		if !narrow && !a.IsPort() && a.Shells > 0 {
-			parts = append(parts, fmt.Sprintf("· %d shell%s", a.Shells, plural(a.Shells)))
+		if !a.IsPort() {
+			bg, n := listBackground(a)
+			if narrow {
+				state = narrowStateWithBackground(state, n)
+			} else {
+				for _, p := range bg {
+					parts = append(parts, "· "+p)
+				}
+			}
 		}
 		if !narrow && !a.IsPort() && a.Viewers > 0 {
 			parts = append(parts, fmt.Sprintf("· %d watching", a.Viewers))

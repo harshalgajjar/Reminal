@@ -130,6 +130,10 @@ type Active struct {
 	// has running in the background, beside Attn for the same reason: a turn
 	// that ended handing work to them is done, and not finished.
 	Agents int `json:"agents,omitempty"`
+	// Other is the rest of the background work the foreground harness still
+	// has running, by kind as it names it ("monitor", "background task"),
+	// beside Attn for the same reason.
+	Other map[string]int `json:"other,omitempty"`
 	// Fg is the name of the command holding the terminal's foreground — "bash",
 	// "claude", "python3". It is what tells a session running an agent from one
 	// that is a plain terminal doing a job of its own.

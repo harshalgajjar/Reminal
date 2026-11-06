@@ -50,3 +50,35 @@ func TestListShowsAPortsLink(t *testing.T) {
 		t.Errorf("a PIN is in the plain list:\n%s", out)
 	}
 }
+
+// Background work besides shells shows beside the state, kind by kind in a
+// steady order, and work said with no count reads as itself.
+func TestListShowsOtherBackgroundWork(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("REMINAL_SESSION", "")
+	writeRec(t, session.Active{ID: "CCCC3333", Name: "agent", Attn: "done", Shells: 1,
+		Other: map[string]int{"monitor": 2, session.BackgroundTask: 1, "background process": 3}})
+	writeRec(t, session.Active{ID: "DDDD4444", Name: "agy", Attn: "done",
+		Other: map[string]int{session.BackgroundWork: 1}})
+
+	out := listOutput(t)
+	for _, want := range []string{
+		"· 1 shell · 3 background processes · 1 background task · 2 monitors",
+		"· background work",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list doesn't say %q:\n%s", want, out)
+		}
+	}
+}
+
+// On a phone-width terminal all of it folds into the state word as one count.
+func TestListBackgroundCount(t *testing.T) {
+	_, n := listBackground(session.Active{Shells: 1, Other: map[string]int{"monitor": 2, session.BackgroundWork: 1}})
+	if n != 4 {
+		t.Errorf("count = %d, want 4", n)
+	}
+	if got := narrowStateWithBackground("done", n); got != "done ·4" {
+		t.Errorf("narrow state = %q, want %q", got, "done ·4")
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
@@ -1528,6 +1529,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	attnFGAt := a.attnFGAt
 	attnShells := a.attnShells
 	attnAgents := a.attnAgents
+	attnOther := maps.Clone(a.attnOther)
 	var resetsAt time.Time
 	if attn == harnessLimited {
 		resetsAt = a.limit.resetsAt
@@ -1559,6 +1561,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		FgSince:      attnFGAt,
 		Shells:       attnShells,
 		Agents:       attnAgents,
+		Other:        attnOther,
 	}
 }
 

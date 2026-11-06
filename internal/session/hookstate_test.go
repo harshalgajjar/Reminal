@@ -160,3 +160,25 @@ func TestHookStateKeepsWhenATurnBegan(t *testing.T) {
 		t.Fatalf("turn_at not kept: %+v (turn began after %v)", hs, before)
 	}
 }
+
+// A kind is the harness's own word and `reminal list` prints it: kept to
+// printable text of a sane length, and an empty one is a background task.
+func TestBackgroundAddOtherKeepsKindPrintable(t *testing.T) {
+	var b Background
+	b.AddOther("moni\x1b[2Jtor\a", 1)
+	b.AddOther("  ", 2)
+	b.AddOther(strings.Repeat("w", 60), 1)
+	b.AddOther("monitor", 0)
+	want := map[string]int{"moni[2Jtor": 1, BackgroundTask: 2, strings.Repeat("w", maxKindLen): 1}
+	if len(b.Other) != len(want) {
+		t.Fatalf("Other = %v, want %v", b.Other, want)
+	}
+	for k, n := range want {
+		if b.Other[k] != n {
+			t.Errorf("Other[%q] = %d, want %d (all: %v)", k, b.Other[k], n, b.Other)
+		}
+	}
+	if b.OtherCount() != 4 {
+		t.Errorf("OtherCount = %d, want 4", b.OtherCount())
+	}
+}

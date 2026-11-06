@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"reminal/internal/atrest"
+	"strings"
 	"time"
+	"unicode"
 )
 
 // HookState is a per-session attention state reported by an integrated coding
@@ -55,10 +57,31 @@ type Background struct {
 // gives a count.
 const BackgroundWork = "background work"
 
-// AddOther counts n more of kind.
+// BackgroundTask is work a harness lists with no kind of its own.
+const BackgroundTask = "background task"
+
+// maxKindLen bounds a kind's name: it is the harness's word, and `reminal
+// list` prints it.
+const maxKindLen = 40
+
+// AddOther counts n more of kind. kind is the harness's own word, printed in
+// a terminal later, so it is kept to printable text of a sane length; an
+// empty one is BackgroundTask.
 func (b *Background) AddOther(kind string, n int) {
 	if n <= 0 {
 		return
+	}
+	kind = strings.TrimSpace(strings.Map(func(r rune) rune {
+		if unicode.IsPrint(r) {
+			return r
+		}
+		return -1
+	}, kind))
+	if r := []rune(kind); len(r) > maxKindLen {
+		kind = strings.TrimSpace(string(r[:maxKindLen]))
+	}
+	if kind == "" {
+		kind = BackgroundTask
 	}
 	if b.Other == nil {
 		b.Other = map[string]int{}
