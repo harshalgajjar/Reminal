@@ -172,15 +172,15 @@ func refBuildSnapshot(e screenView, history, screenRows []string, maxBytes int, 
 	b.WriteString("\x1b[?25l")            // hide cursor while painting
 	b.WriteString("\x1b[?1049l")          // ensure the main screen is active
 	b.WriteString("\x1b[2J\x1b[3J\x1b[H") // clear screen + the viewer's old scrollback, home
-	b.WriteString("\x1b[?7l")             // disable autowrap so full-width rows don't wrap
 
-	// History lines flow into the main buffer's scrollback as the screen
-	// scrolls; each is newline-terminated so the next pushes it up.
+	// History lines wrap at the viewer's width; the screen's rows do not.
+	b.WriteString("\x1b[?7h")
 	for _, ln := range history {
 		b.WriteString(ln)
 		b.WriteString("\x1b[0m\r\n")
 	}
 
+	b.WriteString("\x1b[?7l")
 	if alt {
 		// A full-screen app (vim, claude, …) is on the alternate screen. The
 		// history above went into the main buffer (visible after the app

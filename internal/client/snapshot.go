@@ -200,15 +200,24 @@ func paintSnapshot(v snapView, history, screenRows []string, maxBytes int, reser
 	b.WriteString("\x1b[?25l")            // hide cursor while painting
 	b.WriteString("\x1b[?1049l")          // ensure the main screen is active
 	b.WriteString("\x1b[2J\x1b[3J\x1b[H") // clear screen + the viewer's old scrollback, home
-	b.WriteString("\x1b[?7l")             // disable autowrap so full-width rows don't wrap
 
 	// History lines flow into the main buffer's scrollback as the screen
-	// scrolls; each is newline-terminated so the next pushes it up.
+	// scrolls; each is newline-terminated so the next pushes it up. They
+	// are lines as the program wrote them, of any length, so autowrap is
+	// on: the viewer wraps each at its own width, and a line longer than
+	// the screen is wide loses nothing (a viewer wrapping one that is
+	// exactly as wide holds the wrap until the newline, so no row is added).
+	b.WriteString("\x1b[?7h")
 	for _, ln := range history {
 		b.WriteString(ln)
 		b.WriteString("\x1b[0m\r\n")
 	}
 
+	// The screen's rows are at the session's width, which no viewer is
+	// narrower than once its size is applied: painted without autowrap, so
+	// a full-width row does not spill onto a second one and the cursor's
+	// row stays what it was.
+	b.WriteString("\x1b[?7l")
 	if alt {
 		// A full-screen app (vim, claude, …) is on the alternate screen. The
 		// history above went into the main buffer (visible after the app
