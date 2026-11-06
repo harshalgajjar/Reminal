@@ -6,7 +6,11 @@ permissions:
   contents: read
 jobs:
   probe:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - run: swiftc -O -o reminal-capture native/reminal-capture/main.swift
