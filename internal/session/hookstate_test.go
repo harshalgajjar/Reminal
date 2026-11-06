@@ -5,6 +5,9 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
+	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,5 +183,55 @@ func TestBackgroundAddOtherKeepsKindPrintable(t *testing.T) {
 	}
 	if b.OtherCount() != 4 {
 		t.Errorf("OtherCount = %d, want 4", b.OtherCount())
+	}
+}
+
+// A by-kind count read from elsewhere (another machine's record) is shown
+// under the same bounds as one counted here: kinds that clean to the same
+// one are added up, nothing of a kind is dropped, and none is nil.
+func TestCleanOtherBoundsWhatItShows(t *testing.T) {
+	got := CleanOther(map[string]int{"moni\x1b[2Jtor": 1, "moni[2Jtor": 2, "": 1, "gone": 0, "less": -3, strings.Repeat("w", 60): 1})
+	want := map[string]int{"moni[2Jtor": 3, BackgroundTask: 1, strings.Repeat("w", maxKindLen): 1}
+	if !maps.Equal(got, want) {
+		t.Errorf("CleanOther = %v, want %v", got, want)
+	}
+	if got := CleanOther(map[string]int{"gone": 0}); got != nil {
+		t.Errorf("nothing to show: %v, want nil", got)
+	}
+}
+
+// A record from another machine can name any number of kinds: at most
+// maxKinds of them are shown, the first by name, the rest left out.
+func TestCleanOtherShowsAtMostMaxKinds(t *testing.T) {
+	many := map[string]int{}
+	for i := range 5000 {
+		many[fmt.Sprintf("kind %04d", i)] = 1
+	}
+	got := CleanOther(many)
+	if len(got) != 8 {
+		t.Fatalf("%d kinds shown, want 8", len(got))
+	}
+	for i := range 8 {
+		if k := fmt.Sprintf("kind %04d", i); got[k] != 1 {
+			t.Errorf("%q not kept: %v", k, got)
+		}
+	}
+}
+
+// Nor can its counts overflow: each is held to maxKindCount, added across
+// kinds that clean to the same one too, and so is their sum's every part.
+func TestCleanOtherClampsCounts(t *testing.T) {
+	got := CleanOther(map[string]int{"monitor": math.MaxInt, "moni\x07tor": math.MaxInt, "shell job": 5})
+	if want := map[string]int{"monitor": maxKindCount, "shell job": 5}; !maps.Equal(got, want) {
+		t.Fatalf("CleanOther = %v, want %v", got, want)
+	}
+	if n := CountOther(got); n != maxKindCount+5 {
+		t.Errorf("CountOther = %d, want %d", n, maxKindCount+5)
+	}
+	var b Background
+	b.AddOther("monitor", maxKindCount)
+	b.AddOther("monitor", 1)
+	if b.Other["monitor"] != maxKindCount {
+		t.Errorf("added past the bound: %d", b.Other["monitor"])
 	}
 }

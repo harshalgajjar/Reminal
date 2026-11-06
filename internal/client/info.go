@@ -188,8 +188,13 @@ func InfoJSON(a *session.Active) any {
 		StartedAt time.Time `json:"started_at"`
 		Attn      string    `json:"attn,omitempty"`
 		AttnSince time.Time `json:"attn_since,omitzero"`
-		Kind      string    `json:"kind,omitempty"`
-		Port      int       `json:"port,omitempty"`
+		// The background work its harness still has running, as `reminal
+		// list` says it beside Attn.
+		Shells int            `json:"shells,omitempty"`
+		Agents int            `json:"agents,omitempty"`
+		Other  map[string]int `json:"other,omitempty"`
+		Kind   string         `json:"kind,omitempty"`
+		Port   int            `json:"port,omitempty"`
 	}{
 		ID:        a.ID,
 		Name:      a.Name,
@@ -202,6 +207,9 @@ func InfoJSON(a *session.Active) any {
 		StartedAt: a.StartedAt,
 		Attn:      a.Attn,
 		AttnSince: a.AttnSince,
+		Shells:    a.Shells,
+		Agents:    a.Agents,
+		Other:     session.CleanOther(a.Other),
 		Kind:      kindJSON(a),
 		Port:      a.Port,
 	}

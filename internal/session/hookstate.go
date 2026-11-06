@@ -6,9 +6,11 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reminal/internal/atrest"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -64,13 +66,31 @@ const BackgroundTask = "background task"
 // list` prints it.
 const maxKindLen = 40
 
-// AddOther counts n more of kind. kind is the harness's own word, printed in
-// a terminal later, so it is kept to printable text of a sane length; an
-// empty one is BackgroundTask.
+// maxKinds bounds how many kinds a count read from elsewhere shows, and
+// maxKindCount how much of one kind any count holds: a record from another
+// machine can say anything, and what it says goes into every list_sessions
+// row an agent reads, and is summed (CountOther).
+const (
+	maxKinds     = 8
+	maxKindCount = 1_000_000
+)
+
+// AddOther counts n more of kind (CleanKind), up to maxKindCount of it.
 func (b *Background) AddOther(kind string, n int) {
 	if n <= 0 {
 		return
 	}
+	if b.Other == nil {
+		b.Other = map[string]int{}
+	}
+	kind = CleanKind(kind)
+	b.Other[kind] = min(b.Other[kind]+min(n, maxKindCount), maxKindCount)
+}
+
+// CleanKind is a kind of background work as it may be shown. It is the
+// harness's own word, printed in a terminal and handed to agents later, so it
+// is kept to printable text of a sane length; an empty one is BackgroundTask.
+func CleanKind(kind string) string {
 	kind = strings.TrimSpace(strings.Map(func(r rune) rune {
 		if unicode.IsPrint(r) {
 			return r
@@ -83,10 +103,22 @@ func (b *Background) AddOther(kind string, n int) {
 	if kind == "" {
 		kind = BackgroundTask
 	}
-	if b.Other == nil {
-		b.Other = map[string]int{}
+	return kind
+}
+
+// CleanOther is a by-kind count as it may be shown, read from wherever it
+// came (another machine's record among them): each kind CleanKind, kinds
+// that clean to the same one added up, none of nothing, and the first
+// maxKinds of them by name, the rest left out. nil when it is empty.
+func CleanOther(other map[string]int) map[string]int {
+	var b Background
+	for kind, n := range other {
+		b.AddOther(kind, n)
 	}
-	b.Other[kind] += n
+	for _, kind := range slices.Sorted(maps.Keys(b.Other))[min(len(b.Other), maxKinds):] {
+		delete(b.Other, kind)
+	}
+	return b.Other
 }
 
 // OtherCount is how much of Other there is, in all.

@@ -521,6 +521,10 @@ type DirSession struct {
 	// Agents is how many subagents of its own the session's harness still has
 	// running in the background, beside Shells.
 	Agents int `json:"agents,omitempty"`
+	// Other is the rest of the background work it still has running, by kind
+	// as the harness names it ("monitor", "background terminal"), beside
+	// Shells; a reader shows it under session.CleanKind's bounds.
+	Other map[string]int `json:"other,omitempty"`
 	// Fg is the program in the session's foreground ("bash", "claude",
 	// "python3") — what says whether an agent or a plain terminal is there.
 	Fg string `json:"fg,omitempty"`
