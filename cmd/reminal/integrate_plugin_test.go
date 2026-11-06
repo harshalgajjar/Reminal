@@ -48,3 +48,35 @@ func TestApplyPlugin(t *testing.T) {
 		t.Fatal("a plugin that is not reminal's was changed")
 	}
 }
+
+// A plugin an older reminal wrote is not set up as this one would: check
+// says so (not current), and the Machines view offers to set it up again,
+// as it does for pi's extension. A missing plugin is not current either.
+func TestAnOlderPluginIsNotCurrent(t *testing.T) {
+	home := t.TempDir()
+	exe := "/usr/local/bin/reminal"
+	oc := targetNamed(t, "opencode")
+	writeJSON(t, filepath.Join(home, ".config", "opencode", "opencode.json"), map[string]any{
+		"mcp": map[string]any{"reminal": map[string]any{"type": "local", "command": []string{exe, "mcp"}, "enabled": true}},
+	})
+	if c := checkIntegration(oc, home, exe); !c.Integrated || c.Current {
+		t.Fatalf("no plugin: %+v", c)
+	}
+	if err := applyPlugin(oc.plugin, home, exe, false); err != nil {
+		t.Fatal(err)
+	}
+	if c := checkIntegration(oc, home, exe); !c.Current {
+		t.Fatalf("this binary's plugin: %+v", c)
+	}
+	path := filepath.Join(home, oc.plugin.path)
+	older := strings.Replace(opencodePlugin(exe), "let writing = false;", "", 1)
+	if older == opencodePlugin(exe) {
+		t.Fatal("the plugin no longer queues its reports")
+	}
+	if err := os.WriteFile(path, []byte(older), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c := checkIntegration(oc, home, exe); c.Current {
+		t.Fatalf("an older plugin read as current: %+v", c)
+	}
+}

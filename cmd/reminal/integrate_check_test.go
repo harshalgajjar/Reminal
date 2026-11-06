@@ -56,6 +56,11 @@ func TestCheckReadsBackWhatIntegrateWrote(t *testing.T) {
 				t.Fatalf("%s hooks: %v", bin, err)
 			}
 		}
+		if tg.plugin != nil {
+			if err := applyPlugin(tg.plugin, home, exe, false); err != nil {
+				t.Fatalf("%s plugin: %v", bin, err)
+			}
+		}
 		after := checkIntegration(tg, home, exe)
 		if !after.Integrated || !after.Current || after.ConfigMtime == 0 || after.Error != "" {
 			t.Fatalf("%s after apply: %+v", bin, after)

@@ -106,6 +106,13 @@ func checkIntegration(t agentTarget, home, exe string) protocol.IntegrationStatu
 			st.Hooks = false
 		}
 	}
+	// A plugin (OpenCode's) is code of ours the agent loads, kept where the
+	// agent reads it: upgrading reminal leaves the copy written before, so
+	// one that is not what this binary writes is not current, and the
+	// Machines view offers to set it up again, as for pi's extension.
+	if t.plugin != nil && st.Current && !pluginCurrent(t.plugin, home, exe) {
+		st.Current = false
+	}
 	return st
 }
 
