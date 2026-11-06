@@ -51,7 +51,7 @@ scenario() {
   echo "  A pid $ap resp: $(resp $ap)"
   [ "$bp" != none ] && echo "  B pid $bp resp: $(resp $bp)"
   wait $ap 2>/dev/null
-  wait 2>/dev/null
+  [ "$bp" != none ] && wait $bp 2>/dev/null
   sleep 1
   kill $lp $rp 2>/dev/null; wait $lp $rp 2>/dev/null
   echo "== $name"
