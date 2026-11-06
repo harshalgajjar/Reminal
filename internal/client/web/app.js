@@ -11585,7 +11585,7 @@
       el.append(bar, body, infoEl, rz);
       document.body.appendChild(el);
 
-      const pane = { el, img, ctx, body, cursorEl, notesSlot, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false, kbdMode: false };
+      const pane = { el, img, ctx, body, cursorEl, notesSlot, w: Object.assign({}, w), lastUrl: null, cursor: null, placeCursor: null, zoom: 1, panX: 0, panY: 0, lastFrameAt: performance.now(), lastAliveAt: performance.now(), openedAt: performance.now(), stallMsg, loadMsg, gotFrame: false, errorMsg: null, frameTimes: [], infoEl, infoShown: false, kbdMode: false };
       panes.set(w.id, pane);
       refreshPaneNotes(w.id, pane);
       paneDrag(pane, bar);
@@ -12077,6 +12077,12 @@
     // (an idle window sends 0 frames but heartbeats every ~3s), so STALL_MS sits
     // above the heartbeat interval — an idle window never trips the overlay.
     const STALL_MS = 7000;
+    // NO_PICTURE_MS is how long a pane that has had no picture at all says
+    // Connecting before it says why. Counted from when the pane opened, not
+    // from the last word from the host: heartbeats keep coming while no
+    // picture does. The host replaces a capture that sends nothing within
+    // seconds and keeps trying, and the first frame takes the message away.
+    const NO_PICTURE_MS = 10000;
     function updatePaneOverlay(p) {
       const stale = performance.now() - (p.lastAliveAt || 0) > STALL_MS;
       let html = null, isErr = false, loading = false;
@@ -12084,10 +12090,10 @@
         html = '<span class="dot"></span><span>' + escapeHtml(p.errorMsg) + '</span>';
         isErr = true;
       } else if (!p.gotFrame) {
-        // No frame ever → show the spinner; after a while, hint at why.
+        // No frame ever → show the spinner; after a while, say why.
         loading = true;
-        p.loadMsg.innerHTML = stale
-          ? 'No video yet <span class="sub">the window may be minimized, or capture is blocked</span>'
+        p.loadMsg.innerHTML = performance.now() - p.openedAt > NO_PICTURE_MS
+          ? 'No picture from this window yet <span class="sub">reminal is restarting the capture and will keep trying. A minimized window shows no picture.</span>'
           : 'Connecting…';
       } else if (stale) {
         html = '<span class="dot"></span><span>Waiting for host… <span class="sub">screen may be locked or asleep</span></span>';
