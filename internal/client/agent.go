@@ -2485,7 +2485,9 @@ func (a *Agent) initScreen() {
 		a.screenMu.Unlock()
 		if a.buf != nil {
 			// Seed the replay-geometry baseline for the history rebuild (see
-			// scrollback.SetBase / rebuildView).
+			// scrollback.SetBase / rebuildView). The rebuild (rebuildView,
+			// rebuild.go, reflow.go, resize_anchor.go) has no caller now
+			// that the screen re-wraps itself: it goes in a follow-up.
 			a.buf.SetBase(int(cols), int(rows))
 		}
 	}

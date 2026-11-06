@@ -4,6 +4,7 @@
 package client
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -54,4 +55,31 @@ func historyCapped(s *sessionScreen, n int) []string {
 		h = h[len(h)-n:]
 	}
 	return h
+}
+
+// The line bound is in lines, whatever the width: a session at its 20,000
+// lines of 180 columns narrowed to 60 (a phone joining) keeps them all,
+// three rows each. With the terminal's own cap at 20,000 rows it kept 6,539
+// lines, the oldest two thirds gone (FOSS Innovator 1's measurement).
+func TestTheLineBoundHoldsThroughANarrowing(t *testing.T) {
+	const n = 20000
+	s := testScreen(t, 180, 50)
+	s.SetMaxLines(n)
+	filler := strings.Repeat("x", 170)
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		fmt.Fprintf(&b, "row-%05d %s\r\n", i, filler)
+	}
+	if _, err := s.Write([]byte(b.String())); err != nil {
+		t.Fatal(err)
+	}
+	before := len(s.History())
+	s.Resize(60, 50)
+	hist := s.History()
+	if len(hist) < before-50 || len(hist) > n {
+		t.Fatalf("narrowed to 60: %d lines of %d kept (cap %d)", len(hist), before, n)
+	}
+	if !strings.HasPrefix(hist[0], "row-000") {
+		t.Errorf("the oldest line is %q, want row-000…: the oldest lines went", hist[0][:min(len(hist[0]), 12)])
+	}
 }

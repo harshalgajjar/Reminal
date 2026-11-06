@@ -41,7 +41,7 @@ func newSessionScreen(cols, rows, maxLines int) (*sessionScreen, error) {
 	if maxLines <= 0 {
 		maxLines = defaultScreenLines
 	}
-	t, err := vtwasm.New(cols, rows, maxLines)
+	t, err := vtwasm.New(cols, rows, maxLines*historyRowsPerLine)
 	if err != nil {
 		return nil, err
 	}
@@ -50,6 +50,14 @@ func newSessionScreen(cols, rows, maxLines int) (*sessionScreen, error) {
 
 // defaultScreenLines bounds the scrollback when no limit was set.
 const defaultScreenLines = 20000
+
+// historyRowsPerLine is how many rows the terminal keeps for each line of
+// the bound: its own cap counts rows, and a line re-wrapped for a narrower
+// screen is more of them (180 columns to a phone's 60 is three), so a cap of
+// maxLines rows lost two thirds of a long session's oldest lines as the
+// phone joined. Four keeps every line through a 240-to-60 narrowing; what
+// History hands out is still at most maxLines lines.
+const historyRowsPerLine = 4
 
 func (s *sessionScreen) Write(p []byte) (int, error) {
 	s.gen++
@@ -141,7 +149,7 @@ func (s *sessionScreen) SetMaxLines(n int) {
 	}
 	s.gen++
 	s.maxLines = n
-	s.t.SetMaxLines(n)
+	s.t.SetMaxLines(n * historyRowsPerLine)
 }
 
 // ClearScrollback forgets what scrolled off (ED 3, as a program clears it).
