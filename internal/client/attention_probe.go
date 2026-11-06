@@ -454,7 +454,7 @@ var agentPrograms = map[string]bool{
 	"claude": true, "cursor-agent": true, "codex": true, "gemini": true, "aider": true,
 	"goose": true, "crush": true, "qwen": true, "opencode": true, "amp": true,
 	"copilot": true, "droid": true, "cline": true, "kiro": true, "agy": true,
-	"pi": true,
+	"pi": true, "kilo": true,
 }
 
 // isAgentProgram reports whether a command name is a known coding agent.
@@ -783,9 +783,9 @@ func resolveAttn(screenState string, hs *session.HookState, lastActivity, fgAt t
 
 // hookTurns are the harnesses whose own hook marks the start of every turn
 // (`reminal integrate`: Claude Code's and Qwen's UserPromptSubmit, Gemini's
-// BeforeAgent, Antigravity's PreInvocation, OpenCode's plugin), by the
-// program name in front.
-var hookTurns = map[string]bool{"claude": true, "opencode": true, "qwen": true, "gemini": true, "agy": true}
+// BeforeAgent, Antigravity's PreInvocation, OpenCode's plugin, and Kilo's,
+// the same), by the program name in front.
+var hookTurns = map[string]bool{"claude": true, "opencode": true, "kilo": true, "qwen": true, "gemini": true, "agy": true}
 
 // attnBusyCues are lowercase substrings a harness draws at the bottom of its
 // screen only while a turn is running. Claude Code's footer reads "esc to
@@ -971,6 +971,7 @@ const attnStartCap = 2 * time.Minute
 // open, and nothing is typed into it.
 var attnPromptMarks = map[string]*regexp.Regexp{
 	"opencode": regexp.MustCompile(`(?m)^\s*╹▀{8,}`),
+	"kilo":     regexp.MustCompile(`(?m)^\s*╹▀{8,}`), // OpenCode's fork: the same box
 }
 
 // attnPromptDrawn reports whether prog's screen shows it at its prompt, as far

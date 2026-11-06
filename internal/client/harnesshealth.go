@@ -239,9 +239,12 @@ var harnessLoginScreens = map[string][]loginRow{
 	// ANTHROPIC_API_KEY environment variable."), as does a gateway that
 	// turned its token away.
 	"opencode": loginRows(
-		`[a-z0-9.\-]*apikeyismissing\.passitusingthe'[a-z0-9_]+'parameter(?:orthe[a-z0-9_]+environmentvariable|\.environmentvariables(?:are|is)notsupportedinthisenvironment)`,
+		opencodeKeyMissing,
 		`unauthorized:requestwasblockedbyagatewayorproxy\.yourauthenticationtokenmaybemissingorexpired—tryrunning.?opencodeauthlogin<yourproviderurl>.?tore-authenticate`,
 	),
+	// Kilo Code CLI 7.8.27, OpenCode's fork, says a provider's key is
+	// missing in OpenCode's words. Its own gateway needs no login.
+	"kilo": loginRows(opencodeKeyMissing),
 	// Cursor CLI: its first screen with no login ("Press any key to log
 	// in..." — a key typed there starts signing in), the sign-in itself, and
 	// a login it has not got or can no longer use. A key it was given and
@@ -302,6 +305,10 @@ var harnessLoginScreens = map[string][]loginRow{
 	)),
 }
 
+// opencodeKeyMissing is OpenCode's row for a provider it was set up for and
+// has no key for, as Kilo Code CLI says it too.
+const opencodeKeyMissing = `[a-z0-9.\-]*apikeyismissing\.passitusingthe'[a-z0-9_]+'parameter(?:orthe[a-z0-9_]+environmentvariable|\.environmentvariables(?:are|is)notsupportedinthisenvironment)`
+
 // piProviders are pi's providers by their ids (pi 1.4.0's own list): what
 // its "No API key found for anthropic." names. Any other word there is not
 // pi's ("No API key found for staging-server", from a tool).
@@ -340,6 +347,9 @@ var harnessKeyRefusals = map[string][]loginRow{
 	// API key provided: sk-…"), then sits at its prompt again: it read as
 	// done. A key it was given and the service refused, from the row's start.
 	"opencode": loginOpen(`^[^a-z0-9]*incorrectapikeyprovided`),
+	// Kilo Code CLI 7.8.27 prints the service's words the same way, in the
+	// same box.
+	"kilo": loginOpen(`^[^a-z0-9]*incorrectapikeyprovided`),
 	// Codex with an OpenAI key the service refuses: "■ unexpected status 401
 	// Unauthorized: Incorrect API key provided: …", from the row's start (the
 	// same words in a sentence, or a tool's output at a shell, are not it).
