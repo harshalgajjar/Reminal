@@ -13,8 +13,9 @@
 #   churn     20 streams opened and closed: one helper, no replacements
 #   always    every helper stalls: replacements back off, never a storm
 #   retire    with no streams the helper leaves after its grace
-#   lid       closed-lid mode under a stand-in shut lid makes its virtual
-#             display, capture works, and it goes when the lid "opens"
+#   headless  closed-lid mode on a Mac the census is told is headless
+#             (REMINAL_FORCE_VDISPLAY) makes its virtual display, capture
+#             works, and it goes when a real display is found again
 # On macOS 13 there is no idle refresh: the replacement is off by design,
 # and once/always must show no replacement at all.
 #
@@ -102,18 +103,18 @@ rm -f "$W/stall"
 echo "== retire"; sleep 33
 expect "no streams: the helper has left ($(helpers) left)" "$([ "$(helpers)" = 0 ] && echo 1)"
 
-echo "== lid"; echo '{"closed_lid": true}' > "$W/home/.reminal/settings.json"; echo 1 > "$W/lid"
-daemon REMINAL_FAKE_LID="$W/lid"
+echo "== headless"; echo '{"closed_lid": true}' > "$W/home/.reminal/settings.json"; echo 1 > "$W/headless"
+daemon REMINAL_FORCE_VDISPLAY="$W/headless"
 for _ in $(seq 40); do [ -f "$W/home/.reminal/vdisplay.pid" ] && break; sleep 1; done
 screens=$(osascript -l JavaScript -e 'ObjC.import("AppKit"); var s=$.NSScreen.screens, o=[]; for (var i=0;i<s.count;i++) o.push(ObjC.unwrap(s.objectAtIndex(i).localizedName)); o.join(",")')
-expect "lid shut: the virtual display is made (screens: $screens)" "$([ -f "$W/home/.reminal/vdisplay.pid" ] && grep -qi reminal <<<"$screens" && echo 1)"
+expect "headless: the virtual display is made (screens: $screens)" "$([ -f "$W/home/.reminal/vdisplay.pid" ] && grep -qi reminal <<<"$screens" && echo 1)"
 vp=$(cat "$W/home/.reminal/vdisplay.pid" 2>/dev/null); sleep 30
-expect "lid shut: the virtual display stays, not remade (pid $vp, then $(cat "$W/home/.reminal/vdisplay.pid" 2>/dev/null))" "$([ -n "$vp" ] && [ "$(cat "$W/home/.reminal/vdisplay.pid" 2>/dev/null)" = "$vp" ] && kill -0 "$vp" 2>/dev/null && echo 1)"
+expect "headless: the virtual display stays, not remade (pid $vp, then $(cat "$W/home/.reminal/vdisplay.pid" 2>/dev/null))" "$([ -n "$vp" ] && [ "$(cat "$W/home/.reminal/vdisplay.pid" 2>/dev/null)" = "$vp" ] && kill -0 "$vp" 2>/dev/null && echo 1)"
 mirror 6
-expect "lid shut: the window is captured with it up ($(field frames) frames)" "$(ge "$(field frames)" 1 && echo 1)"
-echo 0 > "$W/lid"
+expect "headless: the window is captured with it up ($(field frames) frames)" "$(ge "$(field frames)" 1 && echo 1)"
+echo 0 > "$W/headless"
 for _ in $(seq 40); do [ -f "$W/home/.reminal/vdisplay.pid" ] || break; sleep 1; done
-expect "lid open: the virtual display goes" "$([ ! -f "$W/home/.reminal/vdisplay.pid" ] && echo 1)"
+expect "a real display again: the virtual display goes" "$([ ! -f "$W/home/.reminal/vdisplay.pid" ] && echo 1)"
 grep -i "liddim" "$W/daemon.log" | head -2 | sed 's/^/  log: /'
 echo "fails=$fails"
 exit $((fails > 0))
