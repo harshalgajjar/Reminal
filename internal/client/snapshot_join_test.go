@@ -173,14 +173,13 @@ func refBuildSnapshot(e screenView, history, screenRows []string, maxBytes int, 
 	b.WriteString("\x1b[?1049l")          // ensure the main screen is active
 	b.WriteString("\x1b[2J\x1b[3J\x1b[H") // clear screen + the viewer's old scrollback, home
 
-	// History lines wrap at the viewer's width; the screen's rows do not.
+	// Everything wraps at the viewer's width.
 	b.WriteString("\x1b[?7h")
 	for _, ln := range history {
 		b.WriteString(ln)
 		b.WriteString("\x1b[0m\r\n")
 	}
 
-	b.WriteString("\x1b[?7l")
 	if alt {
 		// A full-screen app (vim, claude, …) is on the alternate screen. The
 		// history above went into the main buffer (visible after the app
@@ -195,7 +194,6 @@ func refBuildSnapshot(e screenView, history, screenRows []string, maxBytes int, 
 		b.WriteString("\x1b[0m")
 	}
 
-	b.WriteString("\x1b[?7h") // restore autowrap
 	pos := e.CursorPosition()
 	if len(history) > 0 && !alt {
 		// The screen is the bottom block of what was painted, and in a viewer
