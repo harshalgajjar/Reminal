@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"reminal/internal/atomicfile"
@@ -26,6 +27,50 @@ type pluginFile struct {
 // pluginMark opens every plugin reminal writes: a file without it is the
 // person's own, never overwritten or removed.
 const pluginMark = "// reminal's plugin, written by `reminal integrate`"
+
+// healPlugins brings reminal's own agent plugins up to date: one an older
+// reminal wrote stays where the agent loads it when reminal is upgraded, so
+// a fix in it would reach no one. Each that is reminal's (pluginMark) and is
+// not what this binary writes is written again, for the reminal it already
+// calls; a file that is not reminal's, or names no reminal, is left as it
+// is. It says which it wrote.
+func healPlugins(home string) []string {
+	var healed []string
+	for _, t := range agentTargets() {
+		if t.plugin == nil {
+			continue
+		}
+		path := filepath.Join(home, t.plugin.path)
+		b, err := os.ReadFile(path)
+		if err != nil || !strings.HasPrefix(string(b), pluginMark) {
+			continue
+		}
+		bin := pluginBin(string(b))
+		if bin == "" || string(b) == t.plugin.body(bin) {
+			continue
+		}
+		if atomicfile.Write(path, []byte(t.plugin.body(bin)), 0o644) == nil {
+			healed = append(healed, t.plugin.path)
+		}
+	}
+	return healed
+}
+
+// pluginBinRe is the line a plugin names reminal on (opencodePlugin's BIN).
+var pluginBinRe = regexp.MustCompile(`(?m)^const BIN = ("(?:[^"\\\n]|\\.)*");$`)
+
+// pluginBin is the reminal a plugin reminal wrote calls, or "".
+func pluginBin(src string) string {
+	m := pluginBinRe.FindStringSubmatch(src)
+	if m == nil {
+		return ""
+	}
+	var bin string
+	if json.Unmarshal([]byte(m[1]), &bin) != nil {
+		return ""
+	}
+	return bin
+}
 
 // pluginCurrent says whether the plugin in place is the one this binary
 // writes for exe, byte for byte.
@@ -73,7 +118,10 @@ export const Reminal = async () => {
 	// One ` + "`reminal hook`" + ` at a time, and only ever the newest state: each is a
 	// process of its own writing the same file, the last to write wins, and
 	// a turn's end comes right behind its busy reports. A report made while
-	// one is in flight waits, replacing any older one waiting.
+	// one is in flight waits, replacing any older one waiting. One that has
+	// not finished in HOOK_WAIT (held on a lock, a hung disk) is ended, so it
+	// can neither hold back every report after it nor land after them.
+	const HOOK_WAIT = 5000;
 	let writing = false;
 	let parked = "";
 	const report = (state) => {
@@ -83,9 +131,11 @@ export const Reminal = async () => {
 		}
 		writing = true;
 		let released = false;
+		let timer;
 		const next = () => {
 			if (released) return;
 			released = true;
+			clearTimeout(timer);
 			writing = false;
 			const state = parked;
 			parked = "";
@@ -93,6 +143,15 @@ export const Reminal = async () => {
 		};
 		try {
 			const p = spawn(BIN, ["hook", state], { stdio: ["pipe", "ignore", "ignore"], detached: true });
+			timer = setTimeout(() => {
+				try {
+					p.kill("SIGKILL");
+				} catch {
+					// already gone
+				}
+				next();
+			}, HOOK_WAIT);
+			timer.unref?.();
 			p.on("error", next);
 			p.on("exit", next);
 			p.stdin.on("error", () => {});

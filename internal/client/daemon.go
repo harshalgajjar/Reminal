@@ -38,6 +38,9 @@ func RunDaemon(version string) error {
 	// Same reason as Agent.Run: the daemon outlives every session it spawns, so
 	// it is the other process that can carry a backlog across a restart.
 	reapInherited()
+	// Its own agent plugins, as this binary writes them: it is started anew on
+	// every upgrade (execDaemonInPlace).
+	HealOwnPlugins()
 
 	stop := make(chan struct{})
 	sig := make(chan os.Signal, 1)

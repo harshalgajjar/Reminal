@@ -29,4 +29,13 @@ cp "$DIR/check.mjs" "$B/"
 docker run --rm -v "$B":/e2e:ro -e HOME=/root node:22-bookworm sh -c '
   # A stand-in opencode on PATH, only so integrate writes its plugin.
   printf "#!/bin/sh\necho 1.19.5\n" > /usr/local/bin/opencode && chmod +x /usr/local/bin/opencode
-  /e2e/reminal integrate opencode -y >/dev/null && node /e2e/check.mjs'
+  /e2e/reminal integrate opencode -y >/dev/null && node /e2e/check.mjs || exit 1
+  # An older plugin, as an upgrade leaves it: a session starting puts back
+  # the one this binary writes, with nobody running integrate.
+  P=/root/.config/opencode/plugin/reminal.js
+  cp $P /tmp/current.js && sed -i "/let writing = false;/d" $P
+  cmp -s $P /tmp/current.js && { echo "FAIL the older plugin is not older"; exit 1; }
+  cp /e2e/reminal /usr/local/bin/reminal
+  REMINAL_RELAY=ws://127.0.0.1:1 REMINAL_WEB=http://127.0.0.1:1 SHELL=/bin/bash reminal new healed >/dev/null 2>&1
+  for i in 1 2 3 4 5 6 7 8 9 10; do cmp -s $P /tmp/current.js && break; sleep 1; done
+  if cmp -s $P /tmp/current.js; then echo "ok   a session starting brought the older plugin up to date"; else echo "FAIL the older plugin was left as it was"; exit 1; fi'

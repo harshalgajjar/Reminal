@@ -214,3 +214,25 @@ func (a *Agent) healHooksFor(prev, fg string) {
 		}
 	}()
 }
+
+// healPluginsOnce asks reminal, once in this process, to bring its own agent
+// plugins up to date (`reminal integrate --heal-plugins`): a plugin an older
+// reminal wrote stays where its agent loads it when reminal is upgraded. Run
+// by the binary now at this one's path, which an upgrade replaced: the plugin
+// it writes is the new one. In the background, never holding up the start.
+var healPluginsOnce sync.Once
+
+// HealOwnPlugins starts that, the first time it is called.
+func HealOwnPlugins() {
+	healPluginsOnce.Do(func() {
+		exe, ok := reminalSelf()
+		if !ok {
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), hookHealWait)
+			defer cancel()
+			_ = exec.CommandContext(ctx, exe, "integrate", "--heal-plugins").Run()
+		}()
+	})
+}

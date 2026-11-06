@@ -2,6 +2,7 @@
 // turn's events: never two reports at once, and the last one written is the
 // last state reported.
 import { readFileSync, writeFileSync, chmodSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 
 const plugin = '/root/.config/opencode/plugin/reminal.js';
 const log = '/tmp/hook.log';
@@ -44,5 +45,21 @@ for (let turn = 1; turn <= 5; turn++) {
   check(most === 1, `turn ${turn}: at most one report at a time (${most} at once, ${rows.length / 2} reports)`);
   check(last === 'done', `turn ${turn}: the last one written is done (${last || 'none'})`);
 }
+// A `reminal hook` that never finishes (held on a lock, a hung disk): the
+// states reported after it still land, once the wait for it is over.
+writeFileSync(log, '');
+writeFileSync('/tmp/hang-once', '');
+writeFileSync(slow, `#!/bin/sh
+echo "start $2 $(date +%s%N)" >> ${log}
+if [ -e /tmp/hang-once ]; then rm -f /tmp/hang-once; exec sleep 3600; fi
+cat > /dev/null
+echo "end $2 $(date +%s%N)" >> ${log}
+`);
+await event({ event: { type: 'session.status', properties: { sessionID: 'ses_hung', status: { type: 'busy' } } } });
+await event({ event: { type: 'session.status', properties: { sessionID: 'ses_hung', status: { type: 'idle' } } } });
+await sleep(8000);
+const landed = readFileSync(log, 'utf8').trim().split('\n').map(r => r.split(' ')).filter(([what]) => what === 'end').map(([, state]) => state);
+check(landed.at(-1) === 'done', `a hook that never finishes: what came after it still lands (${landed.join(', ') || 'nothing'})`);
+check(!/sleep 3600/.test(execSync('ps -eo args', { encoding: 'utf8' })), 'the hook that never finished was ended');
 console.log(fails ? fails + ' failed' : 'all passed');
 process.exit(fails ? 1 : 0);
