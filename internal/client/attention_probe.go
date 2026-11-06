@@ -319,8 +319,14 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// With what the harness's own hook said it left running: the footer
 		// counts only what it shows, the hook what it lists; each kind the
 		// larger of the two (attn_background.go).
-		shells, agents, other := attnBackground(attnShellsOnScreen(agentActive, render), attnOtherOnScreen(prog, agentActive, render), attnHookBackground(agentActive, hs, fgAt))
-		a.noteShells(shells, agents, other)
+		hb := attnHookBackground(agentActive, hs, fgAt)
+		shells, agents, other := attnBackground(attnShellsOnScreen(agentActive, render), attnOtherOnScreen(prog, agentActive, render), hb)
+		// And what it has set to run later, apart: never work running.
+		var sched *session.Scheduled
+		if hb != nil {
+			sched = session.CleanScheduled(hb.Scheduled)
+		}
+		a.noteShells(shells, agents, other, sched)
 		// Whether the agent here can work at all — its login. Read from the
 		// same screen, before the attention state, because a logged-out agent
 		// takes a message, ends its turn and looks done; by the program that
@@ -576,12 +582,13 @@ func attnHookBackground(agentActive bool, hs *session.HookState, fgAt time.Time)
 }
 
 // noteShells records how many shells and subagents the harness still has
-// running, and the rest of its background work by kind (other), and flushes
-// the record when any of it changes so `reminal list` sees it within a tick.
-func (a *Agent) noteShells(n, agents int, other map[string]int) {
+// running, the rest of its background work by kind (other), and what it has
+// set to run later (sched), and flushes the record when any of it changes so
+// `reminal list` sees it within a tick.
+func (a *Agent) noteShells(n, agents int, other map[string]int, sched *session.Scheduled) {
 	a.metaMu.Lock()
-	changed := n != a.attnShells || agents != a.attnAgents || !maps.Equal(other, a.attnOther)
-	a.attnShells, a.attnAgents, a.attnOther = n, agents, other
+	changed := n != a.attnShells || agents != a.attnAgents || !maps.Equal(other, a.attnOther) || !sameScheduled(sched, a.attnScheduled)
+	a.attnShells, a.attnAgents, a.attnOther, a.attnScheduled = n, agents, other, sched
 	a.metaMu.Unlock()
 	if !changed {
 		return

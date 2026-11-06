@@ -134,6 +134,10 @@ type Active struct {
 	// has running, by kind as it names it ("monitor", "background task"),
 	// beside Attn for the same reason.
 	Other map[string]int `json:"other,omitempty"`
+	// Scheduled is what the foreground harness has set to run later, as its
+	// hook last said (Scheduled): beside Attn and never counted with the
+	// work running above.
+	Scheduled *Scheduled `json:"scheduled,omitempty"`
 	// Fg is the name of the command holding the terminal's foreground — "bash",
 	// "claude", "python3". It is what tells a session running an agent from one
 	// that is a plain terminal doing a job of its own.

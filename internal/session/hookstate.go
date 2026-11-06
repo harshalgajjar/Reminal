@@ -52,7 +52,50 @@ type Background struct {
 	Shells int            `json:"shells,omitempty"`
 	Agents int            `json:"agents,omitempty"`
 	Other  map[string]int `json:"other,omitempty"`
+	// Scheduled is what it has set to run later, apart from what runs now
+	// (nil when its hook said nothing of it).
+	Scheduled *Scheduled `json:"scheduled,omitempty"`
 }
+
+// Scheduled is the work a harness has set to run later, in this session:
+// Claude Code's session_crons, Qwen Code's crons (a /loop, a reminder, a
+// cron job). It is not work running — a job that fires in six hours is no
+// sign the session is busy, nor that anything in it hung — so it is never
+// counted with Shells, Agents or Other, and leaves the attention state as
+// it is. It dies with the session's agent: sleeping the session drops it.
+type Scheduled struct {
+	Count int `json:"count"`
+	// Next is the soonest one fires, when the harness says (Qwen Code's
+	// next_run); zero when it does not.
+	Next time.Time `json:"next,omitzero"`
+	// At is when the harness said it, so a count no later hook refreshed
+	// reads as what was said then, never as now.
+	At time.Time `json:"at,omitzero"`
+}
+
+// Jobs is how many jobs s says are set to run later; none for nil.
+func (s *Scheduled) Jobs() int {
+	if s == nil {
+		return 0
+	}
+	return s.Count
+}
+
+// CleanScheduled is a Scheduled as it may be shown, read from wherever it
+// came (another machine's record among them): its count held to
+// maxKindCount, nil when it holds none.
+func CleanScheduled(s *Scheduled) *Scheduled {
+	if s == nil || s.Count <= 0 {
+		return nil
+	}
+	c := *s
+	c.Count = ClampCount(c.Count)
+	return &c
+}
+
+// ClampCount is a count read from elsewhere as it may be shown: none below
+// zero, none past maxKindCount.
+func ClampCount(n int) int { return min(max(n, 0), maxKindCount) }
 
 // BackgroundWork is work a harness says is running without saying what or
 // how much (Antigravity's Stop, fullyIdle false): one of it, until anything

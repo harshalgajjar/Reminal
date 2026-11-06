@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"reminal/internal/session"
 )
@@ -29,6 +30,8 @@ import (
 // (fullyIdle): not done stands as "background work", one of it, said with
 // no count (session.BackgroundWork).
 //
+// What it has set to run later rides along, apart (hookScheduled).
+//
 // nil when the payload says nothing of it at all — a harness, or an older
 // build, that does not say — which leaves what the screen says to stand.
 func hookBackground(payload []byte, except string) *session.Background {
@@ -39,16 +42,17 @@ func hookBackground(payload []byte, except string) *session.Background {
 	if json.Unmarshal(payload, &p) != nil {
 		return nil
 	}
+	sched := hookScheduled(payload, time.Now())
 	if p.Tasks == nil {
-		if p.FullyIdle == nil {
+		switch {
+		case p.FullyIdle == nil && sched == nil:
 			return nil
+		case p.FullyIdle == nil || *p.FullyIdle:
+			return &session.Background{Scheduled: sched}
 		}
-		if *p.FullyIdle {
-			return &session.Background{}
-		}
-		return &session.Background{Other: map[string]int{session.BackgroundWork: 1}}
+		return &session.Background{Other: map[string]int{session.BackgroundWork: 1}, Scheduled: sched}
 	}
-	bg := &session.Background{}
+	bg := &session.Background{Scheduled: sched}
 	for _, raw := range *p.Tasks {
 		var t struct {
 			ID        json.RawMessage `json:"id"`
@@ -75,6 +79,48 @@ func hookBackground(payload []byte, except string) *session.Background {
 	return bg
 }
 
+// hookScheduled reads, from a hook's payload, what its harness has set to
+// run later: Claude Code's session_crons ({id, schedule, recurring, prompt}
+// each) or Qwen Code's crons ({id, schedule, prompt, recurring, next_run?,
+// last_run?, enabled}). Each counts but one said not enabled; the soonest
+// next_run given is when the next fires. Said at now. nil when it names
+// none: each Stop says the whole of it, so none is what clears one said
+// before.
+func hookScheduled(payload []byte, now time.Time) *session.Scheduled {
+	var p struct {
+		Claude *[]json.RawMessage `json:"session_crons"`
+		Qwen   *[]json.RawMessage `json:"crons"`
+	}
+	if json.Unmarshal(payload, &p) != nil {
+		return nil
+	}
+	list := p.Claude
+	if list == nil {
+		list = p.Qwen
+	}
+	if list == nil {
+		return nil
+	}
+	s := &session.Scheduled{At: now}
+	for _, raw := range *list {
+		var j struct {
+			Enabled *bool  `json:"enabled"`
+			NextRun string `json:"next_run"`
+		}
+		if json.Unmarshal(raw, &j) != nil || (j.Enabled != nil && !*j.Enabled) {
+			continue
+		}
+		s.Count++
+		if t, err := time.Parse(time.RFC3339, j.NextRun); err == nil && (s.Next.IsZero() || t.Before(s.Next)) {
+			s.Next = t
+		}
+	}
+	if s.Count == 0 {
+		return nil
+	}
+	return s
+}
+
 // hookAgentID is the subagent a SubagentStop is about.
 func hookAgentID(payload []byte) string {
 	var p struct {
@@ -92,7 +138,7 @@ func hookDebugBackground(id, event string, bg *session.Background) {
 	}
 	said := "no background_tasks"
 	if bg != nil {
-		said = fmt.Sprintf("shells=%d agents=%d other=%d", bg.Shells, bg.Agents, bg.OtherCount())
+		said = fmt.Sprintf("shells=%d agents=%d other=%d scheduled=%d", bg.Shells, bg.Agents, bg.OtherCount(), bg.Scheduled.Jobs())
 	}
 	_ = session.AppendHookDebug(fmt.Sprintf("session=%s event=%s %s", id, event, said))
 }

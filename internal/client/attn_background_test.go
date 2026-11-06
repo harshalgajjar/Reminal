@@ -180,18 +180,18 @@ func TestAHookAndTheScreenMakeOneCount(t *testing.T) {
 // change in shells does, so `reminal list` sees a monitor start or stop.
 func TestNoteShellsFlushesOnOtherWork(t *testing.T) {
 	var a Agent
-	a.noteShells(0, 0, map[string]int{"monitor": 1})
+	a.noteShells(0, 0, map[string]int{"monitor": 1}, nil)
 	if !a.metaDirty.Swap(false) {
 		t.Fatal("a monitor starting did not flush the record")
 	}
-	a.noteShells(0, 0, map[string]int{"monitor": 1})
+	a.noteShells(0, 0, map[string]int{"monitor": 1}, nil)
 	if a.metaDirty.Load() {
 		t.Fatal("the same count flushed the record again")
 	}
 	if got := a.activeRecord(0).Other; got["monitor"] != 1 || len(got) != 1 {
 		t.Errorf("record's Other = %v, want one monitor", got)
 	}
-	a.noteShells(0, 0, nil)
+	a.noteShells(0, 0, nil, nil)
 	if !a.metaDirty.Load() {
 		t.Fatal("the monitor stopping did not flush the record")
 	}

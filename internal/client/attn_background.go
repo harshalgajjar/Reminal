@@ -165,3 +165,12 @@ func attnBackground(screenShells int, screenOther map[string]int, bg *session.Ba
 	}
 	return shells, agents, other
 }
+
+// sameScheduled says two readings of what a harness has set to run later
+// say the same, when it was said included.
+func sameScheduled(a, b *session.Scheduled) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Count == b.Count && a.Next.Equal(b.Next) && a.At.Equal(b.At)
+}
