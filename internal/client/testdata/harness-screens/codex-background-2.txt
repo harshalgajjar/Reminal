@@ -1,0 +1,40 @@
+
+  >_ OpenAI Codex (v0.167.0)
+     /w
+  permissions: YOLO mode
+
+
+› start the dev server
+
+
+• Started it in the background.
+
+  Worked for 1s • 5:29 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  2 background terminals running · /ps to view · /stop to close
+
+
+› Ask Codex to do anything
+
+  mock-model default · /w
+  ← for agents · ? for shortcuts                                                               ⚠ 1 warning · f2 to view

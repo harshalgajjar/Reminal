@@ -1,0 +1,40 @@
+
+  >_ OpenAI Codex (v0.167.0)
+     /w
+  permissions: YOLO mode
+
+
+› start the dev server
+
+
+  Worked for <1s • 5:31 PM
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+› Ask Codex to do anything
+
+  mock-model default · /w
+  ← for agents · ? for shortcuts                                                               ⚠ 1 warning · f2 to view

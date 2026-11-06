@@ -90,6 +90,60 @@ func TestGeminisBackgroundProcessesAreReadOverItsBox(t *testing.T) {
 	}
 }
 
+// codexScreen is a Codex 0.167.0 screen recorded in Docker (harness-screens),
+// against a stand-in model that ran exec_command's long commands and ended
+// its turn: codex-background-1 and -2 left one and two running, -50 one on a
+// screen 50 wide, codex-done none.
+func codexScreen(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", "harness-screens", name+".txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// Codex says the background terminals it still has running in the row over
+// its input box ("1 background terminal running · /ps to view · /stop to
+// close"), three rows above its prompt: where attnFooter, under the box, and
+// its last attnPromptRows rows never read. Read there for codex only.
+func TestCodexsBackgroundTerminalsAreReadOverItsBox(t *testing.T) {
+	for _, c := range []struct {
+		screen string
+		want   map[string]int
+	}{
+		{"codex-background-1", map[string]int{"background terminal": 1}},
+		{"codex-background-2", map[string]int{"background terminal": 2}},
+		{"codex-background-50", map[string]int{"background terminal": 1}},
+		{"codex-done", nil},
+	} {
+		if got := attnOtherOnScreen("codex", true, codexScreen(t, c.screen)); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %v, want %v", c.screen, got, c.want)
+		}
+	}
+	one := codexScreen(t, "codex-background-1")
+	if f := attnFooter(attentionProbeTail(one, attnTailRows)); strings.Contains(f, "background terminal") {
+		t.Errorf("the count read as the footer's:\n%s", f)
+	}
+	// While a turn runs, the summary is joined to its status row.
+	working := strings.Replace(one, "  1 background terminal running", "• Working (3s • esc to interrupt) · 1 background terminal running", 1)
+	if got, want := attnOtherOnScreen("codex", true, working), map[string]int{"background terminal": 1}; !reflect.DeepEqual(got, want) {
+		t.Errorf("joined to its status: %v, want %v", got, want)
+	}
+	// The same words in what it wrote further up are not it.
+	rows := strings.Split(codexScreen(t, "codex-done"), "\n")
+	rows[30] = "  2 background terminals running"
+	if got := attnOtherOnScreen("codex", true, strings.Join(rows, "\n")); got != nil {
+		t.Errorf("its output above read as its summary: %v", got)
+	}
+	if got := attnOtherOnScreen("claude", true, one); got != nil {
+		t.Errorf("read for another program: %v", got)
+	}
+	if got := attnOtherOnScreen("codex", false, one); got != nil {
+		t.Errorf("no agent in front: %v", got)
+	}
+}
+
 // What is running is the larger of the screen's count and the hook's, kind
 // by kind: a hook that lists work it counts as none, or fewer of it, never
 // lowers what the screen shows, nor the screen the hook. Antigravity's
