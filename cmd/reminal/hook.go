@@ -133,6 +133,13 @@ func runHook(args []string) error {
 		// Ambiguous notification — decide "needs you" vs "done" from the payload
 		// AND the current turn state (see classifyNotify).
 		state = classifyNotify(readCappedStdin(), id)
+		// It says nothing of what runs in the background or is set to run
+		// later: what the turn's end said stands. Written without it, an
+		// idle ping (Qwen Code's comes right after its Stop, Claude Code's a
+		// minute on) wiped the count the Stop had just given.
+		if prev := session.ReadHookStateAnyAge(id); prev != nil {
+			bg = prev.Background
+		}
 	default:
 		go func() { _, _ = io.Copy(io.Discard, os.Stdin) }()
 		return fmt.Errorf("unknown state %q (want working|input|done|failed|notify|subagent|ready)", arg)
