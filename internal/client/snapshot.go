@@ -94,7 +94,7 @@ func renderLines(lines []uv.Line, maxLines int) []string {
 //
 // The caller must hold the emulator lock for the duration (the emulator is read
 // across several calls here and must not be mutated mid-snapshot).
-func buildSnapshot(e *vt.Emulator, history, screenRows []string, maxBytes int, reserveLastRow bool) string {
+func buildSnapshot(e screenView, history, screenRows []string, maxBytes int, reserveLastRow bool) string {
 	return paintSnapshot(viewOf(e), history, screenRows, maxBytes, reserveLastRow)
 }
 
@@ -107,8 +107,18 @@ type snapView struct {
 	cursor        uv.Position
 }
 
+// screenView is what of a terminal a snapshot reads: the session's
+// (sessionScreen), or a test's.
+type screenView interface {
+	IsAltScreen() bool
+	Width() int
+	Height() int
+	Render() string
+	CursorPosition() uv.Position
+}
+
 // viewOf reads e for a snapshot. The caller holds whatever lock guards e.
-func viewOf(e *vt.Emulator) snapView {
+func viewOf(e screenView) snapView {
 	return snapView{alt: e.IsAltScreen(), width: e.Width(), height: e.Height(), screen: e.Render(), cursor: e.CursorPosition()}
 }
 

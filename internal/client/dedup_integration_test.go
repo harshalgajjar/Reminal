@@ -40,8 +40,8 @@ func TestSnapshotDedupWiredIntoReconnectPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &Agent{box: box, buf: newScrollback(4 << 20), scrollbackLines: 10000}
-	a.screen = vt.NewEmulator(119, 51)
-	a.screen.Scrollback().SetMaxLines(10000)
+	a.screen = testScreen(t, 119, 51)
+	a.screen.SetMaxLines(10000)
 	if a.screen == nil {
 		t.Skip("snapshots disabled")
 	}
@@ -56,8 +56,7 @@ func TestSnapshotDedupWiredIntoReconnectPath(t *testing.T) {
 			}
 			a.record(b)
 		case "r":
-			a.buf.AppendResize(ev.C, ev.R)
-			a.screen.Resize(ev.C, ev.R)
+			a.resizeScreen(uint16(ev.C), uint16(ev.R))
 		}
 	}
 

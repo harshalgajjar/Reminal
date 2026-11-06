@@ -13,8 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/x/vt"
-
 	"reminal/internal/crypto"
 	"reminal/internal/pty"
 )
@@ -40,7 +38,7 @@ func quietShell(t *testing.T, body string) *Agent {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &Agent{box: box, buf: newScrollback(1 << 20), term: term, restoreRun: "echo resumed-42", screen: vt.NewEmulator(80, 24)}
+	a := &Agent{box: box, buf: newScrollback(1 << 20), term: term, restoreRun: "echo resumed-42", screen: testScreen(t, 80, 24)}
 	pumped := make(chan struct{})
 	go func() { a.pumpPTY(); close(pumped) }()
 	// Hung up first: a close alone does not end the read under way

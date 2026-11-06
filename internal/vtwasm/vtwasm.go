@@ -9,8 +9,8 @@
 // screen.
 //
 // Each Terminal is a wasm instance of its own (its own memory); the module
-// is compiled once. A Terminal is not safe for concurrent use: its caller
-// holds whatever lock guards it.
+// is compiled once. A Terminal is safe for concurrent use: its calls are
+// serialized.
 package vtwasm
 
 import (
@@ -76,10 +76,27 @@ const (
 
 // Terminal is one terminal: a screen, its scrollback, its cursor and modes.
 type Terminal struct {
+	// mu serializes calls into the instance, which two goroutines must
+	// never be in at once, whatever lock its caller holds or forgets.
+	mu  sync.Mutex
 	ctx context.Context
 	mod api.Module
 	fns map[string]api.Function
 	t   uint64 // GhosttyTerminal
+	// err is why it can no longer be used (closed, or a call into it
+	// trapped): every call after that does nothing and gives zero, never
+	// a panic in the process it runs in.
+	err error
+}
+
+// errClosed is a Terminal used after Close.
+var errClosed = errors.New("vtwasm: closed")
+
+// Err is why it can no longer be used, or nil.
+func (v *Terminal) Err() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.err
 }
 
 // New is a terminal of cols by rows keeping at most maxLines of scrollback.
@@ -109,17 +126,26 @@ func New(cols, rows, maxLines int) (*Terminal, error) {
 
 // Close frees the terminal and its instance.
 func (v *Terminal) Close() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	if v.mod == nil {
 		return
 	}
-	v.call("ghostty_terminal_free", v.t)
+	if v.err == nil {
+		v.call("ghostty_terminal_free", v.t)
+	}
 	v.mod.Close(v.ctx)
-	v.mod = nil
+	v.mod, v.err = nil, errClosed
 }
 
 // Write feeds the bytes a program wrote to its terminal. Replies the
 // terminal would send back (to a query) are not kept.
 func (v *Terminal) Write(p []byte) (int, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.err != nil {
+		return 0, v.err
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -127,51 +153,93 @@ func (v *Terminal) Write(p []byte) (int, error) {
 	v.mod.Memory().Write(buf, p)
 	v.call("ghostty_terminal_vt_write", v.t, uint64(buf), uint64(len(p)))
 	v.free(buf, len(p))
+	if v.err != nil {
+		return 0, v.err
+	}
 	return len(p), nil
 }
 
 // Resize makes it cols by rows, re-wrapping its scrollback to the width.
 func (v *Terminal) Resize(cols, rows int) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.err != nil {
+		return v.err
+	}
 	if rc := v.call("ghostty_terminal_resize", v.t, uint64(clamp16(cols)), uint64(clamp16(rows)), 0, 0); rc != 0 {
 		return fmt.Errorf("vtwasm: resize: %d", int32(rc))
 	}
 	return nil
 }
 
+// SetMaxLines bounds its scrollback to n lines.
+func (v *Terminal) SetMaxLines(n int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.setSize(optScrollbackMaxLines, uint64(max(n, 0)))
+}
+
 // Reset is a full reset (RIS): screen, scrollback and modes, its size kept.
-func (v *Terminal) Reset() { v.call("ghostty_terminal_reset", v.t) }
+func (v *Terminal) Reset() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.call("ghostty_terminal_reset", v.t)
+}
 
 // Size is its width and height in cells.
 func (v *Terminal) Size() (cols, rows int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.size()
+}
+
+func (v *Terminal) size() (cols, rows int) {
 	return int(v.get16(dataCols)), int(v.get16(dataRows))
 }
 
 // Cursor is the cursor's cell on the screen, from the top left, 0-based.
 func (v *Terminal) Cursor() (x, y int) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	return int(v.get16(dataCursorX)), int(v.get16(dataCursorY))
 }
 
 // AltScreen says a full-screen program has the alternate screen up.
-func (v *Terminal) AltScreen() bool { return v.get32(dataActiveScreen) != 0 }
+func (v *Terminal) AltScreen() bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.get32(dataActiveScreen) != 0
+}
 
 // ScrollbackRows is how many rows have scrolled off the top of the screen.
-func (v *Terminal) ScrollbackRows() int { return int(v.get32(dataScrollbackRows)) }
+func (v *Terminal) ScrollbackRows() int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return int(v.get32(dataScrollbackRows))
+}
 
 // History is its scrollback as the program wrote it: one line each, the
 // rows a long line wrapped onto joined again, with its colours and styles
 // as VT sequences. A terminal of any width wraps them anew.
 func (v *Terminal) History() (string, error) {
-	n := v.ScrollbackRows()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.err != nil {
+		return "", v.err
+	}
+	n := int(v.get32(dataScrollbackRows))
 	if n == 0 {
 		return "", nil
 	}
-	cols, _ := v.Size()
+	cols, _ := v.size()
 	return v.format(emitVT, true, &area{tagHistory, 0, 0, cols - 1, n - 1})
 }
 
 // Screen is the screen as VT sequences, one row a line, as wide as it is.
 func (v *Terminal) Screen() (string, error) {
-	cols, rows := v.Size()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	cols, rows := v.size()
 	return v.format(emitVT, false, &area{tagActive, 0, 0, cols - 1, rows - 1})
 }
 
@@ -179,11 +247,19 @@ func (v *Terminal) Screen() (string, error) {
 // wrote it: one line each, the rows a long line wrapped onto joined again,
 // with its styles as VT sequences. Painted with autowrap on, a terminal of
 // any width lays it out as its own; blank rows at the end are left off.
-func (v *Terminal) Contents() (string, error) { return v.format(emitVT, true, nil) }
+func (v *Terminal) Contents() (string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.format(emitVT, true, nil)
+}
 
 // Text is everything it holds, scrollback and screen, as plain text, the
 // rows a long line wrapped onto joined again.
-func (v *Terminal) Text() (string, error) { return v.format(emitPlain, true, nil) }
+func (v *Terminal) Text() (string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.format(emitPlain, true, nil)
+}
 
 // area is a span of cells in one of libghostty's coordinate systems.
 type area struct {
@@ -194,6 +270,9 @@ type area struct {
 // format formats the terminal, or only a, as emit, unwrapping long lines or
 // not.
 func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
+	if v.err != nil {
+		return "", v.err
+	}
 	slot := v.call("ghostty_wasm_alloc_opaque")
 	if rc := v.call("ghostty_formatter_terminal_new", 0, slot, v.t); rc != 0 {
 		return "", fmt.Errorf("vtwasm: formatter: %d", int32(rc))
@@ -221,7 +300,10 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 		if err := set(fmtOptExtras, extraStyle|extraHyperlink); err != nil {
 			return "", err
 		}
-		if err := set(fmtOptTrim, 1); err != nil {
+		// Blank rows at the end are kept: a viewer painting what scrolled
+		// off and then the screen below it puts the screen where it was
+		// only with them.
+		if err := set(fmtOptTrim, 0); err != nil {
 			return "", err
 		}
 	}
@@ -248,6 +330,9 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 	}
 	s := string(b)
 	v.call("ghostty_free", 0, uint64(ptr), uint64(n))
+	if emit == emitVT {
+		s = stepsToSpaces(s)
+	}
 	return s, nil
 }
 
@@ -277,16 +362,21 @@ func (v *Terminal) selection(a area) (uint32, error) {
 }
 
 func (v *Terminal) call(name string, args ...uint64) uint64 {
+	if v.err != nil {
+		return 0
+	}
 	f, ok := v.fns[name]
 	if !ok {
 		if f = v.mod.ExportedFunction(name); f == nil {
-			panic("vtwasm: no export " + name)
+			v.err = errors.New("vtwasm: no export " + name)
+			return 0
 		}
 		v.fns[name] = f
 	}
 	r, err := f.Call(v.ctx, args...)
 	if err != nil {
-		panic("vtwasm: " + name + ": " + err.Error())
+		v.err = fmt.Errorf("vtwasm: %s: %w", name, err)
+		return 0
 	}
 	if len(r) == 0 {
 		return 0
@@ -299,6 +389,9 @@ func (v *Terminal) alloc(n int) uint32 { return uint32(v.call("ghostty_wasm_allo
 func (v *Terminal) free(p uint32, n int) { v.call("ghostty_wasm_free", uint64(p), uint64(n)) }
 
 func (v *Terminal) setSize(opt int, val uint64) {
+	if v.err != nil {
+		return
+	}
 	p := v.alloc(4)
 	v.mod.Memory().WriteUint32Le(p, uint32(val))
 	v.call("ghostty_terminal_set", v.t, uint64(opt), uint64(p))
@@ -307,6 +400,9 @@ func (v *Terminal) setSize(opt int, val uint64) {
 
 // get32 and get16 read a uint32 or uint16 of the terminal's data.
 func (v *Terminal) get32(data int) uint32 {
+	if v.err != nil {
+		return 0
+	}
 	p := v.alloc(8)
 	defer v.free(p, 8)
 	v.mod.Memory().WriteUint64Le(p, 0)
@@ -316,6 +412,9 @@ func (v *Terminal) get32(data int) uint32 {
 }
 
 func (v *Terminal) get16(data int) uint16 {
+	if v.err != nil {
+		return 0
+	}
 	p := v.alloc(8)
 	defer v.free(p, 8)
 	v.mod.Memory().WriteUint64Le(p, 0)

@@ -25,9 +25,8 @@ func TestResizeSegmentsDropRepaintsKeepInterleaved(t *testing.T) {
 	key, _ := crypto.NewSessionKey()
 	box, _ := crypto.NewBox(key)
 	a := &Agent{box: box, buf: newScrollback(8 << 20), scrollbackLines: 20000}
-	a.screen = vt.NewEmulator(70, 20)
-	a.screen.Scrollback().SetMaxLines(20000)
-	go io.Copy(io.Discard, a.screen)
+	a.screen = testScreen(t, 70, 20)
+	a.screen.SetMaxLines(20000)
 	a.buf.SetBase(70, 20)
 
 	// Committed history, then a frame that fills the WHOLE screen — like a real
@@ -140,10 +139,8 @@ func TestResizeSegmentsSnapshotCostAtCap(t *testing.T) {
 	key, _ := crypto.NewSessionKey()
 	box, _ := crypto.NewBox(key)
 	a := &Agent{box: box, buf: newScrollback(8 << 20), scrollbackLines: 20000}
-	a.screen = vt.NewEmulator(80, 24)
-	a.screen.Scrollback().SetMaxLines(20000)
-	go io.Copy(io.Discard, a.screen)
-	freeAtEnd(t, a.screen)
+	a.screen = testScreen(t, 80, 24)
+	a.screen.SetMaxLines(20000)
 	a.buf.SetBase(80, 24)
 
 	// Interleave output bursts with resizes until the segment list is at cap.
@@ -178,7 +175,7 @@ func TestResizeSegmentsSnapshotCostAtCap(t *testing.T) {
 		t.Fatal("empty snapshot")
 	}
 	t.Logf("snapshot with %d segments over ~%d scrollback lines took %v",
-		len(a.resizeSegs), a.screen.Scrollback().Len(), elapsed)
+		len(a.resizeSegs), a.screen.HistoryLen(), elapsed)
 	budget := 2 * time.Second
 	if raceDetector {
 		budget *= 8 // instrumented builds run far slower; see raceDetector

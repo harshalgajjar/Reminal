@@ -64,8 +64,8 @@ func TestAgentSnapshotFramePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &Agent{box: box, buf: newScrollback(2 << 20), scrollbackLines: 10000}
-	a.screen = vt.NewEmulator(80, 24)
-	a.screen.Scrollback().SetMaxLines(10000)
+	a.screen = testScreen(t, 80, 24)
+	a.screen.SetMaxLines(10000)
 
 	a.record([]byte("prompt$ seq 1 300\r\nSTART-OF-HISTORY\r\n"))
 	for i := 1; i <= 300; i++ {

@@ -60,10 +60,8 @@ func colouredSessionPal(t *testing.T, n, budget int, random bool) *Agent {
 	key, _ := crypto.NewSessionKey()
 	box, _ := crypto.NewBox(key)
 	a := &Agent{box: box, buf: newScrollback(scrollbackBytes), scrollbackLines: 10000, scrollbackBytes: budget, sessionID: "SNAPPART"}
-	a.screen = vt.NewEmulator(200, 40)
-	a.screen.Scrollback().SetMaxLines(10000)
-	go io.Copy(io.Discard, a.screen)
-	freeAtEnd(t, a.screen)
+	a.screen = testScreen(t, 200, 40)
+	a.screen.SetMaxLines(10000)
 	a.buf.SetBase(200, 40)
 	words := strings.Fields("the agent read the file and found that the function returns early when the buffer is empty so the caller never sees the error")
 	pal := [][3]int{{215, 119, 87}, {86, 156, 214}, {78, 201, 176}, {220, 220, 170}, {197, 134, 192}, {156, 220, 254}, {206, 145, 120}, {181, 206, 168}}
@@ -249,10 +247,8 @@ func TestASnapshotInPartsLandsItsCursorOnTheScreensCursorRow(t *testing.T) {
 			key, _ := crypto.NewSessionKey()
 			box, _ := crypto.NewBox(key)
 			a := &Agent{box: box, buf: newScrollback(8 << 20), scrollbackLines: 20000, scrollbackBytes: 8 << 20}
-			a.screen = vt.NewEmulator(120, 30)
-			a.screen.Scrollback().SetMaxLines(20000)
-			go io.Copy(io.Discard, a.screen)
-			freeAtEnd(t, a.screen)
+			a.screen = testScreen(t, 120, 30)
+			a.screen.SetMaxLines(20000)
 			a.buf.SetBase(120, 30)
 			for i := 1; i <= 800; i++ {
 				a.record([]byte(fmt.Sprintf("L%05d\r\n", i)))

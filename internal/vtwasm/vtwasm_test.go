@@ -179,3 +179,56 @@ func TestContentsPaintAtAnyWidth(t *testing.T) {
 		t.Errorf("painted at 40 wide: %d of 30 lines lost", n)
 	}
 }
+
+// Used after Close, it does nothing and says so: never a panic in the
+// process it runs in.
+func TestUsedAfterCloseIsHarmless(t *testing.T) {
+	v, err := New(80, 24, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Close()
+	if _, err := v.Write([]byte("hi")); err == nil {
+		t.Error("a write after Close said nothing")
+	}
+	if err := v.Resize(10, 10); err == nil {
+		t.Error("a resize after Close said nothing")
+	}
+	if c, r := v.Size(); c != 0 || r != 0 || v.AltScreen() || v.ScrollbackRows() != 0 {
+		t.Error("read something after Close")
+	}
+	if _, err := v.History(); err == nil {
+		t.Error("history after Close said nothing")
+	}
+	v.Close()
+}
+
+// Text drawn with the cursor stepped over its gaps (as Claude Code draws)
+// comes back with spaces, its words apart and wrapping in any terminal; a
+// background run comes back as spaces in it, and the pen is kept around a
+// gap.
+func TestGapsComeBackAsSpaces(t *testing.T) {
+	v := newTerm(t, 40, 3)
+	fmt.Fprint(v, "I\x1b[1Cgot\x1b[1Ctired \x1b[1;31mred\x1b[3Cstill\x1b[0m \x1b[44m\x1b[4X\x1b[0m end")
+	s, err := v.Screen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(s, "C") && regexp.MustCompile(`\x1b\[\d*C`).MatchString(s) {
+		t.Errorf("a cursor step is left: %q", s)
+	}
+	if plain := sgr.ReplaceAllString(s, ""); !strings.Contains(plain, "I got tired red   still") {
+		t.Errorf("words not apart: %q", plain)
+	}
+	for _, c := range []struct{ in, want string }{
+		{"a\x1b[3Cb", "a   b"},
+		{"\x1b[31ma\x1b[2Cb", "\x1b[31ma\x1b[0m  \x1b[31mb"},
+		{"\x1b[44m\x1b[4X\x1b[4C", "\x1b[44m    "},
+		{"x\x1b[Cy", "x y"},
+		{"\x1b[0m\x1b[1m\x1b[38;5;2mok\x1b[0m\x1b[1Cz", "\x1b[0m\x1b[1m\x1b[38;5;2mok\x1b[0m z"},
+	} {
+		if got := stepsToSpaces(c.in); got != c.want {
+			t.Errorf("%q: %q, want %q", c.in, got, c.want)
+		}
+	}
+}
