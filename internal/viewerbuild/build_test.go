@@ -23,13 +23,13 @@ func spec(t *testing.T) Spec {
 	return s
 }
 
-const page = "<!doctype html><title>t</title>\n  <script data-build=\"header\"></script>\n  <script data-build=\"app\"></script>\n  <script data-build=\"moments\"></script>\n"
+const page = "<!doctype html><title>t</title>\n  <script data-build=\"header\"></script>\n  <script data-build=\"pick\"></script>\n  <script data-build=\"app\"></script>\n  <script data-build=\"moments\"></script>\n"
 
 // A script is served by a name its content makes, and the page's tag for it
 // names that build and carries its SRI: a new build is a new name, so the
 // old one can be cached for good.
 func TestAScriptIsNamedByItsContentAndItsTagStamped(t *testing.T) {
-	src := map[string][]byte{"header": []byte("fit()\n"), "app": []byte("console.log('one')\n"), "moments": []byte("mo()\n")}
+	src := map[string][]byte{"header": []byte("fit()\n"), "app": []byte("console.log('one')\n"), "moments": []byte("mo()\n"), "pick": []byte("pick()\n")}
 	p, err := Render(spec(t), []byte(page), src)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestAScriptIsNamedByItsContentAndItsTagStamped(t *testing.T) {
 	if strings.Contains(string(p.HTML), "data-build") {
 		t.Fatal("a marker was left in the page")
 	}
-	if p.Build != Name("header", src["header"])+" "+Name("app", src["app"])+" "+Name("moments", src["moments"]) {
+	if p.Build != Name("header", src["header"])+" "+Name("app", src["app"])+" "+Name("moments", src["moments"])+" "+Name("pick", src["pick"]) {
 		t.Fatalf("its build line: %q", p.Build)
 	}
 	src["app"] = []byte("console.log('two')\n")
@@ -63,7 +63,7 @@ func TestAScriptIsNamedByItsContentAndItsTagStamped(t *testing.T) {
 // A page that does not mark each script exactly once is refused, never
 // served half stamped.
 func TestAPageWithoutExactlyOneMarkerIsRefused(t *testing.T) {
-	src := map[string][]byte{"header": []byte("h"), "app": []byte("a"), "moments": []byte("m")}
+	src := map[string][]byte{"header": []byte("h"), "app": []byte("a"), "moments": []byte("m"), "pick": []byte("p")}
 	for _, bad := range []string{
 		"<script data-build=\"header\"></script>",
 		page + "<script data-build=\"app\"></script>",
@@ -151,13 +151,13 @@ func TestOnlyThePageNamesABuild(t *testing.T) {
 // The page is stamped as the bytes it is, whatever they are: what is not
 // UTF-8, a BOM or CRLFs, and a script with $& in it, come out as they went in.
 func TestThePageIsStampedAsItsBytes(t *testing.T) {
-	index := []byte("\xef\xbb\xbf<html>\xe9\xff\r\n<script data-build=\"header\"></script>\r\n<script data-build=\"app\"></script>\r\n<script data-build=\"moments\"></script>\r\n")
-	src := map[string][]byte{"header": []byte("a('\xe9')\r\n"), "app": []byte("a('$&$1')\n"), "moments": []byte("mo()\n")}
+	index := []byte("\xef\xbb\xbf<html>\xe9\xff\r\n<script data-build=\"header\"></script>\r\n<script data-build=\"pick\"></script>\r\n<script data-build=\"app\"></script>\r\n<script data-build=\"moments\"></script>\r\n")
+	src := map[string][]byte{"header": []byte("a('\xe9')\r\n"), "app": []byte("a('$&$1')\n"), "moments": []byte("mo()\n"), "pick": []byte("p()\n")}
 	p, err := Render(spec(t), index, src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "\xef\xbb\xbf<html>\xe9\xff\r\n<script src=\"/assets/" + Name("header", src["header"]) + "\" integrity=\"" + SRI(src["header"]) + "\" crossorigin=\"anonymous\"></script>\r\n<script src=\"/assets/" + Name("app", src["app"]) + "\" integrity=\"" + SRI(src["app"]) + "\" crossorigin=\"anonymous\"></script>\r\n<script src=\"/assets/" + Name("moments", src["moments"]) + "\" integrity=\"" + SRI(src["moments"]) + "\" crossorigin=\"anonymous\"></script>\r\n"
+	want := "\xef\xbb\xbf<html>\xe9\xff\r\n<script src=\"/assets/" + Name("header", src["header"]) + "\" integrity=\"" + SRI(src["header"]) + "\" crossorigin=\"anonymous\"></script>\r\n<script src=\"/assets/" + Name("pick", src["pick"]) + "\" integrity=\"" + SRI(src["pick"]) + "\" crossorigin=\"anonymous\"></script>\r\n<script src=\"/assets/" + Name("app", src["app"]) + "\" integrity=\"" + SRI(src["app"]) + "\" crossorigin=\"anonymous\"></script>\r\n<script src=\"/assets/" + Name("moments", src["moments"]) + "\" integrity=\"" + SRI(src["moments"]) + "\" crossorigin=\"anonymous\"></script>\r\n"
 	if string(p.HTML) != want {
 		t.Fatalf("got %q", p.HTML)
 	}

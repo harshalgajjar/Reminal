@@ -1469,12 +1469,15 @@
       refreshAlertBadges();
     }
 
+    // What each number of a rule means, under it in the chip's list.
+    const ALERT_SUBS = {
+      cpu_pct: o => 'Busy: CPU use above ' + o + '%.', cpu_low: o => 'Quiet: CPU use below ' + o + '%.', cpu_mins: o => 'For ' + o + ' minute' + (o === 1 ? '' : 's') + ' on end before you are told.',
+      bat_pct: o => 'Battery below ' + o + '%.', bat_mins: o => 'Less than ' + alertHours(o) + ' of battery left, as the machine estimates it.',
+    };
     function alertChip(k, v, fmt, disabled, allowed) {
       const base = allowed || ALERT_CHOICES[k];
       const opts = base.includes(v) ? base : base.concat([v]).sort((a, b) => a - b);
-      return '<select class="al-chip" data-k="' + k + '" aria-label="' + k.replace('_', ' ') + '"' + (disabled ? ' disabled' : '') + '>'
-        + opts.map(o => '<option value="' + o + '"' + (o === v ? ' selected' : '') + '>' + fmt(o) + '</option>').join('')
-        + '</select>';
+      return Pick.html(opts.map(o => ({ value: String(o), label: fmt(o), sub: ALERT_SUBS[k] ? ALERT_SUBS[k](o) : '' })), String(v), { class: 'al-chip', 'data-k': k, 'aria-label': k.replace('_', ' '), disabled: !!disabled, 'data-compact': true });
     }
     function alertSwitch(attrs, on, label, disabled) {
       return '<button class="al-switch" role="switch" aria-checked="' + (on ? 'true' : 'false') + '" aria-label="' + escHTML(label) + '" '

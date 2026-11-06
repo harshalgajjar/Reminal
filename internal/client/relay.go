@@ -37,7 +37,7 @@ const viewerCSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; 
 // The page's sources and what build.json copies (a test holds every copy
 // entry embedded).
 //
-//go:embed web/index.html web/build.json web/app.js web/moments.js web/header.js web/reload.js web/sw.js web/manifest.webmanifest web/icons web/vendor
+//go:embed web/index.html web/build.json web/app.js web/moments.js web/header.js web/pick.js web/reload.js web/sw.js web/manifest.webmanifest web/icons web/vendor
 var webIndex embed.FS
 
 // viewer is the page this binary serves, rendered once from the sources it
