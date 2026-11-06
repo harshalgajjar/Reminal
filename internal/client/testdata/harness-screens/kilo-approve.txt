@@ -1,0 +1,50 @@
+
+  ┃
+  ┃  please run a command
+  ┃
+
+     $ touch made-by-standin.txt && rm -f made-by-standin.txt
+
+     ▣  Code · gpt-4.1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃  △ Permission required
+  ┃    # Create and remove a file
+  ┃
+  ┃  $ touch made-by-standin.txt && rm -f made-by-standin.txt
+  ┃
+  ┃
+  ┃   Allow once   Allow always   Reject                                 ctrl+f fullscreen  ⇆ select  enter confirm
+  ┃
+

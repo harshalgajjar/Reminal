@@ -91,6 +91,12 @@ func stdioEntry(exe string) map[string]any {
 	return map[string]any{"command": exe, "args": []string{"mcp"}}
 }
 
+// opencodeEntry is the server entry OpenCode, and Kilo Code CLI after it,
+// read: a local command and its arguments as one list.
+func opencodeEntry(exe string) map[string]any {
+	return map[string]any{"type": "local", "command": []string{exe, "mcp"}, "enabled": true}
+}
+
 // ---- Attention hooks -------------------------------------------------------
 //
 // Alongside the MCP server, `reminal integrate` installs lifecycle hooks so an
@@ -483,11 +489,19 @@ func agentTargets() []agentTarget {
 		{
 			// opencode's `mcp add` is interactive, so drive its config instead.
 			Name: "OpenCode", Bin: "opencode",
-			file: ".config/opencode/opencode.json", keyPath: []string{"mcp"},
-			entry: func(exe string) map[string]any {
-				return map[string]any{"type": "local", "command": []string{exe, "mcp"}, "enabled": true}
-			},
+			file: ".config/opencode/opencode.json", keyPath: []string{"mcp"}, entry: opencodeEntry,
 			plugin: &pluginFile{path: ".config/opencode/plugin/reminal.js", body: opencodePlugin},
+		},
+		{
+			// Kilo Code CLI is OpenCode's fork: the same server entry and the
+			// same plugin, in its own config dir (it reads nothing of
+			// OpenCode's). Its own config is kilo.jsonc, comments and all,
+			// which a JSON merge would lose; it also reads a kilo.json beside
+			// it and merges the two, so ours goes there. Its `mcp add` has no
+			// remove to go with it.
+			Name: "Kilo Code CLI", Bin: "kilo",
+			file: ".config/kilo/kilo.json", keyPath: []string{"mcp"}, entry: opencodeEntry,
+			plugin: &pluginFile{path: ".config/kilo/plugin/reminal.js", body: opencodePlugin},
 		},
 		{
 			Name: "Cursor CLI", Bin: "cursor-agent",
