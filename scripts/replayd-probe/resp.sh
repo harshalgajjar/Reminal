@@ -83,12 +83,39 @@ grantpath() {
 }
 # shellr <tag> <bin1> <bin2>: kids.sh run as its own responsible process, so
 # both clients share that one responsible process.
-run R0-shell-same-id shell "$W/capA" "$W/capA"
-run R4-shell-two-paths shell "$W/capA" "$W/capC"
-run R6-own-resp-same-path-denied shell "$W/dA" "$W/dA"
-run R7-own-resp-two-paths-denied shell "$W/dA" "$W/dB"
-grantpath "$W/capA"; grantpath "$W/capB"; grantpath "$W/capC"
-run R8-own-resp-same-path-granted shell "$W/dA" "$W/dA"
-run R9-own-resp-two-paths-granted shell "$W/dA" "$W/dC"
-run R11-shared-own-resp-two-paths shellr "$W/capA" "$W/capC"
-run R12-shared-own-resp-same-path shellr "$W/capA" "$W/capA"
+# multi <tag> <secs> <offset>:<bin> ...: clients started <offset>s apart in
+# one log window, each streaming <secs>s. The shell-started ones are granted
+# (responsible = the runner); the d* ones run as their own responsible
+# process and are refused.
+APPB="$W/reminal.app"; mkdir -p "$APPB/Contents/MacOS"
+cp "$W/mainid" "$APPB/Contents/MacOS/reminal"; cp "$SRC" "$APPB/Contents/MacOS/reminal-capture"
+printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>sh.reminal</string><key>CFBundleExecutable</key><string>reminal</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n' > "$APPB/Contents/Info.plist"
+codesign -f -s - --identifier sh.reminal.capture "$APPB/Contents/MacOS/reminal-capture" 2>/dev/null; codesign -f -s - "$APPB" 2>/dev/null
+BH="$APPB/Contents/MacOS/reminal-capture"
+multi() {
+  local tag=$1 secs=$2; shift 2
+  log stream --style compact --predicate 'eventMessage CONTAINS "RPDaemonProxy: connection INTERRUPTED"' > "$W/$tag.log" 2>/dev/null &
+  local lp=$! pids=() names=() i=0
+  sleep 2
+  for spec in "$@"; do
+    sleep "${spec%%:*}"
+    local bin=${spec#*:}
+    { echo "start 1 display:$D 640 45 5 jpeg"; sleep "$secs"; } | "$bin" serve > "$W/$tag.$i.out" 2> "$W/$tag.$i.err" &
+    pids+=($!); names+=("$(basename "$bin")"); i=$((i+1))
+  done
+  for p in "${pids[@]}"; do wait "$p" 2>/dev/null; done
+  sleep 1; kill $lp 2>/dev/null; wait $lp 2>/dev/null
+  echo "== $tag"
+  for i in "${!pids[@]}"; do
+    echo "  ${names[$i]} (pid ${pids[$i]}): $(perl "$HERE/../capture-stall-test/frames.pl" < "$W/$tag.$i.out" | cut -c1-60)  INTERRUPTED=$(grep -c "\[${pids[$i]}:" "$W/$tag.log")"
+  done
+  sleep 2
+}
+multi M1-granted-alone 10 0:"$W/capC"
+multi M2-ring-first-then-granted-other-path 14 0:"$W/dA" 0:"$W/dA" 4:"$W/capC"
+multi M3-granted-first-then-ring 14 0:"$W/capC" 4:"$W/dA" 0:"$W/dA"
+multi M4-ring-then-bundled-helper 14 0:"$W/dA" 0:"$W/dA" 4:"$BH"
+multi M5-one-refused-then-granted-same-path 14 0:"$W/dA" 4:"$W/capA"
+multi M6-granted-then-refused-same-path 14 0:"$W/capA" 4:"$W/dA"
+multi M7-ring-then-granted-same-path 14 0:"$W/dA" 0:"$W/dA" 4:"$W/capA"
+multi M8-granted-alone-after 10 0:"$W/capC"
