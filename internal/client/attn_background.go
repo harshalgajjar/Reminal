@@ -62,10 +62,44 @@ func attnGeminiBoxEdge(row string) bool {
 	return (r != "" && strings.Trim(r, "▄▀") == "") || (strings.HasPrefix(r, "╭") && attnRuleRow(row))
 }
 
+// attnCodexTerminalPattern finds Codex's count of the background terminals it
+// still has running (bottom_pane/unified_exec_footer.rs: "1 background
+// terminal running · /ps to view · /stop to close"): first in its row, or
+// after the status it is joined to while a turn runs ("• Working (3s • esc
+// to interrupt) · 1 background terminal running"). A narrow screen cuts the
+// row's end, never its count.
+var attnCodexTerminalPattern = regexp.MustCompile(`(?:^|·\s*)([0-9]+) background terminals? running`)
+
+// attnCodexGap is the most rows Codex leaves between that row and its input
+// box's prompt (two blank ones, as recorded).
+const attnCodexGap = 3
+
+// attnCodexActivityRow is the row Codex draws just over its input box: its
+// status, or with none its background terminals' summary (bottom_pane/mod.rs).
+// Its box is the lowest prompt (›) in tail; the row is the first written one
+// above it, past the blank rows between. Under the box is its footer, where
+// attnFooter reads, and its last attnPromptRows rows do not reach the row.
+// "" with no prompt seen, or nothing written just over it.
+func attnCodexActivityRow(tail string) string {
+	rows := strings.Split(strings.TrimRight(tail, "\n"), "\n")
+	for i := len(rows) - 1; i >= 0; i-- {
+		if !strings.HasPrefix(strings.TrimSpace(stripANSI(rows[i])), "›") {
+			continue
+		}
+		for j := i - 1; j >= 0 && i-j <= attnCodexGap; j-- {
+			if r := strings.TrimSpace(stripANSI(rows[j])); r != "" {
+				return r
+			}
+		}
+		return ""
+	}
+	return ""
+}
+
 // attnOtherOnScreen is the background work besides its shells that prog's
 // own screen counts: Claude Code's footer's monitors, Gemini CLI's
-// background processes. nil with no agent in front (attnShellCount's
-// reason), or none shown.
+// background processes, Codex's background terminals. nil with no agent in
+// front (attnShellCount's reason), or none shown.
 func attnOtherOnScreen(prog string, agentActive bool, render string) map[string]int {
 	if !agentActive {
 		return nil
@@ -98,6 +132,8 @@ func attnOtherOnScreen(prog string, agentActive bool, render string) map[string]
 				break
 			}
 		}
+	case "codex":
+		add("background terminal", first(attnCodexTerminalPattern, attnCodexActivityRow(tail)))
 	}
 	return out
 }
