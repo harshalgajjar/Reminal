@@ -6,6 +6,7 @@ package client
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -42,6 +43,12 @@ func TestAgentsLoginScreensAsTheyDrawThem(t *testing.T) {
 		{"qwen-badkey", "qwen", true},
 		// opencode 1.18.34 works with no login (its free models): at work.
 		{"opencode-noupd", "opencode", false},
+		// Copilot CLI 1.0.106 with no login, at 120 and 80 wide; and at
+		// rest on a provider of its own (COPILOT_PROVIDER_BASE_URL), which
+		// needs none.
+		{"copilot-signedout", "copilot", true},
+		{"copilot-signedout-80", "copilot", true},
+		{"copilot-byok", "copilot", false},
 	} {
 		raw, err := os.ReadFile(filepath.Join("testdata", "harness-screens", c.file+".txt"))
 		if err != nil {
@@ -96,5 +103,45 @@ func TestALoggedInAgentThatSitsStillIsCleared(t *testing.T) {
 	}
 	if at := a.harnessReadAt(); !at.IsZero() {
 		t.Errorf("nothing waits on a read now, but one is asked for at %v", at)
+	}
+}
+
+// Copilot CLI's own row over its input box says it has no login; the same
+// words in a sentence that goes on, or quoted, are not it.
+func TestCopilotsSignInRowIsItsOwnOnly(t *testing.T) {
+	box := "\n" + strings.Repeat("─", 40) + "\n❯\n" + strings.Repeat("─", 40) + "\n ← open sidebar · Interactive · Manual Approval · / commands · ? help"
+	if !harnessProblemIn(attentionProbeTail("Please use /login to sign in to use Copilot"+box, harnessRows), "copilot") {
+		t.Fatal("its own row was missed")
+	}
+	for why, said := range map[string]string{
+		"a sentence that goes on": "Please use /login to sign in to use Copilot, then we can carry on with the deploy.",
+		"quoted":                  "● It printed \"Please use /login to sign in to use Copilot\" and stopped.",
+		"in an answer":            "● Please use /login to sign in to use Copilot is what a fresh install shows.",
+	} {
+		if harnessProblemIn(attentionProbeTail(said+box, harnessRows), "copilot") {
+			t.Errorf("%s: read as logged out", why)
+		}
+	}
+	if harnessProblemIn(attentionProbeTail("Please use /login to sign in to use Copilot"+box, harnessRows), "claude") {
+		t.Error("read as another agent's")
+	}
+}
+
+// Copilot CLI asking to run a command (its approval, recorded) reads as
+// needing you from its screen alone, as at rest it reads as done and never
+// as logged out.
+func TestCopilotsApprovalNeedsYou(t *testing.T) {
+	for file, want := range map[string]string{"copilot-approve": "input", "copilot-byok": "done"} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "harness-screens", file+".txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		tail := attentionProbeTail(string(raw), attnTailRows)
+		if got := classifyAttnFor("copilot", true, tail, 5000, time.Minute, false); got != want {
+			t.Errorf("%s: %q, want %q", file, got, want)
+		}
+		if harnessProblemIn(harnessTail(string(raw), harnessRowsFor("copilot")), "copilot") {
+			t.Errorf("%s: read as logged out", file)
+		}
 	}
 }

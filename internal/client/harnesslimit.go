@@ -336,6 +336,14 @@ var harnessLimitNotices = map[string][]limitNotice{
 		`you.?vereachedyourchatgptworkspace.?susagelimit\.askyourworkspaceadmintoincreaseitatadmin\.openai\.com→workspace→usagelimits`,
 		`huggingfaceratelimitreached(?:;retryin`+limitWait+`)?`,
 	),
+	// Copilot CLI 1.0.106: its own rate limits, a session's, a week's or a
+	// model's, then what to do about one, and where to read more.
+	"copilot": wholeRows(`\.?`,
+		`you.?ve(?:hityour(?:session)?ratelimit|hittheratelimitforthismodel|reachedyourweeklyratelimit)`+
+			`(?:\.(?:please(?:switchmodelsor)?waitforyourlimittoreset)(?:orswitchtoautomodeltocontinue)?)?`+
+			`(?:\.?learnmore\(https://docs\.github\.com/copilot/concepts/rate-limits\))?`,
+		`you.?vebeenratelimitedonthecurrentmodel\.wouldyouliketoswitchto[a-z0-9.\-]{1,40}tocontinue\?`,
+	),
 	// Antigravity 1.4: out of credits, as its status row says it.
 	"agy": onCased("AI: Out of credits", wholeRows(`\.?`,
 		`ai:outofcredits`,

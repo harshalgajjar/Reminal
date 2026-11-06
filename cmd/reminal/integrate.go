@@ -108,7 +108,14 @@ const (
 	shapeMatcher hookShape = iota
 	// shapeFlat: Cursor / Crush — an event maps to a list of {command,...} entries.
 	shapeFlat
+	// shapeCopilot: Copilot CLI — an event maps to a list of {type:"command",
+	// bash, timeoutSec} entries.
+	shapeCopilot
 )
+
+// copilotHookTimeout is how long Copilot CLI lets one of our hooks run, in
+// seconds: ours returns at once (stdinWait bounds its read).
+const copilotHookTimeout = 10
 
 type hookEvent struct {
 	Event string // the agent's own event name, e.g. "Notification"
@@ -352,6 +359,16 @@ func ourHookEntry(m map[string]any) bool {
 	if c, ok := m["command"].(string); ok {
 		return len(m) == 1 && reminalHookCmdRe.MatchString(c)
 	}
+	// Copilot CLI's {type:"command", bash, timeoutSec?}.
+	if c, ok := m["bash"].(string); ok {
+		for k := range m {
+			if k != "bash" && k != "type" && k != "timeoutSec" {
+				return false
+			}
+		}
+		t, _ := m["type"].(string)
+		return t == "command" && reminalHookCmdRe.MatchString(c)
+	}
 	hs, ok := m["hooks"].([]any)
 	if !ok || len(hs) == 0 {
 		return false
@@ -390,6 +407,8 @@ func hookEntry(shape hookShape, exe string, ev hookEvent) map[string]any {
 	switch shape {
 	case shapeFlat:
 		return map[string]any{"command": cmd, hookMarker: ev.State}
+	case shapeCopilot:
+		return map[string]any{"type": "command", "bash": cmd, "timeoutSec": copilotHookTimeout, hookMarker: ev.State}
 	default: // shapeMatcher
 		e := map[string]any{
 			"hooks":    []any{map[string]any{"type": "command", "command": cmd}},
@@ -473,6 +492,27 @@ func agentTargets() []agentTarget {
 		{
 			Name: "Cursor CLI", Bin: "cursor-agent",
 			file: ".cursor/mcp.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
+		},
+		{
+			// Its `mcp add` writes ~/.copilot/mcp-config.json, for the user:
+			// it has no scope to choose. Its hooks go in a file of our own in
+			// ~/.copilot/hooks, which it reads every one of.
+			Name: "Copilot CLI", Bin: "copilot",
+			cliAdd:    []string{"mcp", "add", mcpServerName, "--", "%CMD%", "mcp"},
+			cliRemove: []string{"mcp", "remove", mcpServerName},
+			checkFile: ".copilot/mcp-config.json", checkKey: []string{"mcpServers"},
+			hooks: &hookSpec{
+				file: ".copilot/hooks/reminal.json", key: []string{"hooks"}, shape: shapeCopilot,
+				extra: map[string]any{"version": 1},
+				events: []hookEvent{
+					{Event: "userPromptSubmitted", State: "working"}, // a turn begins, its own automatic ones too
+					{Event: "permissionRequest", State: "input"},     // blocked on your approval
+					{Event: "agentStop", State: "done"},              // turn finished
+					// Its first prompt: it has none before one (its sessionStart
+					// fires with the first message, never while signed out).
+					{Event: "sessionStart", State: "ready"},
+				},
+			},
 		},
 		{
 			Name: "Gemini CLI", Bin: "gemini",

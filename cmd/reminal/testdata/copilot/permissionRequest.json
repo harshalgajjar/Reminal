@@ -1,0 +1,1 @@
+{"hookName":"permissionRequest","sessionId":"09f9f414-87b0-49be-92a9-c340700ed074","timestamp":1793988329632,"cwd":"/tmp/h/proj","toolName":"bash","toolInput":{"command":"touch made-by-standin.txt && rm -f made-by-standin.txt"},"permissionSuggestions":[]}

@@ -1,0 +1,45 @@
+ [Current]  Sessions   Issues   Pull requests   Gists
+
+╭────────────────────────────────────────────────────────────────────────────╮
+│                                                                            │
+│  ╭─╮╭─╮                             │  Getting started                     │
+│  ╰─╯╰─╯  Copilot v1.0.106 uses AI.  │  Use the tabs above to explore your… │
+│  █ ▘▝ █  Check for mistakes.        │  /init — Initialize Copilot instruc… │
+│   ▔▔▔▔                              │  /model — Switch models across prov… │
+│                                                                            │
+╰────────────────────────────────────────────────────────────────────────────╯
+
+ ● No Copilot instructions found for this repository. Run /init to generate
+   them.
+
+ ● MCP Servers reloaded: 0 servers connected
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Please use /login to sign in to use Copilot
+ ~/proj [⎇ master%]
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+ ← open sidebar · Interactive · Manual Approval · / commands · tab next tab
