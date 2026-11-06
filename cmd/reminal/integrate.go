@@ -580,7 +580,7 @@ type planStep struct {
 }
 
 func runIntegrate(args []string) error {
-	remove, assumeYes, dryRun, check, asJSON, heal := false, false, false, false, false, false
+	remove, assumeYes, dryRun, check, asJSON, heal, healPlugin := false, false, false, false, false, false, false
 	agentVersions := map[string]string{}
 	var only []string
 	for _, a := range args {
@@ -596,6 +596,10 @@ func runIntegrate(args []string) error {
 			// (hooks_heal.go): an entry the agent is too old for taken
 			// out, and said.
 			heal = true
+		case "--heal-plugins":
+			// Run by a session or the daemon as it starts (hookheal.go):
+			// reminal's own agent plugins brought up to date.
+			healPlugin = true
 		case "-y", "--yes":
 			assumeYes = true
 		case "--dry-run", "-n":
@@ -639,6 +643,10 @@ func runIntegrate(args []string) error {
 		for _, line := range healHooks(home, sessionVersions(agentVersions)) {
 			fmt.Println(line)
 		}
+		return nil
+	}
+	if healPlugin {
+		healPlugins(home)
 		return nil
 	}
 

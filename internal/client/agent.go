@@ -704,6 +704,9 @@ func NewAgent(version string) (*Agent, error) {
 // NewAgentWith builds an agent with the given options. Headless mode is
 // the only non-foreground variant today.
 func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
+	// A session starts on the binary now installed: its own agent plugins
+	// brought up to it.
+	HealOwnPlugins()
 	if opts.Resume != nil {
 		// Hot-restart path: reuse the previous binary's session ID,
 		// PIN, AND the previously-registered pin_hash so the relay
