@@ -14,27 +14,47 @@ import (
 
 // hookBackground reads, from a hook's payload, the work its harness still
 // has running in the background. Claude Code's Stop and SubagentStop carry it
-// as background_tasks: each an id, a type ("shell" or "subagent") and a
-// status. Only one whose status says running is counted, and only a shell or
-// a subagent; anything else about an entry, or an entry that cannot be read,
-// is passed over. except is the subagent the event is about (SubagentStop's
-// agent_id): it is finishing, whatever the list says of it.
+// as background_tasks: each an id, a type and a status. Only one whose status
+// says running is counted, and every one that does, by its kind: "shell" a
+// shell, "subagent" a subagent, any other type ("monitor", "workflow", "MCP
+// task", "teammate", …) under its own name (Background.Other) — a kind
+// reminal does not know yet is still work running, never counted as none.
+// Qwen Code's Stop lists its background agents with no type, an agent_type
+// each: subagents. An entry with neither is "background task". An entry
+// that cannot be read is passed over. except is the subagent the event is
+// about (SubagentStop's agent_id): it is finishing, whatever the list says
+// of it.
 //
-// nil when the payload has no such list at all — a harness, or an older
+// Antigravity's Stop says no list, only whether all of it is done
+// (fullyIdle): not done stands as "background work", one of it, said with
+// no count (session.BackgroundWork).
+//
+// nil when the payload says nothing of it at all — a harness, or an older
 // build, that does not say — which leaves what the screen says to stand.
 func hookBackground(payload []byte, except string) *session.Background {
 	var p struct {
-		Tasks *[]json.RawMessage `json:"background_tasks"`
+		Tasks     *[]json.RawMessage `json:"background_tasks"`
+		FullyIdle *bool              `json:"fullyIdle"`
 	}
-	if json.Unmarshal(payload, &p) != nil || p.Tasks == nil {
+	if json.Unmarshal(payload, &p) != nil {
 		return nil
+	}
+	if p.Tasks == nil {
+		if p.FullyIdle == nil {
+			return nil
+		}
+		if *p.FullyIdle {
+			return &session.Background{}
+		}
+		return &session.Background{Other: map[string]int{session.BackgroundWork: 1}}
 	}
 	bg := &session.Background{}
 	for _, raw := range *p.Tasks {
 		var t struct {
-			ID     json.RawMessage `json:"id"`
-			Type   string          `json:"type"`
-			Status string          `json:"status"`
+			ID        json.RawMessage `json:"id"`
+			Type      string          `json:"type"`
+			AgentType string          `json:"agent_type"`
+			Status    string          `json:"status"`
 		}
 		if json.Unmarshal(raw, &t) != nil || !strings.EqualFold(t.Status, "running") {
 			continue
@@ -42,11 +62,17 @@ func hookBackground(payload []byte, except string) *session.Background {
 		if except != "" && strings.Trim(string(t.ID), `"`) == except {
 			continue
 		}
-		switch strings.ToLower(t.Type) {
-		case "shell":
+		kind := strings.TrimSpace(t.Type)
+		switch k := strings.ToLower(kind); {
+		case k == "shell":
 			bg.Shells++
-		case "subagent":
+		case k == "subagent" || (k == "" && t.AgentType != ""):
 			bg.Agents++
+		default:
+			if kind == "" {
+				kind = "background task"
+			}
+			bg.AddOther(kind, 1)
 		}
 	}
 	return bg
@@ -69,7 +95,7 @@ func hookDebugBackground(id, event string, bg *session.Background) {
 	}
 	said := "no background_tasks"
 	if bg != nil {
-		said = fmt.Sprintf("shells=%d agents=%d", bg.Shells, bg.Agents)
+		said = fmt.Sprintf("shells=%d agents=%d other=%d", bg.Shells, bg.Agents, bg.OtherCount())
 	}
 	_ = session.AppendHookDebug(fmt.Sprintf("session=%s event=%s %s", id, event, said))
 }

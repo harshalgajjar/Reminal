@@ -4,8 +4,10 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,15 +39,16 @@ func TestAHookReadsWhatIsStillRunningInTheBackground(t *testing.T) {
 		name, payload, except string
 		want                  *session.Background
 	}{
-		{"stop", stopWithBackground, "", &session.Background{Shells: 2, Agents: 2}},
-		{"subagent stop", stopWithBackground, "a1", &session.Background{Shells: 2, Agents: 1}},
+		// The monitor is running work too, under its own name.
+		{"stop", stopWithBackground, "", &session.Background{Shells: 2, Agents: 2, Other: map[string]int{"monitor": 1}}},
+		{"subagent stop", stopWithBackground, "a1", &session.Background{Shells: 2, Agents: 1, Other: map[string]int{"monitor": 1}}},
 		{"none running", `{"hook_event_name":"Stop","background_tasks":[]}`, "", &session.Background{}},
 		{"not said", `{"hook_event_name":"Stop","stop_hook_active":false}`, "", nil},
 		{"not json", `not json`, "", nil},
 		{"not a list", `{"background_tasks":"many"}`, "", nil},
 	} {
 		got := hookBackground([]byte(c.payload), c.except)
-		if (got == nil) != (c.want == nil) || (got != nil && *got != *c.want) {
+		if (got == nil) != (c.want == nil) || (got != nil && !reflect.DeepEqual(*got, *c.want)) {
 			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
 		}
 	}
@@ -89,7 +92,7 @@ func TestTheBackgroundCountStaysWithTheTurnThatLeftIt(t *testing.T) {
 
 	hookWithPayload(t, "done", stopWithBackground)
 	hs := session.ReadHookStateAnyAge("BGBG2345")
-	if hs == nil || hs.State != "done" || hs.Background == nil || *hs.Background != (session.Background{Shells: 2, Agents: 2}) {
+	if hs == nil || hs.State != "done" || hs.Background == nil || !reflect.DeepEqual(*hs.Background, session.Background{Shells: 2, Agents: 2, Other: map[string]int{"monitor": 1}}) {
 		t.Fatalf("after Stop: %+v", hs)
 	}
 	said := hs.TS
@@ -98,13 +101,13 @@ func TestTheBackgroundCountStaysWithTheTurnThatLeftIt(t *testing.T) {
 	hookWithPayload(t, "subagent", `{"hook_event_name":"SubagentStop","agent_id":"a2","background_tasks":[
  {"id":"b1","type":"shell","status":"running"},{"id":"a2","type":"subagent","status":"running"}]}`)
 	hs = session.ReadHookStateAnyAge("BGBG2345")
-	if hs == nil || hs.State != "done" || !hs.TS.Equal(said) || hs.Background == nil || *hs.Background != (session.Background{Shells: 1}) {
+	if hs == nil || hs.State != "done" || !hs.TS.Equal(said) || hs.Background == nil || !reflect.DeepEqual(*hs.Background, session.Background{Shells: 1}) {
 		t.Fatalf("after SubagentStop: %+v (said at %v)", hs, said)
 	}
 
 	// One that says nothing of the rest leaves the count as it was.
 	hookWithPayload(t, "subagent", `{"hook_event_name":"SubagentStop","agent_id":"a9"}`)
-	if hs2 := session.ReadHookStateAnyAge("BGBG2345"); hs2 == nil || hs2.Background == nil || *hs2.Background != (session.Background{Shells: 1}) {
+	if hs2 := session.ReadHookStateAnyAge("BGBG2345"); hs2 == nil || hs2.Background == nil || !reflect.DeepEqual(*hs2.Background, session.Background{Shells: 1}) {
 		t.Fatalf("a SubagentStop without the list changed the count: %+v", hs2)
 	}
 
@@ -156,4 +159,64 @@ func TestClaudeCodesHooksHearASubagentFinish(t *testing.T) {
 		t.Fatalf("Claude Code's hooks: %+v", tg.hooks.events)
 	}
 	t.Fatal("no Claude Code target")
+}
+
+// hookBackgroundJSON is what hookBackground made of payload, as it is kept
+// in the hook record ("null" for nothing said).
+func hookBackgroundJSON(t *testing.T, payload string) string {
+	t.Helper()
+	b, err := json.Marshal(hookBackground([]byte(payload), ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// Qwen Code's Stop lists its background agents as its bundle builds them
+// (getBackgroundTaskSnapshot: id, status, agent_type, started_at,
+// description), with no type: each one running is a subagent. One with
+// neither a type nor an agent_type is still running work.
+func TestQwensStopCountsItsBackgroundAgents(t *testing.T) {
+	const qwenStop = `{"session_id":"s1","hook_event_name":"Stop","stop_hook_active":false,"last_assistant_message":"ok",
+"background_tasks":[
+ {"id":"t1","status":"running","agent_type":"general-purpose","started_at":"2026-11-03T10:00:00.000Z","description":"run the benchmark"},
+ {"id":"t2","status":"running","agent_type":"unknown","started_at":"2026-11-03T10:01:00.000Z","description":"review"},
+ {"id":"t3","status":"completed","agent_type":"Explore","started_at":"2026-11-03T09:00:00.000Z","description":"done already"},
+ {"id":"t4","status":"cancelled","agent_type":"Explore"},
+ {"id":"t5","status":"running","description":"no kind said"}
+],"crons":[]}`
+	if got, want := hookBackgroundJSON(t, qwenStop), `{"agents":2,"other":{"background task":1}}`; got != want {
+		t.Errorf("qwen Stop: %s, want %s", got, want)
+	}
+}
+
+// Every kind Claude Code's Stop names (its type map: subagent, workflow,
+// shell, monitor, MCP task, teammate, …) is running work: one reminal has no
+// name for is counted under its own, never as none.
+func TestEveryRunningKindAHookNamesIsCounted(t *testing.T) {
+	const stop = `{"hook_event_name":"Stop","background_tasks":[
+ {"id":"m1","type":"monitor","status":"running"},
+ {"id":"m2","type":"monitor","status":"running"},
+ {"id":"w1","type":"workflow","status":"running"},
+ {"id":"p1","type":"MCP task","status":"running"},
+ {"id":"x1","type":"teammate","status":"completed"},
+ {"id":"z1","type":"something new","status":"running"}
+]}`
+	if got, want := hookBackgroundJSON(t, stop), `{"other":{"MCP task":1,"monitor":2,"something new":1,"workflow":1}}`; got != want {
+		t.Errorf("claude Stop: %s, want %s", got, want)
+	}
+}
+
+// Antigravity's Stop says only whether all its background work is done
+// (fullyIdle): not done is one of it, said as background work.
+func TestAntigravitysStopSaysOnlyWhetherItIsIdle(t *testing.T) {
+	for _, c := range []struct{ name, payload, want string }{
+		{"busy", `{"executionNum":1,"terminationReason":"NO_TOOL_CALL","error":"","fullyIdle":false}`, `{"other":{"background work":1}}`},
+		{"idle", `{"executionNum":2,"terminationReason":"NO_TOOL_CALL","fullyIdle":true}`, `{}`},
+		{"not said", `{"executionNum":3,"terminationReason":"ERROR"}`, `null`},
+	} {
+		if got := hookBackgroundJSON(t, c.payload); got != c.want {
+			t.Errorf("agy %s: %s, want %s", c.name, got, c.want)
+		}
+	}
 }

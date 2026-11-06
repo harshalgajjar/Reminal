@@ -315,13 +315,12 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// going is honestly "done", and "done · 1 shell" is the thing worth
 		// knowing before deciding it needs nothing from you.
 		hs := session.ReadHookStateAnyAge(a.sessionID)
-		shells, agents := attnShellsOnScreen(agentActive, render), 0
-		if bg := attnHookBackground(agentActive, hs, fgAt); bg != nil {
-			// What the harness's own hook said it left running: the footer
-			// counts shells only, and only what it shows.
-			shells, agents = max(shells, bg.Shells), bg.Agents
-		}
+		// With what the harness's own hook said it left running: the footer
+		// counts only what it shows, the hook what it lists; each kind the
+		// larger of the two (attn_background.go).
+		shells, agents, other := attnBackground(attnShellsOnScreen(agentActive, render), attnOtherOnScreen(prog, agentActive, render), attnHookBackground(agentActive, hs, fgAt))
 		a.noteShells(shells, agents)
+		a.noteOther(other)
 		// Whether the agent here can work at all — its login. Read from the
 		// same screen, before the attention state, because a logged-out agent
 		// takes a message, ends its turn and looks done; by the program that

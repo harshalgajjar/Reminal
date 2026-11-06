@@ -334,6 +334,10 @@ type Agent struct {
 	// attnAgents is how many subagents of its own it says it still has
 	// running in the background (its hook; see attnHookBackground).
 	attnAgents int
+	// attnOther is the rest of the background work it says it still has
+	// running, by kind ("monitor", "background process", "background work";
+	// attn_background.go).
+	attnOther map[string]int
 	// attnFG is the command in the terminal's foreground, as the attention
 	// detector last saw it. Written to the session record so a list can tell
 	// an agent from a plain terminal.
