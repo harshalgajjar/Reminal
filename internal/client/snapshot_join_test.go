@@ -273,7 +273,7 @@ func refCoverageDropMask(history []string, shingles map[string]bool, refWords ma
 		for j < len(covered) && covered[j] {
 			j++
 		}
-		if j-i < dedupFrameRunMin {
+		if j-i < dedupFrameRunMin || (i > 0 && lineOf[i-1] == lineOf[i]) {
 			for k := i; k < j; k++ {
 				covered[k] = false
 			}

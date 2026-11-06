@@ -143,3 +143,32 @@ func TestDedupBlocksTruncatedPrefixFragment(t *testing.T) {
 		t.Errorf("legitimately distinct paragraph deleted:\n%s", joined)
 	}
 }
+
+// A list item's wrapped tail reads like another item's: item 4's "golf hotel
+// … mike" row in the history, item 19's identical row on the screen (a real
+// Claude Code list at 50 columns). The history row is the only copy of
+// item 4's continuation, and a repaint re-emits rows from where a row
+// begins: a match that begins inside a line ("4. T3L04" is not on the
+// screen) is no repaint, and the row stays.
+func TestDedupAgainstFrameKeepsARowThatOnlyContinuesLikeTheFrame(t *testing.T) {
+	history := []string{
+		"  4. T3L04 alpha bravo charlie delta echo foxtrot",
+		"     golf hotel india juliet kilo lima mike",
+		"     ENDT3L04",
+	}
+	screen := []string{
+		"  19. T3L19 alpha bravo charlie delta echo foxtrot",
+		"      golf hotel india juliet kilo lima mike",
+		"      ENDT3L19",
+	}
+	out := dedupAgainstFrame(history, screen)
+	if strings.Join(out, "\n") != strings.Join(history, "\n") {
+		t.Errorf("a row of the history went, or moved:\n%s\nwant it unchanged:\n%s", strings.Join(out, "\n"), strings.Join(history, "\n"))
+	}
+	// The same rows re-emitted whole (a repaint of item 19) still go.
+	stale := append([]string{"  3. T3L03 something else entirely here"}, screen...)
+	out = dedupAgainstFrame(stale, screen)
+	if strings.Join(out, "\n") != stale[0] {
+		t.Errorf("a repaint of the frame's rows survived:\n%s", strings.Join(out, "\n"))
+	}
+}

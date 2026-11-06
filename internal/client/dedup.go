@@ -226,6 +226,12 @@ func coverageDropMask(history []string, shingles map[shingle]bool, refWords map[
 	}
 	// Length gate: a covered stretch shorter than dedupFrameRunMin is a phrase that
 	// may legitimately recur, not an unambiguous re-emit — uncover it.
+	// Start gate: a repaint re-emits rows, so a stretch that is one begins
+	// where a history line begins. One that begins inside a line is a line
+	// that only CONTINUES like a row of the frame: the wrapped tail of a
+	// list item, the same words as the tail of another item on the screen
+	// ("4. T3L04 alpha … foxtrot / golf hotel … mike" against "19. T3L19
+	// alpha … foxtrot / golf hotel … mike") — the only copy of it.
 	for i := 0; i < len(covered); {
 		if !covered[i] {
 			i++
@@ -235,7 +241,7 @@ func coverageDropMask(history []string, shingles map[shingle]bool, refWords map[
 		for j < len(covered) && covered[j] {
 			j++
 		}
-		if j-i < dedupFrameRunMin {
+		if j-i < dedupFrameRunMin || (i > 0 && lineOf[i-1] == lineOf[i]) {
 			for k := i; k < j; k++ {
 				covered[k] = false
 			}
