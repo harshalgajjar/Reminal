@@ -343,12 +343,28 @@ func compactDropped(lines []string, drop []bool) []string {
 
 // dedupAgainstFrame drops committed lines that are stale re-emissions of the app's
 // current frame (see block comment above). screen is the live screen's rows.
+// Then the heading rules (dropOrphanHeadings, dropHeadingDebris) are read
+// across the seam: the history's tail and the screen as one text, the
+// screen's rows never dropped. A frame that begins with the heading the
+// history ends on (a redraw after the terminal got shorter: "IV. The
+// Letter", the debris it left, then the screen's "IV. The Letter" over its
+// text) otherwise read the heading twice, since neither side alone holds
+// both copies.
 func dedupAgainstFrame(history, screen []string) []string {
 	var fw []string
 	for _, r := range screen {
 		fw = append(fw, dedupWords(r)...)
 	}
-	return compactDropped(history, frameMatchedDropMask(history, fw))
+	drop := frameMatchedDropMask(history, fw)
+	both := append(append(make([]string, 0, len(history)+len(screen)), history...), screen...)
+	mask := append(append(make([]bool, 0, len(both)), drop...), make([]bool, len(screen))...)
+	paras := dedupParagraphs(both)
+	dropOrphanHeadings(both, paras, mask)
+	dropHeadingDebris(both, paras, mask)
+	for i := range history {
+		drop[i] = mask[i]
+	}
+	return compactDropped(history, drop)
 }
 
 // dedupRepaints drops paragraphs that re-emit text found elsewhere in the

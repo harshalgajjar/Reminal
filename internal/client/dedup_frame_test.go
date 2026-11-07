@@ -393,3 +393,42 @@ func TestDedupRepaintsOnAFoldAndKeyboardSession(t *testing.T) {
 		}
 	}
 }
+
+// The same session at the seam: the history as the agent holds it and the
+// live screen under it (testdata/dedup/fold-keyboard-screen.txt, the 58
+// rows the join painted last). The screen begins with "IV. The Letter"
+// over its text, and the history ends on the heading and the redraw's
+// debris: painted together, the heading read twice. The screen is never
+// changed; the history's tail is.
+func TestJoinReadsAHeadingAtTheSeamOnce(t *testing.T) {
+	read := func(name string) []string {
+		data, err := os.ReadFile("testdata/dedup/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	}
+	history, screen := read("fold-keyboard-history.txt"), read("fold-keyboard-screen.txt")
+	out := dedupAgainstFrame(dedupRepaints(history), screen)
+	plain := func(rows []string) string {
+		var b strings.Builder
+		for _, l := range rows {
+			b.WriteString(strings.TrimSpace(dedupANSI.ReplaceAllString(l, "")) + "\n")
+		}
+		return b.String()
+	}
+	painted := plain(out) + plain(screen)
+	for row, want := range map[string]int{"\nIV. The Letter\n": 1, "\nstairs.\n": 1, "\nIII. The Knocking\n": 1, "\nV. The Last Winter\n": 1} {
+		if n := strings.Count(painted, row); n != want {
+			t.Errorf("%q is read %d times, want %d:\n%s", strings.TrimSpace(row), n, want, painted)
+		}
+	}
+	if n := strings.Count(painted, "The next morning a fishing boat"); n != 1 {
+		t.Errorf("the paragraph under the heading is read %d times, want once", n)
+	}
+	for _, keep := range []string{"The fog came in during the second week", "Mara ran back up the stairs", "Saw your light just in time", "You've met him by now, I expect", "The End."} {
+		if !strings.Contains(painted, keep) {
+			t.Errorf("lost %q", keep)
+		}
+	}
+}
