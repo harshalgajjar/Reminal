@@ -119,3 +119,35 @@ func TestHealPluginsRewritesOnlyReminalsOlderPlugin(t *testing.T) {
 		t.Errorf("pluginBin: %q", bin)
 	}
 }
+
+// Every agent that loads reminal's plugin gets its older copy healed: Kilo
+// Code CLI's, in its own plugin dir, as well as OpenCode's.
+func TestHealPluginsCoversEveryPluginAgent(t *testing.T) {
+	home := t.TempDir()
+	bin := "/home/u/.local/bin/reminal"
+	var want []string
+	for _, a := range []string{"opencode", "kilo"} {
+		p := targetNamed(t, a).plugin
+		if p == nil {
+			t.Fatalf("%s has no plugin", a)
+		}
+		path := filepath.Join(home, p.path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(strings.Replace(p.body(bin), "let writing = false;", "", 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, p.path)
+	}
+	got := healPlugins(home)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("healed %v, want %v", got, want)
+	}
+	for _, a := range []string{"opencode", "kilo"} {
+		p := targetNamed(t, a).plugin
+		if b, _ := os.ReadFile(filepath.Join(home, p.path)); string(b) != p.body(bin) {
+			t.Errorf("%s: not this binary's plugin", a)
+		}
+	}
+}

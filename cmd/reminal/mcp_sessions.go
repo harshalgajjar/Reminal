@@ -42,9 +42,15 @@ type mcpSessionRow struct {
 	// Agents is how many subagents of its own it still has running in the
 	// background, and Other the rest of its background work by kind as the
 	// harness names it ("monitor": 2): as `reminal list` says them.
-	Agents  int            `json:"agents,omitempty"`
-	Other   map[string]int `json:"other,omitempty"`
-	Current bool           `json:"current,omitempty"`
+	Agents int            `json:"agents,omitempty"`
+	Other  map[string]int `json:"other,omitempty"`
+	// Scheduled is how many jobs it has set to run later, never counted with
+	// the work above; ScheduledNext when the soonest fires (RFC3339), when
+	// said; ScheduledAt when its harness said them (RFC3339).
+	Scheduled     int    `json:"scheduled,omitempty"`
+	ScheduledNext string `json:"scheduled_next,omitempty"`
+	ScheduledAt   string `json:"scheduled_at,omitempty"`
+	Current       bool   `json:"current,omitempty"`
 	// Asleep: the session sleeps (its processes ended, its record kept).
 	// read_transcript and search_sessions answer from what it saved;
 	// send_keys wakes it first. SleptAt is when (RFC3339); Dropped, what the
@@ -206,24 +212,27 @@ func fleetMachineRow(m client.FleetMachine, currentID string) mcpMachineRow {
 	}
 	for _, s := range m.Sessions {
 		row.Sessions = append(row.Sessions, mcpSessionRow{
-			ID:       s.ID,
-			Name:     s.Name,
-			Path:     s.Cwd,
-			Title:    s.Title,
-			Kind:     s.Kind,
-			Port:     s.Port,
-			Headless: s.Headless,
-			Viewers:  s.Viewers,
-			IdleSecs: s.IdleSecs,
-			Attn:     s.Attn,
-			ResetsAt: resetsAtRFC3339(s.ResetsAt),
-			Shells:   s.Shells,
-			Agents:   s.Agents,
-			Other:    session.CleanOther(s.Other),
-			Current:  currentID != "" && strings.EqualFold(s.ID, currentID),
-			Asleep:   s.Asleep,
-			SleptAt:  resetsAtRFC3339(s.SleptAt),
-			Dropped:  s.Dropped,
+			ID:            s.ID,
+			Name:          s.Name,
+			Path:          s.Cwd,
+			Title:         s.Title,
+			Kind:          s.Kind,
+			Port:          s.Port,
+			Headless:      s.Headless,
+			Viewers:       s.Viewers,
+			IdleSecs:      s.IdleSecs,
+			Attn:          s.Attn,
+			ResetsAt:      resetsAtRFC3339(s.ResetsAt),
+			Shells:        s.Shells,
+			Agents:        s.Agents,
+			Other:         session.CleanOther(s.Other),
+			Scheduled:     session.ClampCount(s.Scheduled),
+			ScheduledNext: resetsAtRFC3339(s.ScheduledNext),
+			ScheduledAt:   resetsAtRFC3339(s.ScheduledAt),
+			Current:       currentID != "" && strings.EqualFold(s.ID, currentID),
+			Asleep:        s.Asleep,
+			SleptAt:       resetsAtRFC3339(s.SleptAt),
+			Dropped:       s.Dropped,
 		})
 	}
 	return row

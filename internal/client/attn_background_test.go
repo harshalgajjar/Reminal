@@ -144,6 +144,49 @@ func TestCodexsBackgroundTerminalsAreReadOverItsBox(t *testing.T) {
 	}
 }
 
+// Qwen Code 0.26.9 says what it has running in its footer, after its
+// approval mode ("YOLO mode (shift + tab to cycle) · 1 shell, 1 monitor";
+// recorded in Docker against a stand-in model that started a background
+// shell and monitors): its monitors and workflows are read there, its
+// shells as attnShellCount reads them. What it wrote above ("Monitor
+// started: watch logs") is not its count.
+func TestQwensFooterMonitorsAndWorkflowsAreCounted(t *testing.T) {
+	read := func(file string) string {
+		b, err := os.ReadFile(filepath.Join("testdata", "harness-screens", file+".txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	one := read("qwen-background")
+	for _, c := range []struct {
+		name, screen string
+		want         map[string]int
+	}{
+		{"a shell and a monitor", one, map[string]int{"monitor": 1}},
+		{"two monitors, 80 wide", read("qwen-background-80"), map[string]int{"monitor": 2}},
+		{"workflows too", strings.Replace(one, "· 1 shell, 1 monitor", "· 1 shell, 1 monitor, 2 workflows", 1), map[string]int{"monitor": 1, "workflow": 2}},
+		{"its local agents only", strings.Replace(one, "· 1 shell, 1 monitor", "· 2 local agents", 1), nil},
+		{"all of it done", strings.Replace(one, "· 1 shell, 1 monitor", "· 3 tasks done", 1), nil},
+		// Its input row in YOLO mode opens with "*": a count typed there is not
+		// its footer's.
+		{"a count typed in", strings.Replace(one, "* Started them in the background.", "* why did it say 1 shell, 3 monitors", 1), map[string]int{"monitor": 1}},
+	} {
+		if got := attnOtherOnScreen("qwen", true, c.screen); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+	if got := attnShellsOnScreen(true, one); got != 1 {
+		t.Errorf("its shell: %d, want 1", got)
+	}
+	if got := attnOtherOnScreen("gemini", true, one); got != nil {
+		t.Errorf("read for another program: %v", got)
+	}
+	if got := attnOtherOnScreen("qwen", false, one); got != nil {
+		t.Errorf("no agent in front: %v", got)
+	}
+}
+
 // What is running is the larger of the screen's count and the hook's, kind
 // by kind: a hook that lists work it counts as none, or fewer of it, never
 // lowers what the screen shows, nor the screen the hook. Antigravity's
@@ -180,18 +223,18 @@ func TestAHookAndTheScreenMakeOneCount(t *testing.T) {
 // change in shells does, so `reminal list` sees a monitor start or stop.
 func TestNoteShellsFlushesOnOtherWork(t *testing.T) {
 	var a Agent
-	a.noteShells(0, 0, map[string]int{"monitor": 1})
+	a.noteShells(0, 0, map[string]int{"monitor": 1}, nil)
 	if !a.metaDirty.Swap(false) {
 		t.Fatal("a monitor starting did not flush the record")
 	}
-	a.noteShells(0, 0, map[string]int{"monitor": 1})
+	a.noteShells(0, 0, map[string]int{"monitor": 1}, nil)
 	if a.metaDirty.Load() {
 		t.Fatal("the same count flushed the record again")
 	}
 	if got := a.activeRecord(0).Other; got["monitor"] != 1 || len(got) != 1 {
 		t.Errorf("record's Other = %v, want one monitor", got)
 	}
-	a.noteShells(0, 0, nil)
+	a.noteShells(0, 0, nil, nil)
 	if !a.metaDirty.Load() {
 		t.Fatal("the monitor stopping did not flush the record")
 	}

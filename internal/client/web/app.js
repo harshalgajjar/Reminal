@@ -6289,12 +6289,34 @@
     // Size-pipeline trace. ?sizelog=1 or Settings → Size debug. Shows wrap
     // → send → PTY broadcast → paint so a phone can tell whether the hole
     // is the client's measure, the agent's min, or the local grid.
+    // The viewer's own record of what shaped its screen: the sizes it
+    // measured, sent and was told, its grid as painted, the pixel ratio,
+    // each socket wired, each snapshot part received and the snapshot
+    // applied. A screenshot of a garbled screen with this beside it says
+    // which of them came in what order. Kept short (the last DIAG_KEEP),
+    // shown and copied from Settings → Size debug (SizeLog), and read by
+    // tests as window.__size().events.
+    const DIAG_KEEP = 48;
     const sizeEvents = [];
+    function diag(kind, d) {
+      sizeEvents.push({ t: Date.now(), kind, d });
+      if (sizeEvents.length > DIAG_KEEP) sizeEvents.shift();
+      SizeLog.trace(kind + ' ' + d);
+    }
     function sizeTrace(kind, c, r) {
-      const line = kind + ' ' + c + 'x' + r;
-      sizeEvents.push({ t: Date.now(), kind, c, r });
-      if (sizeEvents.length > 24) sizeEvents.shift();
-      SizeLog.trace(line);
+      const e = { t: Date.now(), kind, c, r, d: c + 'x' + r };
+      sizeEvents.push(e);
+      if (sizeEvents.length > DIAG_KEEP) sizeEvents.shift();
+      SizeLog.trace(kind + ' ' + e.d);
+    }
+    // diagText is the record as text, newest last, with the moment each
+    // was taken relative to now.
+    function diagText() {
+      const now = Date.now();
+      let s = {};
+      try { s = window.__size(); } catch (_) {}
+      const head = 'reminal viewer ' + (s.viewer || '-') + ' grid ' + (s.grid ? s.grid.c + 'x' + s.grid.r : '-') + ' dpr ' + (window.devicePixelRatio || 1) + ' inner ' + (s.inner ? s.inner.w + 'x' + s.inner.h : '-');
+      return [head].concat(sizeEvents.map((e) => ((e.t - now) / 1000).toFixed(1) + 's ' + e.kind + ' ' + e.d)).join('\n');
     }
     window.__size = function () {
       let snap = {};
@@ -6359,6 +6381,7 @@
       // The PTY an agent said it has, under its key: another session's is
       // no limit on this one's grid.
       let ptyC = 0, ptyR = 0, ptyKey = null;
+      let lastDpr = window.devicePixelRatio; // the pixel ratio last recorded (diag)
 
       function atLiveBottom() {
         try {
@@ -6477,6 +6500,11 @@
         if (changed && predictions.length > 0) resetPredictionsSoft();
         if (changed) {
           resizeAnchoredBottom(cols, rows);
+          diag('grid', cols + 'x' + rows);
+        }
+        if (window.devicePixelRatio !== lastDpr) {
+          lastDpr = window.devicePixelRatio;
+          diag('dpr', String(lastDpr));
         }
         try {
           const cell = cellSize();
@@ -6702,9 +6730,19 @@
         const handle = document.createElement('div');
         handle.className = 'sizelog-handle';
         handle.textContent = 'SIZE  ·  drag';
+        // The record, copied to go with a screenshot of what went wrong.
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'sizelog-copy';
+        copy.textContent = 'copy';
+        copy.addEventListener('click', async () => {
+          try { await navigator.clipboard.writeText(diagText()); copy.textContent = 'copied'; } catch (_) { copy.textContent = 'no clipboard'; }
+          setTimeout(() => { copy.textContent = 'copy'; }, 1500);
+        });
         body = document.createElement('div');
         body.className = 'sizelog-body';
         box.appendChild(handle);
+        box.appendChild(copy);
         box.appendChild(body);
         box.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
         box.addEventListener('touchmove', (e) => e.stopPropagation(), { passive: true });
@@ -6873,6 +6911,10 @@
     }
     async function onPacedPart(msg, h, body) {
       if (h.screen) {
+        // One entry per snapshot (its screen, then its history applied): its
+        // parts, up to SNAP_PACED_MAX_PARTS, would push out of the record the
+        // size events it is kept for.
+        diag('snap', 'screen' + (h.more ? ', parts to come' : ''));
         // A new snapshot for this connection: whatever was under way is over.
         if (snapAsm) { clearTimeout(snapAsm.timer); snapAsm = null; }
         const seq = typeof msg.seq === 'number' ? msg.seq : 0;
@@ -6924,6 +6966,7 @@
       // lines of it went. A soft reset and the full region; the kept output
       // after it sets again whatever the program set.
       pendingChunks.push(new TextEncoder().encode('\x1b[!p\x1b[r'));
+      diag('snap', 'applied, paced, ' + a.n + ' parts');
       pendingChunks.push(whole);
       bytesReceived += whole.byteLength;
       for (const f of a.held) if (f.seq > a.seq) pendingChunks.push(f.bytes);
@@ -6958,6 +7001,7 @@
       if (!snapAsm || snapAsm.id !== h.id) {
         if (snapAsm) clearTimeout(snapAsm.timer);
         snapAsm = { id: h.id, n: h.n, seq: msg.seq || 0, parts: new Array(h.n), got: 0, held: [] };
+        diag('snap', 'parts, ' + h.n + ' to come');
         snapAsm.timer = setTimeout(snapPartsGiveUp, SNAP_PARTS_WAIT_MS);
       }
       const a = snapAsm;
@@ -6978,6 +7022,7 @@
       snapAsm = null;
       awaitingSnapshotUntil = 0;
       if (a.seq > lastSeq || lastSeq === 0) lastSeq = a.seq;
+      diag('snap', 'applied, ' + a.n + ' parts');
       enqueueData(whole);
       bytesReceived += whole.byteLength;
       for (const f of a.held) {
@@ -7525,6 +7570,7 @@
     // wireSocket gives the page's connection its handlers: on a fresh dial,
     // and on a warm socket unparked (resumeWarm).
     function wireSocket(sock) {
+      diag('socket', 'wired');
       sock.onmessage = async (ev) => {
         noteInbound(sock);
         let msg;

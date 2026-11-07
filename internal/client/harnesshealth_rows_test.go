@@ -503,6 +503,11 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"a person's text at the prompt", "claude", "────\n❯ why does it say\n  Authentication required.\n────", false},
 		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", false},
 		{"Codex's IdP row carried on in an answer", "codex", "● The server said enterprise IdP session has no refresh token; sign in again, so I stopped.\n› ", false},
+		// Claude Code 2.1.319: a claude.ai login that ended while another
+		// login profile pays for the usage: the session goes on, and the
+		// footer and its warning only say so; not a login wanted.
+		{"Claude Code's footer after a claude.ai login ended, usage billed elsewhere", "claude", "answer" + box + "  claude.ai login ended · usage now billed to Acme Corp · /login to sign in", false},
+		{"Claude Code's warning of the same", "claude", "  Warning: the claude.ai login on this machine has ended. This run uses the sign-in from ant auth login instead, and its usage is billed to Acme Corp. Run claude auth login to sign in again, or claude auth logout to remove the ended login and keep that sign-in without this warning." + box, false},
 		// Qwen Code 0.26.9: rows that say the session is fine, and its
 		// notices quoted or carried on in an agent's own words.
 		{"Qwen's models that would not load, signed in", "qwen", "answer" + box + "  Could not load models. Your account is still signed in. Please try again.", false},

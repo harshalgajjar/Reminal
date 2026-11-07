@@ -18,9 +18,10 @@ func TestConvStores(t *testing.T) {
 	t.Setenv("PI_CODING_AGENT_DIR", "")
 	const conv = "51580c55-63f5-43c1-bbea-4d0425f09835"
 	files := map[string]string{
-		"claude": filepath.Join(home, ".claude", "projects", "-work", conv+".jsonl"),
-		"qwen":   filepath.Join(home, ".qwen", "projects", "-work", "chats", conv+".jsonl"),
-		"pi":     filepath.Join(home, ".pi", "agent", "sessions", "--work--", "2026-10-29T17-51-38-000Z_"+conv+".jsonl"),
+		"claude":  filepath.Join(home, ".claude", "projects", "-work", conv+".jsonl"),
+		"qwen":    filepath.Join(home, ".qwen", "projects", "-work", "chats", conv+".jsonl"),
+		"pi":      filepath.Join(home, ".pi", "agent", "sessions", "--work--", "2026-10-29T17-51-38-000Z_"+conv+".jsonl"),
+		"copilot": filepath.Join(home, ".copilot", "session-state", conv, "events.jsonl"),
 	}
 	for agent, p := range files {
 		if convSize(agent, conv) != 0 {

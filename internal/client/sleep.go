@@ -34,6 +34,7 @@ type sleepFacts struct {
 	Shells    int      // background shells its agent said it left running
 	Agents    int      // background subagents
 	Other     int      // the rest of its background work, in all (monitors, background tasks, ...)
+	Scheduled int      // jobs its agent set to run later (session.Scheduled): they die with it
 	BgSaid    bool     // what its agent left running is known (none, too): said by its hook, or seen on its terminal
 	Draft     bool     // something typed on its input line, not sent
 	Jobs      []string // other programs running in its shell
@@ -85,6 +86,15 @@ func sleepVerdict(f sleepFacts) (block string, losses []string) {
 		// have left something. One with no turn since it started (just
 		// woken) has left nothing: what ran before went with its last run.
 		losses = append(losses, "any background work its agent left (it didn't say)")
+	}
+	if f.Scheduled > 0 {
+		// Not work running, and no reason to stay up for: a wake does not
+		// bring it back, so it is said, as what a sleep would drop.
+		job := "job"
+		if f.Scheduled != 1 {
+			job = "jobs"
+		}
+		losses = append(losses, fmt.Sprintf("its %d scheduled %s, which won't fire", f.Scheduled, job))
 	}
 	if f.Draft {
 		losses = append(losses, "what was typed and not sent")
@@ -158,8 +168,9 @@ func (a *Agent) sleepNow(anyway bool) error {
 	f := sleepFacts{
 		Pinned: session.AwakePinned(a.sessionID), Headless: a.headless,
 		Attn: a.attnState, Shells: a.attnShells, Agents: a.attnAgents,
-		Other: session.CountOther(a.attnOther),
-		Draft: a.typing.draft,
+		Other:     session.CountOther(a.attnOther),
+		Scheduled: a.attnScheduled.Jobs(),
+		Draft:     a.typing.draft,
 	}
 	fgAt := a.attnFGAt
 	var base map[procKey]bool
