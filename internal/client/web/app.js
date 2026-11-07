@@ -6910,8 +6910,11 @@
       return whole;
     }
     async function onPacedPart(msg, h, body) {
-      diag('snap', h.screen ? 'screen' : 'part ' + (h.i + 1) + '/' + h.n);
       if (h.screen) {
+        // One entry per snapshot (its screen, then its history applied): its
+        // parts, up to SNAP_PACED_MAX_PARTS, would push out of the record the
+        // size events it is kept for.
+        diag('snap', 'screen' + (h.more ? ', parts to come' : ''));
         // A new snapshot for this connection: whatever was under way is over.
         if (snapAsm) { clearTimeout(snapAsm.timer); snapAsm = null; }
         const seq = typeof msg.seq === 'number' ? msg.seq : 0;
@@ -6963,7 +6966,7 @@
       // lines of it went. A soft reset and the full region; the kept output
       // after it sets again whatever the program set.
       pendingChunks.push(new TextEncoder().encode('\x1b[!p\x1b[r'));
-      diag('snap', 'applied, paced');
+      diag('snap', 'applied, paced, ' + a.n + ' parts');
       pendingChunks.push(whole);
       bytesReceived += whole.byteLength;
       for (const f of a.held) if (f.seq > a.seq) pendingChunks.push(f.bytes);
@@ -6998,12 +7001,12 @@
       if (!snapAsm || snapAsm.id !== h.id) {
         if (snapAsm) clearTimeout(snapAsm.timer);
         snapAsm = { id: h.id, n: h.n, seq: msg.seq || 0, parts: new Array(h.n), got: 0, held: [] };
+        diag('snap', 'parts, ' + h.n + ' to come');
         snapAsm.timer = setTimeout(snapPartsGiveUp, SNAP_PARTS_WAIT_MS);
       }
       const a = snapAsm;
       if (a.parts[h.i]) return;
       a.parts[h.i] = bytes.subarray(4 + hl);
-      diag('snap', 'part ' + (h.i + 1) + '/' + h.n);
       if (++a.got < a.n) return;
       clearTimeout(a.timer);
       let whole;
@@ -7019,7 +7022,7 @@
       snapAsm = null;
       awaitingSnapshotUntil = 0;
       if (a.seq > lastSeq || lastSeq === 0) lastSeq = a.seq;
-      diag('snap', 'applied');
+      diag('snap', 'applied, ' + a.n + ' parts');
       enqueueData(whole);
       bytesReceived += whole.byteLength;
       for (const f of a.held) {
