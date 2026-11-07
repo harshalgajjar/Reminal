@@ -87,17 +87,7 @@ func hookBackground(payload []byte, except string) *session.Background {
 // none: each Stop says the whole of it, so none is what clears one said
 // before.
 func hookScheduled(payload []byte, now time.Time) *session.Scheduled {
-	var p struct {
-		Claude *[]json.RawMessage `json:"session_crons"`
-		Qwen   *[]json.RawMessage `json:"crons"`
-	}
-	if json.Unmarshal(payload, &p) != nil {
-		return nil
-	}
-	list := p.Claude
-	if list == nil {
-		list = p.Qwen
-	}
+	list := hookScheduledList(payload)
 	if list == nil {
 		return nil
 	}
@@ -141,4 +131,27 @@ func hookDebugBackground(id, event string, bg *session.Background) {
 		said = fmt.Sprintf("shells=%d agents=%d other=%d scheduled=%d", bg.Shells, bg.Agents, bg.OtherCount(), bg.Scheduled.Jobs())
 	}
 	_ = session.AppendHookDebug(fmt.Sprintf("session=%s event=%s %s", id, event, said))
+}
+
+// hookScheduledList is the jobs list a hook's payload carries (session_crons
+// or crons), nil when it carries none: a payload that names no list says
+// nothing of the jobs, one with an empty list says there are none.
+func hookScheduledList(payload []byte) *[]json.RawMessage {
+	var p struct {
+		Claude *[]json.RawMessage `json:"session_crons"`
+		Qwen   *[]json.RawMessage `json:"crons"`
+	}
+	if json.Unmarshal(payload, &p) != nil {
+		return nil
+	}
+	if p.Claude != nil {
+		return p.Claude
+	}
+	return p.Qwen
+}
+
+// hookSaysScheduled reports whether a hook's payload speaks of the jobs set
+// to run later at all (hookScheduledList).
+func hookSaysScheduled(payload []byte) bool {
+	return hookScheduledList(payload) != nil
 }

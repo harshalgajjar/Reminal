@@ -58,6 +58,7 @@ func runHook(args []string) error {
 
 	var state, failure string
 	var bg *session.Background // what it still has running in the background, if it said
+	var keepScheduled bool     // said nothing of the jobs set to run later
 	switch arg {
 	case "working", "input", "done":
 		// The state is fixed; what the payload adds is which conversation the
@@ -129,6 +130,10 @@ func runHook(args []string) error {
 		if bg == nil {
 			return nil
 		}
+		// Said with no word of the jobs set to run later (Claude Code's
+		// SubagentStop carries no session_crons), what the turn's end said of
+		// them stands; an empty list is its word that there are none.
+		keepScheduled = !hookSaysScheduled(payload)
 	case "notify":
 		// Ambiguous notification — decide "needs you" vs "done" from the payload
 		// AND the current turn state (see classifyNotify).
@@ -151,7 +156,7 @@ func runHook(args []string) error {
 	var err error
 	switch {
 	case arg == "subagent":
-		err = session.UpdateHookBackground(id, bg)
+		err = session.UpdateHookBackground(id, bg, keepScheduled)
 	case arg == "failed":
 		err = session.WriteHookStateFailed(id, failure)
 	default:

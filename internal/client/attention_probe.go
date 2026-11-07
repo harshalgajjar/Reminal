@@ -321,7 +321,10 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		// larger of the two (attn_background.go).
 		hb := attnHookBackground(agentActive, hs, fgAt)
 		shells, agents, other := attnBackground(attnShellsOnScreen(agentActive, render), attnOtherOnScreen(prog, agentActive, render), hb)
-		// And what it has set to run later, apart: never work running.
+		// And what it has set to run later, apart: never work running. Said
+		// between turns only (attnHookBackground gives nothing while a turn
+		// runs): a turn may set or clear jobs, and its end says the whole of
+		// them, so a count shown while it runs could be one it has changed.
 		var sched *session.Scheduled
 		if hb != nil {
 			sched = session.CleanScheduled(hb.Scheduled)

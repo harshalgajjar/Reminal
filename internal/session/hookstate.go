@@ -255,7 +255,9 @@ func lockHookState(id string) (func(), error) {
 // back under the record's lock, so a turn's state written meanwhile is not
 // undone; without the lock it is left alone — the next turn's end says the
 // count again.
-func UpdateHookBackground(id string, bg *Background) error {
+// keepScheduled: the event said nothing of the jobs set to run later, so what
+// the record holds of them stands.
+func UpdateHookBackground(id string, bg *Background, keepScheduled bool) error {
 	unlock, err := lockHookState(id)
 	if err != nil {
 		return nil
@@ -264,6 +266,9 @@ func UpdateHookBackground(id string, bg *Background) error {
 	hs := ReadHookStateAnyAge(id)
 	if hs == nil {
 		return nil
+	}
+	if keepScheduled && hs.Background != nil && bg.Scheduled == nil {
+		bg.Scheduled = hs.Background.Scheduled
 	}
 	hs.Background = bg
 	return writeHookState(id, *hs)
