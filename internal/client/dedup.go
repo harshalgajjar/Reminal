@@ -337,3 +337,45 @@ func dedupAgainstFrame(history, screen []string) []string {
 	}
 	return compactDropped(history, frameMatchedDropMask(history, fw))
 }
+
+// dedupRepaints drops lines that re-emit text already above them. An inline
+// TUI's reprint of its frame at a new width lands in history as a PARTIAL
+// copy of paragraphs already there, wrapped differently: no paragraph key
+// pairs it (dedupBlocks wants the whole paragraph, verbatim), and once the
+// app has printed more it is no longer the live frame (dedupAgainstFrame).
+// A viewer that joined then read the same passage twice, at two widths.
+// Each paragraph is matched against the 8-word windows of everything kept
+// before it, as a frame is (coverageDropMask): a line whose words are all
+// inside matched runs that begin where a line begins goes; a line with a
+// word of its own, or a short one, stays. The first copy, in its place, is
+// what survives.
+func dedupRepaints(lines []string) []string {
+	shingles := map[shingle]bool{}
+	refWords := map[string]bool{}
+	drop := make([]bool, len(lines))
+	for i := 0; i < len(lines); {
+		if dedupBlank(lines[i]) {
+			i++
+			continue
+		}
+		j := i
+		for j < len(lines) && !dedupBlank(lines[j]) {
+			j++
+		}
+		para := lines[i:j]
+		var kept []string
+		for k, d := range coverageDropMask(para, shingles, refWords) {
+			if d {
+				drop[i+k] = true
+			} else {
+				kept = append(kept, dedupWords(para[k])...)
+			}
+		}
+		addShingles(shingles, kept)
+		for _, w := range kept {
+			refWords[w] = true
+		}
+		i = j
+	}
+	return compactDropped(lines, drop)
+}

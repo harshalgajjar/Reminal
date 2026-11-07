@@ -2614,11 +2614,12 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 			break
 		}
 	}
-	// Resize bottom-anchored, the way a real terminal does (resizeAnchoredBottom).
-	// It moves lines between the screen and scrollback itself — a shrink scrolls
-	// the top off into history, a grow reveals history back onto the screen — so
-	// the segment's scrollback position is taken AFTER it. Those moved rows are
-	// real history; only the app's later repaint is overflow this segment may
+	// Resize as the viewer's terminal does (sessionScreen.Resize): a shrink
+	// drops the rows under the cursor and scrolls the top off into history,
+	// a grow reveals history back onto the screen, a width change re-wraps.
+	// Lines move between the screen and the scrollback, so the segment's
+	// scrollback position is taken AFTER it. Those moved rows are real
+	// history; only the app's later repaint is overflow this segment may
 	// drop, and recording the position beforehand would put genuine content
 	// inside the drop window.
 	a.screen.Resize(int(cols), int(rows))
@@ -2867,7 +2868,7 @@ func (a *Agent) snapshotHistory() []string {
 
 // dedupHistory is snapshotHistory's middle, of what it is given: the resize
 // repaints dropped (unless dropped already: dropped), the newest maxLines
-// kept, and dedupBlocks. A pure function of its arguments, so it runs outside
+// kept, dedupBlocks, and dedupRepaints. A pure function of its arguments, so it runs outside
 // screenMu (joinHistory).
 func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int, dropped bool) []string {
 	if !dropped {
@@ -2876,7 +2877,7 @@ func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int,
 	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
-	return dedupBlocks(lines)
+	return dedupRepaints(dedupBlocks(lines))
 }
 
 // dropResizeRepaints removes, for every resize EXCEPT the newest, the lines its frame

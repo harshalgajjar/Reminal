@@ -83,3 +83,49 @@ func TestTheLineBoundHoldsThroughANarrowing(t *testing.T) {
 		t.Errorf("the oldest line is %q, want row-000…: the oldest lines went", hist[0][:min(len(hist[0]), 12)])
 	}
 }
+
+// A height change is done as the viewer's xterm.js does it, since what the
+// viewer shows is what the person sees and what the program redraws over.
+// With the cursor above the bottom row (Claude Code's always is: its prompt
+// and status rows sit below it): a shrink first drops the rows below the
+// cursor, then scrolls the top into history, the cursor pinned to the
+// bottom; a grow pulls the rows back out of history, the cursor ending on
+// the bottom row. The terminal on its
+// own kept the rows below the cursor on the shrink and added blank rows on
+// the grow, so Claude's redraw after a phone keyboard closed left a stale
+// copy of its frame in the history, which every join then showed twice.
+// (FOSS Innovator 1's control: 100 lines at 102x45, the cursor 5 rows up.)
+func TestAHeightChangeIsDoneAsTheViewerDoesIt(t *testing.T) {
+	s := testScreen(t, 102, 45)
+	defer s.Close()
+	var b strings.Builder
+	for i := 1; i <= 100; i++ {
+		fmt.Fprintf(&b, "L%03d\r\n", i)
+	}
+	b.WriteString("\x1b[5A") // the cursor 5 rows above the bottom, as Claude's
+	s.Write([]byte(b.String()))
+	// The first row and the last row with text (after "L100\r\n" the
+	// bottom row is blank), and the cursor's row.
+	first := func() (string, string, int) {
+		rows := strings.Split(s.Render(), "\n")
+		last := len(rows) - 1
+		for last > 0 && strings.TrimSpace(stripANSI(rows[last])) == "" {
+			last--
+		}
+		return strings.TrimSpace(rows[0]), strings.TrimSpace(rows[last]), s.CursorPosition().Y
+	}
+	if f, l, y := first(); f != "L057" || l != "L100" || y != 39 {
+		t.Fatalf("setup: rows %s..%s, cursor row %d, want L057..L100 and 39", f, l, y)
+	}
+	s.Resize(102, 24)
+	if f, l, y := first(); f != "L073" || l != "L096" || y != 23 {
+		t.Errorf("shrunk to 24: rows %s..%s, cursor row %d; xterm.js: L073..L096, cursor 23 (the rows below the cursor dropped, then scrolled)", f, l, y)
+	}
+	s.Resize(102, 45)
+	if f, l, y := first(); f != "L052" || l != "L096" || y != 44 {
+		t.Errorf("grown to 45: rows %s..%s, cursor row %d; xterm.js: L052..L096, cursor 44 (the history pulled back down)", f, l, y)
+	}
+	if n := len(s.History()); n != 51 {
+		t.Errorf("history is %d lines, xterm.js: 51", n)
+	}
+}

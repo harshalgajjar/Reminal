@@ -172,3 +172,37 @@ func TestDedupAgainstFrameKeepsARowThatOnlyContinuesLikeTheFrame(t *testing.T) {
 		t.Errorf("a repaint of the frame's rows survived:\n%s", strings.Join(out, "\n"))
 	}
 }
+
+// A passage printed at one width, then part of it again at another (the
+// app's reprint of its frame after the phone turned), is read once by a
+// joiner: the later rows, each a run of words already above, go; the copy in
+// its place stays. A paragraph that only shares a few words stays, and so
+// does a short line.
+func TestDedupRepaintsCollapsesACopyAtAnotherWidth(t *testing.T) {
+	para := "deserts cover roughly a fifth of earths land surface defined not by heat but by scarce rainfall and some like antarcticas dry valleys are bitterly cold places where almost nothing grows at all"
+	wide := dfWrap(para, 104)
+	narrow := dfWrap(para, 50)
+	// The reprint starts mid-paragraph: the frame's top row.
+	reprint := narrow[1:]
+	other := dfWrap("deserts cover a fifth of mars where rainfall is unknown and the cold is of another kind entirely", 50)
+	var history []string
+	history = append(history, wide...)
+	history = append(history, "")
+	history = append(history, "MARK-BETWEEN")
+	history = append(history, "")
+	history = append(history, reprint...)
+	history = append(history, "")
+	history = append(history, other...)
+	history = append(history, "", "a short line")
+
+	out := dedupRepaints(history)
+	joined := strings.Join(out, "\n")
+	if n := strings.Count(joined, "antarcticas"); n != 1 {
+		t.Errorf("the copy at the other width survived: %d occurrences\n%s", n, joined)
+	}
+	for _, keep := range []string{"MARK-BETWEEN", "mars where rainfall", "a short line", strings.Join(wide, "\n")} {
+		if !strings.Contains(joined, keep) {
+			t.Errorf("lost %q:\n%s", keep, joined)
+		}
+	}
+}

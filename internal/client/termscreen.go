@@ -5,6 +5,7 @@ package client
 
 import (
 	"bytes"
+	"fmt"
 	"hash/fnv"
 	"strconv"
 	"strings"
@@ -96,11 +97,30 @@ func entersAltScreen(p []byte) bool {
 	return false
 }
 
-// Resize makes it cols by rows, re-wrapping its scrollback.
+// Resize makes it cols by rows, re-wrapping its scrollback. A height change
+// is done as the viewer's xterm.js does it, since what the viewer shows is
+// what the person sees and what the program redraws over: a shrink first
+// drops the rows below the cursor, then scrolls the top into history, so
+// the cursor ends on the bottom row; a grow with the cursor there pulls the
+// rows back out of history (the terminal does that itself). The terminal on
+// its own kept the rows below the cursor on a shrink, so after a phone
+// keyboard closed Claude Code's cursor was not on the bottom row, its grow
+// added blank rows, and its redraw left a stale copy of its frame in the
+// history, shown twice by every join.
 func (s *sessionScreen) Resize(cols, rows int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gen++
+	if _, h := s.t.Size(); rows < h && !s.t.AltScreen() {
+		if x, y := s.t.Cursor(); y < h-1 {
+			if drop := min(h-rows, h-1-y); drop > 0 {
+				// Delete the rows under the cursor (DL at the row below
+				// it, the cursor put back), which leaves blank rows at the
+				// bottom: the terminal trims those before it scrolls.
+				_, _ = s.t.Write([]byte(fmt.Sprintf("\x1b[%d;1H\x1b[%dM\x1b[%d;%dH", y+2, drop, y+1, x+1)))
+			}
+		}
+	}
 	_ = s.t.Resize(cols, rows)
 }
 
