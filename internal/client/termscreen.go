@@ -4,9 +4,11 @@
 package client
 
 import (
+	"bytes"
 	"hash/fnv"
 	"strconv"
 	"strings"
+	"sync"
 
 	uv "github.com/charmbracelet/ultraviolet"
 
@@ -17,10 +19,14 @@ import (
 // in it drew, kept the way a terminal keeps it, so a viewer that joins is
 // shown it. A resize re-wraps the scrollback to the new width, bottom-anchored,
 // as a terminal's own does (vtwasm): a narrower screen loses nothing, and a
-// line wrapped for one width is re-wrapped for another. Its caller holds
-// screenMu.
+// line wrapped for one width is re-wrapped for another. Safe for concurrent
+// use: the agent reads it under screenMu, and the attention probe and tests
+// read it as they do.
 type sessionScreen struct {
 	t *vtwasm.Terminal
+	// mu guards everything below: what is kept of the terminal's answers
+	// (vtwasm serializes the calls into it itself).
+	mu sync.Mutex
 	// maxLines bounds History: the terminal keeps whole pages of rows, so
 	// its own bound is loose, and what it keeps past this is not shown.
 	maxLines int
@@ -33,6 +39,14 @@ type sessionScreen struct {
 	historyKey            string
 	historyGen, renderGen uint64
 	render                string
+	// mainHistory is the history as of the main screen, held while a
+	// program is on the alternate screen: the terminal formats only the
+	// screen it is on, and the alternate one has no scrollback, so a join
+	// to vim or a full-screen Claude Code would paint none. Nothing scrolls
+	// off the main screen while the program is on the other, so it is as
+	// it was at the switch (refreshed at the switch, Write).
+	mainHistory    []string
+	mainHistoryKey string
 }
 
 // newSessionScreen is a screen of cols by rows keeping at most maxLines of
@@ -60,18 +74,42 @@ const defaultScreenLines = 20000
 const historyRowsPerLine = 4
 
 func (s *sessionScreen) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.t.AltScreen() && entersAltScreen(p) {
+		// What scrolled off up to now, kept for a join while the program
+		// is on the alternate screen.
+		s.historyLocked()
+	}
 	s.gen++
 	return s.t.Write(p)
 }
 
+// entersAltScreen says p switches to the alternate screen (DECSET 1049,
+// 1047 or 47, as full-screen programs do).
+func entersAltScreen(p []byte) bool {
+	for _, seq := range []string{"\x1b[?1049h", "\x1b[?1047h", "\x1b[?47h"} {
+		if bytes.Contains(p, []byte(seq)) {
+			return true
+		}
+	}
+	return false
+}
+
 // Resize makes it cols by rows, re-wrapping its scrollback.
 func (s *sessionScreen) Resize(cols, rows int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.gen++
 	_ = s.t.Resize(cols, rows)
 }
 
 // Gen is how many times it has changed: what a cache of it is kept by.
-func (s *sessionScreen) Gen() uint64 { return s.gen }
+func (s *sessionScreen) Gen() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gen
+}
 
 func (s *sessionScreen) Width() int  { c, _ := s.t.Size(); return c }
 func (s *sessionScreen) Height() int { _, r := s.t.Size(); return r }
@@ -79,6 +117,8 @@ func (s *sessionScreen) Height() int { _, r := s.t.Size(); return r }
 // Render is the screen, a row a line joined by "\n", exactly Height rows,
 // each row's colours and styles its own.
 func (s *sessionScreen) Render() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.renderGen == s.gen+1 {
 		return s.render
 	}
@@ -110,6 +150,17 @@ func (s *sessionScreen) IsAltScreen() bool { return s.t.AltScreen() }
 // it: a line each as the program wrote it (the rows a long line wrapped
 // onto joined again), with its styles. A viewer of any width wraps them anew.
 func (s *sessionScreen) History() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.historyLocked()
+}
+
+// historyLocked is History under mu.
+func (s *sessionScreen) historyLocked() []string {
+	if s.t.AltScreen() {
+		s.history, s.historyKey = s.mainHistory, s.mainHistoryKey
+		return s.history
+	}
 	if s.historyGen == s.gen+1 {
 		return s.history
 	}
@@ -128,13 +179,16 @@ func (s *sessionScreen) History() []string {
 		h.Write([]byte{0})
 	}
 	s.historyKey = strconv.Itoa(len(s.history)) + ":" + strconv.FormatUint(h.Sum64(), 16)
+	s.mainHistory, s.mainHistoryKey = s.history, s.historyKey
 	return s.history
 }
 
 // HistoryKey names History's content: the same while what scrolled off is
 // the same, however the screen below it changed.
 func (s *sessionScreen) HistoryKey() string {
-	s.History()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.historyLocked()
 	return s.historyKey
 }
 
@@ -147,6 +201,8 @@ func (s *sessionScreen) SetMaxLines(n int) {
 	if n <= 0 {
 		n = defaultScreenLines
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.gen++
 	s.maxLines = n
 	s.t.SetMaxLines(n * historyRowsPerLine)
