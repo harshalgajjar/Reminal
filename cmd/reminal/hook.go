@@ -304,7 +304,7 @@ func convFromPayload(b []byte) string {
 	if json.Unmarshal(b, &m) != nil {
 		return ""
 	}
-	for _, k := range []string{"session_id", "conversation_id", "conversationId", "thread_id", "thread-id", "chat_id"} {
+	for _, k := range []string{"session_id", "conversation_id", "conversationId", "thread_id", "thread-id", "chat_id", "sessionId"} {
 		if v, ok := m[k].(string); ok && session.ValidConv(v) {
 			return v
 		}

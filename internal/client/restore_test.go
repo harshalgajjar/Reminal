@@ -18,7 +18,7 @@ import (
 func useHelp(t *testing.T) {
 	t.Helper()
 	files := map[string]string{"claude": "claude", "codex": "codex-resume", "gemini": "gemini", "qwen": "qwen",
-		"cursor-agent": "cursor-agent", "opencode": "opencode", "pi": "pi"}
+		"cursor-agent": "cursor-agent", "opencode": "opencode", "pi": "pi", "copilot": "copilot", "kilo": "kilo"}
 	prev := flagSpecFor
 	flagSpecFor = func(bin string) flagSpec {
 		b, err := os.ReadFile("testdata/help/" + files[bin] + ".txt")

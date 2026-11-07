@@ -16,11 +16,14 @@ func TestConvFromPayload(t *testing.T) {
 		`{"session_id":"3f2c9a10-7d4e-4b8a-9c11-0e5d6f7a8b9c","hook_event_name":"Stop"}`: "3f2c9a10-7d4e-4b8a-9c11-0e5d6f7a8b9c",
 		`{"conversation_id":"chat_0123456789"}`:                                          "chat_0123456789",
 		`{"conversationId":"agy_conversation_0042"}`:                                     "agy_conversation_0042",
-		`{"session_id":"x; rm -rf ~"}`:                                                   "",
-		`{"session_id":"$(curl evil)"}`:                                                  "",
-		`{"session_id":"short"}`:                                                         "",
-		`not json`:                                                                       "",
-		`{}`:                                                                             "",
+		// Copilot CLI's sessionId beside the keys read before it: the one read
+		// before keeps winning.
+		`{"sessionId":"184da7fe-1615-4edb-b2ea-1d66a4c42d1c","conversation_id":"chat_0123456789"}`: "chat_0123456789",
+		`{"session_id":"x; rm -rf ~"}`:  "",
+		`{"session_id":"$(curl evil)"}`: "",
+		`{"session_id":"short"}`:        "",
+		`not json`:                      "",
+		`{}`:                            "",
 	}
 	for in, want := range cases {
 		if got := convFromPayload([]byte(in)); got != want {
