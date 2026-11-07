@@ -339,6 +339,9 @@ type Agent struct {
 	// running, by kind ("monitor", "background process", "background work";
 	// attn_background.go).
 	attnOther map[string]int
+	// attnScheduled is what it has set to run later, as its hook last said:
+	// apart from the work running (session.Scheduled).
+	attnScheduled *session.Scheduled
 	// attnFG is the command in the terminal's foreground, as the attention
 	// detector last saw it. Written to the session record so a list can tell
 	// an agent from a plain terminal.
@@ -1533,6 +1536,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	attnShells := a.attnShells
 	attnAgents := a.attnAgents
 	attnOther := maps.Clone(a.attnOther)
+	attnScheduled := a.attnScheduled
 	var resetsAt time.Time
 	if attn == harnessLimited {
 		resetsAt = a.limit.resetsAt
@@ -1565,6 +1569,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		Shells:       attnShells,
 		Agents:       attnAgents,
 		Other:        attnOther,
+		Scheduled:    attnScheduled,
 	}
 }
 

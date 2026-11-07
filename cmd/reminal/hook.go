@@ -58,6 +58,7 @@ func runHook(args []string) error {
 
 	var state, failure string
 	var bg *session.Background // what it still has running in the background, if it said
+	var keepScheduled bool     // said nothing of the jobs set to run later
 	switch arg {
 	case "working", "input", "done":
 		// The state is fixed; what the payload adds is which conversation the
@@ -129,10 +130,19 @@ func runHook(args []string) error {
 		if bg == nil {
 			return nil
 		}
+		// Said with no word of the jobs set to run later (Claude Code's
+		// SubagentStop carries no session_crons), what the turn's end said of
+		// them stands; an empty list is its word that there are none.
+		keepScheduled = !hookSaysScheduled(payload)
 	case "notify":
 		// Ambiguous notification — decide "needs you" vs "done" from the payload
 		// AND the current turn state (see classifyNotify).
 		state = classifyNotify(readCappedStdin(), id)
+		// It says nothing of what runs in the background or is set to run
+		// later: what the turn's end said stands (written below with
+		// WriteHookStateKeepingBackground, under the record's lock). Written
+		// without it, an idle ping (Qwen Code's comes right after its Stop,
+		// Claude Code's a minute on) wiped the count the Stop had just given.
 	default:
 		go func() { _, _ = io.Copy(io.Discard, os.Stdin) }()
 		return fmt.Errorf("unknown state %q (want working|input|done|failed|notify|subagent|ready)", arg)
@@ -144,9 +154,11 @@ func runHook(args []string) error {
 	var err error
 	switch {
 	case arg == "subagent":
-		err = session.UpdateHookBackground(id, bg)
+		err = session.UpdateHookBackground(id, bg, keepScheduled)
 	case arg == "failed":
 		err = session.WriteHookStateFailed(id, failure)
+	case arg == "notify":
+		err = session.WriteHookStateKeepingBackground(id, state)
 	default:
 		err = session.WriteHookStateWith(id, state, bg)
 	}
@@ -292,7 +304,7 @@ func convFromPayload(b []byte) string {
 	if json.Unmarshal(b, &m) != nil {
 		return ""
 	}
-	for _, k := range []string{"session_id", "conversation_id", "conversationId", "thread_id", "thread-id", "chat_id"} {
+	for _, k := range []string{"session_id", "conversation_id", "conversationId", "thread_id", "thread-id", "chat_id", "sessionId"} {
 		if v, ok := m[k].(string); ok && session.ValidConv(v) {
 			return v
 		}
