@@ -163,7 +163,10 @@ for (let still = 0; still < 8;) {
 const rows = await rowsNow();
 const [cols, trows] = await grid();
 const text = rows.join('\n');
-const lost = ids.filter((id) => !text.includes(id));
+// An id can wrap at the grid's edge ("S" ending one row, "1x10" opening the
+// next): present when the rows read on into each other too.
+const flat = rows.join('');
+const lost = ids.filter((id) => !text.includes(id) && !flat.includes(id));
 const seen = new Map();
 for (const r of rows) for (const m of r.matchAll(/S\d+x\d\d/g)) seen.set(m[0], (seen.get(m[0]) || 0) + 1);
 const doubled = [...seen].filter(([, n]) => n > 1).map(([id]) => id);
