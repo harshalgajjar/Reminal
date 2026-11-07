@@ -244,7 +244,11 @@ func coverageDropMask(history []string, shingles map[shingle]bool, refWords map[
 	// that only CONTINUES like a row of the frame: the wrapped tail of a
 	// list item, the same words as the tail of another item on the screen
 	// ("4. T3L04 alpha … foxtrot / golf hotel … mike" against "19. T3L19
-	// alpha … foxtrot / golf hotel … mike") — the only copy of it.
+	// alpha … foxtrot / golf hotel … mike") — the only copy of it. Such a
+	// stretch loses its words up to the next line's start, and what is left
+	// is gated again: a copy whose first matched word is the last of the row
+	// before it (the frame's top row was a wrapped tail, "beard. He climbed
+	// the rocks…") is still the copy from its next line on.
 	for i := 0; i < len(covered); {
 		if !covered[i] {
 			i++
@@ -254,7 +258,13 @@ func coverageDropMask(history []string, shingles map[shingle]bool, refWords map[
 		for j < len(covered) && covered[j] {
 			j++
 		}
-		if j-i < dedupFrameRunMin || (i > 0 && lineOf[i-1] == lineOf[i]) {
+		if i > 0 && lineOf[i-1] == lineOf[i] {
+			for i < j && lineOf[i] == lineOf[i-1] {
+				covered[i] = false
+				i++
+			}
+		}
+		if j-i < dedupFrameRunMin {
 			for k := i; k < j; k++ {
 				covered[k] = false
 			}

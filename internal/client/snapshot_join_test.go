@@ -263,7 +263,15 @@ func refCoverageDropMask(history []string, shingles map[string]bool, refWords ma
 		for j < len(covered) && covered[j] {
 			j++
 		}
-		if j-i < dedupFrameRunMin || (i > 0 && lineOf[i-1] == lineOf[i]) {
+		// Mirrors coverageDropMask: a stretch starting inside a line starts
+		// at the next line, then is gated again.
+		if i > 0 && lineOf[i-1] == lineOf[i] {
+			for i < j && lineOf[i] == lineOf[i-1] {
+				covered[i] = false
+				i++
+			}
+		}
+		if j-i < dedupFrameRunMin {
 			for k := i; k < j; k++ {
 				covered[k] = false
 			}

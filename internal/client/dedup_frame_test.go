@@ -437,3 +437,47 @@ func TestJoinReadsAHeadingAtTheSeamOnce(t *testing.T) {
 		}
 	}
 }
+
+// The fold opened and closed five times in a few seconds while Claude Code
+// reprinted its answer at each width (testdata/dedup/fold-flips-*.txt, a real
+// session's History() before dedup and its screen, recorded right after the
+// inner screen opened). The history ends with the letter and "V. The Last
+// Winter" at the narrow width; the screen holds them at the wide one, under
+// a wrapped tail ("beard. He climbed the rocks to thank her."). A join read
+// the passage twice, once each width: the narrow copy's run of matched words
+// began on the last word of the row before it ("…salt in his beard"), and a
+// run beginning inside a line was given up whole. It goes now; the passage
+// is read once, on the screen.
+func TestJoinDropsANarrowCopyAboveTheWideFrame(t *testing.T) {
+	read := func(name string) []string {
+		data, err := os.ReadFile("testdata/dedup/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	}
+	history, screen := read("fold-flips-history.txt"), read("fold-flips-screen.txt")
+	out := dedupAgainstFrame(dedupRepaints(history), screen)
+	var b strings.Builder
+	for _, l := range append(append([]string{}, out...), screen...) {
+		b.WriteString(strings.TrimSpace(dedupANSI.ReplaceAllString(l, "")) + "\n")
+	}
+	painted := b.String()
+	for phrase, want := range map[string]int{
+		"You've met him by now, I expect.": 1,
+		"\nV. The Last Winter\n":           1,
+		"Mara stayed through that winter":  1,
+		"Saw your light just in time":      1,
+		"\nIV. The Letter\n":               1,
+		"\nIII. The Knocking\n":            1,
+	} {
+		if n := strings.Count(painted, phrase); n != want {
+			t.Errorf("%q is read %d times, want %d", strings.TrimSpace(phrase), n, want)
+		}
+	}
+	for _, keep := range []string{"The fog came in during the second week", "Its captain was a tired man with salt in his", "Mara ran back up the stairs"} {
+		if !strings.Contains(painted, keep) {
+			t.Errorf("lost %q", keep)
+		}
+	}
+}
