@@ -144,3 +144,23 @@ func TestListSaysWhenJobsWereSaidOnceOld(t *testing.T) {
 		}
 	}
 }
+
+// A SubagentStop says what runs now and nothing of the jobs set to run later
+// (Claude Code's carries no session_crons): what the Stop said of them
+// stands beside the new count. One that names an empty list clears them.
+func TestASubagentFinishLeavesTheScheduledJobs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("REMINAL_SESSION", "SCHD3456")
+	hookWithPayload(t, "done", scheduledPayload(t, "claude-stop"))
+	hookWithPayload(t, "subagent", `{"session_id":"x","hook_event_name":"SubagentStop","background_tasks":[{"id":"s1","type":"shell","status":"running"}]}`)
+	hs := session.ReadHookStateAnyAge("SCHD3456")
+	if hs == nil || hs.State != "done" || hs.Background == nil || hs.Background.Shells != 1 || hs.Background.Scheduled == nil || hs.Background.Scheduled.Count != 2 {
+		t.Fatalf("after a SubagentStop with no word of them: %+v", hs)
+	}
+	hookWithPayload(t, "subagent", `{"session_id":"x","hook_event_name":"SubagentStop","background_tasks":[],"session_crons":[]}`)
+	if hs := session.ReadHookStateAnyAge("SCHD3456"); hs == nil || hs.Background == nil || hs.Background.Scheduled != nil {
+		t.Fatalf("after a SubagentStop naming none: %+v", hs)
+	}
+}

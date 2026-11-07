@@ -202,17 +202,29 @@ func WriteHookState(id, state string) error {
 // WriteHookStateFailed records that the session's turn ended on an error
 // its harness named (failure): "done", the turn's start kept.
 func WriteHookStateFailed(id, failure string) error {
-	return writeHookStateAs(id, "done", nil, failure)
+	return writeHookStateAs(id, "done", nil, failure, false)
 }
 
 // WriteHookStateWith records the agent-reported attention state for a
 // session, with the background work it said it still has (nil: it said
 // nothing about that).
 func WriteHookStateWith(id, state string, bg *Background) error {
-	return writeHookStateAs(id, state, bg, "")
+	return writeHookStateAs(id, state, bg, "", false)
 }
 
-func writeHookStateAs(id, state string, bg *Background, failure string) error {
+// WriteHookStateKeepingBackground records a turn's state said by an event
+// that says nothing of what runs in the background or is set to run later
+// (a notification): what the record holds of them stands, read under the
+// lock the write takes, so a count landing meanwhile (a subagent's,
+// UpdateHookBackground) is not written back older. Read as the state is
+// (ReadHookState, within HookStateTTL): a record older than that is no
+// turn's word any more, and carrying its count under a fresh time would
+// revive it.
+func WriteHookStateKeepingBackground(id, state string) error {
+	return writeHookStateAs(id, state, nil, "", true)
+}
+
+func writeHookStateAs(id, state string, bg *Background, failure string, keepBackground bool) error {
 	// Under the record's lock, so it never lands between another hook's
 	// reading the record and writing it back (UpdateHookBackground) to be
 	// overwritten by the older state. A turn's state must land: if the lock
@@ -221,10 +233,14 @@ func writeHookStateAs(id, state string, bg *Background, failure string) error {
 		defer unlock()
 	}
 	hs := HookState{State: state, TS: time.Now(), Background: bg, Failure: failure}
+	prev := ReadHookStateAnyAge(id)
 	if state == "working" {
 		hs.TurnAt = hs.TS
-	} else if prev := ReadHookStateAnyAge(id); prev != nil {
+	} else if prev != nil {
 		hs.TurnAt = prev.TurnAt
+	}
+	if keepBackground && prev != nil && time.Since(prev.TS) <= HookStateTTL {
+		hs.Background = prev.Background
 	}
 	return writeHookState(id, hs)
 }
@@ -255,7 +271,9 @@ func lockHookState(id string) (func(), error) {
 // back under the record's lock, so a turn's state written meanwhile is not
 // undone; without the lock it is left alone — the next turn's end says the
 // count again.
-func UpdateHookBackground(id string, bg *Background) error {
+// keepScheduled: the event said nothing of the jobs set to run later, so what
+// the record holds of them stands.
+func UpdateHookBackground(id string, bg *Background, keepScheduled bool) error {
 	unlock, err := lockHookState(id)
 	if err != nil {
 		return nil
@@ -264,6 +282,9 @@ func UpdateHookBackground(id string, bg *Background) error {
 	hs := ReadHookStateAnyAge(id)
 	if hs == nil {
 		return nil
+	}
+	if keepScheduled && hs.Background != nil && bg.Scheduled == nil {
+		bg.Scheduled = hs.Background.Scheduled
 	}
 	hs.Background = bg
 	return writeHookState(id, *hs)
