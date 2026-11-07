@@ -239,6 +239,10 @@ var harnessLimitNotices = map[string][]limitNotice{
 			`you.?reoutofextrausage`,
 			`you.?vereachedyour(?:session|weekly|daily|monthly|opus|sonnet|fable|usage)?limit`,
 			`yourorganizationisoutofusagecredits(?:\.contactyouradmintoaddmore)?`,
+			// Claude Code 2.1.319: an organization whose usage is paused,
+			// and a goal paused by it.
+			`usageispausedforyourorganization(?:\.forhelp,pleasecontactsupport\.?)?`,
+			`goalpaused·usageispausedforyourorganization`,
 		)))...),
 	// Codex 0.163–0.165: "You’ve hit your usage limit. … try again at 3:05
 	// PM." (the time on the next row when it wraps), its workspace's limit

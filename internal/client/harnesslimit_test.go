@@ -92,6 +92,10 @@ var limitScreens = []struct {
 	{"qwen", "✕ Rate limit exceeded. Please wait and try again.\n│ > │", time.Time{}},
 	{"qwen", "✕ Model API rate limit exceeded (HTTP 429). Wait and try again later.\n│ > │", time.Time{}},
 	{"qwen", "✕ Qwen OAuth quota exceeded\n│ > │", time.Time{}},
+	// Claude Code 2.1.319: an organization whose usage is paused, and a goal
+	// paused by it, drawn as its other notices are.
+	{"claude", "  ⎿  Usage is paused for your organization. For help, please contact support.\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Goal paused · usage is paused for your organization\n\n❯ ", time.Time{}},
 	{"opencode", "┃  Usage limit reached. To continue using this model now, enable usage from your available balance\n┃", time.Time{}},
 	{"opencode", "┃  Free limit reached\n┃", time.Time{}},
 	{"opencode", "┃  Go limit reached\n┃", time.Time{}},
@@ -988,6 +992,9 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"qwen", "✕ ", "Model API rate limit exceeded (HTTP 429). Wait and try again later.", false},
 		{"qwen", "✕ ", "Qwen OAuth quota exceeded", false},
 		{"qwen", "✕ ", "Possible quota limitations in place or slow response times detected. Please wait and try again later.", false},
+		// Claude Code 2.1.319: an organization whose usage is paused.
+		{"claude", "⎿  ", "Usage is paused for your organization. For help, please contact support.", false},
+		{"claude", "⎿  ", "Goal paused · usage is paused for your organization", false},
 		{"opencode", "┃  ", "Usage limit reached. To continue using this model now, enable usage from your available balance", false},
 		{"opencode", "┃  ", "Free limit reached", false},
 		{"opencode", "┃  ", "Go limit reached", false},
