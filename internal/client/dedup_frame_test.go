@@ -307,3 +307,43 @@ func TestDedupRepaintsKeepsTheCompleteCopyWhenThePartialCameFirst(t *testing.T) 
 		}
 	}
 }
+
+// A redraw after the terminal got shorter (a phone's keyboard) prints the
+// frame's heading again under rows the old frame left: a join on a real
+// session read "IV. The Letter", "stairs." (the tail of the paragraph
+// before), a bare quote bar, then "IV. The Letter" with its text. The first
+// heading and the debris go; a short line between two headings that is
+// nowhere else is text, and stays.
+func TestDedupRepaintsDropsAHeadingReprintedOverARedrawsDebris(t *testing.T) {
+	before := dfWrap("the fog came in during the second week thick as wool at three in the morning while she wound the clockwork she heard it three slow knocks echoing up the spiral stairs.", 55)
+	after := dfWrap("the next morning a fishing boat came into the cove its captain was a tired man with salt in his beard he climbed the rocks to thank her", 55)
+	var history []string
+	history = append(history, "III. The Knocking", "")
+	history = append(history, before...)
+	history = append(history, "", "", "IV. The Letter", "", "stairs.", "", "▎", "", "IV. The Letter", "")
+	history = append(history, after...)
+	history = append(history, "")
+	out := dedupRepaints(history)
+	joined := strings.Join(out, "\n")
+	if n := strings.Count(joined, "IV. The Letter"); n != 1 {
+		t.Errorf("the heading is read %d times, want once:\n%s", n, joined)
+	}
+	// "stairs." once: the paragraph's own last row, not the debris row too.
+	if n := strings.Count(joined, "\nstairs.\n"); n != 1 || strings.Contains(joined, "▎") {
+		t.Errorf("the redraw's debris stayed (\"stairs.\" rows %d):\n%s", n, joined)
+	}
+	for _, keep := range []string{"III. The Knocking", strings.Join(before, "\n"), strings.Join(after, "\n")} {
+		if !strings.Contains(joined, keep) {
+			t.Errorf("lost %q:\n%s", keep, joined)
+		}
+	}
+
+	// Text between two copies of a heading, nowhere else: all of it stays.
+	var text []string
+	text = append(text, before...)
+	text = append(text, "", "Note", "", "Checked twice.", "", "Note", "")
+	text = append(text, after...)
+	if got := dedupRepaints(text); len(got) != len(text) {
+		t.Errorf("a line of its own between two headings was dropped:\n%s", strings.Join(got, "\n"))
+	}
+}

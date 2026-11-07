@@ -5,6 +5,7 @@ package client
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -356,7 +357,8 @@ func dedupAgainstFrame(history, screen []string) []string {
 // bound paragraphs, since a frame's bottom lands them right under its last
 // row of text, and a copy they are glued to would otherwise never match.
 // A short paragraph (a heading) a dropped copy carried goes with it
-// (dropOrphanHeadings).
+// (dropOrphanHeadings); a heading printed twice with only a redraw's debris
+// between goes with the debris (dropHeadingDebris).
 func dedupRepaints(lines []string) []string {
 	paras := dedupParagraphs(lines)
 	drop := make([]bool, len(lines))
@@ -403,6 +405,7 @@ func dedupRepaints(lines []string) []string {
 	pass(forward)
 	pass(backward)
 	dropOrphanHeadings(lines, paras, drop)
+	dropHeadingDebris(lines, paras, drop)
 	return compactDropped(lines, drop)
 }
 
@@ -481,4 +484,79 @@ func dropOrphanHeadings(lines []string, paras []dedupPara, drop []bool) {
 			count[keys[k]]--
 		}
 	}
+}
+
+// dropHeadingDebris drops a heading printed twice with only debris between
+// the copies: a redraw after the terminal got shorter (a phone's keyboard)
+// prints the frame's heading again under rows the old frame left behind, so
+// a join read "IV. The Letter", a row of the paragraph before ("stairs."),
+// a bare quote bar, then "IV. The Letter" with its text. Nothing between
+// the copies is a paragraph of its own: debris is a row with no words, or a
+// short paragraph whose words lie, in order, inside a kept paragraph of
+// full length (a row's tail printed on its own). The first copy and the
+// debris go; the second copy, with its text, stays. A short paragraph
+// between the copies that is nowhere else is text, and everything stays.
+func dropHeadingDebris(lines []string, paras []dedupPara, drop []bool) {
+	keys := make([]string, len(paras))
+	var long [][]string
+	for k, p := range paras {
+		w := p.words(lines)
+		keys[k] = strings.Join(w, "\x00")
+		if !drop[p.i] && len(w) >= dedupMinParaWords {
+			long = append(long, w)
+		}
+	}
+	debris := func(k int) bool {
+		if keys[k] == "" {
+			return true
+		}
+		w := paras[k].words(lines)
+		if len(w) >= dedupMinParaWords {
+			return false
+		}
+		for _, l := range long {
+			if wordsContainRun(l, w) {
+				return true
+			}
+		}
+		return false
+	}
+	for k, p := range paras {
+		if drop[p.i] || keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords {
+			continue
+		}
+		// The next copy, with only debris on the way to it.
+		for n := k + 1; n < len(paras) && n <= k+dedupDebrisParas+1; n++ {
+			if drop[paras[n].i] {
+				continue
+			}
+			if keys[n] == keys[k] {
+				for x := p.i; x < paras[n].i; x++ {
+					drop[x] = true
+				}
+				break
+			}
+			if !debris(n) {
+				break
+			}
+		}
+	}
+}
+
+// dedupDebrisParas is the most debris paragraphs a redraw leaves between a
+// heading and its reprint: a frame's few stale rows, each a paragraph.
+const dedupDebrisParas = 4
+
+// wordsContainRun reports whether frag appears in words, in order and
+// unbroken.
+func wordsContainRun(words, frag []string) bool {
+	if len(frag) == 0 || len(frag) > len(words) {
+		return false
+	}
+	for i := 0; i+len(frag) <= len(words); i++ {
+		if slices.Equal(words[i:i+len(frag)], frag) {
+			return true
+		}
+	}
+	return false
 }
