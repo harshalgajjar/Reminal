@@ -168,6 +168,9 @@ func TestQwensFooterMonitorsAndWorkflowsAreCounted(t *testing.T) {
 		{"workflows too", strings.Replace(one, "· 1 shell, 1 monitor", "· 1 shell, 1 monitor, 2 workflows", 1), map[string]int{"monitor": 1, "workflow": 2}},
 		{"its local agents only", strings.Replace(one, "· 1 shell, 1 monitor", "· 2 local agents", 1), nil},
 		{"all of it done", strings.Replace(one, "· 1 shell, 1 monitor", "· 3 tasks done", 1), nil},
+		// Its input row in YOLO mode opens with "*": a count typed there is not
+		// its footer's.
+		{"a count typed in", strings.Replace(one, "* Started them in the background.", "* why did it say 1 shell, 3 monitors", 1), map[string]int{"monitor": 1}},
 	} {
 		if got := attnOtherOnScreen("qwen", true, c.screen); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)

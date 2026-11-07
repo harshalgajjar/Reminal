@@ -135,9 +135,11 @@ func attnOtherOnScreen(prog string, agentActive bool, render string) map[string]
 		add("monitor", first(attnMonitorPattern, strings.ToLower(stripANSI(attnFooter(tail)))))
 	case "qwen":
 		// Its footer's row: "YOLO mode (shift + tab to cycle) · 1 shell, 1
-		// monitor". Its shells are attnShellCount's; its local agents its
-		// hook's.
-		footer := strings.ToLower(stripANSI(attnFooter(tail)))
+		// monitor". That row alone: its input row in YOLO mode opens with "*",
+		// not a prompt mark, so attnFooter cannot find the box and reads the
+		// last rows, the typed line among them ("why did it say 3 monitors").
+		// Its shells are attnShellCount's; its local agents its hook's.
+		footer := strings.ToLower(stripANSI(attnQwenModeRow(tail)))
 		add("monitor", first(attnMonitorPattern, footer))
 		add("workflow", first(attnWorkflowPattern, footer))
 	case "gemini":
@@ -179,4 +181,17 @@ func attnBackground(screenShells int, screenOther map[string]int, bg *session.Ba
 		other = nil
 	}
 	return shells, agents, other
+}
+
+// attnQwenModeRow is the row of Qwen Code's footer that names its approval
+// mode ("YOLO mode (shift + tab to cycle) · 1 shell, 1 monitor"), the
+// lowest one in tail; "" when there is none.
+func attnQwenModeRow(tail string) string {
+	rows := strings.Split(tail, "\n")
+	for i := len(rows) - 1; i >= 0; i-- {
+		if strings.Contains(strings.ToLower(stripANSI(rows[i])), "(shift + tab to cycle)") {
+			return rows[i]
+		}
+	}
+	return ""
 }
