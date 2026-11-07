@@ -17,9 +17,16 @@ import (
 // harness names it ("monitor", "background process", "background work").
 
 // attnMonitorPattern finds Claude Code's footer count of its monitors,
-// beside its shells' ("· 1 shell, 2 monitors"): after the footer's separator
-// or the comma it joins its kinds with.
+// beside its shells' ("· 1 shell, 2 monitors"), and Qwen Code's, in the
+// same shape: after the footer's separator or the comma it joins its kinds
+// with.
 var attnMonitorPattern = regexp.MustCompile(`[·,]\s*([0-9]+)\s*monitors?\b`)
+
+// attnWorkflowPattern finds Qwen Code's footer count of its workflows, in
+// the list of what it has running ("· 1 shell, 1 monitor, 2 workflows";
+// BackgroundTasksPill: shells, local agents, monitors, workflows, dreams,
+// joined by commas).
+var attnWorkflowPattern = regexp.MustCompile(`[·,]\s*([0-9]+)\s*workflows?\b`)
 
 // attnGeminiBackgroundPattern finds Gemini CLI's count of its background
 // processes in its context summary ("1 GEMINI.md file · 1 Background
@@ -97,9 +104,10 @@ func attnCodexActivityRow(tail string) string {
 }
 
 // attnOtherOnScreen is the background work besides its shells that prog's
-// own screen counts: Claude Code's footer's monitors, Gemini CLI's
-// background processes, Codex's background terminals. nil with no agent in
-// front (attnShellCount's reason), or none shown.
+// own screen counts: Claude Code's footer's monitors, Qwen Code's monitors
+// and workflows, Gemini CLI's background processes, Codex's background
+// terminals. nil with no agent in front (attnShellCount's reason), or none
+// shown.
 func attnOtherOnScreen(prog string, agentActive bool, render string) map[string]int {
 	if !agentActive {
 		return nil
@@ -125,6 +133,15 @@ func attnOtherOnScreen(prog string, agentActive bool, render string) map[string]
 	switch prog {
 	case "claude":
 		add("monitor", first(attnMonitorPattern, strings.ToLower(stripANSI(attnFooter(tail)))))
+	case "qwen":
+		// Its footer's row: "YOLO mode (shift + tab to cycle) · 1 shell, 1
+		// monitor". That row alone: its input row in YOLO mode opens with "*",
+		// not a prompt mark, so attnFooter cannot find the box and reads the
+		// last rows, the typed line among them ("why did it say 3 monitors").
+		// Its shells are attnShellCount's; its local agents its hook's.
+		footer := strings.ToLower(stripANSI(attnQwenModeRow(tail)))
+		add("monitor", first(attnMonitorPattern, footer))
+		add("workflow", first(attnWorkflowPattern, footer))
 	case "gemini":
 		for _, row := range attnGeminiStatusRows(tail) {
 			if n := first(attnGeminiBackgroundPattern, strings.TrimSpace(stripANSI(row))); n > 0 {
@@ -164,4 +181,17 @@ func attnBackground(screenShells int, screenOther map[string]int, bg *session.Ba
 		other = nil
 	}
 	return shells, agents, other
+}
+
+// attnQwenModeRow is the row of Qwen Code's footer that names its approval
+// mode ("YOLO mode (shift + tab to cycle) · 1 shell, 1 monitor"), the
+// lowest one in tail; "" when there is none.
+func attnQwenModeRow(tail string) string {
+	rows := strings.Split(tail, "\n")
+	for i := len(rows) - 1; i >= 0; i-- {
+		if strings.Contains(strings.ToLower(stripANSI(rows[i])), "(shift + tab to cycle)") {
+			return rows[i]
+		}
+	}
+	return ""
 }
