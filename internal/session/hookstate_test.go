@@ -133,7 +133,7 @@ func TestAHookStateIsNotUndoneByACountWrittenBackAroundIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	if err := UpdateHookBackground("LKLK2345", &Background{Shells: 9}); err != nil {
+	if err := UpdateHookBackground("LKLK2345", &Background{Shells: 9}, false); err != nil {
 		t.Fatal(err)
 	}
 	if hs := ReadHookStateAnyAge("LKLK2345"); hs == nil || hs.Background != nil {
