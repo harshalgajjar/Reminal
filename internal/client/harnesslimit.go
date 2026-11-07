@@ -286,6 +286,11 @@ var harnessLimitNotices = map[string][]limitNotice{
 	), onGlyph("✕", wholeRows(`\.?\]?`,
 		`(?:apierror:)?quotaexhausted`,
 		`(?:apierror:)?ratelimitexceeded`,
+		// Qwen Code 0.26.9: its credits used up (the weekly ones too), with
+		// what to do next, and when they come back; led by ✕ as its other
+		// notices are.
+		`you.?veusedupyour(?:weekly)?credits\.(?:pleasetryagainafterthereset|youcanwaitorrun/upgradetogetmorecredits)`,
+		`yourcreditsareexpectedtoresetin`+limitWait,
 	))...),
 	// OpenCode 1.19: "Usage limit reached. It will reset in 3 hours 20
 	// minutes." (a model's name may lead it), what to do now, its Go and

@@ -96,6 +96,13 @@ var limitScreens = []struct {
 	// paused by it, drawn as its other notices are.
 	{"claude", "  ⎿  Usage is paused for your organization. For help, please contact support.\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Goal paused · usage is paused for your organization\n\n❯ ", time.Time{}},
+	// Qwen Code 0.26.9: its credits used up, the weekly ones, what to do,
+	// and when they come back (on one row, and wrapped onto two).
+	{"qwen", "✕ You've used up your credits. Please try again after the reset.\n│ > │", time.Time{}},
+	{"qwen", "✕ You've used up your weekly credits. You can wait or run /upgrade to get more credits.\n│ > │", time.Time{}},
+	{"qwen", "✕ You've used up your weekly credits.\n  Please try again after the reset.\n│ > │", time.Time{}},
+	{"qwen", "✕ Your credits are expected to reset in 3 hours.\n│ > │", limitLA(2026, 10, 19, 13, 0)},
+	{"qwen", "✕ Your credits are expected to reset in 2 days 4 hours.\n│ > │", limitLA(2026, 10, 21, 14, 0)},
 	{"opencode", "┃  Usage limit reached. To continue using this model now, enable usage from your available balance\n┃", time.Time{}},
 	{"opencode", "┃  Free limit reached\n┃", time.Time{}},
 	{"opencode", "┃  Go limit reached\n┃", time.Time{}},
@@ -995,6 +1002,12 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		// Claude Code 2.1.319: an organization whose usage is paused.
 		{"claude", "⎿  ", "Usage is paused for your organization. For help, please contact support.", false},
 		{"claude", "⎿  ", "Goal paused · usage is paused for your organization", false},
+		// Qwen Code 0.26.9: its credits.
+		{"qwen", "✕ ", "You've used up your credits. Please try again after the reset.", false},
+		{"qwen", "✕ ", "You've used up your weekly credits. Please try again after the reset.", false},
+		{"qwen", "✕ ", "You've used up your weekly credits. You can wait or run /upgrade to get more credits.", false},
+		{"qwen", "✕ ", "Your credits are expected to reset in 3 hours.", false},
+		{"qwen", "✕ ", "Your credits are expected to reset in 2 days 4 hours.", false},
 		{"opencode", "┃  ", "Usage limit reached. To continue using this model now, enable usage from your available balance", false},
 		{"opencode", "┃  ", "Free limit reached", false},
 		{"opencode", "┃  ", "Go limit reached", false},
