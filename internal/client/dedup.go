@@ -215,6 +215,25 @@ func addShingles(m map[shingle]bool, words []string) {
 // coverageDropMask marks history lines whose words are covered by matched runs
 // against a pre-built shingle index (see frameMatchedDropMask's doc above).
 func coverageDropMask(history []string, shingles map[shingle]bool, refWords map[string]bool) []bool {
+	return coverageMask(history, shingles, refWords, false)
+}
+
+// liveFrameDropMask is frameMatchedDropMask against the live screen at a
+// join, where a matched stretch that begins inside a line starts at the
+// next line instead of being given up (coverageMask, fromNextLine): the
+// screen's top row can be a wrapped tail ("beard. He climbed the rocks…"),
+// and the copy above it then matches from the last word of the row before
+// it. Only here: between copies in the history (dedupRepaints) the stretch
+// given up whole is what keeps the complete copy over a partial one.
+func liveFrameDropMask(history []string, refWords []string) []bool {
+	set := make(map[string]bool, len(refWords))
+	for _, w := range refWords {
+		set[w] = true
+	}
+	return coverageMask(history, buildShingles(refWords), set, true)
+}
+
+func coverageMask(history []string, shingles map[shingle]bool, refWords map[string]bool, fromNextLine bool) []bool {
 	mask := make([]bool, len(history))
 	if len(shingles) == 0 {
 		return mask
@@ -244,11 +263,9 @@ func coverageDropMask(history []string, shingles map[shingle]bool, refWords map[
 	// that only CONTINUES like a row of the frame: the wrapped tail of a
 	// list item, the same words as the tail of another item on the screen
 	// ("4. T3L04 alpha … foxtrot / golf hotel … mike" against "19. T3L19
-	// alpha … foxtrot / golf hotel … mike") — the only copy of it. Such a
-	// stretch loses its words up to the next line's start, and what is left
-	// is gated again: a copy whose first matched word is the last of the row
-	// before it (the frame's top row was a wrapped tail, "beard. He climbed
-	// the rocks…") is still the copy from its next line on.
+	// alpha … foxtrot / golf hotel … mike") — the only copy of it. With
+	// fromNextLine (liveFrameDropMask) such a stretch loses only its words up
+	// to the next line's start, and what is left is gated again.
 	for i := 0; i < len(covered); {
 		if !covered[i] {
 			i++
@@ -259,6 +276,13 @@ func coverageDropMask(history []string, shingles map[shingle]bool, refWords map[
 			j++
 		}
 		if i > 0 && lineOf[i-1] == lineOf[i] {
+			if !fromNextLine {
+				for k := i; k < j; k++ {
+					covered[k] = false
+				}
+				i = j
+				continue
+			}
 			for i < j && lineOf[i] == lineOf[i-1] {
 				covered[i] = false
 				i++
@@ -365,7 +389,7 @@ func dedupAgainstFrame(history, screen []string) []string {
 	for _, r := range screen {
 		fw = append(fw, dedupWords(r)...)
 	}
-	drop := frameMatchedDropMask(history, fw)
+	drop := liveFrameDropMask(history, fw)
 	both := append(append(make([]string, 0, len(history)+len(screen)), history...), screen...)
 	mask := append(append(make([]bool, 0, len(both)), drop...), make([]bool, len(screen))...)
 	paras := dedupParagraphs(both)
@@ -374,6 +398,7 @@ func dedupAgainstFrame(history, screen []string) []string {
 	for i := range history {
 		drop[i] = mask[i]
 	}
+	dropSeamDebris(history, drop)
 	return compactDropped(history, drop)
 }
 
@@ -620,4 +645,40 @@ func wordsContainRun(words, frag []string) bool {
 		}
 	}
 	return false
+}
+
+// dropSeamDebris drops, from the end of the history (only blank rows between
+// them and the screen), rows that carry no words: a bare quote bar or a box
+// edge a redraw left after the old frame's text ("…salt in his beard.", then
+// "▎", then the screen's "beard. He climbed…"). One stays when the row with
+// words above it begins with the same mark: a quote's own closing bar.
+func dropSeamDebris(history []string, drop []bool) {
+	lead := func(s string) string {
+		t := strings.TrimSpace(dedupANSI.ReplaceAllString(s, ""))
+		for _, r := range t {
+			return string(r)
+		}
+		return ""
+	}
+	var tail []int
+	above := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		if drop[i] || dedupBlank(history[i]) {
+			continue
+		}
+		if len(dedupWords(history[i])) > 0 {
+			above = i
+			break
+		}
+		tail = append(tail, i)
+	}
+	mark := ""
+	if above >= 0 {
+		mark = lead(history[above])
+	}
+	for _, i := range tail {
+		if l := lead(history[i]); l != "" && l != mark {
+			drop[i] = true
+		}
+	}
 }

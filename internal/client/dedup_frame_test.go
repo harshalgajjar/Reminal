@@ -463,6 +463,17 @@ func TestJoinDropsANarrowCopyAboveTheWideFrame(t *testing.T) {
 		b.WriteString(strings.TrimSpace(dedupANSI.ReplaceAllString(l, "")) + "\n")
 	}
 	painted := b.String()
+	// The bare quote bar a redraw left at the history's end goes too: the
+	// history's last row with words is "…salt in his beard.".
+	var last []string
+	for i := len(out) - 1; i >= 0 && len(last) < 3; i-- {
+		if !dedupBlank(out[i]) {
+			last = append(last, strings.TrimSpace(dedupANSI.ReplaceAllString(out[i], "")))
+		}
+	}
+	if len(last) == 0 || last[0] == "▎" {
+		t.Errorf("the history ends on a bare quote bar: %q", last)
+	}
 	for phrase, want := range map[string]int{
 		"You've met him by now, I expect.": 1,
 		"\nV. The Last Winter\n":           1,
