@@ -557,23 +557,30 @@ func dropHeadingDebris(lines []string, paras []dedupPara, drop []bool) {
 		}
 	}
 	for k, p := range paras {
-		if drop[p.i] || keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords {
+		if keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords {
 			continue
 		}
 		// The next copy, with only debris on the way to it. Paragraphs
 		// dropped already (the copies a reprint carried) are passed over; a
-		// next copy dropped itself (an orphan) counts when a copy is kept
-		// elsewhere, so the heading is still read.
+		// heading dropped already (an orphan) still sheds its debris; a next
+		// copy dropped itself counts when a copy is kept elsewhere, so the
+		// heading is still read.
 		seen := 0
 		for n := k + 1; n < len(paras) && seen <= dedupDebrisParas; n++ {
 			if keys[n] == keys[k] {
-				if drop[paras[n].i] && kept[keys[k]] < 2 {
+				need := 2
+				if drop[p.i] {
+					need = 1
+				}
+				if drop[paras[n].i] && kept[keys[k]] < need {
 					break
+				}
+				if !drop[p.i] {
+					kept[keys[k]]--
 				}
 				for x := p.i; x < paras[n].i; x++ {
 					drop[x] = true
 				}
-				kept[keys[k]]--
 				break
 			}
 			if drop[paras[n].i] {

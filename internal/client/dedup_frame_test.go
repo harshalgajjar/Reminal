@@ -426,6 +426,11 @@ func TestJoinReadsAHeadingAtTheSeamOnce(t *testing.T) {
 	if n := strings.Count(painted, "The next morning a fishing boat"); n != 1 {
 		t.Errorf("the paragraph under the heading is read %d times, want once", n)
 	}
+	// The history's tail is the redraw's debris alone once its heading has
+	// gone: none of it stays above the screen's copy.
+	if tail := plain(out[max(0, len(out)-4):]); strings.Contains(tail, "stairs.") || strings.Contains(tail, "▎") {
+		t.Errorf("the redraw's debris stayed at the history's tail:\n%s", tail)
+	}
 	for _, keep := range []string{"The fog came in during the second week", "Mara ran back up the stairs", "Saw your light just in time", "You've met him by now, I expect", "The End."} {
 		if !strings.Contains(painted, keep) {
 			t.Errorf("lost %q", keep)
