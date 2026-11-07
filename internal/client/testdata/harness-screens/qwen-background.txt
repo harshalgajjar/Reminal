@@ -1,0 +1,40 @@
+
+   ▄▄▄▄▄▄  ▄▄     ▄▄ ▄▄▄▄▄▄▄ ▄▄▄    ▄▄   ┌──────────────────────────────────────────────────────────┐
+  ██╔═══██╗██║    ██║██╔════╝████╗  ██║  │ >_ Qwen Code (v0.26.9)                                   │
+  ██║   ██║██║ █╗ ██║█████╗  ██╔██╗ ██║  │                                                          │
+  ██║▄▄ ██║██║███╗██║██╔══╝  ██║╚██╗██║  │ API Key | gpt-4.1 (/model to change)                     │
+  ╚██████╔╝╚███╔███╔╝███████╗██║ ╚████║  │ /w                                                       │
+   ╚══▀▀═╝  ╚══╝╚══╝ ╚══════╝╚═╝  ╚═══╝  └──────────────────────────────────────────────────────────┘
+
+  Tips: Add a QWEN.md file to give Qwen Code persistent project context.
+  ●︎ Extensions changed on disk. Run /reload-plugins to apply updates.
+  ●︎ Read context files: ~/.qwen/output-language.md
+
+  > start the server and watch it
+  ✓ Shell sleep 900 [background] (dev server)
+    Background shell bg_700a178e started (pid 259).
+  ✓ Monitor Monitor: watch logs
+    Monitor started: watch logs (mon_6f7622f7f9834538)
+
+  ◆︎ Started them in the background.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+* Started them in the background.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ➜ w · git:(master) · gpt-4.1
+  YOLO mode (shift + tab to cycle) · 1 shell, 1 monitor
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
