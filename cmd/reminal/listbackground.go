@@ -16,7 +16,8 @@ import (
 // running, as `reminal list` says it beside the state: its shells, then each
 // other kind by the harness's own name ("1 shell", "2 monitors"), in a steady
 // order, and how much there is in all. Work said with no count
-// (session.BackgroundWork) reads as itself, and counts as one.
+// (session.BackgroundWork) reads as itself, and counts as one. What it has
+// set to run later ends the list ("1 scheduled"), never counted in n.
 func listBackground(a session.Active) (parts []string, n int) {
 	if a.Shells > 0 {
 		parts = append(parts, fmt.Sprintf("%d shell%s", a.Shells, plural(a.Shells)))
@@ -29,6 +30,11 @@ func listBackground(a session.Active) (parts []string, n int) {
 		default:
 			parts = append(parts, fmt.Sprintf("%d %s", c, pluralKind(kind, c)))
 		}
+	}
+	// What it has set to run later, last, and never in n: it is not work
+	// running ("done · 1 scheduled" is a finished turn with a job to come).
+	if s := session.CleanScheduled(a.Scheduled); s != nil {
+		parts = append(parts, fmt.Sprintf("%d scheduled", s.Count))
 	}
 	return parts, max(a.Shells, 0) + session.CountOther(a.Other)
 }
