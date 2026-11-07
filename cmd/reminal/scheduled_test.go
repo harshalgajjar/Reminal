@@ -97,12 +97,12 @@ func TestListSaysScheduledApart(t *testing.T) {
 func TestFleetMachineRowCarriesScheduled(t *testing.T) {
 	next := time.Date(2026, 11, 7, 15, 7, 0, 0, time.UTC)
 	m := client.FleetMachine{ID: "m", Sessions: []protocol.DirSession{
-		{ID: "SCHD2345", Attn: "done", Scheduled: 2, ScheduledNext: next.Unix()},
+		{ID: "SCHD2345", Attn: "done", Scheduled: 2, ScheduledNext: next.Unix(), ScheduledAt: next.Add(-time.Hour).Unix()},
 		{ID: "HUGE2345", Scheduled: 9_000_000},
 		{ID: "NONE2345"},
 	}}
 	rows := fleetMachineRow(m, "").Sessions
-	if r := rows[0]; r.Scheduled != 2 || r.ScheduledNext != next.Local().Format(time.RFC3339) || r.Shells+r.Agents != 0 || r.Other != nil {
+	if r := rows[0]; r.Scheduled != 2 || r.ScheduledNext != next.Local().Format(time.RFC3339) || r.ScheduledAt != next.Add(-time.Hour).Local().Format(time.RFC3339) || r.Shells+r.Agents != 0 || r.Other != nil {
 		t.Errorf("row: %+v", r)
 	}
 	if rows[1].Scheduled != 1_000_000 {
@@ -110,6 +110,38 @@ func TestFleetMachineRowCarriesScheduled(t *testing.T) {
 	}
 	if rows[2].Scheduled != 0 || rows[2].ScheduledNext != "" {
 		t.Errorf("none: %+v", rows[2])
+	}
+}
+
+// A payload that lists jobs but says nothing of what runs (no
+// background_tasks, no fullyIdle) is taken as saying nothing: never as
+// "nothing runs", which would quiet what the screen and sleep say of work
+// the agent did not mention. Its jobs ride with what does say what runs.
+func TestJobsWithoutWhatRunsSayNothing(t *testing.T) {
+	if bg := hookBackground([]byte(`{"hook_event_name":"Stop","session_crons":[{"id":"a","schedule":"*/5 * * * *"}]}`), ""); bg != nil {
+		t.Errorf("jobs alone: %+v, want nothing said", bg)
+	}
+	if bg := hookBackground([]byte(`{"fullyIdle":true,"crons":[{"id":"a","schedule":"*/5 * * * *","enabled":true}]}`), ""); bg == nil || bg.Scheduled.Jobs() != 1 {
+		t.Errorf("with fullyIdle: %+v, want 1 scheduled", bg)
+	}
+}
+
+// Said a while ago, a count of jobs says when: one may have fired, or been
+// added, since.
+func TestListSaysWhenJobsWereSaidOnceOld(t *testing.T) {
+	now := time.Date(2026, 11, 6, 18, 0, 0, 0, time.Local)
+	for _, c := range []struct {
+		at   time.Time
+		want string
+	}{
+		{time.Time{}, "2 scheduled"},
+		{now.Add(-10 * time.Minute), "2 scheduled"},
+		{now.Add(-3 * time.Hour), "2 scheduled (as of 15:00)"},
+		{now.Add(-50 * time.Hour), "2 scheduled (as of Nov 4 16:00)"},
+	} {
+		if got := scheduledPart(&session.Scheduled{Count: 2, At: c.at}, now); got != c.want {
+			t.Errorf("said at %v: %q, want %q", c.at, got, c.want)
+		}
 	}
 }
 

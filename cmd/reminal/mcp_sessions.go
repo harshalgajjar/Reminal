@@ -45,9 +45,11 @@ type mcpSessionRow struct {
 	Agents int            `json:"agents,omitempty"`
 	Other  map[string]int `json:"other,omitempty"`
 	// Scheduled is how many jobs it has set to run later, never counted with
-	// the work above; ScheduledNext when the soonest fires (RFC3339), when said.
+	// the work above; ScheduledNext when the soonest fires (RFC3339), when
+	// said; ScheduledAt when its harness said them (RFC3339).
 	Scheduled     int    `json:"scheduled,omitempty"`
 	ScheduledNext string `json:"scheduled_next,omitempty"`
+	ScheduledAt   string `json:"scheduled_at,omitempty"`
 	Current       bool   `json:"current,omitempty"`
 	// Asleep: the session sleeps (its processes ended, its record kept).
 	// read_transcript and search_sessions answer from what it saved;
@@ -226,6 +228,7 @@ func fleetMachineRow(m client.FleetMachine, currentID string) mcpMachineRow {
 			Other:         session.CleanOther(s.Other),
 			Scheduled:     session.ClampCount(s.Scheduled),
 			ScheduledNext: resetsAtRFC3339(s.ScheduledNext),
+			ScheduledAt:   resetsAtRFC3339(s.ScheduledAt),
 			Current:       currentID != "" && strings.EqualFold(s.ID, currentID),
 			Asleep:        s.Asleep,
 			SleptAt:       resetsAtRFC3339(s.SleptAt),

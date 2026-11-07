@@ -483,6 +483,9 @@ func localDirSessions() []protocol.DirSession {
 		}
 		if s := session.CleanScheduled(a.Scheduled); s != nil {
 			ds.Scheduled = s.Count
+			if !s.At.IsZero() {
+				ds.ScheduledAt = s.At.Unix()
+			}
 			if !s.Next.IsZero() {
 				ds.ScheduledNext = s.Next.Unix()
 			}
