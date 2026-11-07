@@ -4,6 +4,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -43,6 +44,12 @@ func piConvFile(conv string) string {
 // qwenConvFile: ~/.qwen/projects/<project>/chats/<conv>.jsonl
 func qwenConvFile(conv string) string {
 	return homeUnder(".qwen", "projects", "*", "chats", conv+".jsonl")
+}
+
+// copilotConvFile: ~/.copilot/session-state/<conv>/events.jsonl (Copilot CLI
+// 1.0.106: its hooks' transcriptPath)
+func copilotConvFile(conv string) string {
+	return homeUnder(".copilot", "session-state", conv, "events.jsonl")
 }
 
 // convSize is the size of agent's file for conversation conv, the largest
@@ -101,33 +108,40 @@ func globRoot(pattern string) string {
 // convAskWait is how long an agent is given to list its conversations.
 const convAskWait = 15 * time.Second
 
-// opencodeHas asks opencode, in cwd (it lists a project's sessions), for
+// sessionListHas asks agent, in cwd (it lists a project's sessions), for
 // its sessions, as JSON, and looks for conv among them.
-func opencodeHas(conv, cwd string) (there, known bool) {
-	bin, err := agentLookPath("opencode")
-	if err != nil {
-		return false, false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), convAskWait)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "session", "list", "--format", "json")
-	cmd.Dir = cwd
-	out, err := cmd.Output()
-	if err != nil {
-		return false, false
-	}
-	var list []struct {
-		ID string `json:"id"`
-	}
-	if json.Unmarshal(out, &list) != nil {
-		return false, false
-	}
-	for _, s := range list {
-		if s.ID == conv {
-			return true, true
+// OpenCode, and Kilo Code CLI after it, list them so: `<agent> session list
+// --format json`, an id each.
+func sessionListHas(agent string) func(conv, cwd string) (there, known bool) {
+	return func(conv, cwd string) (there, known bool) {
+		bin, err := agentLookPath(agent)
+		if err != nil {
+			return false, false
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), convAskWait)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, bin, "session", "list", "--format", "json")
+		cmd.Dir = cwd
+		out, err := cmd.Output()
+		if err != nil {
+			return false, false
+		}
+		if len(bytes.TrimSpace(out)) == 0 {
+			return false, true // Kilo prints nothing when it has none
+		}
+		var list []struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(out, &list) != nil {
+			return false, false
+		}
+		for _, s := range list {
+			if s.ID == conv {
+				return true, true
+			}
+		}
+		return false, true
 	}
-	return false, true
 }
 
 // piAgentDir is where pi keeps its files: PI_CODING_AGENT_DIR when set

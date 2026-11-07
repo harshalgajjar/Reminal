@@ -174,3 +174,15 @@ func TestCopilotSubagentTurnLeavesTheSessionsState(t *testing.T) {
 		t.Fatalf("a subagent's turn ended inside the session's: %q, want working still", got)
 	}
 }
+
+// Copilot CLI names its conversation sessionId (camelCase): what a session
+// is resumed on, read from its own Stop.
+func TestCopilotsConversationIsReadFromItsHook(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("testdata", "copilot", "agentStop.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := convFromPayload(b); got != "184da7fe-1615-4edb-b2ea-1d66a4c42d1c" {
+		t.Errorf("conversation %q, want its sessionId", got)
+	}
+}

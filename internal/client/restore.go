@@ -187,6 +187,8 @@ var conversationWords = map[string][]string{
 	"pi":           {"--continue", "-c", "--resume", "-r", "--session"},
 	"agy":          {"--continue"},
 	"amp":          {"continue"},
+	"copilot":      {"--resume", "-r", "--continue", "--session-id", "--connect"},
+	"kilo":         {"--continue", "-c", "--session", "-s"},
 }
 
 // startedIntoConversation says whether an agent's command line (args, its
@@ -405,7 +407,7 @@ var resumers = map[string]resumer{
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--session", c) },
 		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
 		how:    "opencode session list, then opencode --session <id>",
-		store:  convStore{has: opencodeHas},
+		store:  convStore{has: sessionListHas("opencode")},
 	},
 	"pi": {
 		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--session", c) },
@@ -420,6 +422,21 @@ var resumers = map[string]resumer{
 	"amp": {
 		latest: func(b string, _ []string) []string { return []string{b, "threads", "continue"} },
 		how:    "amp threads list, then amp threads continue <id>",
+	},
+	// Copilot CLI 1.0.106: --resume takes its id joined, as its own help
+	// writes it (its value is optional: a bare --resume opens its picker).
+	"copilot": {
+		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--resume="+c) },
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		pick:   func(b string, f []string) []string { return plainFlags(b, f, "--resume") },
+		store:  convStore{file: copilotConvFile},
+	},
+	// Kilo Code CLI 7.8.27, OpenCode's fork: its flags, and its session list.
+	"kilo": {
+		byID:   func(b string, f []string, c string) []string { return plainFlags(b, f, "--session", c) },
+		latest: func(b string, f []string) []string { return plainFlags(b, f, "--continue") },
+		how:    "kilo session list, then kilo --session <id>",
+		store:  convStore{has: sessionListHas("kilo")},
 	},
 }
 
@@ -463,6 +480,11 @@ var agentRules = map[string]argRules{
 		drop: []string{"--continue", "-c", "--session", "-s", "--fork", "--prompt"}},
 	"pi": {oneShot: []string{"-p", "--print"},
 		drop: []string{"--continue", "-c", "--resume", "-r", "--session"}},
+	"copilot": {oneShot: []string{"-p", "--prompt"},
+		oneShotSub: []string{"app", "login", "help", "init", "config", "update", "version", "workflow", "sessions", "memories", "plugin", "mcp", "skill", "instruction", "lsp", "sandbox", "completion"},
+		drop:       []string{"--resume", "-r", "--continue", "--session-id", "--connect", "-i", "--interactive"}},
+	"kilo": {oneShotSub: []string{"completion", "acp", "mcp", "attach", "run", "debug", "auth", "providers", "agent", "upgrade", "uninstall", "serve", "models", "stats", "export", "import", "github", "pr", "session", "plugin", "plug", "db", "console", "cloud", "roll-call", "profile", "auto", "remote", "daemon", "config", "worktree", "help"},
+		drop: []string{"--continue", "-c", "--session", "-s", "--fork", "--prompt"}},
 }
 
 func inList(l []string, s string) bool {
