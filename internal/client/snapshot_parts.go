@@ -47,6 +47,11 @@ func (a *Agent) noteSnapshotJoiner(viewer, snap string, paced bool, cursor uint6
 	defer a.snapMu.Unlock()
 	if viewer != "" {
 		a.snapXfers = slices.DeleteFunc(a.snapXfers, func(x *snapXfer) bool { return x.viewer == viewer })
+		// Remembered as one a width change re-snapshots (resnapshot.go),
+		// whether or not it is owed a snapshot now.
+		if snap == snapCapParts && paced {
+			a.rememberPaced(viewer)
+		}
 	}
 	if a.buf == nil || cursor > a.buf.OldestSeq() {
 		return
