@@ -194,9 +194,17 @@ var harnessLoginScreens = map[string][]loginRow{
 		`youraccesstokencouldnotberefreshed\.pleaselogoutandsigninagain`,
 		`yourauthenticationsessioncouldnotberefreshedautomatically\.pleaselogoutandsigninagain`,
 		"chatgptaccountidnotavailable,pleasere-run`?codexlogin`?",
-	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`), loginMarked("■",
-		`yoursessionhasexpired\.pleasereauthenticate`,
-	)),
+		// Codex 0.167.0: signing in by device code (its three rows), and an
+		// enterprise identity provider's session it cannot keep.
+		`preparingdevicecodelogin`,
+		`enterpriseidp(?:sessionhasnorefreshtoken;signinagain|credentialswereremoved;signinagain|identitychanged;signinagainandreconnect)`,
+	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`),
+		// Its device-code steps are its only together: the first, then the second
+		// within the next few rows (the link between them). One numbered step
+		// alone is an agent's own list.
+		loginThen(`1\.openthislinkinyourbrowserandsignin`, `2\.enterthisone-timecodeafteryouaresignedin`), loginMarked("■",
+			`yoursessionhasexpired\.pleasereauthenticate`,
+		)),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), the steps of
 	// setting one up, and a login that lapsed.
