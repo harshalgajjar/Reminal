@@ -40,6 +40,14 @@ var loginRowCases = []loginRowCase{
 	{prog: "codex", row: "■ Your authentication session could not be refreshed automatically. Please log out and sign in again."},
 	{prog: "codex", row: "■ ChatGPT account ID not available, please re-run `codex login`"},
 	{prog: "codex", row: "■ ChatGPT account ID not available, please re-run codex login"},
+	// Codex 0.167.0: the device-code sign-in's three rows, and an enterprise
+	// identity provider's session it cannot keep.
+	{prog: "codex", row: "  Preparing device code login"},
+	{prog: "codex", row: "  1. Open this link in your browser and sign in"},
+	{prog: "codex", row: "  2. Enter this one-time code after you are signed in"},
+	{prog: "codex", row: "■ enterprise IdP session has no refresh token; sign in again"},
+	{prog: "codex", row: "■ enterprise IdP credentials were removed; sign in again"},
+	{prog: "codex", row: "■ enterprise IdP identity changed; sign in again and reconnect"},
 
 	{prog: "amp", row: "Would you like to log in to Amp? [(y)es, (n)o]: "},
 	{prog: "amp", row: "No API key found. Starting login flow..."},
@@ -465,6 +473,7 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"a tool's output's last row", "claude", "  ⎿  Fetched https://staging.example.com/api\n     Authentication required.", false},
 		{"a person's text at the prompt", "claude", "────\n❯ why does it say\n  Authentication required.\n────", false},
 		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", false},
+		{"Codex's IdP row carried on in an answer", "codex", "● The server said enterprise IdP session has no refresh token; sign in again, so I stopped.\n› ", false},
 	} {
 		if got := harnessProblemIn(c.tail, c.prog); got != c.want {
 			t.Errorf("%s (as %q): logged out %v, want %v:\n%s", c.name, c.prog, got, c.want, c.tail)

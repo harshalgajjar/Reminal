@@ -194,6 +194,12 @@ var harnessLoginScreens = map[string][]loginRow{
 		`youraccesstokencouldnotberefreshed\.pleaselogoutandsigninagain`,
 		`yourauthenticationsessioncouldnotberefreshedautomatically\.pleaselogoutandsigninagain`,
 		"chatgptaccountidnotavailable,pleasere-run`?codexlogin`?",
+		// Codex 0.167.0: signing in by device code (its three rows), and an
+		// enterprise identity provider's session it cannot keep.
+		`preparingdevicecodelogin`,
+		`1\.openthislinkinyourbrowserandsignin`,
+		`2\.enterthisone-timecodeafteryouaresignedin`,
+		`enterpriseidp(?:sessionhasnorefreshtoken;signinagain|credentialswereremoved;signinagain|identitychanged;signinagainandreconnect)`,
 	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`), loginMarked("■",
 		`yoursessionhasexpired\.pleasereauthenticate`,
 	)),
