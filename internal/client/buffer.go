@@ -35,8 +35,9 @@ type scrollEntry struct {
 	// this geometry before the next entry's bytes were emitted. The snapshot's
 	// history rebuild resizes its replay emulator in lockstep so each segment
 	// re-renders at the width it was written for — replaying 120-col output at
-	// 100 cols wraps every line into garbage. Never streamed to viewers (they
-	// get real resize messages) and skipped by the catch-up sender.
+	// 100 cols wraps every line into garbage. Streamed to viewers as the size
+	// message in its place (runSender), so a viewer's grid is the new size
+	// before any byte the program wrote for it.
 	Cols, Rows int
 }
 

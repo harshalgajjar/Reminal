@@ -1394,7 +1394,6 @@ func (a *Agent) applyEffectiveSize() {
 	// ConPTY echoing this Resize — BEFORE the PTY hears the new size. If
 	// that opcode lands first, ED2 undoes the screen we just re-anchored.
 	a.resizeScreen(cols, rows)
-	_ = a.term.Resize(cols, rows)
 	// Tell every viewer the new PTY size so their xterm.js matches.
 	// Without this, the agent shrinks the PTY for a small viewer (e.g.,
 	// phone joining a desktop session), the shell formats output for
@@ -1402,7 +1401,17 @@ func (a *Agent) applyEffectiveSize() {
 	// at its old size — cursor-positioning escape codes land in the
 	// wrong column and the display goes garbled. Broadcasting keeps
 	// every screen in sync with what the shell actually thinks.
+	//
+	// Told BEFORE the PTY is resized: the size and the output share one
+	// ordered socket per viewer (writeMu), so told first, the size is
+	// there before any output the program writes for it. Told after, the
+	// program's redraw for the new width could reach a viewer still at
+	// the old one: a phone turned back to landscape (55 to 102 columns)
+	// had Claude Code's words placed for 102 columns clamped at its edge,
+	// and its grid then grew under the rest of the frame, which came out
+	// one word a row, stepping right (the staircase).
 	a.broadcastSize(cols, rows)
+	_ = a.term.Resize(cols, rows)
 }
 
 // broadcastSize publishes the PTY's current (cols, rows) to every
@@ -1416,18 +1425,8 @@ func (a *Agent) applyEffectiveSize() {
 // grow the PTY back after the smallest viewer left. Viewers handle
 // it by refitting + sendResize-ing their own viewport dimensions.
 func (a *Agent) broadcastSize(cols, rows uint16) {
-	// Must not use protocol.Message: Cols/Rows are omitempty, so the
-	// (0, 0) "re-report your wrap" sentinel would serialize as {} and
-	// the remaining viewer would never grow after a smaller one left.
-	payload, err := json.Marshal(struct {
-		Cols uint16 `json:"cols"`
-		Rows uint16 `json:"rows"`
-	}{cols, rows})
-	if err != nil {
-		return
-	}
-	enc, err := a.box.Encrypt(payload)
-	if err != nil {
+	msg, ok := a.sizeMessage(cols, rows)
+	if !ok {
 		return
 	}
 	sizeLog("broadcast %dx%d", cols, rows)
@@ -1435,7 +1434,28 @@ func (a *Agent) broadcastSize(cols, rows uint16) {
 	// sentinel follows forgetting every viewer's wrap, so one that never
 	// hears it is left out of the next size, and a smaller terminal here
 	// was grown past.
-	_ = a.toViewers(protocol.Message{Type: protocol.TypeResize, Data: enc})
+	_ = a.toViewers(msg)
+}
+
+// sizeMessage is the PTY size cols by rows as a viewer is told it, sealed:
+// sent beside the stream (broadcastSize) or in its place in it (runSender).
+// Must not use protocol.Message's own fields: Cols/Rows are omitempty, so
+// the (0, 0) "re-report your wrap" sentinel would serialize as {} and the
+// remaining viewer would never grow after a smaller one left
+// (TestBroadcastSizeSentinelKeepsZeroFields).
+func (a *Agent) sizeMessage(cols, rows uint16) (protocol.Message, bool) {
+	payload, err := json.Marshal(struct {
+		Cols uint16 `json:"cols"`
+		Rows uint16 `json:"rows"`
+	}{cols, rows})
+	if err != nil {
+		return protocol.Message{}, false
+	}
+	enc, err := a.box.Encrypt(payload)
+	if err != nil {
+		return protocol.Message{}, false
+	}
+	return protocol.Message{Type: protocol.TypeResize, Data: enc}, true
 }
 
 // signalRegistered releases the parent (`reminal new`) handshake the first time
@@ -3775,6 +3795,8 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 	acked := a.snapAcks()
 	var cursor uint64
 	sending := false
+	// told: this stream has begun with the PTY's size (below).
+	told := false
 
 	for {
 		if !sending {
@@ -3784,6 +3806,7 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			case c := <-cursorCh:
 				cursor = c
 				sending = true
+				told = false
 			}
 		}
 
@@ -3801,6 +3824,22 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			a.dropSnapshotXfers()
 			sending = false
 			continue
+		}
+
+		// The stream begins with the PTY's size as it is. A viewer that has
+		// just (re)connected knows none and falls back to its own width,
+		// and a size is otherwise told only when it changes: a snapshot
+		// laid out for the PTY's width landed in a narrower grid before
+		// any size came, one word a row, stepping right.
+		if !told {
+			told = true
+			if sz := a.sizeBook.lastApplied(); !sz.zero() {
+				if msg, ok := a.sizeMessage(sz.cols, sz.rows); ok {
+					if err := a.writeMsg(conn, msg); err != nil {
+						return err
+					}
+				}
+			}
 		}
 
 		// Fresh attach (or a viewer that fell behind past what we still
@@ -3852,11 +3891,22 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 
 		entries := a.buf.From(cursor)
 		for _, e := range entries {
-			if err := a.writeMsg(conn, protocol.Message{
-				Type: protocol.TypeData,
-				Data: e.Data,
-				Seq:  e.Seq,
-			}); err != nil {
+			msg := protocol.Message{Type: protocol.TypeData, Data: e.Data, Seq: e.Seq}
+			if e.Cols > 0 {
+				// A resize marker: the PTY's size from here on, sent in
+				// its place in the stream, so the viewer's grid is the
+				// new size before any byte the program wrote for it. A
+				// size told beside the stream could reach the viewer
+				// after that output, and its grid then grew under a
+				// half-written frame (one word a row, stepping right).
+				var ok bool
+				if msg, ok = a.sizeMessage(uint16(e.Cols), uint16(e.Rows)); !ok {
+					cursor = e.Seq + 1
+					continue
+				}
+				msg.Seq = e.Seq
+			}
+			if err := a.writeMsg(conn, msg); err != nil {
 				return err
 			}
 			cursor = e.Seq + 1
