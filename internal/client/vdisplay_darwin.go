@@ -55,20 +55,19 @@ func vdisplayLockPath() string {
 // and the point size of the first one (0,0 when none) — remembered so the
 // virtual display can match the layout the windows were living in.
 //
-// A MacBook's own panel behind a shut lid is not real. With sleep disabled
-// macOS keeps listing it, online and main, with the lid shut and nothing
-// else attached; counted, it stood for a display and closed-lid mode never
-// made the one it promises while no monitor is attached.
+// A MacBook's own panel is real while macOS lists it, lid open or shut
+// (countRealScreens): with sleep disabled a shut MacBook keeps it online and
+// main, every window on it, and a virtual display beside it is a second,
+// empty screen.
 func displayCensus() (real int, w, h int, err error) {
 	out, err := run("osascript", "-l", "JavaScript", "-e",
-		`ObjC.import("AppKit"); ObjC.import("CoreGraphics");
+		`ObjC.import("AppKit");
 var s = $.NSScreen.screens, out = [];
 for (var i = 0; i < s.count; i++) {
-  var sc = s.objectAtIndex(i), name = "", builtin = 0;
+  var sc = s.objectAtIndex(i), name = "";
   try { name = ObjC.unwrap(sc.localizedName); } catch (e) {}
-  try { builtin = $.CGDisplayIsBuiltin(ObjC.unwrap(sc.deviceDescription.objectForKey("NSScreenNumber"))) ? 1 : 0; } catch (e) {}
   var f = sc.frame;
-  out.push(name + "\t" + Math.round(f.size.width) + "\t" + Math.round(f.size.height) + "\t" + builtin);
+  out.push(name + "\t" + Math.round(f.size.width) + "\t" + Math.round(f.size.height));
 }
 out.join("\n");`)
 	if err != nil {
@@ -80,36 +79,42 @@ out.join("\n");`)
 		if len(f) < 3 {
 			continue
 		}
-		screens = append(screens, censusScreen{name: f[0], w: atoi(f[1]), h: atoi(f[2]), builtin: len(f) > 3 && f[3] == "1"})
+		screens = append(screens, censusScreen{name: f[0], w: atoi(f[1]), h: atoi(f[2])})
 	}
-	lid, fake := readLid()
-	if fake {
-		// The stand-in lid is over the first screen that is not ours.
-		for i := range screens {
-			if !screens[i].ours() {
-				screens[i].builtin = true
-				break
-			}
-		}
-	}
-	real, w, h = countRealScreens(screens, lid)
+	real, w, h = countRealScreens(screens, readLid())
 	return real, w, h, nil
 }
 
 // readLid reads the lid (AppleClamshellState, as the dimmer does).
-// REMINAL_FAKE_LID names a file standing in for a lid over the first screen
-// not ours, for a Mac with none (a VM, in tests): shut while it holds "1".
-// fake says the stand-in is in use.
-func readLid() (lid censusLid, fake bool) {
+// REMINAL_FAKE_LID names a file standing in for a lid, for a Mac with none (a
+// VM, in tests): shut while it holds "1".
+func readLid() censusLid {
 	if p := os.Getenv("REMINAL_FAKE_LID"); p != "" {
 		b, _ := os.ReadFile(p)
-		return censusLid{has: true, shut: strings.TrimSpace(string(b)) == "1"}, true
+		return censusLid{has: true, shut: strings.TrimSpace(string(b)) == "1"}
 	}
 	out, err := run("ioreg", "-r", "-k", "AppleClamshellState", "-d", "1")
 	if err != nil {
-		return censusLid{}, false
+		return censusLid{}
 	}
-	return censusLid{has: strings.Contains(out, `"AppleClamshellState"`), shut: strings.Contains(out, `"AppleClamshellState" = Yes`)}, false
+	return censusLid{has: strings.Contains(out, `"AppleClamshellState"`), shut: strings.Contains(out, `"AppleClamshellState" = Yes`)}
+}
+
+// forcedVDisplay is the test hook that has the census find no real display
+// with one attached, so the virtual display's making and going are testable
+// on any Mac: REMINAL_FORCE_VDISPLAY set to "1" forces it for good, or names
+// a file that forces it while the file holds "1", so a test takes the force
+// away and sees the display go.
+func forcedVDisplay() bool {
+	v := os.Getenv("REMINAL_FORCE_VDISPLAY")
+	if v == "" {
+		return false
+	}
+	if v == "1" {
+		return true
+	}
+	b, _ := os.ReadFile(v)
+	return strings.TrimSpace(string(b)) == "1"
 }
 
 // vdisplayLoop keeps the closed-lid promise: while settings.ClosedLid is on
@@ -220,7 +225,7 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		if err != nil {
 			continue // census is best-effort; try again next tick
 		}
-		if os.Getenv("REMINAL_FORCE_VDISPLAY") == "1" {
+		if forcedVDisplay() {
 			real = 0 // test hook: behave headless with a monitor attached
 		}
 		if w > 0 {
@@ -245,8 +250,8 @@ func vdisplayLoop(stop <-chan struct{}, isDaemon bool) {
 		if err != nil {
 			continue // no helper installed — nothing we can do headless
 		}
-		// REMINAL_FORCE_VDISPLAY exists purely so this path is testable with a
-		// monitor attached (census is skipped above when forcing).
+		// forcedVDisplay exists purely so this path is testable with a
+		// monitor attached (the census is overruled above when forcing).
 		cmd := helperCommand(helper, "vdisplay", strconv.Itoa(lastW), strconv.Itoa(lastH))
 		stdin, err := cmd.StdinPipe() // lifeline
 		if err != nil {
