@@ -40,6 +40,12 @@ var loginRowCases = []loginRowCase{
 	{prog: "codex", row: "■ Your authentication session could not be refreshed automatically. Please log out and sign in again."},
 	{prog: "codex", row: "■ ChatGPT account ID not available, please re-run `codex login`"},
 	{prog: "codex", row: "■ ChatGPT account ID not available, please re-run codex login"},
+	// Codex 0.167.0: the device-code sign-in's three rows, and an enterprise
+	// identity provider's session it cannot keep.
+	{prog: "codex", row: "  Preparing device code login"},
+	{prog: "codex", row: "■ enterprise IdP session has no refresh token; sign in again"},
+	{prog: "codex", row: "■ enterprise IdP credentials were removed; sign in again"},
+	{prog: "codex", row: "■ enterprise IdP identity changed; sign in again and reconnect"},
 	// Qwen Code 0.26.9: a message turned away for want of a login, its /auth
 	// flow, its signed-out state, no provider, signing in through the
 	// browser, and a plan without Qwen Code (the plan's name is a hole:
@@ -334,6 +340,24 @@ func TestCodexsLoginMenuIsItsItemsTogether(t *testing.T) {
 	}
 }
 
+// Codex 0.167.0's device-code steps are its only together: the first, then
+// the second within the next few rows (the link between them). An agent's
+// own numbered list that starts with the first step's words is not it.
+func TestCodexsDeviceCodeStepsAreItsTogether(t *testing.T) {
+	steps := "  Preparing device code login\n\n  1. Open this link in your browser and sign in\n     https://auth.openai.com/device?user_code=ABCD-EFGH\n\n  2. Enter this one-time code after you are signed in\n     ABCD-EFGH"
+	if !harnessProblemIn(steps+loginRowFrame, "codex") {
+		t.Error("its device-code steps, together, were not read as logged out")
+	}
+	for _, answer := range []string{
+		"● To get the token:\n  1. Open this link in your browser and sign in\n  2. Copy the key into .env\n  3. Run the tests again.",
+		"  2. Enter this one-time code after you are signed in",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "codex") {
+			t.Errorf("an answer's numbered step read as Codex's device-code login:\n%s", answer)
+		}
+	}
+}
+
 // Antigravity's "You are currently not signed in." is its screen's only after
 // its heading's words: alone, it is a sentence anyone may write.
 func TestAntigravitysLoginHeadingIsItsOnlyWhole(t *testing.T) {
@@ -478,6 +502,7 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"a tool's output's last row", "claude", "  ⎿  Fetched https://staging.example.com/api\n     Authentication required.", false},
 		{"a person's text at the prompt", "claude", "────\n❯ why does it say\n  Authentication required.\n────", false},
 		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", false},
+		{"Codex's IdP row carried on in an answer", "codex", "● The server said enterprise IdP session has no refresh token; sign in again, so I stopped.\n› ", false},
 		// Qwen Code 0.26.9: rows that say the session is fine, and its
 		// notices quoted or carried on in an agent's own words.
 		{"Qwen's models that would not load, signed in", "qwen", "answer" + box + "  Could not load models. Your account is still signed in. Please try again.", false},
