@@ -40,11 +40,15 @@ sleep 2
 # Twice, a fresh session each: without the keyboard (judged on sentences
 # lost) and with it (judged on layout; a height shrink loses rows to Claude
 # Code's own redraw in any terminal).
-for KB in 0 1; do
+# KEYBOARDS picks the runs (default both); RESIZE_OUT a directory the
+# viewer rows each run ends with are written to (story<KB>.txt).
+OUT=${RESIZE_OUT:-$B/out}
+mkdir -p "$OUT"
+for KB in ${KEYBOARDS:-0 1}; do
   S=story$KB
   docker exec "$NAME" sh -c "mkdir -p /root/$S && cd /root/$S && SHELL=/usr/local/bin/claude-shell reminal new $S >/dev/null 2>&1"
   read -r ID PIN < <(docker exec "$NAME" sh -c "reminal info $S | grep -E 'Session:|PIN:' | awk '{print \$2}'" | tr '\n' ' '; echo)
   echo "== KEYBOARD=$KB: session $ID (claude $CLAUDE, reminal from ${1:-this tree})"
-  docker run --rm --network "container:$NAME" -v "$DIR:/t:ro" -w /tmp -e KEYBOARD=$KB "$PW" sh -c \
+  docker run --rm --network "container:$NAME" -v "$DIR:/t:ro" -v "$OUT:/out" -w /tmp -e KEYBOARD=$KB -e DUMP=/out/story$KB.txt "$PW" sh -c \
     'npm i -s playwright@1.56.0 >/dev/null 2>&1 && cp /t/check.mjs /t/model.mjs . && node check.mjs "$@"' _ "$ID" "$PIN" || exit 1
 done
