@@ -129,6 +129,9 @@ func TestHarnessSignInScreensAreLoggedOut(t *testing.T) {
 		"claude, signing in narrow": " Browser didn't open? Use the url     (c to \n below to sign in                     copy)\nhttps://claude.com/cai/oauth/authorize?code=tru\ne&client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5",
 		"agy": " Welcome to the Antigravity CLI. You are currently not signed in.\n Select login method:\n" +
 			" > 1. Google OAuth\n   2. Use a Google Cloud project\n   ↑/↓ Navigate · enter Select",
+		// Droid 1.6.0 with no login: the bottom of its screen (recorded in
+		// Docker, testdata/harness-screens/droid.txt).
+		"droid": "Please login with your Factory account to continue.\n\n> Login\n  Sign in to a Factory Custom Deployment\n  Exit",
 		// As they are drawn: a dialog is mostly its own blank rows.
 		"gemini": "│   How would you like to authenticate for this project?                       │\n" +
 			"│                                                                              │\n" +

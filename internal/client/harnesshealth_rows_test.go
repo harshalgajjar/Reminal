@@ -502,6 +502,9 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"a tool's output's last row", "claude", "  ⎿  Fetched https://staging.example.com/api\n     Authentication required.", false},
 		{"a person's text at the prompt", "claude", "────\n❯ why does it say\n  Authentication required.\n────", false},
 		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", false},
+		{"Droid's state carried on in an answer", "droid", "● It printed that this Droid is not signed in, and I went on with the next file.\n", false},
+		{"a bundle label of Droid's, never recorded on a screen, ending an answer", "droid", "● It said:\n  This Droid is not signed in\n", false},
+		{"Droid's login sentence in an answer, no menu under it", "droid", "● Please login with your Factory account to continue.\n  Then run droid again and the tests pass.\n", false},
 		{"Codex's IdP row carried on in an answer", "codex", "● The server said enterprise IdP session has no refresh token; sign in again, so I stopped.\n› ", false},
 		// Claude Code 2.1.319: a claude.ai login that ended while another
 		// login profile pays for the usage: the session goes on, and the

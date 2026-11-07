@@ -205,6 +205,13 @@ var harnessLoginScreens = map[string][]loginRow{
 		loginThen(`1\.openthislinkinyourbrowserandsignin`, `2\.enterthisone-timecodeafteryouaresignedin`), loginMarked("■",
 			`yoursessionhasexpired\.pleasereauthenticate`,
 		)),
+	// Droid 1.6.0 with no login (recorded in Docker, testdata/harness-screens/
+	// droid.txt): "Please login with your Factory account to continue.", its
+	// login menu under it ("> Login", "Sign in to a Factory Custom
+	// Deployment", "Exit"): the sentence is its only with the menu below, as
+	// an agent may write it. ("This Droid is not signed in", a label in its
+	// bundle, is not on that screen: not read until recorded.)
+	"droid": loginThen(`pleaseloginwithyourfactoryaccounttocontinue`, `signintoafactorycustomdeployment`),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), the steps of
 	// setting one up, and a login that lapsed.
