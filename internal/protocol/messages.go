@@ -528,8 +528,10 @@ type DirSession struct {
 	// Scheduled is how many jobs it has set to run later (session.Scheduled):
 	// never counted with the work above. ScheduledNext is when the soonest
 	// fires (unix seconds), when its harness said; zero when not.
+	// ScheduledAt is when its harness said them (unix seconds).
 	Scheduled     int   `json:"scheduled,omitempty"`
 	ScheduledNext int64 `json:"scheduled_next,omitempty"`
+	ScheduledAt   int64 `json:"scheduled_at,omitempty"`
 	// Fg is the program in the session's foreground ("bash", "claude",
 	// "python3") — what says whether an agent or a plain terminal is there.
 	Fg string `json:"fg,omitempty"`
