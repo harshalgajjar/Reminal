@@ -4,6 +4,7 @@
 package client
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -141,5 +142,168 @@ func TestDedupBlocksTruncatedPrefixFragment(t *testing.T) {
 	}
 	if !strings.Contains(joined, "mars land surface") {
 		t.Errorf("legitimately distinct paragraph deleted:\n%s", joined)
+	}
+}
+
+// A list item's wrapped tail reads like another item's: item 4's "golf hotel
+// … mike" row in the history, item 19's identical row on the screen (a real
+// Claude Code list at 50 columns). The history row is the only copy of
+// item 4's continuation, and a repaint re-emits rows from where a row
+// begins: a match that begins inside a line ("4. T3L04" is not on the
+// screen) is no repaint, and the row stays.
+func TestDedupAgainstFrameKeepsARowThatOnlyContinuesLikeTheFrame(t *testing.T) {
+	history := []string{
+		"  4. T3L04 alpha bravo charlie delta echo foxtrot",
+		"     golf hotel india juliet kilo lima mike",
+		"     ENDT3L04",
+	}
+	screen := []string{
+		"  19. T3L19 alpha bravo charlie delta echo foxtrot",
+		"      golf hotel india juliet kilo lima mike",
+		"      ENDT3L19",
+	}
+	out := dedupAgainstFrame(history, screen)
+	if strings.Join(out, "\n") != strings.Join(history, "\n") {
+		t.Errorf("a row of the history went, or moved:\n%s\nwant it unchanged:\n%s", strings.Join(out, "\n"), strings.Join(history, "\n"))
+	}
+	// The same rows re-emitted whole (a repaint of item 19) still go.
+	stale := append([]string{"  3. T3L03 something else entirely here"}, screen...)
+	out = dedupAgainstFrame(stale, screen)
+	if strings.Join(out, "\n") != stale[0] {
+		t.Errorf("a repaint of the frame's rows survived:\n%s", strings.Join(out, "\n"))
+	}
+}
+
+// A passage printed at one width, then part of it again at another (the
+// app's reprint of its frame after the phone turned), is read once by a
+// joiner: the later rows, each a run of words already above, go; the copy in
+// its place stays. A paragraph that only shares a few words stays, and so
+// does a short line.
+func TestDedupRepaintsCollapsesACopyAtAnotherWidth(t *testing.T) {
+	para := "deserts cover roughly a fifth of earths land surface defined not by heat but by scarce rainfall and some like antarcticas dry valleys are bitterly cold places where almost nothing grows at all"
+	wide := dfWrap(para, 104)
+	narrow := dfWrap(para, 50)
+	// The reprint starts mid-paragraph: the frame's top row.
+	reprint := narrow[1:]
+	other := dfWrap("deserts cover a fifth of mars where rainfall is unknown and the cold is of another kind entirely", 50)
+	var history []string
+	history = append(history, wide...)
+	history = append(history, "")
+	history = append(history, "MARK-BETWEEN")
+	history = append(history, "")
+	history = append(history, reprint...)
+	history = append(history, "")
+	history = append(history, other...)
+	history = append(history, "", "a short line")
+
+	out := dedupRepaints(history)
+	joined := strings.Join(out, "\n")
+	if n := strings.Count(joined, "antarcticas"); n != 1 {
+		t.Errorf("the copy at the other width survived: %d occurrences\n%s", n, joined)
+	}
+	for _, keep := range []string{"MARK-BETWEEN", "mars where rainfall", "a short line", strings.Join(wide, "\n")} {
+		if !strings.Contains(joined, keep) {
+			t.Errorf("lost %q:\n%s", keep, joined)
+		}
+	}
+}
+
+// A partial copy ABOVE the complete one (an earlier reprint, kept as the
+// first in its place) must not eat the complete copy's tail: a paragraph is
+// dropped whole or kept whole, so a sentence is never split between two
+// places. Here the complete copy's first row has words the partial copy
+// lacks, so it stays, all of it; the later partial copy goes.
+func TestDedupRepaintsNeverSplitsAParagraph(t *testing.T) {
+	para := "deserts cover roughly a fifth of earths land surface defined not by heat but by scarce rainfall and some like antarcticas dry valleys are bitterly cold places where almost nothing grows at all"
+	wide := dfWrap(para, 104)
+	narrow := dfWrap(para, 50)
+	var history []string
+	history = append(history, narrow[2:]...) // an earlier partial copy
+	history = append(history, "", "MARK-A", "")
+	history = append(history, wide...) // the complete copy
+	history = append(history, "", "MARK-B", "")
+	history = append(history, narrow[1:]...) // a later partial copy
+	history = append(history, "")
+
+	out := dedupRepaints(history)
+	joined := strings.Join(out, "\n")
+	if !strings.Contains(joined, strings.Join(wide, "\n")) {
+		t.Errorf("the complete copy was cut:\n%s", joined)
+	}
+	// The complete copy wins: both partial copies go, the earlier one too
+	// (the backward pass), so the passage is read exactly once.
+	if n := strings.Count(joined, "antarcticas"); n != 1 {
+		t.Errorf("want the complete copy alone (1 occurrence), both partial copies gone: %d\n%s", n, joined)
+	}
+}
+
+// A reprint carries its headings: when its paragraphs go, a heading that
+// appeared above verbatim and now sits next to a dropped paragraph goes
+// too, or a join read a stack of headings with nothing under them (one per
+// reprint: 42 "Section" headings for 8 sections in the browser rig). A
+// heading in its first place, with its paragraph kept, stays.
+func TestDedupRepaintsTakesAReprintsHeadingsWithIt(t *testing.T) {
+	p1 := dfWrap("deserts cover roughly a fifth of earths land surface defined not by heat but by scarce rainfall and some like antarcticas dry valleys are bitterly cold", 104)
+	p2 := dfWrap("mountains rise where tectonic plates collide folding rock upward over millions of years into peaks that catch snow feeding rivers below them", 104)
+	var history []string
+	history = append(history, "## 1. Deserts", "")
+	history = append(history, p1...)
+	history = append(history, "", "## 2. Mountains", "")
+	history = append(history, p2...)
+	history = append(history, "")
+	// The reprint, narrower, headings and all.
+	history = append(history, "## 1. Deserts", "")
+	history = append(history, dfWrap("deserts cover roughly a fifth of earths land surface defined not by heat but by scarce rainfall and some like antarcticas dry valleys are bitterly cold", 50)...)
+	history = append(history, "", "## 2. Mountains", "")
+	history = append(history, dfWrap("mountains rise where tectonic plates collide folding rock upward over millions of years into peaks that catch snow feeding rivers below them", 50)...)
+	history = append(history, "", "## 3. Rivers", "", "a short new section")
+
+	out := dedupRepaints(history)
+	joined := strings.Join(out, "\n")
+	for _, h := range []string{"## 1. Deserts", "## 2. Mountains"} {
+		if n := strings.Count(joined, h); n != 1 {
+			t.Errorf("%s: %d copies, want 1 (the reprint's heading goes with its paragraph)\n%s", h, n, joined)
+		}
+	}
+	if !strings.Contains(joined, "## 3. Rivers") || !strings.Contains(joined, "a short new section") {
+		t.Errorf("a new heading or its text went:\n%s", joined)
+	}
+}
+
+// The partial copy FIRST: the rows of a list that scrolled off before the
+// phone turned (items 1 to 3 of 6, the frame's bottom cut mid-item, the
+// app's status row glued under it), then the app's reprint of the whole
+// list at the new width. The complete copy stays and the partial one goes
+// (a reader finds every item once); the status row stays.
+func TestDedupRepaintsKeepsTheCompleteCopyWhenThePartialCameFirst(t *testing.T) {
+	item := func(n int) string {
+		return fmt.Sprintf("%d. T4L%02d alpha bravo charlie delta echo foxtrot golf-T4L%02d hotel india juliet kilo lima mike ENDT4L%02d", n, n, n, n)
+	}
+	var history []string
+	history = append(history, "● Reply for turn 4:", "")
+	for n := 1; n <= 3; n++ {
+		history = append(history, dfWrap(item(n), 50)...)
+	}
+	history = append(history, dfWrap(item(4), 50)[0]) // cut at the frame's bottom
+	history = append(history, "✻ Cooked for 0s · done 9:33 PM", "", "❯ turn 4", "", "● Reply for turn 4:", "")
+	for n := 1; n <= 6; n++ {
+		history = append(history, item(n))
+	}
+	history = append(history, "", "Done with turn 4.", "")
+
+	out := dedupRepaints(history)
+	joined := strings.Join(out, "\n")
+	for n := 1; n <= 6; n++ {
+		if c := strings.Count(joined, fmt.Sprintf("ENDT4L%02d", n)); c != 1 {
+			t.Errorf("item %d appears %d times, want once:\n%s", n, c, joined)
+		}
+	}
+	if !strings.Contains(joined, item(1)) {
+		t.Errorf("the complete copy (one row an item) is not the one kept:\n%s", joined)
+	}
+	for _, keep := range []string{"✻ Cooked for 0s", "❯ turn 4", "Done with turn 4."} {
+		if !strings.Contains(joined, keep) {
+			t.Errorf("lost %q:\n%s", keep, joined)
+		}
 	}
 }

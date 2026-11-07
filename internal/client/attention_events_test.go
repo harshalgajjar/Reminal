@@ -6,14 +6,11 @@ package client
 import (
 	"bufio"
 	"bytes"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/charmbracelet/x/vt"
 
 	"reminal/internal/session"
 )
@@ -25,8 +22,7 @@ func attnTestAgent(t *testing.T) (*Agent, string) {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
 	a := &Agent{sessionID: "ATTNEVT1"}
-	a.screen = vt.NewEmulator(80, 24)
-	go io.Copy(io.Discard, a.screen)
+	a.screen = testScreen(t, 80, 24)
 	log := filepath.Join(t.TempDir(), "probe.jsonl")
 	a.attnStop = make(chan struct{})
 	go a.runAttention(log, a.attnStop)
@@ -152,8 +148,7 @@ func TestStopAttentionWaitsForTheReadUnderWay(t *testing.T) {
 	}
 	t.Cleanup(func() { attnReadHook = nil })
 	a := &Agent{sessionID: "ATTNSTOP"}
-	a.screen = vt.NewEmulator(80, 24)
-	go io.Copy(io.Discard, a.screen)
+	a.screen = testScreen(t, 80, 24)
 	a.startAttention()
 	<-inRead // the detector is in a read
 	stopped := make(chan struct{})

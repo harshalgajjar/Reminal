@@ -1,0 +1,27 @@
+# internal/vtwasm/ghostty-vt.wasm is built from a pinned ghostty commit with a
+# pinned Zig (scripts/ghostty-vt/build.sh) and kept in the tree, since go build
+# cannot run Zig. This rebuilds it and fails if the bytes differ from what is
+# kept: on a change to the module or its build, and weekly, so a toolchain or
+# upstream drift that would change the build is seen before a rebuild is needed.
+name: ghostty-vt
+
+on:
+  pull_request:
+    paths:
+      - internal/vtwasm/**
+      - scripts/ghostty-vt/**
+      - .github/workflows/ghostty-vt.yml
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The kept wasm is what the pinned build gives
+        run: scripts/ghostty-vt/build.sh --check

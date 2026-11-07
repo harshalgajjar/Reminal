@@ -23,16 +23,8 @@ import (
 	"github.com/charmbracelet/x/vt"
 )
 
-func refRenderScrollback(e *vt.Emulator, maxLines int) []string {
-	lines := e.Scrollback().Lines()
-	if maxLines > 0 && len(lines) > maxLines {
-		lines = lines[len(lines)-maxLines:]
-	}
-	rendered := make([]string, len(lines))
-	for i, ln := range lines {
-		rendered[i] = strings.TrimRight(ln.Render(), " ")
-	}
-	return rendered
+func refRenderScrollback(e *sessionScreen, maxLines int) []string {
+	return historyCapped(e, maxLines)
 }
 
 func refSnapshotHistory(a *Agent) []string {
@@ -41,7 +33,7 @@ func refSnapshotHistory(a *Agent) []string {
 	if a.scrollbackLines > 0 && len(lines) > a.scrollbackLines {
 		lines = lines[len(lines)-a.scrollbackLines:]
 	}
-	lines = dedupBlocks(lines)
+	lines = dedupRepaints(dedupBlocks(lines))
 	return refDedupAgainstFrame(lines, strings.Split(a.screen.Render(), "\n"))
 }
 
@@ -103,7 +95,7 @@ func refDropResizeRepaints(a *Agent, lines []string) []string {
 	return compactDropped(lines, drop)
 }
 
-func refBuildSnapshot(e *vt.Emulator, history, screenRows []string, maxBytes int, reserveLastRow bool) string {
+func refBuildSnapshot(e screenView, history, screenRows []string, maxBytes int, reserveLastRow bool) string {
 	alt := e.IsAltScreen()
 	width, height := e.Width(), e.Height()
 	if alt {
@@ -180,10 +172,9 @@ func refBuildSnapshot(e *vt.Emulator, history, screenRows []string, maxBytes int
 	b.WriteString("\x1b[?25l")            // hide cursor while painting
 	b.WriteString("\x1b[?1049l")          // ensure the main screen is active
 	b.WriteString("\x1b[2J\x1b[3J\x1b[H") // clear screen + the viewer's old scrollback, home
-	b.WriteString("\x1b[?7l")             // disable autowrap so full-width rows don't wrap
 
-	// History lines flow into the main buffer's scrollback as the screen
-	// scrolls; each is newline-terminated so the next pushes it up.
+	// Everything wraps at the viewer's width.
+	b.WriteString("\x1b[?7h")
 	for _, ln := range history {
 		b.WriteString(ln)
 		b.WriteString("\x1b[0m\r\n")
@@ -203,7 +194,6 @@ func refBuildSnapshot(e *vt.Emulator, history, screenRows []string, maxBytes int
 		b.WriteString("\x1b[0m")
 	}
 
-	b.WriteString("\x1b[?7h") // restore autowrap
 	pos := e.CursorPosition()
 	if len(history) > 0 && !alt {
 		// The screen is the bottom block of what was painted, and in a viewer
@@ -273,7 +263,7 @@ func refCoverageDropMask(history []string, shingles map[string]bool, refWords ma
 		for j < len(covered) && covered[j] {
 			j++
 		}
-		if j-i < dedupFrameRunMin {
+		if j-i < dedupFrameRunMin || (i > 0 && lineOf[i-1] == lineOf[i]) {
 			for k := i; k < j; k++ {
 				covered[k] = false
 			}
@@ -368,7 +358,7 @@ func resetAgent(a *Agent, maxLines int) {
 	a.screen.ClearScrollback()
 	a.screen.Resize(80, 24)
 	a.scrollbackLines = maxLines
-	a.screen.Scrollback().SetMaxLines(maxLines)
+	a.screen.SetMaxLines(maxLines)
 	a.resizeSegs, a.sbLen = nil, 0
 	a.segsGen++
 }
@@ -543,7 +533,7 @@ func TestJoinHistoryIsSnapshotHistory(t *testing.T) {
 	// alone would not tell the change (historyKey's collision case).
 	b := clearingAgent(t, 80, 24)
 	b.scrollbackLines = 60
-	b.screen.Scrollback().SetMaxLines(60)
+	b.screen.SetMaxLines(60)
 	b.record(fillerLines("CAP", 100))
 	sameAsRef(t, b, "at the cap")
 	for i := 0; i < 3; i++ {
@@ -576,7 +566,7 @@ func TestJoinRacesOutput(t *testing.T) {
 	// At its cap the scrollback shifts its row list in place on each push: a
 	// join must render from its own copy of it.
 	a.scrollbackLines = 100
-	a.screen.Scrollback().SetMaxLines(100)
+	a.screen.SetMaxLines(100)
 	a.record(fillerLines("START", 200))
 	done := make(chan struct{})
 	go func() {
@@ -625,10 +615,12 @@ func TestJoinKeysAreOfWhatTheStagesRead(t *testing.T) {
 	if d0 != d1 {
 		t.Error("with no segments the middle stage does not read the screen, yet its key changed")
 	}
-	// Segments: the screen changes the middle key too.
+	// Segments: the screen changes the middle key too. Narrower each time:
+	// a wider screen takes lines back out of the history, and a segment
+	// left past its end is forgotten (resizeScreen).
 	a.resizeScreen(60, 20)
 	a.record(fillerLines("MID", 10))
-	a.resizeScreen(70, 20)
+	a.resizeScreen(50, 20)
 	if g := in(a); g.segs == nil {
 		t.Fatal("setup: want resize segments in use")
 	}
@@ -655,7 +647,7 @@ func TestJoinKeysAreOfWhatTheStagesRead(t *testing.T) {
 	// Their eviction at the cap.
 	b := clearingAgent(t, 70, 20)
 	b.scrollbackLines = 50
-	b.screen.Scrollback().SetMaxLines(50)
+	b.screen.SetMaxLines(50)
 	b.record(fillerLines("A", 20))
 	b.resizeScreen(60, 20)
 	b.record(fillerLines("B", 5))
@@ -757,7 +749,7 @@ func TestJoinHistoryKeyNotReused(t *testing.T) {
 		a.record(hist("AAAA"))
 		_ = joinFrame(t, a) // fills the kept stages
 		a.screenMu.Lock()
-		k1 := historyKey(a.screen.Scrollback().Lines())
+		k1 := strconv.FormatUint(a.screen.Gen(), 10)
 		a.screenMu.Unlock()
 		a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
 		runtime.GC()
@@ -767,7 +759,7 @@ func TestJoinHistoryKeyNotReused(t *testing.T) {
 		runtime.GC()
 		a.record(b[half:])
 		a.screenMu.Lock()
-		k2 := historyKey(a.screen.Scrollback().Lines())
+		k2 := strconv.FormatUint(a.screen.Gen(), 10)
 		a.screenMu.Unlock()
 		got, want := joinFrame(t, a), refFrame(a)
 		if k1 == k2 || got != want {

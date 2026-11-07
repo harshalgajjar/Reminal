@@ -27,7 +27,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"
 	"github.com/gorilla/websocket"
 	xterm "golang.org/x/term"
@@ -170,7 +169,7 @@ type Agent struct {
 	// by screenMu (composite reads during snapshot must not race Write/Resize).
 	// nil when snapshots are disabled (REMINAL_SNAPSHOT=0) — then we fall back
 	// to raw replay.
-	screen          *vt.Emulator
+	screen          *sessionScreen
 	screenMu        sync.Mutex
 	scrollbackLines int // history lines included in a snapshot (0 = screen only)
 	// Captured-frame resize segments (see dropResizeRepaints): an inline TUI repaints
@@ -491,8 +490,18 @@ type Agent struct {
 	snapMu      sync.Mutex
 	snapJoiners map[string]bool
 	snapPlain   bool
-	snapXfers   []*snapXfer
-	snapWake    chan struct{}
+	// snapPaced are the viewers that take a snapshot in parts, paced (by
+	// id, from their resumes): the ones a width change re-snapshots
+	// (resnapshot.go). resnapTimer waits for the program's redraw to
+	// settle after one; resnapWanted says the sender owes them a snapshot.
+	snapPaced    []string
+	resnapTimer  *time.Timer
+	resnapWanted bool
+	// lastOutputAt is when the program last wrote (UnixNano): the quiet a
+	// re-snapshot waits for is measured from it.
+	lastOutputAt atomic.Int64
+	snapXfers    []*snapXfer
+	snapWake     chan struct{}
 	// histCache is the rendered scrollback the last dump carried, and
 	// histKey what it was of (renderedHistory). Guarded by screenMu.
 	histCache []string
@@ -1387,6 +1396,7 @@ func (a *Agent) applyEffectiveSize() {
 	}
 	sizeLog("apply want %dx%d host %dx%d → pty %dx%d  %s",
 		viewer.cols, viewer.rows, host.cols, host.rows, cols, rows, a.sizeBook.dump())
+	prev := a.sizeBook.lastApplied()
 	if !a.sizeBook.setApplied(cols, rows) {
 		sizeLog("skip pty already %dx%d", cols, rows)
 		return
@@ -1395,7 +1405,6 @@ func (a *Agent) applyEffectiveSize() {
 	// ConPTY echoing this Resize — BEFORE the PTY hears the new size. If
 	// that opcode lands first, ED2 undoes the screen we just re-anchored.
 	a.resizeScreen(cols, rows)
-	_ = a.term.Resize(cols, rows)
 	// Tell every viewer the new PTY size so their xterm.js matches.
 	// Without this, the agent shrinks the PTY for a small viewer (e.g.,
 	// phone joining a desktop session), the shell formats output for
@@ -1403,7 +1412,23 @@ func (a *Agent) applyEffectiveSize() {
 	// at its old size — cursor-positioning escape codes land in the
 	// wrong column and the display goes garbled. Broadcasting keeps
 	// every screen in sync with what the shell actually thinks.
+	//
+	// Told BEFORE the PTY is resized: the size and the output share one
+	// ordered socket per viewer (writeMu), so told first, the size is
+	// there before any output the program writes for it. Told after, the
+	// program's redraw for the new width could reach a viewer still at
+	// the old one: a phone turned back to landscape (55 to 102 columns)
+	// had Claude Code's words placed for 102 columns clamped at its edge,
+	// and its grid then grew under the rest of the frame, which came out
+	// one word a row, stepping right (the staircase).
 	a.broadcastSize(cols, rows)
+	_ = a.term.Resize(cols, rows)
+	// A width change: once the program's redraw for it has settled, the
+	// attached viewers are painted anew from the deduped history, so the
+	// copy at the old width goes for them as it does on a reload.
+	if prev.cols != 0 && prev.cols != cols {
+		a.armResnapshot()
+	}
 }
 
 // broadcastSize publishes the PTY's current (cols, rows) to every
@@ -1417,18 +1442,8 @@ func (a *Agent) applyEffectiveSize() {
 // grow the PTY back after the smallest viewer left. Viewers handle
 // it by refitting + sendResize-ing their own viewport dimensions.
 func (a *Agent) broadcastSize(cols, rows uint16) {
-	// Must not use protocol.Message: Cols/Rows are omitempty, so the
-	// (0, 0) "re-report your wrap" sentinel would serialize as {} and
-	// the remaining viewer would never grow after a smaller one left.
-	payload, err := json.Marshal(struct {
-		Cols uint16 `json:"cols"`
-		Rows uint16 `json:"rows"`
-	}{cols, rows})
-	if err != nil {
-		return
-	}
-	enc, err := a.box.Encrypt(payload)
-	if err != nil {
+	msg, ok := a.sizeMessage(cols, rows)
+	if !ok {
 		return
 	}
 	sizeLog("broadcast %dx%d", cols, rows)
@@ -1436,7 +1451,28 @@ func (a *Agent) broadcastSize(cols, rows uint16) {
 	// sentinel follows forgetting every viewer's wrap, so one that never
 	// hears it is left out of the next size, and a smaller terminal here
 	// was grown past.
-	_ = a.toViewers(protocol.Message{Type: protocol.TypeResize, Data: enc})
+	_ = a.toViewers(msg)
+}
+
+// sizeMessage is the PTY size cols by rows as a viewer is told it, sealed:
+// sent beside the stream (broadcastSize) or in its place in it (runSender).
+// Must not use protocol.Message's own fields: Cols/Rows are omitempty, so
+// the (0, 0) "re-report your wrap" sentinel would serialize as {} and the
+// remaining viewer would never grow after a smaller one left
+// (TestBroadcastSizeSentinelKeepsZeroFields).
+func (a *Agent) sizeMessage(cols, rows uint16) (protocol.Message, bool) {
+	payload, err := json.Marshal(struct {
+		Cols uint16 `json:"cols"`
+		Rows uint16 `json:"rows"`
+	}{cols, rows})
+	if err != nil {
+		return protocol.Message{}, false
+	}
+	enc, err := a.box.Encrypt(payload)
+	if err != nil {
+		return protocol.Message{}, false
+	}
+	return protocol.Message{Type: protocol.TypeResize, Data: enc}, true
 }
 
 // signalRegistered releases the parent (`reminal new`) handshake the first time
@@ -2475,30 +2511,23 @@ func (a *Agent) initScreen() {
 			_ = a.term.Resize(cols, rows)
 		}
 	}
-	a.screenMu.Lock()
-	a.screen = vt.NewEmulator(int(cols), int(rows))
-	if a.scrollbackLines > 0 {
-		a.screen.Scrollback().SetMaxLines(a.scrollbackLines)
+	if scr, err := newSessionScreen(int(cols), int(rows), a.scrollbackLines); err != nil {
+		// No copy of the screen to join from: viewers are given the raw
+		// replay instead, as with REMINAL_SNAPSHOT=0.
+		log.Printf("no screen copy for joins: %v", err)
+	} else {
+		a.screenMu.Lock()
+		a.screen = scr
+		a.sbLen = 0 // fresh emulator: the shrink watch starts from empty
+		a.screenMu.Unlock()
+		if a.buf != nil {
+			// Seed the replay-geometry baseline for the history rebuild (see
+			// scrollback.SetBase / rebuildView). The rebuild (rebuildView,
+			// rebuild.go, reflow.go, resize_anchor.go) has no caller now
+			// that the screen re-wraps itself: it goes in a follow-up.
+			a.buf.SetBase(int(cols), int(rows))
+		}
 	}
-	a.sbLen = 0 // fresh emulator: the shrink watch starts from empty
-	scr := a.screen
-	a.screenMu.Unlock()
-	if a.buf != nil {
-		// Seed the replay-geometry baseline for the history rebuild (see
-		// scrollback.SetBase / rebuildView).
-		a.buf.SetBase(int(cols), int(rows))
-	}
-
-	// CRITICAL: the emulator answers terminal queries (device attributes,
-	// cursor-position / status reports, etc.) by writing the reply into an
-	// internal pipe. If nothing reads that pipe, the *next* such query makes
-	// Write block forever — which stalls record() and freezes the shell. Apps
-	// like `claude` emit these queries on startup (plain `seq`/`less` don't,
-	// which is why this slipped through). We don't want the emulator's replies
-	// anyway — the real viewer/host terminal answers queries over the normal
-	// stdin→PTY path — so drain and discard them. Runs until the emulator is
-	// closed / the process exits.
-	go func() { _, _ = io.Copy(io.Discard, scr) }()
 
 	// Attention detector: classifies working/awaiting-input/done for `reminal
 	// list`. Always runs; REMINAL_ATTENTION_PROBE adds a raw-sample log. See
@@ -2512,6 +2541,7 @@ func (a *Agent) initScreen() {
 // corresponds exactly to the buffer through its latest seq, so a snapshot can be
 // tagged with that seq without duplicating or dropping a chunk on the joiner.
 func (a *Agent) record(p []byte) {
+	a.lastOutputAt.Store(time.Now().UnixNano())
 	a.screenMu.Lock()
 	p = a.conhostClear.feed(p)
 	if a.screen != nil {
@@ -2536,7 +2566,7 @@ func (a *Agent) record(p []byte) {
 // "slice bounds out of range [12:0]" panic that killed Windows sessions the
 // moment a viewer resized. Caller holds screenMu.
 func (a *Agent) noteScrollbackLen() {
-	n := a.screen.Scrollback().Len()
+	n := a.screen.HistoryLen()
 	if n < a.sbLen {
 		a.resizeSegs = nil
 		a.segsGen++
@@ -2622,22 +2652,29 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 			break
 		}
 	}
-	// Resize bottom-anchored, the way a real terminal does (resizeAnchoredBottom).
-	// It moves lines between the screen and scrollback itself — a shrink scrolls
-	// the top off into history, a grow reveals history back onto the screen — so
-	// the segment's scrollback position is taken AFTER it. Those moved rows are
-	// real history; only the app's later repaint is overflow this segment may
+	// Resize as the viewer's terminal does (sessionScreen.Resize): a shrink
+	// drops the rows under the cursor and scrolls the top off into history,
+	// a grow reveals history back onto the screen, a width change re-wraps.
+	// Lines move between the screen and the scrollback, so the segment's
+	// scrollback position is taken AFTER it. Those moved rows are real
+	// history; only the app's later repaint is overflow this segment may
 	// drop, and recording the position beforehand would put genuine content
 	// inside the drop window.
-	resizeAnchoredBottom(a.screen, int(cols), int(rows))
-	// A grow pulls lines back out of scrollback, so its length can fall here.
-	// Reconcile before recording a new segment, or the older segments' absolute
-	// positions would be left pointing past the end of the rendered history.
-	a.noteScrollbackLen()
-	cur := 0
-	if sb := a.screen.Scrollback(); sb != nil {
-		cur = sb.Len()
+	a.screen.Resize(int(cols), int(rows))
+	// Segments are in lines as the program wrote them, which a resize
+	// re-wraps but never renumbers (History). A grow pulls lines back out of
+	// scrollback, though: one that would leave an older segment past the
+	// end of the history forgets them all, or dropRepaints would slice past
+	// it. And the rows it holds change with the width, so their count is
+	// taken again rather than read as a clear (noteScrollbackLen).
+	cur := len(a.screen.History())
+	for _, s := range a.resizeSegs {
+		if s.start > cur {
+			a.resizeSegs = nil
+			break
+		}
 	}
+	a.sbLen = a.screen.HistoryLen()
 	a.resizeSegs = append(a.resizeSegs, resizeSeg{start: cur, maxOver: prevRows*4 + 8, words: fw})
 	if len(a.resizeSegs) > maxResizeSegs {
 		a.resizeSegs = a.resizeSegs[len(a.resizeSegs)-maxResizeSegs:]
@@ -2861,7 +2898,7 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 // rule since requires a content match; pure position is never sufficient.
 // Caller holds screenMu.
 func (a *Agent) snapshotHistory() []string {
-	lines := renderScrollback(a.screen, 0) // uncapped: segment indices are absolute
+	lines := a.screen.History() // uncapped: segment indices are absolute
 	lines = a.dropResizeRepaints(lines)
 	screen := a.screen.Render()
 	return dedupAgainstFrame(dedupHistory(lines, a.resizeSegs, screen, a.scrollbackLines, true), strings.Split(screen, "\n"))
@@ -2869,7 +2906,7 @@ func (a *Agent) snapshotHistory() []string {
 
 // dedupHistory is snapshotHistory's middle, of what it is given: the resize
 // repaints dropped (unless dropped already: dropped), the newest maxLines
-// kept, and dedupBlocks. A pure function of its arguments, so it runs outside
+// kept, dedupBlocks, and dedupRepaints. A pure function of its arguments, so it runs outside
 // screenMu (joinHistory).
 func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int, dropped bool) []string {
 	if !dropped {
@@ -2878,7 +2915,7 @@ func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int,
 	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
-	return dedupBlocks(lines)
+	return dedupRepaints(dedupBlocks(lines))
 }
 
 // dropResizeRepaints removes, for every resize EXCEPT the newest, the lines its frame
@@ -2904,7 +2941,7 @@ func (a *Agent) staleSegs(n int) bool {
 	if len(a.resizeSegs) < 2 {
 		return true
 	}
-	if a.scrollbackLines > 0 && n >= a.scrollbackLines {
+	if a.scrollbackLines > 0 && (n >= a.scrollbackLines || a.screen.HistoryLen() >= a.scrollbackLines) {
 		a.resizeSegs = nil // eviction possible: indices stale, start fresh
 		a.segsGen++
 		return true
@@ -3013,8 +3050,8 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 // joinIn is what a join's snapshot is made of, copied under screenMu
 // (joinInputs) so the rest needs no lock.
 type joinIn struct {
-	rows     []uv.Line   // a copy of the scrollback's row list (at its cap the scrollback shifts its own in place); the rows themselves never change
-	histKey  string      // historyKey(rows): what renderedHistory's cache is keyed by
+	rows     []string    // the history (sessionScreen.History), shared: never changed once made
+	histKey  string      // the screen's Gen it was made at: what renderedHistory's cache is keyed by
 	segs     []resizeSeg // nil when of no use (staleSegs)
 	segsGen  uint64
 	maxLines int
@@ -3024,8 +3061,8 @@ type joinIn struct {
 // joinInputs copies what a join needs. Cheap: one screen rendered, the rows'
 // list and the segments copied, the history's key. Caller holds screenMu.
 func (a *Agent) joinInputs() joinIn {
-	rows := a.screen.Scrollback().Lines()
-	in := joinIn{rows: append([]uv.Line(nil), rows...), histKey: historyKey(rows), maxLines: a.scrollbackLines, view: viewOf(a.screen)}
+	rows := a.screen.History()
+	in := joinIn{rows: rows, histKey: a.screen.HistoryKey(), maxLines: a.scrollbackLines, view: viewOf(a.screen)}
 	if !a.staleSegs(len(rows)) {
 		// Shared, not copied: a segment is never changed once made, and the
 		// list is only appended to (past this one's length), trimmed or
@@ -3067,7 +3104,10 @@ func (a *Agent) joinHistory(in joinIn) []string {
 	a.screenMu.Unlock()
 	if deduped == nil {
 		if rendered == nil {
-			rendered = renderLines(in.rows, in.maxLines)
+			rendered = in.rows
+			if in.maxLines > 0 && len(rendered) > in.maxLines {
+				rendered = rendered[len(rendered)-in.maxLines:]
+			}
 			a.screenMu.Lock()
 			a.histCache, a.histKey = rendered, in.histKey
 			a.screenMu.Unlock()
@@ -3299,6 +3339,7 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 	a.viewerSizeMu.Lock()
 	a.viewerCount = 0
 	a.viewerSizeMu.Unlock()
+	a.forgetPaced()
 
 	return a.serveConn(conn, shellExit, false)
 }
@@ -3657,6 +3698,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.syncViewerList(msg.Count, true)
 			if msg.Count == 0 {
 				a.forgetViewerCaps() // no watchers left; stale records must not outlive them
+				a.forgetPaced()
 			}
 			a.viewerSizeMu.Lock()
 			prevCount := a.viewerCount
@@ -3725,6 +3767,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			}
 			if msg.Count == 0 {
 				a.forgetViewerCaps()
+				a.forgetPaced()
 			}
 			a.viewerSizeMu.Lock()
 			prevCount := a.viewerCount
@@ -3773,6 +3816,8 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 	acked := a.snapAcks()
 	var cursor uint64
 	sending := false
+	// told: this stream has begun with the PTY's size (below).
+	told := false
 
 	for {
 		if !sending {
@@ -3782,6 +3827,7 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			case c := <-cursorCh:
 				cursor = c
 				sending = true
+				told = false
 			}
 		}
 
@@ -3799,6 +3845,22 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			a.dropSnapshotXfers()
 			sending = false
 			continue
+		}
+
+		// The stream begins with the PTY's size as it is. A viewer that has
+		// just (re)connected knows none and falls back to its own width,
+		// and a size is otherwise told only when it changes: a snapshot
+		// laid out for the PTY's width landed in a narrower grid before
+		// any size came, one word a row, stepping right.
+		if !told {
+			told = true
+			if sz := a.sizeBook.lastApplied(); !sz.zero() {
+				if msg, ok := a.sizeMessage(sz.cols, sz.rows); ok {
+					if err := a.writeMsg(conn, msg); err != nil {
+						return err
+					}
+				}
+			}
 		}
 
 		// Fresh attach (or a viewer that fell behind past what we still
@@ -3850,16 +3912,37 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 
 		entries := a.buf.From(cursor)
 		for _, e := range entries {
-			if err := a.writeMsg(conn, protocol.Message{
-				Type: protocol.TypeData,
-				Data: e.Data,
-				Seq:  e.Seq,
-			}); err != nil {
+			msg := protocol.Message{Type: protocol.TypeData, Data: e.Data, Seq: e.Seq}
+			if e.Cols > 0 {
+				// A resize marker: the PTY's size from here on, sent in
+				// its place in the stream, so the viewer's grid is the
+				// new size before any byte the program wrote for it. A
+				// size told beside the stream could reach the viewer
+				// after that output, and its grid then grew under a
+				// half-written frame (one word a row, stepping right).
+				var ok bool
+				if msg, ok = a.sizeMessage(uint16(e.Cols), uint16(e.Rows)); !ok {
+					cursor = e.Seq + 1
+					continue
+				}
+				msg.Seq = e.Seq
+			}
+			if err := a.writeMsg(conn, msg); err != nil {
 				return err
 			}
 			cursor = e.Seq + 1
 		}
 
+		// A width change settled: the attached viewers that take parts are
+		// painted anew, as a joiner is (resnapshot.go). Through the relay
+		// only: a viewer attached here is a terminal of its own.
+		if !local {
+			if vs := a.takeResnapshot(); len(vs) > 0 {
+				if _, err := a.startPacedSnapshot(conn, vs); err != nil {
+					return err
+				}
+			}
+		}
 		// A part of each paced snapshot that may go, then round again for
 		// whatever output came meanwhile: live output waits behind one part.
 		more, err := a.pumpSnapshotParts(conn)

@@ -226,6 +226,12 @@ func coverageDropMask(history []string, shingles map[shingle]bool, refWords map[
 	}
 	// Length gate: a covered stretch shorter than dedupFrameRunMin is a phrase that
 	// may legitimately recur, not an unambiguous re-emit — uncover it.
+	// Start gate: a repaint re-emits rows, so a stretch that is one begins
+	// where a history line begins. One that begins inside a line is a line
+	// that only CONTINUES like a row of the frame: the wrapped tail of a
+	// list item, the same words as the tail of another item on the screen
+	// ("4. T3L04 alpha … foxtrot / golf hotel … mike" against "19. T3L19
+	// alpha … foxtrot / golf hotel … mike") — the only copy of it.
 	for i := 0; i < len(covered); {
 		if !covered[i] {
 			i++
@@ -235,7 +241,7 @@ func coverageDropMask(history []string, shingles map[shingle]bool, refWords map[
 		for j < len(covered) && covered[j] {
 			j++
 		}
-		if j-i < dedupFrameRunMin {
+		if j-i < dedupFrameRunMin || (i > 0 && lineOf[i-1] == lineOf[i]) {
 			for k := i; k < j; k++ {
 				covered[k] = false
 			}
@@ -330,4 +336,149 @@ func dedupAgainstFrame(history, screen []string) []string {
 		fw = append(fw, dedupWords(r)...)
 	}
 	return compactDropped(history, frameMatchedDropMask(history, fw))
+}
+
+// dedupRepaints drops paragraphs that re-emit text found elsewhere in the
+// history. An inline TUI's reprint of its frame at a new width lands in
+// history as a copy of paragraphs already there, wrapped differently: no
+// paragraph key pairs it (dedupBlocks wants the whole paragraph, verbatim),
+// and once the app has printed more it is no longer the live frame
+// (dedupAgainstFrame). A viewer that joined then read the same passage
+// twice, at two widths. Which copy is whole depends on the order: the rows
+// that scrolled off before a reprint are a partial first copy, the reprint
+// below them complete; or the complete copy came first and the reprint is
+// the frame's tail. So a paragraph goes when every line of it is covered
+// by the text kept BEFORE it (coverageDropMask: matched runs of 8 words
+// that begin where a line begins), and then, over what is left, when it is
+// covered by the text kept AFTER it. A paragraph goes whole or stays whole:
+// dropping some of its lines split a sentence between two places. The
+// app's own rows (its prompt, its spinner and status rows: dedupChrome)
+// bound paragraphs, since a frame's bottom lands them right under its last
+// row of text, and a copy they are glued to would otherwise never match.
+// A short paragraph (a heading) a dropped copy carried goes with it
+// (dropOrphanHeadings).
+func dedupRepaints(lines []string) []string {
+	paras := dedupParagraphs(lines)
+	drop := make([]bool, len(lines))
+	covered := func(p dedupPara, shingles map[shingle]bool, refWords map[string]bool) bool {
+		whole := false
+		for k, d := range coverageDropMask(lines[p.i:p.j], shingles, refWords) {
+			if len(dedupWords(lines[p.i+k])) == 0 {
+				continue
+			}
+			if !d {
+				return false
+			}
+			whole = true
+		}
+		return whole
+	}
+	// Forward: covered by what is kept above.
+	pass := func(order []int) {
+		shingles := map[shingle]bool{}
+		refWords := map[string]bool{}
+		for _, k := range order {
+			p := paras[k]
+			if drop[p.i] {
+				continue
+			}
+			if covered(p, shingles, refWords) {
+				for x := p.i; x < p.j; x++ {
+					drop[x] = true
+				}
+				continue
+			}
+			words := p.words(lines)
+			addShingles(shingles, words)
+			for _, w := range words {
+				refWords[w] = true
+			}
+		}
+	}
+	forward := make([]int, len(paras))
+	backward := make([]int, len(paras))
+	for k := range paras {
+		forward[k], backward[len(paras)-1-k] = k, k
+	}
+	pass(forward)
+	pass(backward)
+	dropOrphanHeadings(lines, paras, drop)
+	return compactDropped(lines, drop)
+}
+
+// dedupPara is one paragraph of history: lines[i:j].
+type dedupPara struct{ i, j int }
+
+func (p dedupPara) words(lines []string) []string {
+	var w []string
+	for _, l := range lines[p.i:p.j] {
+		w = append(w, dedupWords(l)...)
+	}
+	return w
+}
+
+// dedupParagraphs splits history into paragraphs: runs of lines between
+// blank ones, with the app's own rows (dedupChrome) paragraphs of their own.
+func dedupParagraphs(lines []string) []dedupPara {
+	var paras []dedupPara
+	for i := 0; i < len(lines); {
+		if dedupBlank(lines[i]) {
+			i++
+			continue
+		}
+		if dedupChrome(lines[i]) {
+			paras = append(paras, dedupPara{i, i + 1})
+			i++
+			continue
+		}
+		j := i
+		for j < len(lines) && !dedupBlank(lines[j]) && !dedupChrome(lines[j]) {
+			j++
+		}
+		paras = append(paras, dedupPara{i, j})
+		i = j
+	}
+	return paras
+}
+
+// dedupChrome says a line is the app's own furniture, not its text: a
+// prompt, a spinner or status row (Claude Code's "❯", "✻ Worked for 3s",
+// "⏵⏵ auto mode on"), which the app draws under its last row of text.
+func dedupChrome(s string) bool {
+	t := strings.TrimSpace(dedupANSI.ReplaceAllString(s, ""))
+	for _, g := range []string{"❯", "⏵", "✻", "✳", "✢", "✶", "✽"} {
+		if strings.HasPrefix(t, g) {
+			return true
+		}
+	}
+	return false
+}
+
+// dropOrphanHeadings drops, from the lines marked for dropping, the short
+// paragraphs a dropped reprint carried with it: a heading, a rule, a label
+// (too short for the word match) that has appeared elsewhere verbatim and
+// sits next to a dropped paragraph. Left, a join read a stack of headings
+// with nothing under them, one per reprint. A short paragraph with kept
+// neighbours, or one seen nowhere else, stays.
+func dropOrphanHeadings(lines []string, paras []dedupPara, drop []bool) {
+	count := map[string]int{}
+	keys := make([]string, len(paras))
+	for k, p := range paras {
+		keys[k] = strings.Join(p.words(lines), "\x00")
+		if !drop[p.i] && keys[k] != "" {
+			count[keys[k]]++
+		}
+	}
+	dropped := func(k int) bool { return k >= 0 && k < len(paras) && drop[paras[k].i] }
+	for k, p := range paras {
+		if drop[p.i] || keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords {
+			continue
+		}
+		if count[keys[k]] > 1 && (dropped(k-1) || dropped(k+1)) {
+			for x := p.i; x < p.j; x++ {
+				drop[x] = true
+			}
+			count[keys[k]]--
+		}
+	}
 }

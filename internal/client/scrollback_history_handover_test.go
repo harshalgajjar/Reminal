@@ -5,15 +5,12 @@ package client
 
 import (
 	"fmt"
-	"io"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/charmbracelet/x/vt"
 
 	"reminal/internal/crypto"
 )
@@ -88,9 +85,8 @@ func distinctLines(text string) (shell, answer int) {
 func handoverAgent(t *testing.T, box *crypto.Box) *Agent {
 	t.Helper()
 	a := &Agent{box: box, buf: newScrollback(scrollbackBytes), scrollbackLines: 10000, sessionID: "HANDOVR1"}
-	a.screen = vt.NewEmulator(120, 30)
-	a.screen.Scrollback().SetMaxLines(a.scrollbackLines)
-	go io.Copy(io.Discard, a.screen)
+	a.screen = testScreen(t, 120, 30)
+	a.screen.SetMaxLines(a.scrollbackLines)
 	a.buf.SetBase(120, 30)
 	return a
 }
@@ -202,7 +198,7 @@ func TestAHotRestartWithTheHistoryInItsRingShowsNothingTwice(t *testing.T) {
 	r.restoreResumedScrollback()
 	r.screenMu.Lock()
 	after := stripANSI(buildSnapshot(r.screen, r.snapshotHistory(), nil, maxSnapshotPlaintext, false))
-	sb := r.screen.Scrollback().Len()
+	sb := r.screen.HistoryLen()
 	r.screenMu.Unlock()
 	if s, an := distinctLines(after); s != 3000 || an != 2000 {
 		t.Fatalf("after a hot restart a viewer sees %d/3000 shell and %d/2000 answer lines", s, an)
@@ -286,7 +282,7 @@ func TestTheDumpsRenderedHistoryIsKeptOnlyWhileUnchanged(t *testing.T) {
 	box, _ := crypto.NewBox(key)
 	a := handoverAgent(t, box)
 	a.scrollbackLines = 50
-	a.screen.Scrollback().SetMaxLines(50)
+	a.screen.SetMaxLines(50)
 	for i := 1; i <= 200; i++ {
 		a.record([]byte(fmt.Sprintf("line %d\r\n", i)))
 	}
@@ -326,9 +322,8 @@ func TestTheDumpsRenderedHistoryIsNotFooledByRepeatsAtBothEnds(t *testing.T) {
 		key, _ := crypto.NewSessionKey()
 		box, _ := crypto.NewBox(key)
 		a := &Agent{box: box, buf: newScrollback(scrollbackBytes), scrollbackLines: 5, sessionID: "HISTKEY1"}
-		a.screen = vt.NewEmulator(20, 3)
-		a.screen.Scrollback().SetMaxLines(5)
-		go io.Copy(io.Discard, a.screen)
+		a.screen = testScreen(t, 20, 3)
+		a.screen.SetMaxLines(5)
 		a.buf.SetBase(20, 3)
 		a.record([]byte(c.fill))
 		a.screenMu.Lock()
@@ -337,7 +332,7 @@ func TestTheDumpsRenderedHistoryIsNotFooledByRepeatsAtBothEnds(t *testing.T) {
 		a.record([]byte(c.push))
 		a.screenMu.Lock()
 		got := strings.Join(a.renderedHistory(), "|")
-		want := strings.Join(renderScrollback(a.screen, a.scrollbackLines), "|")
+		want := strings.Join(historyCapped(a.screen, a.scrollbackLines), "|")
 		a.screenMu.Unlock()
 		if before == want {
 			t.Fatalf("%s: fixture: the push changed nothing (%q)", c.name, want)
@@ -363,7 +358,6 @@ func TestARestoreLetsGoOfItsScratchEmulator(t *testing.T) {
 	key, _ := crypto.NewSessionKey()
 	box, _ := crypto.NewBox(key)
 	a := handoverAgent(t, box)
-	freeAtEnd(t, a.screen)
 	for i := 0; i < 10000; i++ {
 		a.record([]byte(fmt.Sprintf("%05d %s\r\n", i, strings.Repeat("x", 234))))
 	}
@@ -372,7 +366,7 @@ func TestARestoreLetsGoOfItsScratchEmulator(t *testing.T) {
 		t.Fatalf("dump: %q %v", path, err)
 	}
 	id := a.sessionID
-	freeEmulator(a.screen)
+	a.screen.Close()
 	a = nil
 	base := heapInUse()
 
@@ -384,8 +378,8 @@ func TestARestoreLetsGoOfItsScratchEmulator(t *testing.T) {
 	b.restoreResumedScrollback()
 	b.resumeDump = nil
 	b.screenMu.Lock()
-	n := b.screen.Scrollback().Len()
-	freeEmulator(b.screen) // the agent's own history let go: what is left, the restore kept
+	n := b.screen.HistoryLen()
+	b.screen.Close() // the agent's own history let go: what is left, the restore kept
 	b.screenMu.Unlock()
 	if n < 9000 {
 		t.Fatalf("fixture: the restore brought back %d lines", n)
