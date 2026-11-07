@@ -181,7 +181,10 @@ console.log(`grid at the end: ${cols}x${trows}, ${rows.length} rows held`);
 console.log(`sentences: ${ids.length - lost.length}/${ids.length} present${lost.length ? ' (lost: ' + lost.join(' ') + ')' : ''}`);
 console.log(`doubled sentences: ${doubled.length}${doubled.length ? ' (' + doubled.slice(0, 12).join(' ') + (doubled.length > 12 ? ' …' : '') + ')' : ''}; section headings ${headings} for ${SECTIONS} sections`);
 console.log(`layout: staircase rows ${stair}, rows wider than ${cols} cols ${wide}, rule rows ${rules.length} (${splitRules} short), status rows ${status}`);
-const ok = (keyboard || lost.length === 0) && stair === 0 && wide === 0 && splitRules === 0;
+// Without the keyboard, every width change re-snapshots the viewer from the
+// deduped history: each story's headings appear once, so two stories' at
+// most twice the sections. With the keyboard, Claude's own redraws count.
+const ok = (keyboard || (lost.length === 0 && headings <= 2 * SECTIONS)) && stair === 0 && wide === 0 && splitRules === 0;
 console.log(ok ? 'PASS' : 'FAIL');
 if (process.env.DUMP) fs.writeFileSync(process.env.DUMP, rows.join('\n'));
 await b.close();

@@ -494,8 +494,18 @@ type Agent struct {
 	snapMu      sync.Mutex
 	snapJoiners map[string]bool
 	snapPlain   bool
-	snapXfers   []*snapXfer
-	snapWake    chan struct{}
+	// snapPaced are the viewers that take a snapshot in parts, paced (by
+	// id, from their resumes): the ones a width change re-snapshots
+	// (resnapshot.go). resnapTimer waits for the program's redraw to
+	// settle after one; resnapWanted says the sender owes them a snapshot.
+	snapPaced    []string
+	resnapTimer  *time.Timer
+	resnapWanted bool
+	// lastOutputAt is when the program last wrote (UnixNano): the quiet a
+	// re-snapshot waits for is measured from it.
+	lastOutputAt atomic.Int64
+	snapXfers    []*snapXfer
+	snapWake     chan struct{}
 	// histCache is the rendered scrollback the last dump carried, and
 	// histKey what it was of (renderedHistory). Guarded by screenMu.
 	histCache []string
@@ -1390,6 +1400,7 @@ func (a *Agent) applyEffectiveSize() {
 	}
 	sizeLog("apply want %dx%d host %dx%d → pty %dx%d  %s",
 		viewer.cols, viewer.rows, host.cols, host.rows, cols, rows, a.sizeBook.dump())
+	prev := a.sizeBook.lastApplied()
 	if !a.sizeBook.setApplied(cols, rows) {
 		sizeLog("skip pty already %dx%d", cols, rows)
 		return
@@ -1416,6 +1427,12 @@ func (a *Agent) applyEffectiveSize() {
 	// one word a row, stepping right (the staircase).
 	a.broadcastSize(cols, rows)
 	_ = a.term.Resize(cols, rows)
+	// A width change: once the program's redraw for it has settled, the
+	// attached viewers are painted anew from the deduped history, so the
+	// copy at the old width goes for them as it does on a reload.
+	if prev.cols != 0 && prev.cols != cols {
+		a.armResnapshot()
+	}
 }
 
 // broadcastSize publishes the PTY's current (cols, rows) to every
@@ -2537,6 +2554,7 @@ func (a *Agent) initScreen() {
 // corresponds exactly to the buffer through its latest seq, so a snapshot can be
 // tagged with that seq without duplicating or dropping a chunk on the joiner.
 func (a *Agent) record(p []byte) {
+	a.lastOutputAt.Store(time.Now().UnixNano())
 	a.screenMu.Lock()
 	p = a.conhostClear.feed(p)
 	if a.screen != nil {
@@ -3324,6 +3342,7 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 	a.viewerSizeMu.Lock()
 	a.viewerCount = 0
 	a.viewerSizeMu.Unlock()
+	a.forgetPaced()
 
 	return a.serveConn(conn, shellExit, false)
 }
@@ -3682,6 +3701,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.syncViewerList(msg.Count, true)
 			if msg.Count == 0 {
 				a.forgetViewerCaps() // no watchers left; stale records must not outlive them
+				a.forgetPaced()
 			}
 			a.viewerSizeMu.Lock()
 			prevCount := a.viewerCount
@@ -3750,6 +3770,7 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			}
 			if msg.Count == 0 {
 				a.forgetViewerCaps()
+				a.forgetPaced()
 			}
 			a.viewerSizeMu.Lock()
 			prevCount := a.viewerCount
@@ -3915,6 +3936,16 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			cursor = e.Seq + 1
 		}
 
+		// A width change settled: the attached viewers that take parts are
+		// painted anew, as a joiner is (resnapshot.go). Through the relay
+		// only: a viewer attached here is a terminal of its own.
+		if !local {
+			if vs := a.takeResnapshot(); len(vs) > 0 {
+				if _, err := a.startPacedSnapshot(conn, vs); err != nil {
+					return err
+				}
+			}
+		}
 		// A part of each paced snapshot that may go, then round again for
 		// whatever output came meanwhile: live output waits behind one part.
 		more, err := a.pumpSnapshotParts(conn)
