@@ -6152,8 +6152,31 @@
     // human noticeable threshold.
     const pendingChunks = [];
     let flushScheduled = false;
+    // Output waits for the PTY's size. A viewer that has just (re)connected
+    // knows none, and painted at its own width a snapshot laid out for the
+    // PTY's width came out one word a row, stepping right (the staircase).
+    // The agent sends the size first thing in the stream; one too old to
+    // does not, so after SIZE_HOLD_MS the output goes at the viewer's own
+    // width. beginSizeHold on a new connection; endSizeHold when the size
+    // comes (TermSize.adoptPty).
+    const SIZE_HOLD_MS = 2000;
+    let sizeHoldTimer = null, sizeHoldOver = false;
+    function beginSizeHold() {
+      sizeHoldOver = false;
+      if (sizeHoldTimer) { clearTimeout(sizeHoldTimer); sizeHoldTimer = null; }
+    }
+    function endSizeHold() {
+      if (sizeHoldTimer) { clearTimeout(sizeHoldTimer); sizeHoldTimer = null; }
+      flushPendingChunks();
+    }
+    function holdingForSize() {
+      if (sizeHoldOver || TermSize.known()) return false;
+      if (!sizeHoldTimer) sizeHoldTimer = setTimeout(() => { sizeHoldTimer = null; sizeHoldOver = true; flushPendingChunks(); }, SIZE_HOLD_MS);
+      return true;
+    }
     function flushPendingChunks() {
       if (pendingChunks.length === 0) return;
+      if (holdingForSize()) return;
       // Every path that writes the session's output comes through here.
       if (staleScreen) {
         staleScreen = false;
@@ -6520,16 +6543,33 @@
         // loop — the very lines the grow needs stay put unless rows moved.
         if (changed) pinLive(wasLive);
       }
+      // known: the agent has told this connection the PTY's size.
+      function known() { return ptyC >= MIN_C && ptyR >= MIN_R && ptyKey === cryptoKey; }
       function display(wrap) {
         if (!ownsTerminal) return;
         if (!wrap) wrap = measure();
         if (!wrap) return;
         let cols = wrap.cols, rows = wrap.rows;
-        if (ptyC >= MIN_C && ptyR >= MIN_R && ptyKey === cryptoKey) {
-          cols = Math.min(cols, ptyC);
-          // Match the visible wrap, including keyboard-open. A tall PTY
-          // grid CSS-clipped into a short wrap left a black hole under
-          // the prompt and Chrome panned the page to chase the cursor.
+        if (!known() && holdingForSize()) {
+          // No size from the agent yet, its output held for it: the
+          // columns stay what they are rather than this screen's own,
+          // which a snapshot laid out for the PTY's width does not fit.
+          cols = term.cols || cols;
+        }
+        if (known()) {
+          // The PTY's width, exactly, until the PTY's own size changes
+          // (told in the output stream, where it belongs): the program
+          // places its words for that width, and a grid narrower than
+          // it, even for the moment between this screen narrowing and
+          // the PTY following it, clamped Claude Code's columns at its
+          // edge and left a staircase, one word a row, stepping right.
+          // The agent follows the narrowest screen, so the PTY is never
+          // wider than this one for longer than its settle.
+          cols = ptyC;
+          // Match the visible wrap, including keyboard-open, for the rows,
+          // at once: a tall PTY grid CSS-clipped into a short wrap left a
+          // black hole under the prompt and Chrome panned the page to
+          // chase the cursor; rows do not clamp a column.
           rows = Math.min(rows, ptyR);
         }
         paint(cols, rows);
@@ -6559,6 +6599,7 @@
 
       return {
         sync,
+        known,
         // A warm socket's agent told this screen's size now, ahead of the
         // screen asked for behind it: the promise of the send, or null.
         reportUnparking() { const wrap = measure(); display(wrap); return report(wrap, true); },
@@ -6580,6 +6621,8 @@
           ptyR = r;
           ptyKey = cryptoKey;
           display();
+          // Output held for this size goes now, at it.
+          endSizeHold();
         },
         boxDrift(el) {
           return !!(el && (el.clientWidth !== lastW || el.clientHeight !== lastH));
@@ -7571,11 +7614,20 @@
     // and on a warm socket unparked (resumeWarm).
     function wireSocket(sock) {
       diag('socket', 'wired');
-      sock.onmessage = async (ev) => {
+      // Handled one after another, in the order they came: a handler
+      // waits on decrypt, and the browser fires the next message's
+      // handler meanwhile, so a later message could be applied before
+      // an earlier one. The agent's size notice comes before the output
+      // the program writes for the new size; applied after it, the
+      // grid grew under a half-written frame (one word a row, stepping
+      // right). A handler that throws ends only its own message.
+      let inbound = Promise.resolve();
+      beginSizeHold(); // this connection's size is not known yet
+      sock.onmessage = (ev) => {
         noteInbound(sock);
         let msg;
         try { msg = JSON.parse(ev.data); } catch { return; }
-        await handleMessage(msg);
+        inbound = inbound.then(() => handleMessage(msg)).catch(() => {});
       };
 
       sock.onclose = (e) => {
