@@ -92,6 +92,10 @@ var limitScreens = []struct {
 	{"qwen", "✕ Rate limit exceeded. Please wait and try again.\n│ > │", time.Time{}},
 	{"qwen", "✕ Model API rate limit exceeded (HTTP 429). Wait and try again later.\n│ > │", time.Time{}},
 	{"qwen", "✕ Qwen OAuth quota exceeded\n│ > │", time.Time{}},
+	// Claude Code 2.1.319: an organization whose usage is paused, and a goal
+	// paused by it, drawn as its other notices are.
+	{"claude", "  ⎿  Usage is paused for your organization. For help, please contact support.\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Goal paused · usage is paused for your organization\n\n❯ ", time.Time{}},
 	// Qwen Code 0.26.9: its credits used up, the weekly ones, what to do,
 	// and when they come back (on one row, and wrapped onto two).
 	{"qwen", "✕ You've used up your credits. Please try again after the reset.\n│ > │", time.Time{}},
@@ -995,6 +999,9 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"qwen", "✕ ", "Model API rate limit exceeded (HTTP 429). Wait and try again later.", false},
 		{"qwen", "✕ ", "Qwen OAuth quota exceeded", false},
 		{"qwen", "✕ ", "Possible quota limitations in place or slow response times detected. Please wait and try again later.", false},
+		// Claude Code 2.1.319: an organization whose usage is paused.
+		{"claude", "⎿  ", "Usage is paused for your organization. For help, please contact support.", false},
+		{"claude", "⎿  ", "Goal paused · usage is paused for your organization", false},
 		// Qwen Code 0.26.9: its credits.
 		{"qwen", "✕ ", "You've used up your credits. Please try again after the reset.", false},
 		{"qwen", "✕ ", "You've used up your weekly credits. Please try again after the reset.", false},
