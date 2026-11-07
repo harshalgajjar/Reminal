@@ -5,6 +5,7 @@ package client
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -345,5 +346,50 @@ func TestDedupRepaintsDropsAHeadingReprintedOverARedrawsDebris(t *testing.T) {
 	text = append(text, after...)
 	if got := dedupRepaints(text); len(got) != len(text) {
 		t.Errorf("a line of its own between two headings was dropped:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// The history of a real session (Claude Code 2.1.319 on a folding phone:
+// the fold closed while it printed, then the keyboard opened and closed;
+// testdata/dedup/fold-keyboard-history.txt, the agent's History() before
+// any dedup, recorded from the session's ring). A join read "IV. The
+// Letter", "stairs.", a bare quote bar, then "IV. The Letter" again. Once
+// deduped as a join's history is (dedupBlocks, then dedupRepaints), the
+// heading and its paragraph are read once, "stairs." is the row of its own
+// paragraph only, and every paragraph of the story is there.
+func TestDedupRepaintsOnAFoldAndKeyboardSession(t *testing.T) {
+	data, err := os.ReadFile("testdata/dedup/fold-keyboard-history.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	out := dedupRepaints(lines)
+	plain := make([]string, len(out))
+	for i, l := range out {
+		plain[i] = strings.TrimSpace(dedupANSI.ReplaceAllString(l, ""))
+	}
+	count := func(row string) int {
+		n := 0
+		for _, l := range plain {
+			if l == row {
+				n++
+			}
+		}
+		return n
+	}
+	joined := strings.Join(plain, "\n")
+	// The bare quote bar once: the quote's own blank row, not the debris one.
+	for row, want := range map[string]int{"IV. The Letter": 1, "stairs.": 1, "▎": 1, "III. The Knocking": 1} {
+		if n := count(row); n != want {
+			t.Errorf("%q is read %d times, want %d:\n%s", row, n, want, joined)
+		}
+	}
+	if n := strings.Count(joined, "The next morning a fishing boat"); n != 1 {
+		t.Errorf("the paragraph under the heading is read %d times, want once", n)
+	}
+	for _, keep := range []string{"The fog came in during the second week", "She took the lantern down", "Mara ran back up the stairs", "Saw your light just in time", "After he left, Mara finally opened the envelope", "You've met him by now, I expect"} {
+		if !strings.Contains(joined, keep) {
+			t.Errorf("lost %q", keep)
+		}
 	}
 }

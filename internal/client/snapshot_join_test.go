@@ -33,7 +33,7 @@ func refSnapshotHistory(a *Agent) []string {
 	if a.scrollbackLines > 0 && len(lines) > a.scrollbackLines {
 		lines = lines[len(lines)-a.scrollbackLines:]
 	}
-	lines = dedupRepaints(dedupBlocks(lines))
+	lines = dedupRepaints(lines)
 	return refDedupAgainstFrame(lines, strings.Split(a.screen.Render(), "\n"))
 }
 

@@ -54,13 +54,20 @@ func dedupBlank(s string) bool {
 // removed. Blank separators around a dropped paragraph are absorbed so the surviving
 // history doesn't accumulate blank gaps.
 func dedupBlocks(lines []string) []string {
+	return compactDropped(lines, dedupBlocksMask(lines))
+}
+
+// dedupBlocksMask marks the lines dedupBlocks drops: the later verbatim
+// copies, and the blank each absorbs. dedupRepaints starts from it, so the
+// rules that read a dropped neighbour (a heading left on its own) see the
+// copies this one took.
+func dedupBlocksMask(lines []string) []bool {
 	seen := make(map[string]bool)
 	var seenParas [][]string
-	out := make([]string, 0, len(lines))
+	drop := make([]bool, len(lines))
 	i := 0
 	for i < len(lines) {
 		if dedupBlank(lines[i]) {
-			out = append(out, lines[i])
 			i++
 			continue
 		}
@@ -81,6 +88,9 @@ func dedupBlocks(lines []string) []string {
 			if j < len(lines) && dedupBlank(lines[j]) {
 				j++
 			}
+			for x := i; x < j; x++ {
+				drop[x] = true
+			}
 			i = j
 			continue
 		}
@@ -91,6 +101,9 @@ func dedupBlocks(lines []string) []string {
 			if j < len(lines) && dedupBlank(lines[j]) {
 				j++
 			}
+			for x := i; x < j; x++ {
+				drop[x] = true
+			}
 			i = j
 			continue
 		}
@@ -98,10 +111,9 @@ func dedupBlocks(lines []string) []string {
 			seen[key] = true
 			seenParas = append(seenParas, words)
 		}
-		out = append(out, lines[i:j]...)
 		i = j
 	}
-	return out
+	return drop
 }
 
 // isTruncatedPrefix reports whether frag (>= dedupFrameRunMin words) is a prefix of
@@ -361,7 +373,8 @@ func dedupAgainstFrame(history, screen []string) []string {
 // between goes with the debris (dropHeadingDebris).
 func dedupRepaints(lines []string) []string {
 	paras := dedupParagraphs(lines)
-	drop := make([]bool, len(lines))
+	// The verbatim copies first (dedupBlocks' rule), in the same mask.
+	drop := dedupBlocksMask(lines)
 	covered := func(p dedupPara, shingles map[shingle]bool, refWords map[string]bool) bool {
 		whole := false
 		for k, d := range coverageDropMask(lines[p.i:p.j], shingles, refWords) {
@@ -521,24 +534,39 @@ func dropHeadingDebris(lines []string, paras []dedupPara, drop []bool) {
 		}
 		return false
 	}
+	kept := map[string]int{}
+	for k, p := range paras {
+		if !drop[p.i] {
+			kept[keys[k]]++
+		}
+	}
 	for k, p := range paras {
 		if drop[p.i] || keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords {
 			continue
 		}
-		// The next copy, with only debris on the way to it.
-		for n := k + 1; n < len(paras) && n <= k+dedupDebrisParas+1; n++ {
-			if drop[paras[n].i] {
-				continue
-			}
+		// The next copy, with only debris on the way to it. Paragraphs
+		// dropped already (the copies a reprint carried) are passed over; a
+		// next copy dropped itself (an orphan) counts when a copy is kept
+		// elsewhere, so the heading is still read.
+		seen := 0
+		for n := k + 1; n < len(paras) && seen <= dedupDebrisParas; n++ {
 			if keys[n] == keys[k] {
+				if drop[paras[n].i] && kept[keys[k]] < 2 {
+					break
+				}
 				for x := p.i; x < paras[n].i; x++ {
 					drop[x] = true
 				}
+				kept[keys[k]]--
 				break
+			}
+			if drop[paras[n].i] {
+				continue
 			}
 			if !debris(n) {
 				break
 			}
+			seen++
 		}
 	}
 }

@@ -2915,7 +2915,7 @@ func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int,
 	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
-	return dedupRepaints(dedupBlocks(lines))
+	return dedupRepaints(lines)
 }
 
 // dropResizeRepaints removes, for every resize EXCEPT the newest, the lines its frame
