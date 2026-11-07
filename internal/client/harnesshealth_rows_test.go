@@ -46,6 +46,19 @@ var loginRowCases = []loginRowCase{
 	{prog: "codex", row: "■ enterprise IdP session has no refresh token; sign in again"},
 	{prog: "codex", row: "■ enterprise IdP credentials were removed; sign in again"},
 	{prog: "codex", row: "■ enterprise IdP identity changed; sign in again and reconnect"},
+	// Qwen Code 0.26.9: a message turned away for want of a login, its /auth
+	// flow, its signed-out state, no provider, signing in through the
+	// browser, and a plan without Qwen Code (the plan's name is a hole:
+	// empty, or a name).
+	{prog: "qwen", row: "  Not signed in. Run /auth to sign in."},
+	{prog: "qwen", row: "  Your Qwen session has expired. Run /auth to sign in again."},
+	{prog: "qwen", row: "  Your login credentials are no longer valid. Run /auth to sign in again."},
+	{prog: "qwen", row: "  Signed out of Qwen. Use /auth to sign in again."},
+	{prog: "qwen", row: "  Signed out of Qwen. Use /auth to sign in with another account."},
+	{prog: "qwen", row: "  Use /auth to sign in or configure a model first."},
+	{prog: "qwen", row: "  Opening chat.qwen.ai in your browser… Sign in there to connect Qwen Code."},
+	{prog: "qwen", row: "  You're signed in with a Free account, which doesn't include Qwen Code. Choose Plus or Pro in your browser; this terminal continues automatically after you subscribe."},
+	{prog: "qwen", row: "  You're signed in with a  account, which doesn't include Qwen Code. Choose Plus or Pro in your browser; this terminal continues automatically after you subscribe."},
 
 	{prog: "amp", row: "Would you like to log in to Amp? [(y)es, (n)o]: "},
 	{prog: "amp", row: "No API key found. Starting login flow..."},
@@ -490,6 +503,14 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"a person's text at the prompt", "claude", "────\n❯ why does it say\n  Authentication required.\n────", false},
 		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", false},
 		{"Codex's IdP row carried on in an answer", "codex", "● The server said enterprise IdP session has no refresh token; sign in again, so I stopped.\n› ", false},
+		// Qwen Code 0.26.9: rows that say the session is fine, and its
+		// notices quoted or carried on in an agent's own words.
+		{"Qwen's models that would not load, signed in", "qwen", "answer" + box + "  Could not load models. Your account is still signed in. Please try again.", false},
+		{"Qwen signed in", "qwen", "answer" + box + "  Signed in successfully", false},
+		{"Qwen signed in as", "qwen", "answer" + box + "  Signed in as someone@example.com", false},
+		{"a Qwen command for subscribers only", "qwen", "answer" + box + "  This command is only available with Qwen Subscription login. Use /auth to sign in to Qwen Subscription.", false},
+		{"Qwen's notice in an answer's words", "qwen", "● The docs say: not signed in. Run /auth to sign in, then try again." + box, false},
+		{"Qwen's notice quoted", "qwen", "  \"Your Qwen session has expired. Run /auth to sign in again.\" is what it printed." + box, false},
 	} {
 		if got := harnessProblemIn(c.tail, c.prog); got != c.want {
 			t.Errorf("%s (as %q): logged out %v, want %v:\n%s", c.name, c.prog, got, c.want, c.tail)

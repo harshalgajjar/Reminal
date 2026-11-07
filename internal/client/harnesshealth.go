@@ -217,6 +217,17 @@ var harnessLoginScreens = map[string][]loginRow{
 		`connectwithanexistingmodelstudioapikey`,
 		`noapikeyfound:setopenai_api_keyorsecurity\.auth\.apikey\.?`,
 		`qwenoauthcredentialsexpired\.pleaseuse/authtore-authenticatewithqwen-oauth`,
+		// Qwen Code 0.26.9: a message turned away for want of a login, its
+		// /auth flow, its signed-out state, no provider set up, signing in
+		// through the browser, and signed in on a plan that has no Qwen Code
+		// in it (the plan's name is the hole).
+		`notsignedin\.run/authtosignin\.?`,
+		`yourqwensessionhasexpired\.run/authtosigninagain\.?`,
+		`yourlogincredentialsarenolongervalid\.run/authtosigninagain\.?`,
+		`signedoutofqwen\.use/authtosignin(?:again|withanotheraccount)\.?`,
+		`use/authtosigninorconfigureamodelfirst\.?`,
+		`openingchat\.qwen\.aiinyourbrowser.{0,3}signintheretoconnectqwencode\.?`,
+		`you.?resignedinwitha[a-z]{0,12}account,whichdoesn.?tincludeqwencode\.chooseplusorproinyourbrowser;thisterminalcontinuesautomaticallyafteryousubscribe\.?`,
 	), loginMarked("✕",
 		`refreshtokenexpiredorinvalid\.pleaseuse.?/auth.?tore-authenticate`,
 	)),
