@@ -197,6 +197,10 @@ var harnessLoginScreens = map[string][]loginRow{
 	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`), loginMarked("■",
 		`yoursessionhasexpired\.pleasereauthenticate`,
 	)),
+	// Droid 1.6.0: what it says with no login.
+	"droid": loginAll(loginRows(
+		`thisdroidisnotsignedin`,
+	)),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), the steps of
 	// setting one up, and a login that lapsed.
