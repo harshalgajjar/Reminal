@@ -40,8 +40,8 @@ var loginRowCases = []loginRowCase{
 	{prog: "codex", row: "■ Your authentication session could not be refreshed automatically. Please log out and sign in again."},
 	{prog: "codex", row: "■ ChatGPT account ID not available, please re-run `codex login`"},
 	{prog: "codex", row: "■ ChatGPT account ID not available, please re-run codex login"},
-	// Droid 1.6.0: its state with no login.
-	{prog: "droid", row: "  This Droid is not signed in"},
+	// Droid 1.6.0: its status label with no login, on its last rows.
+	{prog: "droid", row: "  This Droid is not signed in", bottom: true},
 
 	{prog: "amp", row: "Would you like to log in to Amp? [(y)es, (n)o]: "},
 	{prog: "amp", row: "No API key found. Starting login flow..."},
@@ -468,6 +468,8 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"a person's text at the prompt", "claude", "────\n❯ why does it say\n  Authentication required.\n────", false},
 		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", false},
 		{"Droid's state carried on in an answer", "droid", "● It printed that this Droid is not signed in, and I went on with the next file.\n", false},
+		{"Droid's login sentence in an answer, no menu under it", "droid", "● Please login with your Factory account to continue.\n  Then run droid again and the tests pass.\n", false},
+		{"Droid's status label higher up, quoted", "droid", "● It said:\n  This Droid is not signed in\n  so I stopped.\n  Next I will check the key.\n  And the config.\n  And the env.\n  Then rerun.\n", false},
 	} {
 		if got := harnessProblemIn(c.tail, c.prog); got != c.want {
 			t.Errorf("%s (as %q): logged out %v, want %v:\n%s", c.name, c.prog, got, c.want, c.tail)

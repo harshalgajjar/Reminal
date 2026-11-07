@@ -197,8 +197,12 @@ var harnessLoginScreens = map[string][]loginRow{
 	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`), loginMarked("■",
 		`yoursessionhasexpired\.pleasereauthenticate`,
 	)),
-	// Droid 1.6.0: what it says with no login.
-	"droid": loginAll(loginRows(
+	// Droid 1.6.0 with no login (recorded in Docker, testdata/harness-screens/
+	// droid.txt): "Please login with your Factory account to continue.", its
+	// login menu under it ("> Login", "Sign in to a Factory Custom
+	// Deployment", "Exit"): the sentence is its only with the menu below, as
+	// an agent may write it. And its status label, on the last few rows.
+	"droid": loginAll(loginThen(`pleaseloginwithyourfactoryaccounttocontinue`, `signintoafactorycustomdeployment`), loginBottom(
 		`thisdroidisnotsignedin`,
 	)),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
