@@ -43,8 +43,6 @@ var loginRowCases = []loginRowCase{
 	// Codex 0.167.0: the device-code sign-in's three rows, and an enterprise
 	// identity provider's session it cannot keep.
 	{prog: "codex", row: "  Preparing device code login"},
-	{prog: "codex", row: "  1. Open this link in your browser and sign in"},
-	{prog: "codex", row: "  2. Enter this one-time code after you are signed in"},
 	{prog: "codex", row: "■ enterprise IdP session has no refresh token; sign in again"},
 	{prog: "codex", row: "■ enterprise IdP credentials were removed; sign in again"},
 	{prog: "codex", row: "■ enterprise IdP identity changed; sign in again and reconnect"},
@@ -325,6 +323,24 @@ func TestCodexsLoginMenuIsItsItemsTogether(t *testing.T) {
 	} {
 		if harnessProblemIn(answer+loginRowFrame, "codex") {
 			t.Errorf("an answer's numbered item read as Codex's menu:\n%s", answer)
+		}
+	}
+}
+
+// Codex 0.167.0's device-code steps are its only together: the first, then
+// the second within the next few rows (the link between them). An agent's
+// own numbered list that starts with the first step's words is not it.
+func TestCodexsDeviceCodeStepsAreItsTogether(t *testing.T) {
+	steps := "  Preparing device code login\n\n  1. Open this link in your browser and sign in\n     https://auth.openai.com/device?user_code=ABCD-EFGH\n\n  2. Enter this one-time code after you are signed in\n     ABCD-EFGH"
+	if !harnessProblemIn(steps+loginRowFrame, "codex") {
+		t.Error("its device-code steps, together, were not read as logged out")
+	}
+	for _, answer := range []string{
+		"● To get the token:\n  1. Open this link in your browser and sign in\n  2. Copy the key into .env\n  3. Run the tests again.",
+		"  2. Enter this one-time code after you are signed in",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "codex") {
+			t.Errorf("an answer's numbered step read as Codex's device-code login:\n%s", answer)
 		}
 	}
 }
