@@ -4,10 +4,13 @@
 package client
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	uv "github.com/charmbracelet/ultraviolet"
+
+	"reminal/internal/crypto"
 )
 
 // A full-screen program (vim, htop, Claude Code's own full-screen mode) on
@@ -61,5 +64,35 @@ func TestAFullScreenProgramOnTheAltScreen(t *testing.T) {
 	}
 	if n := len(s.History()); n != histBefore {
 		t.Errorf("the history is %d lines, was %d", n, histBefore)
+	}
+}
+
+// A hot restart while a program is on the alternate screen (Claude Code's
+// full-screen mode, vim): the dump carries the main screen's history, so
+// the restarted session has its scrollback. The terminal itself has no
+// history to format on the alternate screen.
+func TestADumpWrittenOnTheAltScreenCarriesTheHistory(t *testing.T) {
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := handoverAgent(t, box)
+	for i := 0; i < 40; i++ {
+		a.record([]byte(fmt.Sprintf("before-%02d some words\r\n", i)))
+	}
+	a.record([]byte("\x1b[?1049h\x1b[2J\x1b[Hfull screen program\x1b[?1000h"))
+	path, k, err := a.writeScrollbackDump()
+	if err != nil || path == "" {
+		t.Fatalf("dump: %q %v", path, err)
+	}
+	d := takeScrollbackDump(path, k, a.sessionID)
+	if d == nil {
+		t.Fatal("no dump")
+	}
+	// 40 lines on 30 rows: the first 10 or so scrolled off the main screen.
+	joined := strings.Join(d.History, "\n")
+	if !strings.Contains(joined, "before-00") || !strings.Contains(joined, "before-09") {
+		t.Errorf("the dump's history lost the main screen's lines on the alt screen: %d lines:\n%s", len(d.History), joined)
+	}
+	if strings.Contains(joined, "full screen program") {
+		t.Errorf("the alt screen's content is in the history: %q", joined)
 	}
 }
