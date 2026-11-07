@@ -13,18 +13,23 @@ const PORT = Number(process.env.MODEL_PORT ?? 8099);
 export const SECTIONS = 8, SENTENCES = 12;
 
 // The story: SECTIONS sections of SENTENCES sentences, each sentence its id
-// and a run of ordinary words, long enough that rows wrap on a phone.
+// and a run of ordinary words, long enough that rows wrap on a phone. The
+// second story asked for in a conversation is another (part 1: "T3x07",
+// its own headings, another run of the words), so that the history's
+// dedup of reprints never takes one for a reprint of the other.
 const WORDS = "the lighthouse keeper kept the lamp lit through every storm and the island was never on a map because the surveyors brass instruments found nothing where the rock should have been".split(" ");
-export function story() {
-  const out = ["The Lighthouse Keeper's Last Map", ""];
+export const STORIES = ["S", "T"];
+export const storyHeading = (part, s) => `${s}. Section ${s} of the ${part ? "second " : ""}story`;
+export function story(part = 0) {
+  const out = [part ? "The Lighthouse Keeper's Last Map, Part Two" : "The Lighthouse Keeper's Last Map", ""];
   for (let s = 1; s <= SECTIONS; s++) {
-    out.push(`## ${s}. Section ${s} of the story`, "");
+    out.push(`## ${storyHeading(part, s)}`, "");
     const para = [];
     for (let k = 1; k <= SENTENCES; k++) {
       const n = 9 + ((s * 7 + k * 3) % 9);
       const words = [];
-      for (let i = 0; i < n; i++) words.push(WORDS[(s * 11 + k * 5 + i) % WORDS.length]);
-      para.push(`S${s}x${String(k).padStart(2, "0")} ${words.join(" ")}.`);
+      for (let i = 0; i < n; i++) words.push(WORDS[(s * 11 + k * 5 + i + part * 13) % WORDS.length]);
+      para.push(`${STORIES[part]}${s}x${String(k).padStart(2, "0")} ${words.join(" ")}.`);
       if (k % 4 === 0) { out.push(para.join(" "), ""); para.length = 0; }
     }
   }
@@ -48,7 +53,9 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function answer(body, res) {
   const said = lastUserText(body);
-  const text = /story/i.test(said) ? story() : (said ? `noted: ${said.slice(0, 80)}` : "noted.");
+  // The second story asked for in the conversation is the second story.
+  const asked = (body.messages || []).filter((m) => m && m.role === "user" && /story/i.test(typeof m.content === "string" ? m.content : JSON.stringify(m.content || ""))).length;
+  const text = /story/i.test(said) ? story(asked > 1 ? 1 : 0) : (said ? `noted: ${said.slice(0, 80)}` : "noted.");
   const id = "msg_" + Date.now().toString(36);
   const usage = { input_tokens: 10, output_tokens: 10 };
   if (!body.stream) {

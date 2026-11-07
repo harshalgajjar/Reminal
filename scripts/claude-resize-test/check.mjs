@@ -8,11 +8,15 @@
 // window.__term (app.js).
 import { chromium } from 'playwright';
 import * as fs from 'node:fs';
-import { SECTIONS, SENTENCES } from './model.mjs';
+import { SECTIONS, SENTENCES, STORIES, storyHeading } from './model.mjs';
 
 const [ID, PIN] = process.argv.slice(2);
+// The sentences of both stories (S…, then T…), and each story's last.
 const ids = [];
-for (let s = 1; s <= SECTIONS; s++) for (let k = 1; k <= SENTENCES; k++) ids.push(`S${s}x${String(k).padStart(2, '0')}`);
+for (const led of STORIES) for (let s = 1; s <= SECTIONS; s++) for (let k = 1; k <= SENTENCES; k++) ids.push(`${led}${s}x${String(k).padStart(2, '0')}`);
+
+// headingsOf counts the rows that are one of a story's headings.
+const headingsOf = (rows, part) => rows.filter((r) => new RegExp(`Section \\d of the ${part ? 'second ' : ''}story`).test(r)).length;
 
 const b = await chromium.launch();
 const ctx = await b.newContext({ viewport: { width: 1200, height: 900 }, deviceScaleFactor: 1 });
@@ -172,19 +176,37 @@ for (const r of rows) {
   if (m && col > lastCol && col > 0) { run++; if (run >= 3) stair++; } else run = 0;
   lastCol = col;
 }
-const headings = rows.filter((r) => /Section \d of the story/.test(r)).length;
+const headings = [headingsOf(rows, 0), headingsOf(rows, 1)];
 const rules = rows.filter((r) => /^─{10,}$/.test(r.trim()));
 const splitRules = rules.filter((r) => r.trim().length < cols - 2).length;
 const status = rows.filter((r) => /auto mode on|esc to interrupt/.test(r)).length;
 const wide = rows.filter((r) => r.length > cols).length;
 console.log(`grid at the end: ${cols}x${trows}, ${rows.length} rows held`);
 console.log(`sentences: ${ids.length - lost.length}/${ids.length} present${lost.length ? ' (lost: ' + lost.join(' ') + ')' : ''}`);
-console.log(`doubled sentences: ${doubled.length}${doubled.length ? ' (' + doubled.slice(0, 12).join(' ') + (doubled.length > 12 ? ' …' : '') + ')' : ''}; section headings ${headings} for ${SECTIONS} sections`);
+console.log(`doubled sentences: ${doubled.length}${doubled.length ? ' (' + doubled.slice(0, 12).join(' ') + (doubled.length > 12 ? ' …' : '') + ')' : ''}; section headings ${headings[0]} and ${headings[1]} for ${SECTIONS} sections each`);
 console.log(`layout: staircase rows ${stair}, rows wider than ${cols} cols ${wide}, rule rows ${rules.length} (${splitRules} short), status rows ${status}`);
+// A fresh join at the end, for comparison: its history is the agent's,
+// deduped, so a count above the attached viewer's own says a copy is the
+// history's, below it that the attached viewer kept one the history shed.
+await page.reload({ waitUntil: 'domcontentloaded' });
+await ready();
+await size(cols, trows);
+await waitFor(new RegExp(ids[ids.length - 1]), 30000);
+await page.waitForTimeout(3000);
+const fresh = await rowsNow();
+const freshHeadings = [headingsOf(fresh, 0), headingsOf(fresh, 1)];
+console.log(`a fresh join at the end: ${fresh.length} rows, section headings ${freshHeadings[0]} and ${freshHeadings[1]}`);
+if (process.env.DUMP) fs.writeFileSync(process.env.DUMP.replace(/(\.txt)?$/, '-fresh$1'), fresh.join('\n'));
 // Without the keyboard, every width change re-snapshots the viewer from the
-// deduped history: each story's headings appear once, so two stories' at
-// most twice the sections. With the keyboard, Claude's own redraws count.
-const ok = (keyboard || (lost.length === 0 && headings <= 2 * SECTIONS)) && stair === 0 && wide === 0 && splitRules === 0;
+// deduped history once the program is quiet. The second story streams
+// through the fold's changes (one width change, then a pause: a reconnect,
+// a grid change): its headings appear once each, on the attached viewer and
+// on a fresh join alike. The first streams through the flurry (a width
+// change every 120 ms): what the program prints for one width lands on the
+// next, in any terminal, and its headings are counted but not judged. With
+// the keyboard, Claude's own redraws count, and the run is judged on layout.
+const once = headings[1] === SECTIONS && freshHeadings[1] === SECTIONS;
+const ok = (keyboard || (lost.length === 0 && once)) && stair === 0 && wide === 0 && splitRules === 0;
 console.log(ok ? 'PASS' : 'FAIL');
 if (process.env.DUMP) fs.writeFileSync(process.env.DUMP, rows.join('\n'));
 await b.close();
