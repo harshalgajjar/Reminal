@@ -359,7 +359,8 @@ func ringStartIn(history, again []string) int {
 // drawnAgain says of a row whether rows (what a replay draws) show its text:
 // its tokens, split at spaces, an unbroken run of theirs read as one text. Or
 // a redraw's splice of two: the start of one line, cut mid-word, and the rest
-// of another, each shown (the first's last token the start of one of theirs).
+// of another, each shown (the first's last token the start of one of theirs,
+// shorter: a whole word is no cut, or any two pieces would pass).
 // A row with no text is drawn.
 func drawnAgain(rows []string) func(string) bool {
 	var stream []string
@@ -370,8 +371,8 @@ func drawnAgain(rows []string) func(string) bool {
 			stream = append(stream, w)
 		}
 	}
-	// run says whether t is a run of stream; cut: its last token may be the
-	// start of the one there.
+	// run says whether t is a run of stream; cut: its last token is the start
+	// of the one there, cut short.
 	run := func(t []string, cut bool) bool {
 		for _, s := range at[t[0]] {
 			if s+len(t) > len(stream) {
@@ -379,7 +380,11 @@ func drawnAgain(rows []string) func(string) bool {
 			}
 			ok := true
 			for k := 1; k < len(t) && ok; k++ {
-				ok = stream[s+k] == t[k] || cut && k == len(t)-1 && strings.HasPrefix(stream[s+k], t[k])
+				if cut && k == len(t)-1 {
+					ok = len(t[k]) < len(stream[s+k]) && strings.HasPrefix(stream[s+k], t[k])
+				} else {
+					ok = stream[s+k] == t[k]
+				}
 			}
 			if ok {
 				return true
