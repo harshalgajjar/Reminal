@@ -2932,13 +2932,29 @@ func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int,
 	return dedupRepaintsIn(lines, reprints)
 }
 
-// repaintLines marks the lines that can be an app's reprint of its frame at
-// a resize: inside that resize's window (from where its repaint landed, as
-// far as dropRepaints looks) and matching the frame captured at it. Only
-// those are looked at as reprints (dedupRepaintsIn); anything else the
+// lineMark is what the strict rules know of a history line from the
+// resizes: whether it can be an app's reprint of its frame (inside a
+// resize's window, matching the frame captured at it), and how many resizes
+// came before it was printed.
+type lineMark struct {
+	reprint bool
+	resizes int
+}
+
+// repaintLines marks each line (lineMark). Only a line that can be a reprint
+// is looked at as one, and a paragraph printed again as it was goes only
+// when a resize came between the two (dedupRepaintsIn); anything else the
 // program printed again is kept, a duplicate shown rather than a line lost.
-func repaintLines(lines []string, segs []resizeSeg) []bool {
-	mark := make([]bool, len(lines))
+func repaintLines(lines []string, segs []resizeSeg) []lineMark {
+	mark := make([]lineMark, len(lines))
+	for _, seg := range segs {
+		if s := max(seg.start, 0); s < len(lines) {
+			mark[s].resizes++ // summed below: the resizes at or before each line
+		}
+	}
+	for x := 1; x < len(mark); x++ {
+		mark[x].resizes += mark[x-1].resizes
+	}
 	for i, seg := range segs {
 		end := min(seg.start+seg.maxOver, len(lines))
 		if i+1 < len(segs) {
@@ -2949,17 +2965,17 @@ func repaintLines(lines []string, segs []resizeSeg) []bool {
 		}
 		for k, m := range frameMatchedDropMask(lines[seg.start:end], seg.words) {
 			if m {
-				mark[seg.start+k] = true
+				mark[seg.start+k].reprint = true
 			}
 		}
 	}
 	return mark
 }
 
-// compactDroppedAlong is compactDropped, carrying a mark per line along.
-func compactDroppedAlong(lines []string, drop, along []bool) ([]string, []bool) {
+// compactDroppedAlong is compactDropped, carrying a value per line along.
+func compactDroppedAlong[T any](lines []string, drop []bool, along []T) ([]string, []T) {
 	out := make([]string, 0, len(lines))
-	marks := make([]bool, 0, len(lines))
+	marks := make([]T, 0, len(lines))
 	justDropped := false
 	for i, l := range lines {
 		if drop[i] {

@@ -12,12 +12,14 @@ import "os"
 // again verbatim go too (dedupRepaintsCovered). It clears the most reprints;
 // now and then it takes a line the program really printed twice.
 //
-// On (REMINAL_DEDUP=strict in the agent's environment): only a paragraph
-// that can be a reprint (inside a resize's window, matching the frame it
-// captured) is looked at, it must be one unbroken run of kept text, a
-// command and its output are never a copy, and a run printed at two widths
-// is split where the width changes (dedupRepaintsIn). It never takes a line
-// a program printed again; some reprints stay as duplicates.
+// On (REMINAL_DEDUP=strict in the agent's environment): no row is ever lost
+// entirely, though a repeat may show once. A paragraph printed again as it
+// was goes only when a resize came between the two printings or it lies in
+// that resize's frame; anything else
+// is looked at only when it can be a reprint (inside a resize's window,
+// matching the frame it captured), it must be one unbroken run of kept text,
+// a command and its output are never a copy, and a run printed at two widths
+// is split where the width changes (dedupRepaintsIn).
 var dedupStrict = dedupStrictIn(os.Getenv)
 
 // dedupStrictIn reads the choice from an environment.
