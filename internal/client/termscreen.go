@@ -51,6 +51,9 @@ type sessionScreen struct {
 	mainHistoryKey string
 	// tail is the end of the last write (entersAltScreen).
 	tail []byte
+	// failed is the first write the terminal refused (memory it would not
+	// give): from then on its copy is not what the program drew (Err).
+	failed error
 	// count is how many lines its history holds (uncapped) when it held
 	// count.rows rows: kept so a resize need not format all of it
 	// (HistoryLines).
@@ -99,7 +102,11 @@ func (s *sessionScreen) Write(p []byte) (int, error) {
 		s.historyLocked()
 	}
 	s.gen++
-	return s.t.Write(p)
+	n, err := s.t.Write(p)
+	if err != nil && s.failed == nil {
+		s.failed = err
+	}
+	return n, err
 }
 
 // entersAltScreen says p switches to the alternate screen: DECSET 1049, 1047
@@ -283,9 +290,16 @@ func (s *sessionScreen) SetMaxLines(n int) {
 func (s *sessionScreen) ClearScrollback() { _, _ = s.Write([]byte("\x1b[3J")) }
 
 // Err is why its terminal can no longer be used (a call into it trapped,
-// ran past its memory or its time limit), or nil. Once it is not nil every
+// ran past its memory or its time limit, or refused a write), or nil. Once it is not nil
 // read of it is empty: its owner stops using it (Agent.dropFailedScreenLocked).
-func (s *sessionScreen) Err() error { return s.t.Err() }
+func (s *sessionScreen) Err() error {
+	if err := s.t.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.failed
+}
 
 // Close frees it.
 func (s *sessionScreen) Close() { s.t.Close() }

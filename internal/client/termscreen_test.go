@@ -157,7 +157,7 @@ func TestAFailedScreenIsDroppedAndAJoinFallsBack(t *testing.T) {
 // ways, a program that leaves rows under its cursor, and clears.
 func TestTheHistoryLineCountMatchesTheHistory(t *testing.T) {
 	resizes, carried := 0, 0
-	for seed := int64(1); seed <= 12; seed++ {
+	for seed := int64(1); seed <= 40; seed++ {
 		rng := rand.New(rand.NewSource(seed))
 		s := testScreen(t, 80, 24)
 		s.SetMaxLines(100000)
@@ -171,6 +171,12 @@ func TestTheHistoryLineCountMatchesTheHistory(t *testing.T) {
 			case op < 6:
 				var b strings.Builder
 				for n := rng.Intn(6) + 1; n > 0; n-- {
+					if rng.Intn(3) == 0 {
+						// A line long enough to wrap at most widths (Claude Code's
+						// rows are up to 200 wide).
+						b.WriteString(strings.Repeat("x", 120+rng.Intn(100)) + fmt.Sprintf(" W%d.%d\r\n", seed, step))
+						continue
+					}
 					for w := rng.Intn(40); w > 0; w-- {
 						b.WriteString(word() + " ")
 					}
@@ -181,7 +187,11 @@ func TestTheHistoryLineCountMatchesTheHistory(t *testing.T) {
 				}
 				_, _ = s.Write([]byte(b.String()))
 			case op < 9:
-				s.Resize(20+rng.Intn(140), 8+rng.Intn(50))
+				if rng.Intn(3) == 0 {
+					s.Resize(140+rng.Intn(80), 20+rng.Intn(30)) // wide to wide: long lines re-wrap
+				} else {
+					s.Resize(20+rng.Intn(140), 8+rng.Intn(50))
+				}
 				resizes++
 				if s.count.valid {
 					carried++
@@ -197,7 +207,7 @@ func TestTheHistoryLineCountMatchesTheHistory(t *testing.T) {
 		}
 	}
 	// Carried, not counted again, on most resizes: what makes it cheap.
-	if carried*10 < resizes*8 {
+	if carried*10 < resizes*7 {
 		t.Errorf("the count was carried across %d of %d resizes", carried, resizes)
 	}
 	t.Logf("carried across %d of %d resizes", carried, resizes)

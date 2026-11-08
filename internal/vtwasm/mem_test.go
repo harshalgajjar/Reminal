@@ -116,3 +116,22 @@ func TestAFullScrollbackStaysNearItsBudget(t *testing.T) {
 		t.Errorf("the history after: %d bytes, %v", len(h), err)
 	}
 }
+
+// A write the instance has no memory for is refused with an error, the call
+// not made (its owner then stops trusting its copy: sessionScreen.Err).
+func TestAWriteWithNoMemoryForItIsRefused(t *testing.T) {
+	saved := memoryMax
+	memoryMax = 8 << 20
+	defer func() { memoryMax = saved }()
+	v, err := New(80, 24, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	if _, err := v.Write(make([]byte, 16<<20)); err == nil {
+		t.Fatal("a 16 MiB write into an 8 MiB instance was taken")
+	}
+	if _, err := v.Write([]byte("small\r\n")); err != nil && v.Err() == nil {
+		t.Logf("a small write after: %v", err)
+	}
+}

@@ -139,7 +139,11 @@ func New(cols, rows, maxLines int) (*Terminal, error) {
 	}
 	v := &Terminal{ctx: ctx, mod: mod, fns: map[string]api.Function{}}
 	slot := v.call("ghostty_wasm_alloc_opaque")
-	if rc := v.call("ghostty_terminal_new", 0, slot, uint64(clamp16(cols)), uint64(clamp16(rows))); rc != 0 || slot == 0 || v.err != nil {
+	if slot == 0 || v.err != nil {
+		mod.Close(ctx)
+		return nil, fmt.Errorf("vtwasm: no memory for the terminal: %v", v.err)
+	}
+	if rc := v.call("ghostty_terminal_new", 0, slot, uint64(clamp16(cols)), uint64(clamp16(rows))); rc != 0 || v.err != nil {
 		mod.Close(ctx)
 		return nil, fmt.Errorf("vtwasm: ghostty_terminal_new: %d %v", int32(rc), v.err)
 	}
@@ -337,7 +341,10 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 	v.limit = formatLimit
 	defer func() { v.limit = 0 }()
 	slot := v.call("ghostty_wasm_alloc_opaque")
-	if rc := v.call("ghostty_formatter_terminal_new", 0, slot, v.t); rc != 0 || slot == 0 || v.err != nil {
+	if slot == 0 || v.err != nil {
+		return "", errors.Join(errAlloc, v.err)
+	}
+	if rc := v.call("ghostty_formatter_terminal_new", 0, slot, v.t); rc != 0 || v.err != nil {
 		return "", fmt.Errorf("vtwasm: formatter: %d %v", int32(rc), v.err)
 	}
 	f := v.call("ghostty_wasm_take_opaque", slot)
@@ -395,8 +402,12 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 	}
 	ptr, ok1 := v.mod.Memory().ReadUint32Le(out)
 	n, ok2 := v.mod.Memory().ReadUint32Le(out + 4)
+	if !ok1 || !ok2 {
+		return "", errRange
+	}
 	b, ok := v.mod.Memory().Read(ptr, n)
-	if !ok1 || !ok2 || !ok {
+	if !ok {
+		v.call("ghostty_free", 0, uint64(ptr), uint64(n)) // the buffer is still the module's to free
 		return "", errRange
 	}
 	s := string(b)
