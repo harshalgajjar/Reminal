@@ -25,8 +25,8 @@ import (
 // from it at least as faithful as what an attached viewer holds: a copy
 // that keeps each row at the width it was printed at (charmbracelet/x/vt)
 // repainted a viewer with less than its own re-wrapped scrollback, a whole
-// paragraph gone. Off with that copy; the engine that re-wraps turns it on.
-const screenRewraps = false
+// paragraph gone. This copy (vtwasm, sessionScreen) re-wraps.
+const screenRewraps = true
 
 // resnapQuiet is how long the program must have been quiet after the width
 // change before the re-snapshot: its redraw follows SIGWINCH within a few
