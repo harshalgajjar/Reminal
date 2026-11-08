@@ -51,7 +51,7 @@ func TestResizeScreenGrowAnchorsBottom(t *testing.T) {
 	feedLines(a, 30)
 
 	before := screenRows(a)
-	sbBefore := a.screen.Scrollback().Len()
+	sbBefore := a.screen.HistoryLen()
 	if got := lastNonBlankRow(before); got != len(before)-2 {
 		t.Fatalf("setup: last content row %d, want %d (cursor sits on the blank row below)", got, len(before)-2)
 	}
@@ -75,7 +75,7 @@ func TestResizeScreenGrowAnchorsBottom(t *testing.T) {
 		t.Errorf("row above the cursor is %q, want %q", rows[grown-2], "line-0030")
 	}
 	// The 10 new rows must be filled from scrollback, not left blank.
-	if sbAfter := a.screen.Scrollback().Len(); sbAfter != sbBefore-(grown-10) {
+	if sbAfter := a.screen.HistoryLen(); sbAfter != sbBefore-(grown-10) {
 		t.Errorf("scrollback is %d lines after grow, want %d — older lines were not pulled back onto the screen",
 			sbAfter, sbBefore-(grown-10))
 	}
@@ -91,7 +91,7 @@ func TestResizeScreenShrinkKeepsBottom(t *testing.T) {
 	a := clearingAgent(t, 80, 20)
 	feedLines(a, 30)
 
-	sbBefore := a.screen.Scrollback().Len()
+	sbBefore := a.screen.HistoryLen()
 	const shrunk = 10
 	a.resizeScreen(80, shrunk)
 
@@ -105,7 +105,7 @@ func TestResizeScreenShrinkKeepsBottom(t *testing.T) {
 	if rows[shrunk-2] != "line-0030" {
 		t.Errorf("row above the cursor is %q, want %q — the bottom of the screen was truncated away", rows[shrunk-2], "line-0030")
 	}
-	if sbAfter := a.screen.Scrollback().Len(); sbAfter != sbBefore+(20-shrunk) {
+	if sbAfter := a.screen.HistoryLen(); sbAfter != sbBefore+(20-shrunk) {
 		t.Errorf("scrollback is %d lines after shrink, want %d — the rows scrolled off the top were dropped instead of kept",
 			sbAfter, sbBefore+(20-shrunk))
 	}

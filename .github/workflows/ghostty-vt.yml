@@ -1,0 +1,45 @@
+# internal/vtwasm/ghostty-vt.wasm is built from a pinned ghostty commit with a
+# pinned Zig (scripts/ghostty-vt/build.sh) and kept in the tree, since go build
+# cannot run Zig. This rebuilds it and fails if the bytes differ from what is
+# kept: on a change to the module or its build, and weekly, so a toolchain or
+# upstream drift that would change the build is seen before a rebuild is needed.
+name: ghostty-vt
+
+on:
+  pull_request:
+    paths:
+      - internal/vtwasm/**
+      - scripts/ghostty-vt/**
+      - .github/workflows/ghostty-vt.yml
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: The kept wasm is what the pinned build gives
+        run: scripts/ghostty-vt/build.sh --check
+  # The same pin built with ReleaseSafe, where ReleaseSmall (what ships) has
+  # undefined behaviour a trap stands in for: the terminal's tests and the
+  # session screen's run on it, so a libghostty bug that would corrupt the
+  # shipped copy silently fails here instead. Not kept, not shipped.
+  safe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: stable
+      - name: Build the pin with ReleaseSafe
+        run: scripts/ghostty-vt/build.sh --safe "$RUNNER_TEMP/safe"
+      - name: The tests on it
+        run: |
+          cp "$RUNNER_TEMP/safe/ghostty-vt.wasm" internal/vtwasm/ghostty-vt.wasm
+          go test -count=1 -skip TestModuleIsTheRecordedBuild ./internal/vtwasm/
+          go test -count=1 -run 'Screen|History|AltScreen|Failed|Join|Dedup|Snapshot|Wrap' ./internal/client/

@@ -24,9 +24,8 @@ func TestSnapshotNeverDropsScrollback(t *testing.T) {
 	key, _ := crypto.NewSessionKey()
 	box, _ := crypto.NewBox(key)
 	a := &Agent{box: box, buf: newScrollback(8 << 20), scrollbackLines: 20000}
-	a.screen = vt.NewEmulator(50, 20)
-	a.screen.Scrollback().SetMaxLines(20000)
-	go io.Copy(io.Discard, a.screen)
+	a.screen = testScreen(t, 50, 20)
+	a.screen.SetMaxLines(20000)
 	a.buf.SetBase(50, 20)
 
 	a.resizeScreen(50, 18) // phone connects — first resize on an empty buffer

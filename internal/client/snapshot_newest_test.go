@@ -26,10 +26,8 @@ func TestSnapshotCursorLandsOnTheScreensCursorRow(t *testing.T) {
 			key, _ := crypto.NewSessionKey()
 			box, _ := crypto.NewBox(key)
 			a := &Agent{box: box, buf: newScrollback(8 << 20), scrollbackLines: 20000}
-			a.screen = vt.NewEmulator(120, 30)
-			a.screen.Scrollback().SetMaxLines(20000)
-			go io.Copy(io.Discard, a.screen)
-			freeAtEnd(t, a.screen)
+			a.screen = testScreen(t, 120, 30)
+			a.screen.SetMaxLines(20000)
 			a.buf.SetBase(120, 30)
 			for i := 1; i <= 800; i++ {
 				a.record([]byte(fmt.Sprintf("L%05d\r\n", i)))
