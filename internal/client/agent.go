@@ -2912,7 +2912,8 @@ func (a *Agent) snapshotHistory() []string {
 
 // dedupHistory is snapshotHistory's middle, of what it is given: the resize
 // repaints dropped (unless dropped already: dropped), the newest maxLines
-// kept, and dedupBlocks. A pure function of its arguments, so it runs outside
+// kept, and the verbatim and cross-width reprints dropped (dedupRepaints,
+// which starts from dedupBlocks' rule). A pure function of its arguments, so it runs outside
 // screenMu (joinHistory).
 func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int, dropped bool) []string {
 	if !dropped {
@@ -2921,7 +2922,7 @@ func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int,
 	if maxLines > 0 && len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
-	return dedupBlocks(lines)
+	return dedupRepaints(lines)
 }
 
 // dropResizeRepaints removes, for every resize EXCEPT the newest, the lines its frame

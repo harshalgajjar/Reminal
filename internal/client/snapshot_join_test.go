@@ -41,7 +41,7 @@ func refSnapshotHistory(a *Agent) []string {
 	if a.scrollbackLines > 0 && len(lines) > a.scrollbackLines {
 		lines = lines[len(lines)-a.scrollbackLines:]
 	}
-	lines = dedupBlocks(lines)
+	lines = dedupRepaints(lines)
 	return refDedupAgainstFrame(lines, strings.Split(a.screen.Render(), "\n"))
 }
 
@@ -240,6 +240,10 @@ func refAddShingles(m map[string]bool, words []string) {
 }
 
 func refCoverageDropMask(history []string, shingles map[string]bool, refWords map[string]bool) []bool {
+	return refCoverageMask(history, shingles, refWords, false)
+}
+
+func refCoverageMask(history []string, shingles map[string]bool, refWords map[string]bool, fromNextLine bool) []bool {
 	mask := make([]bool, len(history))
 	if len(shingles) == 0 {
 		return mask
@@ -273,7 +277,22 @@ func refCoverageDropMask(history []string, shingles map[string]bool, refWords ma
 		for j < len(covered) && covered[j] {
 			j++
 		}
-		if j-i < dedupFrameRunMin || (i > 0 && lineOf[i-1] == lineOf[i]) {
+		// Mirrors coverageMask: a stretch starting inside a line is given up,
+		// or with fromNextLine starts at the next line and is gated again.
+		if i > 0 && lineOf[i-1] == lineOf[i] {
+			if !fromNextLine {
+				for k := i; k < j; k++ {
+					covered[k] = false
+				}
+				i = j
+				continue
+			}
+			for i < j && lineOf[i] == lineOf[i-1] {
+				covered[i] = false
+				i++
+			}
+		}
+		if j-i < dedupFrameRunMin {
 			for k := i; k < j; k++ {
 				covered[k] = false
 			}
@@ -339,7 +358,13 @@ func refDedupAgainstFrame(history, screen []string) []string {
 	for _, r := range screen {
 		fw = append(fw, dedupWords(r)...)
 	}
-	return compactDropped(history, refFrameMatchedDropMask(history, fw))
+	set := make(map[string]bool, len(fw))
+	for _, w := range fw {
+		set[w] = true
+	}
+	drop := refCoverageMask(history, refBuildShingles(fw), set, true)
+	dropSeamDebris(history, drop)
+	return compactDropped(history, drop)
 }
 
 // refFrame is the old snapshotFrame's plaintext: everything under screenMu.
