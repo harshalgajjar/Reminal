@@ -44,7 +44,7 @@ func refSnapshotHistory(a *Agent) []string {
 	if !a.staleSegs(len(lines)) {
 		segs = a.resizeSegs
 	}
-	reprints := repaintLines(lines, segs)
+	reprints := repaintLines(lines, segs, a.resizesKnown(len(lines)))
 	if drop := refDropResizeRepaints(a, lines); drop != nil {
 		lines, reprints = compactDroppedAlong(lines, drop, reprints)
 	}
