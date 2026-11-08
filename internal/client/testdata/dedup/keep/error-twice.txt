@@ -1,0 +1,11 @@
+2026-11-07T18:01:02Z ERROR request failed: connection reset by peer while reading the response body
+    at fetchJSON (client.js:41:13)
+    at async loadUser (users.js:88:20)
+    at async handler (server.js:120:5)
+
+2026-11-07T18:01:07Z ERROR request failed: connection reset by peer while reading the response body
+    at fetchJSON (client.js:41:13)
+    at async loadUser (users.js:88:20)
+    at async handler (server.js:120:5)
+
+$

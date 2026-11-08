@@ -29,28 +29,31 @@ func refRenderScrollback(e *sessionScreen, maxLines int) []string {
 
 func refSnapshotHistory(a *Agent) []string {
 	lines := refRenderScrollback(a.screen, 0) // uncapped: segment indices are absolute
-	resized := len(lines)                     // mirrors dedupHistory, given the segments joinInputs passes
+	// Mirrors dedupHistory, given the segments joinInputs passes: the lines
+	// that can be reprints, carried through the segment pass and the trim.
+	var segs []resizeSeg
 	if !a.staleSegs(len(lines)) {
-		for _, s := range a.resizeSegs {
-			resized = min(resized, s.start)
-		}
+		segs = a.resizeSegs
 	}
-	lines = refDropResizeRepaints(a, lines)
+	reprints := repaintLines(lines, segs)
+	if drop := refDropResizeRepaints(a, lines); drop != nil {
+		lines, reprints = compactDroppedAlong(lines, drop, reprints)
+	}
 	if a.scrollbackLines > 0 && len(lines) > a.scrollbackLines {
-		resized -= len(lines) - a.scrollbackLines
-		lines = lines[len(lines)-a.scrollbackLines:]
+		k := len(lines) - a.scrollbackLines
+		lines, reprints = lines[k:], reprints[k:]
 	}
-	lines = dedupRepaintsFrom(lines, max(resized, 0))
+	lines = dedupRepaintsIn(lines, reprints)
 	return refDedupAgainstFrame(lines, strings.Split(a.screen.Render(), "\n"))
 }
 
-func refDropResizeRepaints(a *Agent, lines []string) []string {
+func refDropResizeRepaints(a *Agent, lines []string) []bool {
 	if len(a.resizeSegs) < 2 {
-		return lines
+		return nil
 	}
 	if a.scrollbackLines > 0 && len(lines) >= a.scrollbackLines {
 		a.resizeSegs = nil // eviction possible: indices stale, start fresh
-		return lines
+		return nil
 	}
 	drop := make([]bool, len(lines))
 	// Existence corpus, built newest-to-oldest: a row may be dropped only if its
@@ -99,7 +102,7 @@ func refDropResizeRepaints(a *Agent, lines []string) []string {
 		refAddShingles(corpus, segRegion)
 		addWords(segRegion)
 	}
-	return compactDropped(lines, drop)
+	return drop
 }
 
 func refBuildSnapshot(e screenView, history, screenRows []string, maxBytes int, reserveLastRow bool) string {

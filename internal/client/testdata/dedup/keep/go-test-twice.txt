@@ -1,0 +1,11 @@
+$ go test ./...
+ok      reminal/internal/client 12.311s
+ok      reminal/internal/relay  0.412s
+ok      reminal/internal/session        1.102s
+
+$ go test ./...
+ok      reminal/internal/client 12.311s
+ok      reminal/internal/relay  0.412s
+ok      reminal/internal/session        1.102s
+
+$

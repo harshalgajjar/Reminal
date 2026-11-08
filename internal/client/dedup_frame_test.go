@@ -6,6 +6,7 @@ package client
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -504,7 +505,7 @@ func TestDedupRepaintsKeepsAPatchworkAndARepeatedLine(t *testing.T) {
 		"two paragraphs sharing halves with a third": {a, c, "", b, c, "", a, b, "", "$"},
 		"a tail of a file just shown":                {"$ cat notes.txt", a, b, "", "$ tail -1 notes.txt", "", b, "", "$"},
 	} {
-		got := dedupRepaints(history)
+		got := dedupHistory(history, nil, "", 0, false)
 		if len(got) != len(history) {
 			t.Errorf("%s: %d of %d rows kept:\n%s", name, len(got), len(history), strings.Join(got, "\n"))
 		}
@@ -531,7 +532,7 @@ func TestJoinSplitsCopiesGluedAtTwoWidths(t *testing.T) {
 	}
 	history, screen := read("width-seams-history.txt"), read("width-seams-screen.txt")
 	// Written after the session's resizes, as a join's history is here.
-	out := dedupAgainstFrame(dedupRepaintsFrom(history, 0), screen)
+	out := dedupAgainstFrame(dedupRepaints(history), screen)
 	var b strings.Builder
 	for _, l := range append(append([]string{}, out...), screen...) {
 		b.WriteString(strings.TrimSpace(dedupANSI.ReplaceAllString(l, "")) + "\n")
@@ -597,10 +598,41 @@ func TestJoinSplitsAWideRowLeftAboveANarrowCopy(t *testing.T) {
 	}
 	history = append(history[:cut:cut], history[cut+1:]...)
 	var b strings.Builder
-	for _, l := range dedupRepaintsFrom(history, 0) {
+	for _, l := range dedupRepaints(history) {
 		b.WriteString(strings.TrimSpace(dedupANSI.ReplaceAllString(l, "")) + "\n")
 	}
 	if n := strings.Count(b.String(), "The Halcyon took Dev away at dawn"); n != 1 {
 		t.Errorf("the wide row left above the narrow copy: read %d times, want once", n)
+	}
+}
+
+// What a program printed again on its own is kept, whatever the dedup is
+// changed to: each file in testdata/dedup/keep goes through the join's
+// history pass unchanged, with no resize and with one at its start. Losing
+// a line is worse than showing a duplicate. Each is a case review found
+// dropped once: words gathered from separate places, a `tail` of a file
+// just shown, an error printed twice with its stack, a command typed twice,
+// a file shown with `cat` and again with `fmt`.
+func TestDedupKeepsWhatAProgramPrintedAgain(t *testing.T) {
+	files, err := filepath.Glob("testdata/dedup/keep/*.txt")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no keep corpus: %v", err)
+	}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		for name, segs := range map[string][]resizeSeg{
+			"no resize":     nil,
+			"a resize at 0": {{start: 0, maxOver: 1000}},
+			"two resizes":   {{start: 0, maxOver: 1000}, {start: len(lines) / 2, maxOver: 1000}},
+		} {
+			got := dedupHistory(lines, segs, "", 0, false)
+			if strings.Join(got, "\n") != strings.Join(lines, "\n") {
+				t.Errorf("%s, %s: lines dropped:\n--- kept\n%s\n--- given\n%s", filepath.Base(f), name, strings.Join(got, "\n"), strings.Join(lines, "\n"))
+			}
+		}
 	}
 }
