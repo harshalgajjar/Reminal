@@ -2910,6 +2910,15 @@ func (a *Agent) snapshotHistory() []string {
 // which starts from dedupBlocks' rule). A pure function of its arguments, so it runs outside
 // screenMu (joinHistory).
 func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int, dropped bool) []string {
+	if !dedupStrict {
+		if !dropped {
+			lines = dropRepaints(lines, segs, screen)
+		}
+		if maxLines > 0 && len(lines) > maxLines {
+			lines = lines[len(lines)-maxLines:]
+		}
+		return dedupRepaintsCovered(lines)
+	}
 	reprints := repaintLines(lines, segs)
 	if !dropped {
 		if drop := dropRepaintsMask(lines, segs, screen); drop != nil {

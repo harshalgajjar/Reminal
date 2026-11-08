@@ -496,8 +496,9 @@ func TestJoinDropsANarrowCopyAboveTheWideFrame(t *testing.T) {
 
 // Text gathered from separate places is not a copy, and rows printed again
 // as they were are the program saying it again: the reprint dedup keeps
-// both, as a join on main did (a cross-review's probes).
+// both, as a join on main did (a cross-review's probes). Under the strict rules.
 func TestDedupRepaintsKeepsAPatchworkAndARepeatedLine(t *testing.T) {
+	withDedupStrict(t)
 	a := "the build on the second runner stopped at the cache step again"
 	b := "the deploy waits for an approval from someone on the release team"
 	c := "and the nightly job reports the same warning about the old config"
@@ -606,14 +607,15 @@ func TestJoinSplitsAWideRowLeftAboveANarrowCopy(t *testing.T) {
 	}
 }
 
-// What a program printed again on its own is kept, whatever the dedup is
-// changed to: each file in testdata/dedup/keep goes through the join's
+// Under the strict rules (REMINAL_DEDUP=strict): what a program printed
+// again on its own is kept, whatever the dedup is changed to: each file in testdata/dedup/keep goes through the join's
 // history pass unchanged, with no resize and with one at its start. Losing
 // a line is worse than showing a duplicate. Each is a case review found
 // dropped once: words gathered from separate places, a `tail` of a file
 // just shown, an error printed twice with its stack, a command typed twice,
 // a file shown with `cat` and again with `fmt`.
 func TestDedupKeepsWhatAProgramPrintedAgain(t *testing.T) {
+	withDedupStrict(t)
 	files, err := filepath.Glob("testdata/dedup/keep/*.txt")
 	if err != nil || len(files) == 0 {
 		t.Fatalf("no keep corpus: %v", err)
@@ -633,6 +635,62 @@ func TestDedupKeepsWhatAProgramPrintedAgain(t *testing.T) {
 			if strings.Join(got, "\n") != strings.Join(lines, "\n") {
 				t.Errorf("%s, %s: lines dropped:\n--- kept\n%s\n--- given\n%s", filepath.Base(f), name, strings.Join(got, "\n"), strings.Join(lines, "\n"))
 			}
+		}
+	}
+}
+
+// withDedupStrict runs a test under the strict rules (REMINAL_DEDUP=strict).
+func withDedupStrict(t *testing.T) {
+	t.Helper()
+	saved := dedupStrict
+	dedupStrict = true
+	t.Cleanup(func() { dedupStrict = saved })
+}
+
+// The recorded sessions through the default rules (what a join gets without
+// REMINAL_DEDUP=strict), the history and screen as the join reads them: every
+// passage once, nothing of the story lost.
+func TestDefaultRulesReadTheRecordedSessionsOnce(t *testing.T) {
+	read := func(name string) []string {
+		data, err := os.ReadFile("testdata/dedup/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	}
+	for _, c := range []struct {
+		name       string
+		once, kept []string
+	}{
+		{"fold-keyboard", []string{"IV. The Letter", "The next morning a fishing boat"}, []string{"III. The Knocking", "Mara ran back up the stairs", "You've met him by now, I expect"}},
+		{"fold-flips", []string{"You've met him by now, I expect.", "V. The Last Winter", "Mara stayed through that winter"}, []string{"The fog came in during the second week", "Mara ran back up the stairs"}},
+		{"width-seams", []string{"She had never been able to draw. This time her hand was steady", "The Halcyon took Dev away at dawn", "The reactor was old and tired."}, []string{"VIII. The Return", "Position unconfirmed.", "Dev worked through the numbers"}},
+	} {
+		history, screen := read(c.name+"-history.txt"), read(c.name+"-screen.txt")
+		out := dedupAgainstFrame(dedupRepaintsCovered(history), screen)
+		var b strings.Builder
+		for _, l := range append(append([]string{}, out...), screen...) {
+			b.WriteString(strings.TrimSpace(dedupANSI.ReplaceAllString(l, "")) + "\n")
+		}
+		painted := b.String()
+		for _, row := range c.once {
+			if n := strings.Count(painted, row); n != 1 {
+				t.Errorf("%s: %q is read %d times, want once", c.name, row, n)
+			}
+		}
+		for _, row := range c.kept {
+			if !strings.Contains(painted, row) {
+				t.Errorf("%s: lost %q", c.name, row)
+			}
+		}
+	}
+}
+
+// REMINAL_DEDUP=strict, and only that, picks the strict rules.
+func TestTheStrictRulesAreChosenByTheEnvironment(t *testing.T) {
+	for v, want := range map[string]bool{"strict": true, "": false, "default": false, "STRICT": false} {
+		if got := dedupStrictIn(func(string) string { return v }); got != want {
+			t.Errorf("REMINAL_DEDUP=%q: strict %v, want %v", v, got, want)
 		}
 	}
 }

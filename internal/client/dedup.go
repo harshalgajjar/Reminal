@@ -392,9 +392,9 @@ func dedupAgainstFrame(history, screen []string) []string {
 	drop := liveFrameDropMask(history, fw)
 	both := append(append(make([]string, 0, len(history)+len(screen)), history...), screen...)
 	mask := append(append(make([]bool, 0, len(both)), drop...), make([]bool, len(screen))...)
-	paras := dedupParagraphs(both)
-	dropOrphanHeadings(both, paras, mask)
-	dropHeadingDebris(both, paras, mask)
+	paras := dedupParagraphs(both, dedupStrict)
+	dropOrphanHeadings(both, paras, mask, dedupStrict)
+	dropHeadingDebris(both, paras, mask, dedupStrict)
 	for i := range history {
 		drop[i] = mask[i]
 	}
@@ -436,7 +436,7 @@ func dedupRepaints(lines []string) []string {
 // same width) counts as well as one wrapped otherwise. Anything else the
 // program printed again stays: losing a line is worse than a duplicate.
 func dedupRepaintsIn(lines []string, reprint []bool) []string {
-	paras := dedupParagraphs(lines)
+	paras := dedupParagraphs(lines, true)
 	eligible := func(p dedupPara) bool {
 		for x := p.i; x < p.j; x++ {
 			if !reprint[x] && len(dedupWords(lines[x])) > 0 {
@@ -501,8 +501,8 @@ func dedupRepaintsIn(lines []string, reprint []bool) []string {
 			keep(k + 1)
 		}
 	}
-	dropOrphanHeadings(lines, paras, drop)
-	dropHeadingDebris(lines, paras, drop)
+	dropOrphanHeadings(lines, paras, drop, true)
+	dropHeadingDebris(lines, paras, drop, true)
 	return compactDropped(lines, drop)
 }
 
@@ -618,7 +618,7 @@ func (p dedupPara) words(lines []string) []string {
 // dedupParagraphs splits history into paragraphs: runs of lines between
 // blank ones, with the app's own rows (dedupChrome) paragraphs of their own,
 // and a run split where its wrap width changes (widthSeam).
-func dedupParagraphs(lines []string) []dedupPara {
+func dedupParagraphs(lines []string, splitWidths bool) []dedupPara {
 	var paras []dedupPara
 	for i := 0; i < len(lines); {
 		if dedupBlank(lines[i]) {
@@ -634,9 +634,11 @@ func dedupParagraphs(lines []string) []dedupPara {
 		for j < len(lines) && !dedupBlank(lines[j]) && !dedupChrome(lines[j]) {
 			j++
 		}
-		if s := widthSeam(lines[i:j]); s > 0 {
-			paras = append(paras, dedupPara{i: i, j: i + s, split: true})
-			i += s
+		if splitWidths {
+			if s := widthSeam(lines[i:j]); s > 0 {
+				paras = append(paras, dedupPara{i: i, j: i + s, split: true})
+				i += s
+			}
 		}
 		paras = append(paras, dedupPara{i: i, j: j})
 		i = j
@@ -663,7 +665,7 @@ func dedupChrome(s string) bool {
 // sits next to a dropped paragraph. Left, a join read a stack of headings
 // with nothing under them, one per reprint. A short paragraph with kept
 // neighbours, or one seen nowhere else, stays.
-func dropOrphanHeadings(lines []string, paras []dedupPara, drop []bool) {
+func dropOrphanHeadings(lines []string, paras []dedupPara, drop []bool, strict bool) {
 	count := map[string]int{}
 	keys := make([]string, len(paras))
 	for k, p := range paras {
@@ -674,7 +676,7 @@ func dropOrphanHeadings(lines []string, paras []dedupPara, drop []bool) {
 	}
 	dropped := func(k int) bool { return k >= 0 && k < len(paras) && drop[paras[k].i] }
 	for k, p := range paras {
-		if drop[p.i] || keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords || dedupCommand(lines[p.i]) {
+		if drop[p.i] || keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords || (strict && dedupCommand(lines[p.i])) {
 			continue
 		}
 		if count[keys[k]] > 1 && (dropped(k-1) || dropped(k+1)) {
@@ -696,7 +698,7 @@ func dropOrphanHeadings(lines []string, paras []dedupPara, drop []bool) {
 // full length (a row's tail printed on its own). The first copy and the
 // debris go; the second copy, with its text, stays. A short paragraph
 // between the copies that is nowhere else is text, and everything stays.
-func dropHeadingDebris(lines []string, paras []dedupPara, drop []bool) {
+func dropHeadingDebris(lines []string, paras []dedupPara, drop []bool, strict bool) {
 	keys := make([]string, len(paras))
 	var long [][]string
 	for k, p := range paras {
@@ -728,7 +730,7 @@ func dropHeadingDebris(lines []string, paras []dedupPara, drop []bool) {
 		}
 	}
 	for k, p := range paras {
-		if keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords || dedupCommand(lines[p.i]) {
+		if keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords || (strict && dedupCommand(lines[p.i])) {
 			continue
 		}
 		// The next copy, with only debris on the way to it. Paragraphs
