@@ -562,13 +562,45 @@ func TestWidthSeamOnlyWhereTheWidthChanges(t *testing.T) {
 		rows []string
 		want int
 	}{
-		"one width, short last row":  {[]string{wide, wide, "the end."}, 0},
-		"one width, sentence inside": {[]string{wide, wide + " done.", wide, "end"}, 0},
-		"a narrow copy glued after":  {[]string{wide, wide + " done.", strings.Repeat("n", 50), "tail"}, 2},
-		"a narrow single row after":  {[]string{wide, wide + " done.", "one narrow row"}, 0},
+		"one width, short last row":                             {[]string{wide, wide, "the end."}, 0},
+		"one width, sentence inside":                            {[]string{wide, wide + " done.", wide, "end"}, 0},
+		"a narrow copy glued after":                             {[]string{wide, wide + " done.", strings.Repeat("n", 50), "tail"}, 2},
+		"a narrow single row after":                             {[]string{wide, wide + " done.", "one narrow row"}, 0},
+		"one wide row mid-sentence above a wrapped narrow copy": {[]string{wide, strings.Repeat("n", 49), strings.Repeat("n", 50), "tail"}, 1},
+		"a short list under a long row":                         {[]string{wide, "2. short", "3. shorter item", "4. x"}, 0},
 	} {
 		if got := widthSeam(c.rows); got != c.want {
 			t.Errorf("%s: %d, want %d", name, got, c.want)
 		}
+	}
+}
+
+// The same glued copies as a join meets them after the resize-segment pass
+// has dropped the wide copy's second row: one wide row, mid-sentence, right
+// above the narrow copy. It is read once.
+func TestJoinSplitsAWideRowLeftAboveANarrowCopy(t *testing.T) {
+	data, err := os.ReadFile("testdata/dedup/width-seams-history.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	cut := -1
+	for i := len(history) - 1; i > 0; i-- {
+		if strings.Contains(dedupANSI.ReplaceAllString(history[i], ""), "time anyone had hugged Pim, and its pressure") &&
+			strings.Contains(dedupANSI.ReplaceAllString(history[i+1], ""), "The reactor was old and tired.") {
+			cut = i
+			break
+		}
+	}
+	if cut < 0 {
+		t.Fatal("fixture: the glued copies were not found")
+	}
+	history = append(history[:cut:cut], history[cut+1:]...)
+	var b strings.Builder
+	for _, l := range dedupRepaintsFrom(history, 0) {
+		b.WriteString(strings.TrimSpace(dedupANSI.ReplaceAllString(l, "")) + "\n")
+	}
+	if n := strings.Count(b.String(), "The Halcyon took Dev away at dawn"); n != 1 {
+		t.Errorf("the wide row left above the narrow copy: read %d times, want once", n)
 	}
 }
