@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-// What a program printed again is kept, through the join's history pass
-// (dedupHistory), whatever the dedup is changed to: losing a line is worse
-// than showing a duplicate. Each file in testdata/dedup/review is a shape
-// review found dropped on some head of this change, read three ways:
+// What the strict rules (REMINAL_DEDUP=strict) guarantee, through the join's
+// history pass (dedupHistory): no row is ever lost entirely, though a repeat
+// may show once. Each file in testdata/dedup/review is a shape review found
+// dropped on some head of this change, read three ways:
 //
 //   - no resize: nothing the session remembers could be a reprint;
 //   - a resize with no frame: a segment over the whole history whose
@@ -21,16 +21,15 @@ import (
 //   - a resize with its frame: one as it happens, right where the second
 //     copy begins, its frame the screenful above it (reviewCorpusFrame).
 //
-// Under the strict rules (REMINAL_DEDUP=strict), whose guard this is; the
-// default rules drop some of these shapes by design.
+// The default rules drop some of these shapes entirely, by design.
 //
-// Every case comes back exactly as given with no resize and with a frameless
-// one; with a frame, a copy printed at the same width inside it may go (it
-// can be a reprint) but every row is still shown at least once. The one
-// exception
-// is reprint-rewrapped, the same paragraph at two widths: with its frame it
-// goes as reprint-rewrapped.want.txt says (the reprint dropped). Without a
-// frame it is not checked, since a word-level match there is how a reconnect's
+// With no resize every case comes back exactly as given: nothing can be a
+// reprint. With a resize a copy may go (a paragraph printed again as it was
+// after a resize, or one inside its frame, can be a reprint), but every row
+// is still shown at least once. The one exception is reprint-rewrapped, the
+// same paragraph at two widths: with its frame it goes as
+// reprint-rewrapped.want.txt says (the reprint dropped). Without a frame it
+// is not checked, since a word-level match there is how a reconnect's
 // stacked copies are cleared when the resizes behind them are forgotten.
 func TestDedupReviewCorpus(t *testing.T) {
 	withDedupStrict(t)
@@ -73,10 +72,9 @@ func TestDedupReviewCorpus(t *testing.T) {
 				expect = want
 			}
 			got := dedupHistory(append([]string(nil), lines...), m.segs, "", 0, false)
-			if m.segs != nil && m.segs[0].words != nil && !reprint {
-				// Inside a frame a copy printed at the same width can be a
-				// reprint and may go: nothing may be lost, every row still
-				// shown at least once.
+			if m.segs != nil && !reprint {
+				// After a resize a copy can be a reprint and may go: nothing
+				// may be lost, every row still shown at least once.
 				if missing := reviewCorpusMissing(lines, got); len(missing) > 0 {
 					t.Errorf("%s, %s: rows no longer shown at all: %q", name, m.mode, missing)
 				}

@@ -61,9 +61,18 @@ func dedupBlocks(lines []string) []string {
 // copies, and the blank each absorbs. dedupRepaints starts from it, so the
 // rules that read a dropped neighbour (a heading left on its own) see the
 // copies this one took.
-func dedupBlocksMask(lines []string) []bool {
-	seen := make(map[string]bool)
+func dedupBlocksMask(lines []string) []bool { return dedupBlocksMaskWhere(lines, nil) }
+
+// dedupBlocksMaskWhere is dedupBlocksMask taking only the copies ok allows:
+// ok(orig, i, j) is asked of the copy at lines[i:j] whose first printing
+// began at line orig. A nil ok allows every copy.
+func dedupBlocksMaskWhere(lines []string, ok func(orig, i, j int) bool) []bool {
+	if ok == nil {
+		ok = func(int, int, int) bool { return true }
+	}
+	seen := make(map[string]int) // a paragraph's words: the line it was first printed at
 	var seenParas [][]string
+	var seenAt []int
 	drop := make([]bool, len(lines))
 	i := 0
 	for i < len(lines) {
@@ -79,22 +88,17 @@ func dedupBlocksMask(lines []string) []bool {
 			j++
 		}
 		key := strings.Join(words, "\x00")
-		if len(words) >= dedupFrameRunMin && len(words) < dedupMinParaWords && isTruncatedPrefix(words, seenParas) {
+		orig, isCopy := seen[key]
+		isCopy = isCopy && len(words) >= dedupMinParaWords && ok(orig, i, j)
+		if !isCopy && len(words) >= dedupFrameRunMin && len(words) < dedupMinParaWords {
 			// Repaint FRAGMENT: an interrupted re-emit commits just a paragraph's
 			// head — often with its final word cut mid-word — too short for the
 			// verbatim key above and possibly out of the live frame. A >=10-word
 			// prefix (last word tolerant) of a paragraph we already emitted is
 			// unambiguous: drop it like any other re-emitted copy.
-			if j < len(lines) && dedupBlank(lines[j]) {
-				j++
-			}
-			for x := i; x < j; x++ {
-				drop[x] = true
-			}
-			i = j
-			continue
+			isCopy = isTruncatedPrefix(words, seenParas, func(k int) bool { return ok(seenAt[k], i, j) })
 		}
-		if len(words) >= dedupMinParaWords && seen[key] {
+		if isCopy {
 			// Re-emitted copy: drop it and absorb the ONE trailing blank that followed
 			// it, so the blank preceding it survives as the separator between its
 			// neighbours (removing that leading blank instead would merge them).
@@ -107,9 +111,10 @@ func dedupBlocksMask(lines []string) []bool {
 			i = j
 			continue
 		}
-		if len(words) >= dedupMinParaWords {
-			seen[key] = true
+		if _, dup := seen[key]; len(words) >= dedupMinParaWords && !dup {
+			seen[key] = i
 			seenParas = append(seenParas, words)
+			seenAt = append(seenAt, i)
 		}
 		i = j
 	}
@@ -117,19 +122,19 @@ func dedupBlocksMask(lines []string) []bool {
 }
 
 // isTruncatedPrefix reports whether frag (>= dedupFrameRunMin words) is a prefix of
-// any paragraph in seen, tolerating a mid-word cut of its final token ("sur" matching
-// "surface"). Word-exact on everything before the last token, so legit short
-// paragraphs that merely open with similar phrasing don't reach it (they'd have to
-// share the first 9+ words verbatim AND the 10th as a prefix).
-func isTruncatedPrefix(frag []string, seen [][]string) bool {
+// any paragraph in seen that ok allows (by its index), tolerating a mid-word cut of
+// its final token ("sur" matching "surface"). Word-exact on everything before the
+// last token, so legit short paragraphs that merely open with similar phrasing don't
+// reach it (they'd have to share the first 9+ words verbatim AND the 10th as a prefix).
+func isTruncatedPrefix(frag []string, seen [][]string, ok func(k int) bool) bool {
 	n := len(frag)
-	for _, para := range seen {
-		if len(para) < n {
+	for k, para := range seen {
+		if len(para) < n || !ok(k) {
 			continue
 		}
 		match := true
-		for k := 0; k < n-1; k++ {
-			if para[k] != frag[k] {
+		for x := 0; x < n-1; x++ {
+			if para[x] != frag[x] {
 				match = false
 				break
 			}
@@ -422,44 +427,35 @@ func dedupAgainstFrame(history, screen []string) []string {
 // heading printed twice with only a redraw's debris between goes with the
 // debris (dropHeadingDebris).
 func dedupRepaints(lines []string) []string {
-	all := make([]bool, len(lines))
+	all := make([]lineMark, len(lines))
 	for i := range all {
-		all[i] = true
+		all[i].reprint = true
 	}
 	return dedupRepaintsIn(lines, all)
 }
 
-// dedupRepaintsIn is dedupRepaints where only the lines marked can be a
-// reprint (repaintLines: inside a resize's window, matching the frame it
-// captured). A paragraph is looked at as a reprint only when all its lines
-// are; there a copy printed as it was (the head of a frame reprinted at the
-// same width) counts as well as one wrapped otherwise. Anything else the
-// program printed again stays: losing a line is worse than a duplicate.
-func dedupRepaintsIn(lines []string, reprint []bool) []string {
+// dedupRepaintsIn is dedupRepaints where only some copies can go, as the
+// marks from repaintLines say. A paragraph printed again as it was goes when
+// a resize came between the two printings (an app reprints its frame after
+// one) or when it is inside a frame; anything else is looked at as a reprint
+// only when all its lines can be one (inside a resize's window, matching the
+// frame it captured). What is left the program printed again, and stays: no
+// row is ever lost entirely, though a repeat may show once.
+func dedupRepaintsIn(lines []string, marks []lineMark) []string {
 	paras := dedupParagraphs(lines, true)
-	eligible := func(p dedupPara) bool {
-		for x := p.i; x < p.j; x++ {
-			if !reprint[x] && len(dedupWords(lines[x])) > 0 {
+	inFrame := func(i, j int) bool {
+		for x := i; x < j; x++ {
+			if !marks[x].reprint && len(dedupWords(lines[x])) > 0 {
 				return false
 			}
 		}
 		return true
 	}
-	// The verbatim copies first (dedupBlocks' rule), in the same mask, but
-	// only inside a frame: a paragraph printed again as it was anywhere else
-	// is the program saying it again.
-	drop := dedupBlocksMask(lines)
-	for k, p := range paras {
-		if drop[p.i] && !eligible(p) {
-			end := len(lines) // with the blank rows after it that went with it
-			if k+1 < len(paras) {
-				end = paras[k+1].i
-			}
-			for x := p.i; x < end; x++ {
-				drop[x] = false
-			}
-		}
-	}
+	eligible := func(p dedupPara) bool { return inFrame(p.i, p.j) }
+	// The verbatim copies first (dedupBlocks' rule), in the same mask.
+	drop := dedupBlocksMaskWhere(lines, func(orig, i, j int) bool {
+		return marks[i].resizes > marks[orig].resizes || inFrame(i, j)
+	})
 	pass := func(order []int, reversed bool) {
 		var src reprintSource
 		for _, k := range order {
