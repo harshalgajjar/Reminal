@@ -1,0 +1,11 @@
+worker: queue drained
+
+worker 3 drained the queue and flushed every pending write to the store
+worker 3 is idle now and waits for the next batch from the scheduler
+
+worker: queue drained
+
+worker 3 drained the queue and flushed every pending write to the store
+worker 3 is idle now and waits for the next batch from the scheduler
+
+$
