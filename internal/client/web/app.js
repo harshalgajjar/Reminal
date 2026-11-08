@@ -6189,6 +6189,7 @@
       const bufA = term.buffer.active;
       const distUp = bufA.baseY - bufA.viewportY;
       if (hasWipeSignature(merged)) {
+        diag('snap', 'wipe, ' + distUp + ' up');
         term.write(merged, () => {
           const b2 = term.buffer.active;
           cleanBaseY = b2.baseY;                     // buffer just laundered
@@ -6931,7 +6932,7 @@
         // One entry per snapshot (its screen, then its history applied): its
         // parts, up to SNAP_PACED_MAX_PARTS, would push out of the record the
         // size events it is kept for.
-        diag('snap', 'screen' + (h.more ? ', parts to come' : ''));
+        diag('snap', (h.resnap === true ? 'repaint, screen not painted' : 'screen') + (h.more ? ', parts to come' : ''));
         // A new snapshot for this connection: whatever was under way is over.
         if (snapAsm) { clearTimeout(snapAsm.timer); snapAsm = null; }
         const seq = typeof msg.seq === 'number' ? msg.seq : 0;
