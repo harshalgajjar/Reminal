@@ -25,3 +25,21 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: The kept wasm is what the pinned build gives
         run: scripts/ghostty-vt/build.sh --check
+  # The same pin built with ReleaseSafe, where ReleaseSmall (what ships) has
+  # undefined behaviour a trap stands in for: the terminal's tests and the
+  # session screen's run on it, so a libghostty bug that would corrupt the
+  # shipped copy silently fails here instead. Not kept, not shipped.
+  safe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: stable
+      - name: Build the pin with ReleaseSafe
+        run: scripts/ghostty-vt/build.sh --safe "$RUNNER_TEMP/safe"
+      - name: The tests on it
+        run: |
+          cp "$RUNNER_TEMP/safe/ghostty-vt.wasm" internal/vtwasm/ghostty-vt.wasm
+          go test -count=1 -skip TestModuleIsTheRecordedBuild ./internal/vtwasm/
+          go test -count=1 -run 'Screen|History|AltScreen|Failed|Join|Dedup|Snapshot|Wrap' ./internal/client/

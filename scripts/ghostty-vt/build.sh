@@ -10,6 +10,9 @@
 #
 #   build.sh            rebuild and record
 #   build.sh --check    rebuild and fail if it differs from what is kept
+#   build.sh --safe DIR build the same pin with ReleaseSafe (a trap where
+#                       ReleaseSmall has undefined behaviour) into DIR, not
+#                       kept: CI runs the tests on it to find what Small hides
 set -e
 GHOSTTY=f6cb4cf1276c3cb1a027468ddeb1a976a822ccfa
 ZIG=0.17.0
@@ -21,9 +24,11 @@ IMAGE=debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$DIR/../.." && pwd)
 OUT=$ROOT/internal/vtwasm
+MODE=ReleaseSmall
+[ "${1:-}" = "--safe" ] && MODE=ReleaseSafe
 B=$(mktemp -d)
 trap '"$ROOT/scripts/rm-tmp.sh" "$B"' EXIT
-docker run --rm -v "$B":/b -v "${REMINAL_VOLUME_PREFIX:-reminal}-zigcache":/root/.cache/zig -e GHOSTTY=$GHOSTTY -e ZIG=$ZIG -e ZIG_SHA_X86_64=$ZIG_SHA_X86_64 -e ZIG_SHA_AARCH64=$ZIG_SHA_AARCH64 "$IMAGE" sh -c '
+docker run --rm -v "$B":/b -v "${REMINAL_VOLUME_PREFIX:-reminal}-zigcache":/root/.cache/zig -e GHOSTTY=$GHOSTTY -e ZIG=$ZIG -e ZIG_SHA_X86_64=$ZIG_SHA_X86_64 -e ZIG_SHA_AARCH64=$ZIG_SHA_AARCH64 -e MODE=$MODE "$IMAGE" sh -c '
   set -e
   apt-get update -qq >/dev/null && apt-get install -y -qq curl xz-utils git ca-certificates >/dev/null
   A=$(uname -m)
@@ -33,9 +38,12 @@ docker run --rm -v "$B":/b -v "${REMINAL_VOLUME_PREFIX:-reminal}-zigcache":/root
   mkdir -p /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
   git init -q /b/src && cd /b/src && git remote add origin https://github.com/ghostty-org/ghostty
   git fetch -q --depth 1 origin $GHOSTTY && git checkout -q FETCH_HEAD
-  /opt/zig/zig build -Demit-lib-vt -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall
+  /opt/zig/zig build -Demit-lib-vt -Dtarget=wasm32-freestanding -Doptimize=$MODE
   cp zig-out/bin/ghostty-vt.wasm /b/ghostty-vt.wasm'
 SUM=$(sha256sum "$B/ghostty-vt.wasm" 2>/dev/null | cut -d" " -f1 || shasum -a 256 "$B/ghostty-vt.wasm" | cut -d" " -f1)
+if [ "${1:-}" = "--safe" ]; then
+  mkdir -p "$2" && cp "$B/ghostty-vt.wasm" "$2/ghostty-vt.wasm" && echo "built ReleaseSafe $SUM into $2"; exit 0
+fi
 if [ "${1:-}" = "--check" ]; then
   [ "$SUM" = "$(cut -d" " -f1 "$OUT/ghostty-vt.wasm.sha256")" ] && echo "same: $SUM" && exit 0
   echo "differs: built $SUM, kept $(cat "$OUT/ghostty-vt.wasm.sha256")"; exit 1
