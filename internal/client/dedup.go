@@ -507,15 +507,74 @@ func dedupRepaintsIn(lines []string, marks []lineMark) []string {
 	}
 	// A run split where its width changed goes only whole: a piece that is
 	// a copy beside one that is not is kept with it.
-	for k := 0; k+1 < len(paras); k++ {
-		if p, q := paras[k], paras[k+1]; p.split && drop[p.i] != drop[q.i] {
-			keep(k)
-			keep(k + 1)
+	together := func() {
+		for k := 0; k+1 < len(paras); k++ {
+			if p, q := paras[k], paras[k+1]; p.split && drop[p.i] != drop[q.i] {
+				keep(k)
+				keep(k + 1)
+			}
 		}
 	}
+	together()
 	dropOrphanHeadings(lines, paras, drop, true)
 	dropHeadingDebris(lines, paras, drop, true)
+	// The words decide what is a copy, but a row is its text: one whose text
+	// is shown nowhere else (a ✗ where a ✓ was, WARNING for warning, 1000 for
+	// 100) is not a copy, and its paragraph stays.
+	if unshown := unshownRows(lines, drop, nil); len(unshown) > 0 {
+		para := make([]int, len(lines))
+		for k, p := range paras {
+			for x := p.i; x < p.j; x++ {
+				para[x] = k
+			}
+		}
+		for _, x := range unshown {
+			keep(para[x])
+		}
+		together()
+	}
 	return compactDropped(lines, drop)
+}
+
+// unshownRows is the rows drop takes whose text is shown neither by the rows
+// kept nor by also (rows shown elsewhere: the screen). A row is shown when
+// its tokens (as printed, split at spaces, colours aside) are an unbroken run
+// of the kept tokens read as one stream, so a row wrapped otherwise is still
+// shown by the paragraph it was wrapped from. A row with no letters or digits
+// (a quote bar, a rule a redraw left) has no text to lose.
+func unshownRows(lines []string, drop []bool, also []string) []int {
+	tokens := func(s string) []string { return strings.Fields(dedupANSI.ReplaceAllString(s, "")) }
+	var stream []string
+	at := map[string][]int{}
+	read := func(l string) {
+		for _, t := range tokens(l) {
+			at[t] = append(at[t], len(stream))
+			stream = append(stream, t)
+		}
+	}
+	for x, l := range lines {
+		if !drop[x] {
+			read(l)
+		}
+	}
+	for _, l := range also {
+		read(l)
+	}
+	shown := func(row []string) bool {
+		for _, s := range at[row[0]] {
+			if s+len(row) <= len(stream) && slices.Equal(stream[s:s+len(row)], row) {
+				return true
+			}
+		}
+		return false
+	}
+	var unshown []int
+	for x, l := range lines {
+		if row := tokens(l); drop[x] && len(dedupWords(l)) > 0 && !shown(row) {
+			unshown = append(unshown, x)
+		}
+	}
+	return unshown
 }
 
 // reprintSource is the text kept so far in one pass of dedupRepaints: its

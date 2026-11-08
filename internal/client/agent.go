@@ -172,7 +172,7 @@ type Agent struct {
 	screen          *sessionScreen
 	screenMu        sync.Mutex
 	scrollbackLines int // history lines included in a snapshot (0 = screen only)
-	// Captured-frame resize segments (see dropResizeRepaints): an inline TUI repaints
+	// Captured-frame resize segments (see dropRepaints): an inline TUI repaints
 	// its bounded frame on every resize; when that frame is taller than the viewer the
 	// overflow scrolls a stale copy into scrollback. Each segment records WHERE that
 	// resize's overflow can land (position: the emulator never reflows scrollback, so
@@ -2568,7 +2568,7 @@ func (a *Agent) record(p []byte) {
 // session), routine on Windows, where conhost's PowerShell shim emits
 // ESC[H ESC[2J ESC[3J whenever the shell blanks its whole buffer, which
 // PowerShell does on resize. Left stale, those indices point past the end of the
-// rendered history and dropResizeRepaints slices with from > to — the
+// rendered history and dropRepaints slices with from > to — the
 // "slice bounds out of range [12:0]" panic that killed Windows sessions the
 // moment a viewer resized. Caller holds screenMu.
 func (a *Agent) noteScrollbackLen() {
@@ -2917,7 +2917,7 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 // snapshotHistory renders the emulator's native scrollback for the reconnect snapshot.
 //
 // Three dedup passes run over it, in order, all lossless by construction:
-//  1. dropResizeRepaints: per-resize captured-frame segments — position bounds the
+//  1. dropRepaints: per-resize captured-frame segments — position bounds the
 //     search, content decides, and a row is dropped only if it also provably
 //     re-occurs later. Kills cross-width resize-repaint stamps (see resizeSegs).
 //  2. dedupBlocks: collapses paragraphs the app re-emitted VERBATIM (same word key);
@@ -2933,31 +2933,33 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 // Caller holds screenMu.
 func (a *Agent) snapshotHistory() []string {
 	lines := a.screen.History() // uncapped: segment indices are absolute
-	lines = a.dropResizeRepaints(lines)
+	var segs []resizeSeg
+	if !a.staleSegs(len(lines)) {
+		segs = a.resizeSegs
+	}
 	screen := a.screen.Render()
-	return dedupAgainstFrame(dedupHistory(lines, a.resizeSegs, screen, a.scrollbackLines, true), strings.Split(screen, "\n"))
+	return dedupAgainstFrame(dedupHistory(lines, segs, screen, a.scrollbackLines), strings.Split(screen, "\n"))
 }
 
 // dedupHistory is snapshotHistory's middle, of what it is given: the resize
-// repaints dropped (unless dropped already: dropped), the newest maxLines
+// repaints dropped (dropRepaints), the newest maxLines
 // kept, and the verbatim and cross-width reprints dropped (dedupRepaints,
 // which starts from dedupBlocks' rule). A pure function of its arguments, so it runs outside
 // screenMu (joinHistory).
-func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int, dropped bool) []string {
+func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int) []string {
 	if !dedupStrict {
-		if !dropped {
-			lines = dropRepaints(lines, segs, screen)
-		}
+		lines = dropRepaints(lines, segs, screen)
 		if maxLines > 0 && len(lines) > maxLines {
 			lines = lines[len(lines)-maxLines:]
 		}
 		return dedupRepaintsCovered(lines)
 	}
 	reprints := repaintLines(lines, segs)
-	if !dropped {
-		if drop := dropRepaintsMask(lines, segs, screen); drop != nil {
-			lines, reprints = compactDroppedAlong(lines, drop, reprints)
+	if drop := dropRepaintsMask(lines, segs, screen); drop != nil {
+		for _, x := range unshownRows(lines, drop, strings.Split(screen, "\n")) {
+			drop[x] = false // a row shown nowhere else is no repaint
 		}
+		lines, reprints = compactDroppedAlong(lines, drop, reprints)
 	}
 	if maxLines > 0 && len(lines) > maxLines {
 		k := len(lines) - maxLines
@@ -3027,22 +3029,6 @@ func compactDroppedAlong[T any](lines []string, drop []bool, along []T) ([]strin
 	return out, marks
 }
 
-// dropResizeRepaints removes, for every resize EXCEPT the newest, the lines its frame
-// repaint stamped into scrollback: within that resize's positional segment, exactly
-// the lines whose words match the frame captured at that resize (see resizeSegs).
-// The newest segment is the CURRENT frame's own overflow — the frame's top rows above
-// the live screen — which the viewer needs, so it is never touched. Position bounds
-// the search, captured-frame content decides — genuine output never matches, so it
-// can never be dropped, no matter how it interleaves with a resize burst.
-// Skipped entirely once the emulator may have evicted from the front of scrollback
-// (absolute indices would be stale). Caller holds screenMu.
-func (a *Agent) dropResizeRepaints(lines []string) []string {
-	if a.staleSegs(len(lines)) {
-		return lines
-	}
-	return dropRepaints(lines, a.resizeSegs, a.screen.Render())
-}
-
 // staleSegs says whether the resize segments are of no use for a history of n
 // lines, and forgets them when its front may have been evicted (absolute
 // indices would be stale). Caller holds screenMu.
@@ -3058,8 +3044,16 @@ func (a *Agent) staleSegs(n int) bool {
 	return false
 }
 
-// dropRepaints is dropResizeRepaints of what it is given: segs (at least two,
-// none stale) and the live screen as rendered. Pure, so outside screenMu.
+// dropRepaints removes, for every resize EXCEPT the newest, the lines its frame
+// repaint stamped into scrollback: within that resize's positional segment, exactly
+// the lines whose words match the frame captured at that resize (see resizeSegs).
+// The newest segment is the CURRENT frame's own overflow — the frame's top rows above
+// the live screen — which the viewer needs, so it is never touched. Position bounds
+// the search, captured-frame content decides — genuine output never matches, so it
+// can never be dropped, no matter how it interleaves with a resize burst.
+// It is given segs (at least two, none stale: none once the emulator may have
+// evicted from the front of scrollback, staleSegs) and the live screen as
+// rendered. Pure, so outside screenMu.
 func dropRepaints(lines []string, segs []resizeSeg, screenRender string) []string {
 	if drop := dropRepaintsMask(lines, segs, screenRender); drop != nil {
 		return compactDropped(lines, drop)
@@ -3235,7 +3229,7 @@ func (a *Agent) joinHistory(in joinIn) []string {
 			a.histCache, a.histKey = rendered, in.histKey
 			a.screenMu.Unlock()
 		}
-		deduped = dedupHistory(rendered, in.segs, in.view.screen, in.maxLines, false)
+		deduped = dedupHistory(rendered, in.segs, in.view.screen, in.maxLines)
 	}
 	final := dedupAgainstFrame(deduped, strings.Split(in.view.screen, "\n"))
 	a.screenMu.Lock()

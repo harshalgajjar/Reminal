@@ -506,7 +506,7 @@ func TestDedupRepaintsKeepsAPatchworkAndARepeatedLine(t *testing.T) {
 		"two paragraphs sharing halves with a third": {a, c, "", b, c, "", a, b, "", "$"},
 		"a tail of a file just shown":                {"$ cat notes.txt", a, b, "", "$ tail -1 notes.txt", "", b, "", "$"},
 	} {
-		got := dedupHistory(history, nil, "", 0, false)
+		got := dedupHistory(history, nil, "", 0)
 		if len(got) != len(history) {
 			t.Errorf("%s: %d of %d rows kept:\n%s", name, len(got), len(history), strings.Join(got, "\n"))
 		}
@@ -631,7 +631,7 @@ func TestDedupKeepsWhatAProgramPrintedAgain(t *testing.T) {
 			"a resize at 0": {{start: 0, maxOver: 1000}},
 			"two resizes":   {{start: 0, maxOver: 1000}, {start: len(lines) / 2, maxOver: 1000}},
 		} {
-			got := dedupHistory(lines, segs, "", 0, false)
+			got := dedupHistory(lines, segs, "", 0)
 			if strings.Join(got, "\n") != strings.Join(lines, "\n") {
 				t.Errorf("%s, %s: lines dropped:\n--- kept\n%s\n--- given\n%s", filepath.Base(f), name, strings.Join(got, "\n"), strings.Join(lines, "\n"))
 			}
@@ -642,6 +642,7 @@ func TestDedupKeepsWhatAProgramPrintedAgain(t *testing.T) {
 // withDedupStrict runs a test under the strict rules (REMINAL_DEDUP=strict).
 func withDedupStrict(t *testing.T) {
 	t.Helper()
+	t.Setenv("REMINAL_DEDUP", "strict") // panics in a parallel test: the switch is one package var
 	saved := dedupStrict
 	dedupStrict = true
 	t.Cleanup(func() { dedupStrict = saved })

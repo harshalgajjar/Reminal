@@ -1,0 +1,9 @@
+✓ parses the config file and loads every section it finds
+✓ connects to the store and reads the records back again
+✓ writes the report to disk with all of its fields filled
+
+✓ parses the config file and loads every section it finds
+✗ connects to the store and reads the records back again
+✓ writes the report to disk with all of its fields filled
+
+$

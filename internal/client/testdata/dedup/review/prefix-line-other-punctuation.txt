@@ -1,0 +1,5 @@
+Step 3 of 4: copy the files to every host in the cluster and check them all
+
+Step 3 of 4 copy the files to every host in
+
+$

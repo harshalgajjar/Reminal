@@ -6,6 +6,7 @@ package client
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -24,9 +25,11 @@ import (
 // The default rules drop some of these shapes entirely, by design.
 //
 // With no resize every case comes back exactly as given: nothing can be a
-// reprint. With a resize a copy may go (a paragraph printed again as it was
+// reprint. A command run again at a shell's prompt (reviewCorpusCommands)
+// comes back exactly in every mode: running it again is news, not a reprint.
+// Otherwise, with a resize a copy may go (a paragraph printed again as it was
 // after a resize, or one inside its frame, can be a reprint), but every row
-// is still shown at least once. The one exception is reprint-rewrapped, the
+// is still shown at least once: its text, as printed, not just its words. The one exception is reprint-rewrapped, the
 // same paragraph at two widths: with its frame it goes as
 // reprint-rewrapped.want.txt says (the reprint dropped). Without a frame it
 // is not checked, since a word-level match there is how a reconnect's
@@ -71,8 +74,8 @@ func TestDedupReviewCorpus(t *testing.T) {
 			if m.segs != nil && m.segs[0].words != nil {
 				expect = want
 			}
-			got := dedupHistory(append([]string(nil), lines...), m.segs, "", 0, false)
-			if m.segs != nil && !reprint {
+			got := dedupHistory(append([]string(nil), lines...), m.segs, "", 0)
+			if m.segs != nil && !reprint && !reviewCorpusCommand(name) {
 				// After a resize a copy can be a reprint and may go: nothing
 				// may be lost, every row still shown at least once.
 				if missing := reviewCorpusMissing(lines, got); len(missing) > 0 {
@@ -86,6 +89,13 @@ func TestDedupReviewCorpus(t *testing.T) {
 			}
 		}
 	}
+}
+
+// reviewCorpusCommands are the cases of a command run twice at a prompt.
+var reviewCorpusCommands = []string{"go-test-twice-", "cat-tail-", "fmt-after-cat-"}
+
+func reviewCorpusCommand(name string) bool {
+	return slices.ContainsFunc(reviewCorpusCommands, func(p string) bool { return strings.HasPrefix(name, p) })
 }
 
 func reviewCorpusFileExists(p string) bool {
@@ -118,8 +128,8 @@ func reviewCorpusFrame(lines []string) resizeSeg {
 	return resizeSeg{start: start, maxOver: screen, words: regionWords(lines, max(0, start-screen), start)}
 }
 
-// reviewCorpusMissing is the rows of in, as read, that out no longer shows
-// anywhere.
+// reviewCorpusMissing is the rows of in whose text (colours and the spaces
+// around it aside) out no longer shows on any row.
 func reviewCorpusMissing(in, out []string) []string {
 	shown := map[string]bool{}
 	for _, l := range out {
