@@ -265,11 +265,7 @@ func (a *Agent) restoreResumedScrollbackLocked() {
 	if a.screen == nil {
 		return
 	}
-	// A ring that still holds the session's first output draws all of its
-	// history again on its own (ringFromStart): the history is not put back.
-	// Put back, a young session's came back twice whenever the replay drew any
-	// line otherwise than the history holds it, since no tail then matched.
-	if len(d.History) > 0 && !ringFromStart(d) {
+	if len(d.History) > 0 {
 		// Only what the ring will not draw again: replayed into a scratch
 		// emulator first (once, at a restart), what it reproduces is matched
 		// against the history's tail, and the history goes in up to there.
@@ -295,11 +291,64 @@ func (a *Agent) restoreResumedScrollbackLocked() {
 			_ = pw.Close()
 			<-drained
 		}
-		restoreHistory(a.screen, d.History[:historySeam(d.History, again)], d.HistoryCols)
+		restoreHistory(a.screen, d.History[:restoreCut(d, again)], d.HistoryCols)
 		a.noteScrollbackLen()
 	}
 	replayDump(a.screen, d, a.noteScrollbackLen)
 	a.freshLineAfterRestoreLocked()
+}
+
+// restoreCut is how much of d's history goes back before its ring is
+// replayed: what the ring does not draw again (again: what it draws). A ring
+// that holds the session's first output (ringFromStart) draws all of the
+// history but what an older restart put back above it, so the history goes
+// back up to where the ring's own first lines are in it (ringStartIn): a
+// line the replay draws otherwise is then the replay's, not a reason to put
+// all of it back (a young session's history came back twice). Any other
+// ring, up to where it starts drawing the history's tail (historySeam).
+func restoreCut(d *scrollbackDump, again []string) int {
+	if ringFromStart(d) {
+		return ringStartIn(d.History, again)
+	}
+	return historySeam(d.History, again)
+}
+
+// ringStartIn is where in history the ring's replay (again) begins: the first
+// of its lines with text, and the two after it, found there together; of
+// several places, the one nearest where the two would end together. Not
+// found, all of history (a line twice rather than one lost).
+func ringStartIn(history, again []string) int {
+	plain := func(l string) string { return strings.TrimRight(stripANSI(l), " ") }
+	at := map[string][]int{}
+	for i, l := range history {
+		if p := plain(l); p != "" {
+			at[p] = append(at[p], i)
+		}
+	}
+	for j := 0; j < len(again) && j < 64; j++ {
+		first := plain(again[j])
+		if first == "" {
+			continue
+		}
+		n := min(3, len(again)-j)
+		best, near := -1, 0
+		for _, p := range at[first] {
+			if p+n > len(history) {
+				continue
+			}
+			same := true
+			for k := 1; k < n && same; k++ {
+				same = plain(history[p+k]) == plain(again[j+k])
+			}
+			if d := absInt(p - (len(history) - len(again) + j)); same && (best < 0 || d < near) {
+				best, near = p, d
+			}
+		}
+		if best >= 0 {
+			return best
+		}
+	}
+	return len(history)
 }
 
 // ringFromStart says whether a dump's output ring still holds the session's
