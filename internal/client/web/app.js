@@ -7201,8 +7201,9 @@
       if (manualClose || fatal) return;
       if (redialNow) {
         redialNow = false;
-        setStatus('Reconnecting…', 'warn connecting');
-        showOverlay('Reconnecting…');
+        const now = notReadySince ? 'Waiting for the session to come back…' : 'Reconnecting…';
+        setStatus(now, 'warn connecting');
+        showOverlay(now);
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null;
           openSocket();
@@ -7215,8 +7216,10 @@
       }
       const delay = Math.min(backoffMs, MAX_BACKOFF_MS);
       const secs = Math.max(1, Math.round(delay / 1000));
-      setStatus('Reconnecting in ' + secs + 's…', 'warn connecting');
-      showOverlay('Reconnecting in ' + secs + 's…');
+      // Refused as not ready (notReadyWait): said as the wait it is.
+      const words = (notReadySince ? 'Waiting for the session to come back · trying again in ' : 'Reconnecting in ') + secs + 's…';
+      setStatus(words, 'warn connecting');
+      showOverlay(words);
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         openSocket();
@@ -7442,6 +7445,7 @@
       manualClose = false;
       fatal = false;
       fatalWords = '';
+      notReadySince = 0;
       backoffMs = 1000;
       // Switching to a different session invalidates the replay cursor and
       // any previously rendered output; start the terminal clean.
