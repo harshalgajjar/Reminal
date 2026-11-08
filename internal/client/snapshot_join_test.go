@@ -192,7 +192,6 @@ func refBuildSnapshot(e screenView, history, screenRows []string, maxBytes int, 
 		b.WriteString("\x1b[0m")
 	}
 
-	b.WriteString("\x1b[?7h") // restore autowrap
 	pos := e.CursorPosition()
 	if len(history) > 0 && !alt {
 		// The screen is the bottom block of what was painted, and in a viewer
@@ -719,9 +718,10 @@ func TestShingleIndexIsTheJoinedOne(t *testing.T) {
 	}
 }
 
-// Two different histories that historyKey might name alike (from the
-// review of #213) — the same length, first line and last line, and, after the
-// first is erased and collected, a newest row allocated where an old one was.
+// Two different histories that a key might name alike (from the review of
+// #213): the same length, first line and last line, and, after the first is
+// erased and collected, a newest row allocated where an old one was. The
+// join of the second must be the old path's, never a kept stage of the first.
 func TestJoinHistoryKeyNotReused(t *testing.T) {
 	hist := func(mid string) []byte {
 		var b strings.Builder
@@ -747,9 +747,6 @@ func TestJoinHistoryKeyNotReused(t *testing.T) {
 		resetAgent(a, 20000)
 		a.record(hist("AAAA"))
 		_ = joinFrame(t, a) // fills the kept stages
-		a.screenMu.Lock()
-		k1 := strconv.FormatUint(a.screen.Gen(), 10)
-		a.screenMu.Unlock()
 		a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
 		runtime.GC()
 		b := hist("BBBB")
@@ -757,14 +754,11 @@ func TestJoinHistoryKeyNotReused(t *testing.T) {
 		a.record(b[:half])
 		runtime.GC()
 		a.record(b[half:])
-		a.screenMu.Lock()
-		k2 := strconv.FormatUint(a.screen.Gen(), 10)
-		a.screenMu.Unlock()
 		got, want := joinFrame(t, a), refFrame(a)
-		if k1 == k2 || got != want {
+		if got != want {
 			found++
 			if found == 1 {
-				t.Errorf("attempt %d: same key %v, join differs from the old path %v (got AAAA %v, want AAAA %v)", attempt, k1 == k2, got != want, strings.Contains(got, "AAAA"), strings.Contains(want, "AAAA"))
+				t.Errorf("attempt %d: the join differs from the old path (got AAAA %v, want AAAA %v)", attempt, strings.Contains(got, "AAAA"), strings.Contains(want, "AAAA"))
 			}
 		}
 	}

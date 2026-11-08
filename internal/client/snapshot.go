@@ -229,7 +229,6 @@ func paintSnapshot(v snapView, history, screenRows []string, maxBytes int, reser
 		b.WriteString("\x1b[0m")
 	}
 
-	b.WriteString("\x1b[?7h") // restore autowrap
 	pos := v.cursor
 	if len(history) > 0 && !alt {
 		// The screen is the bottom block of what was painted, and in a viewer
