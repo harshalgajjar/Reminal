@@ -779,16 +779,23 @@ func dropSeamDebris(history []string, drop []bool) {
 // sentence's end, two or more of them, all well narrower than the rows
 // before, are a second piece (the head of a reprint at a narrower width left
 // right under the tail of a wide one, as a fold closed while Claude Code
-// printed). Split there, each piece is the copy it is, and goes or stays on
-// its own. 0 when there is no such place.
+// printed). Or anywhere, rows after it wrapped at their own narrower width:
+// one wide row left mid-sentence above them is not of their paragraph.
+// Split there, each piece is the copy it is, and goes or stays on its own.
+// 0 when there is no such place.
 func widthSeam(rows []string) int {
 	if len(rows) < 3 {
 		return 0
 	}
 	width := make([]int, len(rows))
+	text := make([]string, len(rows))
 	for k, r := range rows {
-		width[k] = len([]rune(strings.TrimRight(dedupANSI.ReplaceAllString(r, ""), " ")))
+		text[k] = strings.TrimRight(dedupANSI.ReplaceAllString(r, ""), " ")
+		width[k] = len([]rune(text[k]))
 	}
+	// seams are the places where every row after is well narrower than the
+	// widest before, two rows or more of them.
+	var seams []int
 	wide := 0
 	for s := 1; s <= len(rows)-2; s++ {
 		wide = max(wide, width[s-1])
@@ -796,8 +803,32 @@ func widthSeam(rows []string) int {
 		for _, w := range width[s:] {
 			narrow = max(narrow, w)
 		}
-		end := strings.TrimRight(dedupANSI.ReplaceAllString(rows[s-1], ""), " ")
-		if narrow*10 <= wide*6 && strings.ContainsAny(end[max(0, len(end)-1):], ".!?\"”)") {
+		if narrow*10 <= wide*6 {
+			seams = append(seams, s)
+		}
+	}
+	// After a sentence's end first: a wide paragraph's own short last row
+	// stays with it.
+	for _, s := range seams {
+		if t := text[s-1]; t != "" && strings.ContainsAny(t[len(t)-1:], ".!?\"”)") {
+			return s
+		}
+	}
+	// Then anywhere the rows after are wrapped at their own width (all but
+	// their last near it, three rows or more): a row wider than that cannot
+	// be of their paragraph, even a wide copy's one row left mid-sentence.
+	for _, s := range seams {
+		narrow := 0
+		for _, w := range width[s:] {
+			narrow = max(narrow, w)
+		}
+		wrapped := len(width[s:]) >= 3
+		for _, w := range width[s : len(width)-1] {
+			if w*10 < narrow*7 {
+				wrapped = false
+			}
+		}
+		if wrapped {
 			return s
 		}
 	}
