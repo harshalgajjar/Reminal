@@ -263,7 +263,11 @@ func (a *Agent) restoreResumedScrollbackLocked() {
 	if a.screen == nil {
 		return
 	}
-	if len(d.History) > 0 {
+	// A ring that still holds the session's first output draws all of its
+	// history again on its own (ringFromStart): the history is not put back.
+	// Put back, a young session's came back twice whenever the replay drew any
+	// line otherwise than the history holds it, since no tail then matched.
+	if len(d.History) > 0 && !ringFromStart(d) {
 		// Only what the ring will not draw again: replayed into a scratch
 		// emulator first (once, at a restart), what it reproduces is matched
 		// against the history's tail, and the history goes in up to there.
@@ -282,6 +286,13 @@ func (a *Agent) restoreResumedScrollbackLocked() {
 	}
 	replayDump(a.screen, d, a.noteScrollbackLen)
 	a.freshLineAfterRestoreLocked()
+}
+
+// ringFromStart says whether a dump's output ring still holds the session's
+// first output: its first entry is the first ever (seqs start at 1, nothing
+// evicted, and a restart keeps them).
+func ringFromStart(d *scrollbackDump) bool {
+	return len(d.Entries) > 0 && d.Entries[0].Seq == 1
 }
 
 // freshLineAfterRestoreLocked starts what a new shell writes on a line of its
