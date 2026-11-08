@@ -42,6 +42,7 @@ while (Date.now() < until && refused.length === 0) await new Promise((r) => setT
 const wasRefused = refused.length > 0;
 console.log(`   the page was back first and refused as not ready: ${wasRefused}`);
 await new Promise((r) => setTimeout(r, 3000)); // held a while past the refusal
+say(1, '   while it waits, the page says so', await p.evaluate(() => document.body.innerText.includes('Waiting for the session to come back')));
 await ask('AGENT');
 const back = await live(60000);
 say(1, 'the page is live again once the agent is back', wasRefused && back);
@@ -53,6 +54,13 @@ if (back) {
 } else {
   console.log('     overlay: ' + (await p.evaluate(() => document.querySelector('#overlay, .overlay')?.textContent?.trim() || '(none)')));
 }
+
+// 3: a wrong PIN for that live session is not waited out: it ends at once.
+const w = await ctx.newPage();
+const t1 = Date.now();
+await w.goto(`${BASE}/?s=${S}#p=00000000`, { waitUntil: 'domcontentloaded' });
+const wrong = await w.waitForFunction(() => fatal === true, null, { timeout: 20000 }).then(() => true, () => false);
+say(3, `a wrong PIN still ends at once (${((Date.now() - t1) / 1000).toFixed(1)}s)`, wrong);
 
 // 2: a session no relay has heard of: said at once, not waited for.
 const q = await ctx.newPage();

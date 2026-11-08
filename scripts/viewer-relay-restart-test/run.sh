@@ -9,6 +9,7 @@
 #   1. the page waits for the agent and is live again once it is back, and
 #      what is typed then echoes
 #   2. a page opened on a session no relay has heard of still says so at once
+#   3. a wrong PIN for the live session still ends at once
 #
 #   scripts/viewer-relay-restart-test/run.sh [TREE]   # TREE: a checkout to test (default: this one)
 # Needs docker. Nothing here touches the host's reminal.
@@ -20,7 +21,7 @@ NAME=${NAME:-reminal-viewer-relay-restart-test-$$}
 PW=mcr.microsoft.com/playwright:v1.56.0-noble
 ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/;s/arm64/arm64/')
 docker run --rm -v "$TREE":/src:ro -v "$PWD":/out -e GOFLAGS=-buildvcs=false golang:1.26-bookworm \
-  sh -c "cp -r /src /w && cd /w && GOOS=linux GOARCH=$ARCH go build -o /out/reminal ./cmd/reminal"
+  sh -c "rm -f /out/reminal; cp -r /src /w && cd /w && GOOS=linux GOARCH=$ARCH go build -o /out/reminal ./cmd/reminal"
 docker build -q -t "$NAME" . >/dev/null
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --init --name "$NAME" "$NAME" >/dev/null
