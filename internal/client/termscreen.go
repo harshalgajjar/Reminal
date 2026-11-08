@@ -51,6 +51,10 @@ type sessionScreen struct {
 	mainHistoryKey string
 	// tail is the end of the last write (entersAltScreen).
 	tail []byte
+	// count is how many lines its history holds (uncapped) when it held
+	// count.rows rows: kept so a resize need not format all of it
+	// (HistoryLines).
+	count lineCount
 }
 
 // newSessionScreen is a screen of cols by rows keeping at most maxLines of
@@ -134,7 +138,30 @@ func (s *sessionScreen) Resize(cols, rows int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.gen++
-	if _, h := s.t.Size(); rows < h && !s.t.AltScreen() {
+	// The count of the history's lines is carried across (HistoryLines):
+	// its tail read before and after, and the lines it gained or lost found
+	// between them (tailShift). Not on the alternate screen, whose resize
+	// re-wraps the main screen out of sight: it is counted again later.
+	alt := s.t.AltScreen()
+	var before []string
+	lines, tracked := 0, false
+	if !alt {
+		lines = s.linesLocked()
+		_, h := s.t.Size()
+		before, tracked = s.historyTail(max(h, rows))
+		tracked = tracked && s.count.valid
+	}
+	defer func() {
+		s.count.valid = false
+		if !tracked {
+			return
+		}
+		after, ok := s.historyTail(max(rows, len(before)/8))
+		if d, found := tailShift(before, after); ok && found {
+			s.count = lineCount{valid: true, lines: lines + d, rows: s.t.ScrollbackRows()}
+		}
+	}()
+	if _, h := s.t.Size(); rows < h && !alt {
 		if x, y := s.t.Cursor(); y < h-1 {
 			if drop := min(h-rows, h-1-y); drop > 0 {
 				// Delete the rows under the cursor (DL at the row below
@@ -212,6 +239,7 @@ func (s *sessionScreen) historyLocked() []string {
 		out = ""
 	}
 	rows := splitRows(out)
+	s.count = lineCount{valid: err == nil, lines: len(rows), rows: s.t.ScrollbackRows()}
 	if len(rows) > s.maxLines {
 		rows = rows[len(rows)-s.maxLines:]
 	}
@@ -324,4 +352,98 @@ func (a *Agent) closeScreen() {
 		a.screen.Close()
 		a.screen = nil
 	}
+}
+
+// lineCount is a count of the history's lines, as of a number of its rows.
+type lineCount struct {
+	valid       bool
+	lines, rows int
+}
+
+// HistoryLines is len(History()) without formatting all of it: the count of
+// its lines is kept from the rows that scrolled off since (only those are
+// read), and across a resize from where the history's last lines went
+// (Resize). A resize reads it on every step of a drag, under the lock the
+// program's output waits on, and formatting a full history took 150 ms.
+func (s *sessionScreen) HistoryLines() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.t.AltScreen() {
+		return len(s.mainHistory)
+	}
+	if s.historyGen == s.gen+1 {
+		return len(s.history)
+	}
+	return min(s.linesLocked(), s.maxLines)
+}
+
+// linesLocked is the count of the history's lines, uncapped, brought up to
+// date: from the rows added since it was taken when there are more, from the
+// whole history when there are fewer (a clear, the oldest pages let go) or no
+// count is kept.
+func (s *sessionScreen) linesLocked() int {
+	r := s.t.ScrollbackRows()
+	if s.count.valid && r == s.count.rows {
+		return s.count.lines
+	}
+	if s.count.valid && r > s.count.rows {
+		// From the last row counted: its line, or the end of it, comes first.
+		if out, err := s.t.HistoryRows(s.count.rows-1, r-1); err == nil {
+			n := len(splitRows(out))
+			if s.count.rows > 0 {
+				n--
+			}
+			s.count = lineCount{valid: true, lines: s.count.lines + n, rows: r}
+			return s.count.lines
+		}
+	}
+	out, err := s.t.History()
+	n := len(splitRows(out))
+	s.count = lineCount{valid: err == nil, lines: n, rows: r}
+	return n
+}
+
+// historyTail is the last lines of the history, read from its last rows
+// (enough for a screen's height h several times over): the first may be
+// only the end of a line.
+func (s *sessionScreen) historyTail(h int) ([]string, bool) {
+	r := s.t.ScrollbackRows()
+	out, err := s.t.HistoryRows(r-(8*h+16), r-1)
+	return splitRows(out), err == nil
+}
+
+// tailShift is how many lines the history gained (or lost, negative) between
+// two reads of its tail, before and after a resize: a shrink moves rows off
+// the top of the screen into it, a grow pulls its last lines back down, and a
+// re-wrap moves neither. Read off a pair of lines found once in each tail,
+// away from both ends (a tail's first line can be the end of one, its last
+// the start of one the screen goes on with); false when there is none.
+func tailShift(old, now []string) (int, bool) {
+	key := func(t []string, i int) string { return t[i-1] + "\x00" + t[i] }
+	where := func(t []string) map[string]int {
+		m := map[string]int{}
+		for i := 2; i <= len(t)-2; i++ {
+			k := key(t, i)
+			if _, seen := m[k]; seen {
+				m[k] = -1
+			} else {
+				m[k] = i
+			}
+		}
+		return m
+	}
+	inOld, inNow := where(old), where(now)
+	for i := len(old) - 2; i >= 2; i-- {
+		if len(dedupWords(old[i]))+len(dedupWords(old[i-1])) == 0 {
+			continue
+		}
+		k := key(old, i)
+		if inOld[k] != i {
+			continue
+		}
+		if j, ok := inNow[k]; ok && j > 0 {
+			return (len(now) - 1 - j) - (len(old) - 1 - i), true
+		}
+	}
+	return 0, false
 }

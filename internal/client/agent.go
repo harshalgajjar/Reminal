@@ -2683,7 +2683,20 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	// end of the history forgets them all, or dropRepaints would slice past
 	// it. And the rows it holds change with the width, so their count is
 	// taken again rather than read as a clear (noteScrollbackLen).
-	cur := len(a.screen.History())
+	// Not counted when the segments would be stale for a join anyway
+	// (staleSegs: a history as long as the bound in rows), and counted
+	// without formatting the whole history when not (HistoryLines).
+	if a.scrollbackLines > 0 && a.screen.HistoryLen() >= a.scrollbackLines {
+		a.resizeSegs = nil
+		a.segsGen++
+		a.sbLen = a.screen.HistoryLen()
+		if a.buf != nil {
+			a.buf.AppendResize(int(cols), int(rows))
+		}
+		a.screenMu.Unlock()
+		return
+	}
+	cur := a.screen.HistoryLines()
 	for _, s := range a.resizeSegs {
 		if s.start > cur {
 			a.resizeSegs = nil

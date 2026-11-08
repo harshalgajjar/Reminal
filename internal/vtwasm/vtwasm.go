@@ -277,6 +277,25 @@ func (v *Terminal) History() (string, error) {
 	return v.format(emitVT, true, &area{tagHistory, 0, 0, cols - 1, n - 1})
 }
 
+// HistoryRows is History for its rows y0 to y1 (0 the oldest, inclusive):
+// the lines they hold, the first one partly when y0 continues a row before
+// it. Reading only the rows that changed is how a count of the history's
+// lines is kept without formatting all of it.
+func (v *Terminal) HistoryRows(y0, y1 int) (string, error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.err != nil {
+		return "", v.err
+	}
+	n := int(v.get32(dataScrollbackRows))
+	y0, y1 = max(y0, 0), min(y1, n-1)
+	if n == 0 || y0 > y1 {
+		return "", nil
+	}
+	cols, _ := v.size()
+	return v.format(emitVT, true, &area{tagHistory, 0, y0, cols - 1, y1})
+}
+
 // Screen is the screen as VT sequences, one row a line, as wide as it is.
 func (v *Terminal) Screen() (string, error) {
 	v.mu.Lock()

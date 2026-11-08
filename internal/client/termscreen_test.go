@@ -5,6 +5,7 @@ package client
 
 import (
 	"fmt"
+	"math/rand"
 	"strings"
 	"testing"
 )
@@ -148,4 +149,56 @@ func TestAFailedScreenIsDroppedAndAJoinFallsBack(t *testing.T) {
 		t.Fatalf("a join was painted from a failed screen: %d bytes", len(s))
 	}
 	a.resizeScreen(100, 30) // and nothing reads it after
+}
+
+// The count of the history's lines a resize reads (HistoryLines, kept from
+// the rows added since and carried across resizes) is what formatting all of
+// it gives, through writes of every length, width and height changes both
+// ways, a program that leaves rows under its cursor, and clears.
+func TestTheHistoryLineCountMatchesTheHistory(t *testing.T) {
+	resizes, carried := 0, 0
+	for seed := int64(1); seed <= 12; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		s := testScreen(t, 80, 24)
+		s.SetMaxLines(100000)
+		full := func() int {
+			out, _ := s.t.History()
+			return len(splitRows(out))
+		}
+		word := func() string { return []string{"alpha", "be", "charlie", "delta", "e", "foxtrot", "golf"}[rng.Intn(7)] }
+		for step := 0; step < 120; step++ {
+			switch op := rng.Intn(10); {
+			case op < 6:
+				var b strings.Builder
+				for n := rng.Intn(6) + 1; n > 0; n-- {
+					for w := rng.Intn(40); w > 0; w-- {
+						b.WriteString(word() + " ")
+					}
+					b.WriteString(fmt.Sprintf("L%d.%d\r\n", seed, step))
+				}
+				if rng.Intn(4) == 0 {
+					b.WriteString("\x1b[A\x1b[A") // the cursor left above the bottom, as a TUI does
+				}
+				_, _ = s.Write([]byte(b.String()))
+			case op < 9:
+				s.Resize(20+rng.Intn(140), 8+rng.Intn(50))
+				resizes++
+				if s.count.valid {
+					carried++
+				}
+			default:
+				if rng.Intn(5) == 0 {
+					s.ClearScrollback()
+				}
+			}
+			if got, want := s.HistoryLines(), full(); got != want {
+				t.Fatalf("seed %d step %d: the count says %d lines, the history holds %d", seed, step, got, want)
+			}
+		}
+	}
+	// Carried, not counted again, on most resizes: what makes it cheap.
+	if carried*10 < resizes*8 {
+		t.Errorf("the count was carried across %d of %d resizes", carried, resizes)
+	}
+	t.Logf("carried across %d of %d resizes", carried, resizes)
 }
