@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // The reconnect scrollback-duplication bug: inline TUIs (Claude Code / Ink) repaint
@@ -540,8 +541,8 @@ func dedupRepaintsIn(lines []string, marks []lineMark) []string {
 // kept nor by also (rows shown elsewhere: the screen). A row is shown when
 // its tokens (as printed, split at spaces, colours aside) are an unbroken run
 // of the kept tokens read as one stream, so a row wrapped otherwise is still
-// shown by the paragraph it was wrapped from. A row with no letters or digits
-// (a quote bar, a rule a redraw left) has no text to lose.
+// shown by the paragraph it was wrapped from. Only a redraw's debris (redrawDebris)
+// has no text to lose.
 func unshownRows(lines []string, drop []bool, also []string) []int {
 	tokens := func(s string) []string { return strings.Fields(dedupANSI.ReplaceAllString(s, "")) }
 	var stream []string
@@ -570,7 +571,7 @@ func unshownRows(lines []string, drop []bool, also []string) []int {
 	}
 	var unshown []int
 	for x, l := range lines {
-		if row := tokens(l); drop[x] && len(dedupWords(l)) > 0 && !shown(row) {
+		if row := tokens(l); drop[x] && len(row) > 0 && !redrawDebris(l) && !shown(row) {
 			unshown = append(unshown, x)
 		}
 	}
@@ -976,3 +977,15 @@ func dedupShellCommand(s string) bool {
 
 // dedupPrompt is a shell prompt with the user and host before its mark.
 var dedupPrompt = regexp.MustCompile(`^\S+@\S+[^$#%]*[$#%] `)
+
+// redrawDebris says whether a row is a scrap a redraw leaves, with no text
+// to lose: a lone quote bar or spinner glyph, at most redrawDebrisMax
+// characters as shown and no letters or digits. A longer row with none (a
+// table's border, a rule) is part of a layout, and stays.
+func redrawDebris(l string) bool {
+	shown := strings.TrimSpace(dedupANSI.ReplaceAllString(l, ""))
+	return utf8.RuneCountInString(shown) <= redrawDebrisMax && len(dedupWords(l)) == 0
+}
+
+// redrawDebrisMax is the most characters a redraw's debris row shows.
+const redrawDebrisMax = 3
