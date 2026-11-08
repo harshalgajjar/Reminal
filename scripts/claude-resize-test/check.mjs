@@ -197,7 +197,10 @@ await page.evaluate(() => window.__term.scrollLines(-40));
 const upBefore = await upBy();
 await step('reading the history: narrower', 90, trows, 4000);
 const upAfter = await upBy();
+// The viewer's own record of the step (snapshots, sizes), for a failure.
+const diagAfter = await page.evaluate(() => { try { return window.__size().events.slice(-24).map((e) => e.kind + " " + e.d).join(" | "); } catch (_) { return ""; } });
 console.log(`reading the history through a repaint: ${upBefore} rows up before, ${upAfter} after`);
+console.log(`  the viewer's record: ${diagAfter}`);
 const keptPlace = upBefore > 0 && upAfter > 0;
 await step('reading the history: back', cols, trows, 3000);
 

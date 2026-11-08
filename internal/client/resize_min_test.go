@@ -93,3 +93,17 @@ func TestApplyEffectiveSizeDoesNotHostCap(t *testing.T) {
 		t.Fatal("host SIGWINCH must not applyEffectiveSize while viewers own geometry")
 	}
 }
+
+// A viewer's report past any real grid is clamped: one viewer saying 65535
+// by 65535 does not size the session's terminal, or its copy, at that.
+func TestAViewerReportPastAnyGridIsClamped(t *testing.T) {
+	var b viewerSizeBook
+	b.report("huge", 65535, 65535)
+	if got := b.wraps["huge"]; got.cols != maxTermCols || got.rows != maxTermRows {
+		t.Fatalf("a 65535x65535 report kept as %dx%d, want %dx%d", got.cols, got.rows, maxTermCols, maxTermRows)
+	}
+	b.report("phone", 60, 30)
+	if got := b.wraps["phone"]; got.cols != 60 || got.rows != 30 {
+		t.Fatalf("a real report changed: %dx%d", got.cols, got.rows)
+	}
+}
