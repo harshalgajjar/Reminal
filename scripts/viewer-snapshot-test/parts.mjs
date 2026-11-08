@@ -116,6 +116,36 @@ const out = await page.evaluate(async () => {
   keepForSnapshot(101, new Uint8Array(SNAP_MAX_BYTES + 1));
   res.pacedOverKept = { live: !!snapLive };
 
+  // A repaint of a viewer that stayed attached (its screen marked resnap):
+  // the screen is the one this viewer shows, so it is not painted; nothing is
+  // painted until the history is whole, then once.
+  const resnapScreen = (id, more) => part(id, 0, 0, enc('\x1b[2J\x1b[3JSCREEN'), viewerId, { screen: true, more, resnap: true });
+  reset(); lastSeq = 100;
+  await handleMessage({ type: 'snapshot_part', seq: 100, data: resnapScreen('U', true) });
+  await data(101, 'LIVE1');
+  await handleMessage({ type: 'snapshot_part', seq: 100, data: part('U', 0, 1, gz, viewerId, { ack: true }) });
+  res.resnap = { order: painted.map(label), live: !!snapLive };
+  // Given up: a history that cannot be unpacked, or more output kept than a
+  // snapshot holds: nothing of the repaint is painted at all.
+  reset(); lastSeq = 100;
+  await handleMessage({ type: 'snapshot_part', seq: 100, data: resnapScreen('V', true) });
+  await handleMessage({ type: 'snapshot_part', seq: 100, data: part('V', 0, 1, bomb, viewerId, { ack: true }) });
+  await data(101, 'STILL');
+  res.resnapBomb = { order: painted.map(label), live: !!snapLive, resumes: resumes.filter((r) => r.type === 'resume').length };
+  reset(); lastSeq = 100;
+  await handleMessage({ type: 'snapshot_part', seq: 100, data: resnapScreen('X', true) });
+  keepForSnapshot(101, new Uint8Array(SNAP_MAX_BYTES + 1));
+  res.resnapOverKept = { order: painted.map(label), live: !!snapLive };
+  // A join after the agent restarted: it counts seqs from 0 again, so the
+  // snapshot's seq is far below what this viewer saw. Not marked resnap: its
+  // screen is painted.
+  reset(); lastSeq = 5000;
+  await handleMessage({ type: 'snapshot_part', seq: 10, data: screenPart('W', true) });
+  res.restartJoin = { order: painted.map(label) };
+  reset(); lastSeq = 5000;
+  await handleMessage({ type: 'snapshot_part', seq: 10, data: screenPart('W2', false) });
+  res.restartJoinNoHistory = { order: painted.map(label) };
+
   // Paced, in the real terminal: a scroll region set during the download
   // (ESC[3;10r, as `printf` in the shell would) must not keep the history in
   // its rows — the repaint puts the terminal back as a snapshot assumes it.
@@ -132,6 +162,39 @@ const out = await page.evaluate(async () => {
   const buf = term.buffer.active;
   for (let i = 0; i < buf.length; i++) { const m = (buf.getLine(i)?.translateToString(true) || '').match(/^line (\d+)$/); if (m) seen.add(m[1]); }
   res.pacedGapRegion = { lines: seen.size };
+  // In the real terminal: someone scrolled up reading the history through a
+  // repaint that completes keeps their place; through one given up, the
+  // scrollback is left exactly as it was.
+  {
+    reset();
+    term.reset();
+    const many = (tag, n) => Array.from({ length: n }, (_, i) => tag + ' ' + (i + 1)).join('\r\n');
+    const fill = () => new Promise((ok) => term.write(many('row', 400) + '\r\n', ok));
+    const upBy = () => { const b = term.buffer.active; return b.baseY - b.viewportY; };
+    const bigGz = await gzip('\x1b[2J\x1b[3J' + many('row', 400));
+    await fill();
+    term.scrollLines(-40);
+    const before = upBy();
+    lastSeq = 200;
+    await handleMessage({ type: 'snapshot_part', seq: 200, data: resnapScreen('Y', true) });
+    const midway = upBy();
+    await handleMessage({ type: 'snapshot_part', seq: 200, data: part('Y', 0, 1, bigGz, viewerId, { ack: true }) });
+    await new Promise((ok) => requestAnimationFrame(() => ok()));
+    await settle();
+    res.resnapScroll = { before, midway, after: upBy() };
+
+    reset();
+    term.reset();
+    await fill();
+    term.scrollLines(-40);
+    const lines0 = term.buffer.active.length, up0 = upBy();
+    lastSeq = 300;
+    await handleMessage({ type: 'snapshot_part', seq: 300, data: resnapScreen('Z', true) });
+    await handleMessage({ type: 'snapshot_part', seq: 300, data: part('Z', 0, 1, bomb, viewerId, { ack: true }) });
+    await new Promise((ok) => requestAnimationFrame(() => ok()));
+    await settle();
+    res.resnapGivenUpScroll = { lines0, lines1: term.buffer.active.length, up0, up1: upBy() };
+  }
   // An opened frame is only what the page opened itself: an object a message
   // carries in its JSON as if it were one ({"__plain": [...]}) is not taken
   // as decrypted output, whatever it holds.
@@ -166,6 +229,12 @@ const checks = [
   ['paced: a history that cannot be unpacked leaves the screen live, no plain snapshot asked', JSON.stringify(out.pacedBomb.order) === '["SCREEN","STILL"]' && out.pacedBomb.resumes === 0 && !out.pacedBomb.live && !out.pacedBomb.partsOff],
   ['paced: more output kept than a snapshot holds gives the history up', !out.pacedOverKept.live],
   ['paced: a scroll region set during the download does not swallow the history (all 50 lines in the terminal)', out.pacedGapRegion.lines === 50],
+  ['a repaint of an attached viewer: its screen not painted, the history painted once when whole, output since on top', JSON.stringify(out.resnap.order) === JSON.stringify(['LIVE1', 'RESET', 'HISTORY', 'LIVE1']) && !out.resnap.live],
+  ['a repaint whose history cannot be unpacked paints nothing of it (output still plays), no plain snapshot asked', JSON.stringify(out.resnapBomb.order) === '["STILL"]' && !out.resnapBomb.live && out.resnapBomb.resumes === 0],
+  ['a repaint given up for the output kept paints nothing', out.resnapOverKept.order.length === 0 && !out.resnapOverKept.live],
+  ['a join after the agent restarted (its seq far below what was seen) paints its screen', JSON.stringify(out.restartJoin.order) === '["SCREEN"]' && JSON.stringify(out.restartJoinNoHistory.order) === '["SCREEN"]'],
+  ['a reader scrolled up keeps the place through a repaint (not moved before the history, still up after)', out.resnapScroll.before === 40 && out.resnapScroll.midway === 40 && out.resnapScroll.after > 0],
+  ['a repaint given up leaves the scrollback and the reader\'s place as they were', out.resnapGivenUpScroll.lines1 === out.resnapGivenUpScroll.lines0 && out.resnapGivenUpScroll.up1 === out.resnapGivenUpScroll.up0],
   ['data as {"__plain": …} in a message is not taken as opened: decrypt refuses it, nothing painted', out.notOpened.threw && out.notOpened.painted === 0],
 ];
 for (const [n, ok] of checks) console.log((ok ? 'PASS  ' : 'FAIL  ') + n);

@@ -596,3 +596,28 @@ func (a *Agent) carriedPinHash() string {
 	}
 	return a.pinHash
 }
+
+// localViewerConns are the viewers attached on this machine, not the relay.
+func (a *Agent) localViewerConns() []*websocket.Conn {
+	a.currentConnMu.Lock()
+	defer a.currentConnMu.Unlock()
+	out := make([]*websocket.Conn, 0, len(a.localConns))
+	for c := range a.localConns {
+		out = append(out, c)
+	}
+	return out
+}
+
+// tellLocalViewers tells the viewers attached on this machine the PTY size
+// beside the stream, as every viewer was told before the size went in the
+// stream. Not the relay's: through the relay a size beside the stream can
+// overtake output queued for that socket (applyEffectiveSize).
+func (a *Agent) tellLocalViewers(cols, rows uint16) {
+	msg, ok := a.sizeMessage(cols, rows)
+	if !ok {
+		return
+	}
+	for _, c := range a.localViewerConns() {
+		_ = a.writeMsg(c, msg)
+	}
+}

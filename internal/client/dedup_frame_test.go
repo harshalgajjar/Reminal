@@ -492,3 +492,21 @@ func TestJoinDropsANarrowCopyAboveTheWideFrame(t *testing.T) {
 		}
 	}
 }
+
+// Text gathered from separate places is not a copy, and rows printed again
+// as they were are the program saying it again: the reprint dedup keeps
+// both, as a join on main did (a cross-review's probes).
+func TestDedupRepaintsKeepsAPatchworkAndARepeatedLine(t *testing.T) {
+	a := "the build on the second runner stopped at the cache step again"
+	b := "the deploy waits for an approval from someone on the release team"
+	c := "and the nightly job reports the same warning about the old config"
+	for name, history := range map[string][]string{
+		"two paragraphs sharing halves with a third": {a, c, "", b, c, "", a, b, "", "$"},
+		"a tail of a file just shown":                {"$ cat notes.txt", a, b, "", "$ tail -1 notes.txt", "", b, "", "$"},
+	} {
+		got := dedupRepaints(history)
+		if len(got) != len(history) {
+			t.Errorf("%s: %d of %d rows kept:\n%s", name, len(got), len(history), strings.Join(got, "\n"))
+		}
+	}
+}

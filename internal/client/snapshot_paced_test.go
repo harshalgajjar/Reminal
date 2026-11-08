@@ -96,6 +96,9 @@ func TestAPacedSnapshotSendsTheScreenFirstAndTheHistoryAsItIsAcknowledged(t *tes
 
 	m := <-r.msgs
 	h, screen := r.part(t, m)
+	if h.Resnap {
+		t.Fatalf("a join's screen is marked a repaint: %+v", h)
+	}
 	if !h.Screen || !h.More || h.To != "v-test" || h.ID == "" || m.Seq != a.buf.LatestSeq() {
 		t.Fatalf("first: %+v seq %d (latest %d), want the screen with more to come", h, m.Seq, a.buf.LatestSeq())
 	}

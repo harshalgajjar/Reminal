@@ -6152,31 +6152,13 @@
     // human noticeable threshold.
     const pendingChunks = [];
     let flushScheduled = false;
-    // Output waits for the PTY's size. A viewer that has just (re)connected
-    // knows none, and painted at its own width a snapshot laid out for the
-    // PTY's width came out one word a row, stepping right (the staircase).
-    // The agent sends the size first thing in the stream; one too old to
-    // does not, so after SIZE_HOLD_MS the output goes at the viewer's own
-    // width. beginSizeHold on a new connection; endSizeHold when the size
-    // comes (TermSize.adoptPty).
-    const SIZE_HOLD_MS = 2000;
-    let sizeHoldTimer = null, sizeHoldOver = false;
-    function beginSizeHold() {
-      sizeHoldOver = false;
-      if (sizeHoldTimer) { clearTimeout(sizeHoldTimer); sizeHoldTimer = null; }
-    }
-    function endSizeHold() {
-      if (sizeHoldTimer) { clearTimeout(sizeHoldTimer); sizeHoldTimer = null; }
-      flushPendingChunks();
-    }
-    function holdingForSize() {
-      if (sizeHoldOver || TermSize.known()) return false;
-      if (!sizeHoldTimer) sizeHoldTimer = setTimeout(() => { sizeHoldTimer = null; sizeHoldOver = true; flushPendingChunks(); }, SIZE_HOLD_MS);
-      return true;
-    }
+    // No output waits for the PTY's size: the agent sends the size first
+    // thing in every stream, and messages are handled in the order they
+    // came (wireSocket), so the size is applied before any output it laid
+    // out. An agent too old to send it first paints at once, at the
+    // viewer's own width, as it always did.
     function flushPendingChunks() {
       if (pendingChunks.length === 0) return;
-      if (holdingForSize()) return;
       // Every path that writes the session's output comes through here.
       if (staleScreen) {
         staleScreen = false;
@@ -6550,12 +6532,6 @@
         if (!wrap) wrap = measure();
         if (!wrap) return;
         let cols = wrap.cols, rows = wrap.rows;
-        if (!known() && holdingForSize()) {
-          // No size from the agent yet, its output held for it: the
-          // columns stay what they are rather than this screen's own,
-          // which a snapshot laid out for the PTY's width does not fit.
-          cols = term.cols || cols;
-        }
         if (known()) {
           // The PTY's width, exactly, until the PTY's own size changes
           // (told in the output stream, where it belongs): the program
@@ -6621,8 +6597,6 @@
           ptyR = r;
           ptyKey = cryptoKey;
           display();
-          // Output held for this size goes now, at it.
-          endSizeHold();
         },
         boxDrift(el) {
           return !!(el && (el.clientWidth !== lastW || el.clientHeight !== lastH));
@@ -6961,18 +6935,21 @@
         // A new snapshot for this connection: whatever was under way is over.
         if (snapAsm) { clearTimeout(snapAsm.timer); snapAsm = null; }
         const seq = typeof msg.seq === 'number' ? msg.seq : 0;
-        // Already showing everything through this snapshot's seq: a repaint
-        // of a viewer that stayed attached (the agent sends one after a
-        // width change settles). Its screen is the one this viewer shows, so
-        // it is not painted: painted alone it wipes the scrollback, and
-        // someone scrolled up reading the history lost their place before
-        // the history came. The history's repaint keeps the distance from the
-        // bottom (flushPendingChunks).
-        const caughtUp = lastSeq > 0 && seq <= lastSeq;
+        // A repaint of a viewer that stayed attached (the agent sends one
+        // after a width change settles; its header says so): its screen is
+        // the one this viewer shows, so it is not painted. Painted alone it
+        // wiped the scrollback, and someone scrolled up reading the history
+        // lost their place before the history came. Nothing is painted until
+        // the history is whole, in one write that keeps the distance from the
+        // bottom (flushPendingChunks); given up (too much output meanwhile, a
+        // part that will not unpack, a newer snapshot), the scrollback is
+        // left as it was. Said by the agent, not read off the seqs: after a
+        // restart the agent counts from 0 again and a join's seq is low.
+        const resnap = h.resnap === true;
         snapLive = h.more ? { id: h.id, seq, n: 0, parts: null, got: 0, held: [], heldBytes: 0 } : null;
         awaitingSnapshotUntil = 0;
         if (seq > lastSeq || lastSeq === 0) lastSeq = seq;
-        if (caughtUp) return;
+        if (resnap) return;
         enqueueData(body);
         bytesReceived += body.byteLength;
         return;
@@ -7631,12 +7608,11 @@
       // grid grew under a half-written frame (one word a row, stepping
       // right). A handler that throws ends only its own message.
       let inbound = Promise.resolve();
-      beginSizeHold(); // this connection's size is not known yet
       sock.onmessage = (ev) => {
         noteInbound(sock);
         let msg;
         try { msg = JSON.parse(ev.data); } catch { return; }
-        inbound = inbound.then(() => handleMessage(msg)).catch(() => {});
+        inbound = inbound.then(() => handleMessage(msg)).catch((e) => dbg("message handler: " + ((e && e.message) || e)));
       };
 
       sock.onclose = (e) => {
