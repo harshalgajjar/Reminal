@@ -570,7 +570,8 @@ func (p dedupPara) words(lines []string) []string {
 }
 
 // dedupParagraphs splits history into paragraphs: runs of lines between
-// blank ones, with the app's own rows (dedupChrome) paragraphs of their own.
+// blank ones, with the app's own rows (dedupChrome) paragraphs of their own,
+// and a run split where its wrap width changes (widthSeam).
 func dedupParagraphs(lines []string) []dedupPara {
 	var paras []dedupPara
 	for i := 0; i < len(lines); {
@@ -586,6 +587,10 @@ func dedupParagraphs(lines []string) []dedupPara {
 		j := i
 		for j < len(lines) && !dedupBlank(lines[j]) && !dedupChrome(lines[j]) {
 			j++
+		}
+		if s := widthSeam(lines[i:j]); s > 0 {
+			paras = append(paras, dedupPara{i, i + s})
+			i += s
 		}
 		paras = append(paras, dedupPara{i, j})
 		i = j
@@ -766,4 +771,35 @@ func dropSeamDebris(history []string, drop []bool) {
 			drop[i] = true
 		}
 	}
+}
+
+// widthSeam is where a run of rows with no blank between them is two copies
+// glued together, printed at two widths: the rows of one paragraph a program
+// wraps for its width are all near that width but the last, so rows after a
+// sentence's end, two or more of them, all well narrower than the rows
+// before, are a second piece (the head of a reprint at a narrower width left
+// right under the tail of a wide one, as a fold closed while Claude Code
+// printed). Split there, each piece is the copy it is, and goes or stays on
+// its own. 0 when there is no such place.
+func widthSeam(rows []string) int {
+	if len(rows) < 3 {
+		return 0
+	}
+	width := make([]int, len(rows))
+	for k, r := range rows {
+		width[k] = len([]rune(strings.TrimRight(dedupANSI.ReplaceAllString(r, ""), " ")))
+	}
+	wide := 0
+	for s := 1; s <= len(rows)-2; s++ {
+		wide = max(wide, width[s-1])
+		narrow := 0
+		for _, w := range width[s:] {
+			narrow = max(narrow, w)
+		}
+		end := strings.TrimRight(dedupANSI.ReplaceAllString(rows[s-1], ""), " ")
+		if narrow*10 <= wide*6 && strings.ContainsAny(end[max(0, len(end)-1):], ".!?\"”)") {
+			return s
+		}
+	}
+	return 0
 }
