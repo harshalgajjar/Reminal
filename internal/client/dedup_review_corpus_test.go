@@ -143,3 +143,38 @@ func reviewCorpusMissing(in, out []string) []string {
 	}
 	return missing
 }
+
+// The join's last pass, against the live screen, keeps the strict promise
+// too: history rows whose words the screen holds, but not their text (a
+// test that passed then, failing now), are still shown.
+func TestStrictFramePassKeepsRowsTheScreenChanged(t *testing.T) {
+	withDedupStrict(t)
+	line := "running the suite against the staging database with every fixture loaded first"
+	history := []string{"$ npm test", line, "✓ login accepts a valid password", "✓ login refuses a wrong password"}
+	screen := []string{line, "✗ login accepts a valid password", "✗ login refuses a wrong password"}
+	got := dedupAgainstFrame(append([]string(nil), history...), screen)
+	if missing := reviewCorpusMissing(history, append(got, screen...)); len(missing) > 0 {
+		t.Errorf("rows no longer shown at all: %q (history kept %q)", missing, got)
+	}
+}
+
+// A shorter paragraph that begins as an earlier one did, wrapped otherwise,
+// is the program saying less, not a reprint: with no resize it stays. (Inside
+// a resize's frame it reads exactly as a reprint cut by the screen's top, so
+// it may go there; its text is still shown, in the earlier paragraph.)
+func TestStrictKeepsAShorterParagraphWithNoResize(t *testing.T) {
+	withDedupStrict(t)
+	lines := []string{
+		"Deploying service api to cluster prod-east with three replicas",
+		"and the canary enabled for an hour, then the rest of the fleet",
+		"after the checks pass on every host",
+		"",
+		"Deploying service api to cluster prod-east",
+		"with three replicas and the canary enabled",
+		"",
+		"$",
+	}
+	if got := dedupHistory(append([]string(nil), lines...), nil, nil, "", 0); !slices.Equal(got, lines) {
+		t.Errorf("got\n%s\nwant it as given", strings.Join(got, "\n"))
+	}
+}

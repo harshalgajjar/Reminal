@@ -364,7 +364,18 @@ func spliceRelative(w string, refWords map[string]bool) bool {
 // compactDropped removes mask-marked lines, absorbing ONE blank after each dropped
 // block so separators don't pile up.
 func compactDropped(lines []string, drop []bool) []string {
+	out, _ := compactDroppedAlong[struct{}](lines, drop, nil)
+	return out
+}
+
+// compactDroppedAlong is compactDropped, carrying a value per line along
+// (none when along is nil).
+func compactDroppedAlong[T any](lines []string, drop []bool, along []T) ([]string, []T) {
 	out := make([]string, 0, len(lines))
+	var marks []T
+	if along != nil {
+		marks = make([]T, 0, len(lines))
+	}
 	justDropped := false
 	for i, l := range lines {
 		if drop[i] {
@@ -377,8 +388,11 @@ func compactDropped(lines []string, drop []bool) []string {
 		}
 		justDropped = false
 		out = append(out, l)
+		if along != nil {
+			marks = append(marks, along[i])
+		}
 	}
-	return out
+	return out, marks
 }
 
 // dedupAgainstFrame drops committed lines that are stale re-emissions of the app's
@@ -390,6 +404,8 @@ func compactDropped(lines []string, drop []bool) []string {
 // Letter", the debris it left, then the screen's "IV. The Letter" over its
 // text) otherwise read the heading twice, since neither side alone holds
 // both copies.
+// Under the strict rules a row whose text is then shown neither by the history
+// kept nor by the screen stays (unshownRows).
 func dedupAgainstFrame(history, screen []string) []string {
 	var fw []string
 	for _, r := range screen {
@@ -405,6 +421,11 @@ func dedupAgainstFrame(history, screen []string) []string {
 		drop[i] = mask[i]
 	}
 	dropSeamDebris(history, drop)
+	if dedupStrict {
+		for _, x := range unshownRows(history, drop, screen) {
+			drop[x] = false
+		}
+	}
 	return compactDropped(history, drop)
 }
 
@@ -538,40 +559,109 @@ func dedupRepaintsIn(lines []string, marks []lineMark) []string {
 }
 
 // unshownRows is the rows drop takes whose text is shown neither by the rows
-// kept nor by also (rows shown elsewhere: the screen). A row is shown when
-// its tokens (as printed, split at spaces, colours aside) are an unbroken run
-// of the kept tokens read as one stream, so a row wrapped otherwise is still
-// shown by the paragraph it was wrapped from. Only a redraw's debris (redrawDebris)
-// has no text to lose.
+// kept nor by also (rows shown elsewhere: the screen). Text is a row's
+// tokens as printed, split at spaces; colours are no text, so a row that
+// differs from a kept one only in colour is shown by it. A dropped row is
+// shown when its text is
+//   - an unbroken run of the kept text that crosses from one kept row into
+//     the next, never one inside a single longer row (a shorter line that
+//     only begins as an earlier one did);
+//   - or part of a piece of dropped rows, one after another, whose text is
+//     kept text from the start of a kept row to the end of one (a kept row
+//     whole, or the same text wrapped at another width: a reprint after a
+//     resize), or, cut at the screen's edge, from one edge of a kept row on
+//     past at least one whole row.
+//
+// Only a redraw's debris (redrawDebris) has no text to lose.
 func unshownRows(lines []string, drop []bool, also []string) []int {
 	tokens := func(s string) []string { return strings.Fields(dedupANSI.ReplaceAllString(s, "")) }
-	var stream []string
-	at := map[string][]int{}
-	read := func(l string) {
-		for _, t := range tokens(l) {
-			at[t] = append(at[t], len(stream))
-			stream = append(stream, t)
-		}
-	}
+	toks := make([][]string, len(lines))
 	for x, l := range lines {
+		toks[x] = tokens(l)
+	}
+	var stream []string
+	var rowOf []int        // the kept row each token of stream is in
+	edge := map[int]bool{} // where in stream a kept row begins or ends
+	at := map[string][]int{}
+	read := func(t []string, row int) {
+		if len(t) == 0 {
+			return
+		}
+		edge[len(stream)] = true
+		for _, w := range t {
+			at[w] = append(at[w], len(stream))
+			stream = append(stream, w)
+			rowOf = append(rowOf, row)
+		}
+		edge[len(stream)] = true
+	}
+	for x := range lines {
 		if !drop[x] {
-			read(l)
+			read(toks[x], x)
 		}
 	}
-	for _, l := range also {
-		read(l)
+	for k, l := range also {
+		read(tokens(l), len(lines)+k)
 	}
-	shown := func(row []string) bool {
-		for _, s := range at[row[0]] {
-			if s+len(row) <= len(stream) && slices.Equal(stream[s:s+len(row)], row) {
-				return true
+	// match is where text is in the kept stream: the starts it had (all, when
+	// nil), narrowed to those it still has once n of its tokens are matched
+	// and the next ones are next.
+	match := func(starts []int, n int, next []string) []int {
+		if starts == nil {
+			starts = at[next[0]]
+		}
+		var out []int
+		for _, s := range starts {
+			e := s + n + len(next)
+			if e <= len(stream) && slices.Equal(stream[s+n:e], next) {
+				out = append(out, s)
 			}
 		}
-		return false
+		return out
+	}
+	// aligned: of the starts of text n tokens long, one runs from a row's edge
+	// to a row's edge, or from one edge past a whole row; across: one is
+	// anywhere but inside one row.
+	place := func(starts []int, n int) (aligned, across bool) {
+		for _, s := range starts {
+			e := s + n
+			a := rowOf[s] != rowOf[e-1]
+			across = across || a
+			aligned = aligned || edge[s] && edge[e] || (edge[s] || edge[e]) && a
+		}
+		return aligned, across
+	}
+	dropped := func(x int) bool { return x < len(lines) && drop[x] && len(toks[x]) > 0 }
+	shown := make([]bool, len(lines))
+	for p := 0; p < len(lines); {
+		if !dropped(p) {
+			p++
+			continue
+		}
+		// The longest piece from p whose text is kept text, aligned.
+		q, n, starts := p, 0, []int(nil)
+		for k := p; dropped(k); k++ {
+			if starts = match(starts, n, toks[k]); len(starts) == 0 {
+				break
+			}
+			n += len(toks[k])
+			if aligned, _ := place(starts, n); aligned {
+				q = k + 1
+			}
+		}
+		if q == p { // no piece: the row on its own
+			_, shown[p] = place(match(nil, 0, toks[p]), len(toks[p]))
+			p++
+			continue
+		}
+		for x := p; x < q; x++ {
+			shown[x] = true
+		}
+		p = q
 	}
 	var unshown []int
 	for x, l := range lines {
-		if row := tokens(l); drop[x] && len(row) > 0 && !redrawDebris(l) && !shown(row) {
+		if dropped(x) && !redrawDebris(l) && !shown[x] {
 			unshown = append(unshown, x)
 		}
 	}
@@ -580,21 +670,25 @@ func unshownRows(lines []string, drop []bool, also []string) []int {
 
 // reprintSource is the text kept so far in one pass of dedupRepaints: its
 // words as one stream (in reading order, or reversed for the pass from the
-// bottom), where each word starts in it, and its rows as printed.
+// bottom), where each word starts in it, where each paragraph begins and
+// ends in it, and its rows as printed.
 type reprintSource struct {
 	words []string
 	at    map[string][]int
+	edge  map[int]bool
 	rows  map[string]bool
 }
 
 func (s *reprintSource) add(rows, words []string) {
 	if s.at == nil {
-		s.at, s.rows = map[string][]int{}, map[string]bool{}
+		s.at, s.edge, s.rows = map[string][]int{}, map[int]bool{}, map[string]bool{}
 	}
+	s.edge[len(s.words)] = true
 	for _, w := range words {
 		s.at[w] = append(s.at[w], len(s.words))
 		s.words = append(s.words, w)
 	}
+	s.edge[len(s.words)] = true
 	for _, r := range rows {
 		if t := dedupRow(r); t != "" {
 			s.rows[t] = true
@@ -610,6 +704,9 @@ func (s *reprintSource) add(rows, words []string) {
 // gathered from separate places are not a copy (two paragraphs that share
 // halves with a third), and rows printed again as they were (a `tail` of a
 // file just shown) are the program saying it again, not a reprint.
+// Outside a frame (mustRewrap) the run must be a whole paragraph of the
+// source, first word to last: a shorter line that only begins as an earlier
+// one did is the program saying less, not a reprint.
 // Its blind spot: text the program prints again in one unbroken run, wrapped
 // otherwise (`fmt -w 30` of a file just shown by `cat`), reads as a reprint.
 func (s *reprintSource) reprintOf(rows, words []string, reversed, mustRewrap bool) bool {
@@ -646,7 +743,7 @@ func (s *reprintSource) reprintOf(rows, words []string, reversed, mustRewrap boo
 		}
 	}
 	for _, i := range starts {
-		if i+len(words) > len(s.words) {
+		if i+len(words) > len(s.words) || (mustRewrap && !(s.edge[i] && s.edge[i+len(words)])) {
 			continue
 		}
 		ok := true

@@ -3057,27 +3057,6 @@ func repaintLines(lines []string, segs []resizeSeg, resizes []int) []lineMark {
 	return mark
 }
 
-// compactDroppedAlong is compactDropped, carrying a value per line along.
-func compactDroppedAlong[T any](lines []string, drop []bool, along []T) ([]string, []T) {
-	out := make([]string, 0, len(lines))
-	marks := make([]T, 0, len(lines))
-	justDropped := false
-	for i, l := range lines {
-		if drop[i] {
-			justDropped = true
-			continue
-		}
-		if justDropped && dedupBlank(l) && (len(out) == 0 || dedupBlank(out[len(out)-1])) {
-			justDropped = false
-			continue
-		}
-		justDropped = false
-		out = append(out, l)
-		marks = append(marks, along[i])
-	}
-	return out, marks
-}
-
 // staleSegs says whether the resize segments are of no use for a history of n
 // lines, and forgets them when its front may have been evicted (absolute
 // indices would be stale). Caller holds screenMu.
