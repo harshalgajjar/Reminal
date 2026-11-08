@@ -231,7 +231,7 @@ console.log(`reading the history through width changes: ${judged} loops judged, 
 // one whose copy of the screen re-wraps does. With it the attached viewer is
 // judged like a fresh join; without it, only the fresh join is.
 const repainted = await page.evaluate(() => window.__size().events.some((e) => e.kind === 'snap' && e.d.startsWith('repaint')));
-console.log(`repaints of the attached viewer: `);
+console.log(`repaints of the attached viewer: ${repainted ? 'yes' : 'none (this engine does not re-wrap)'}`);
 await widthTo(cols);
 await page.waitForTimeout(3000);
 
