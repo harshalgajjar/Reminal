@@ -42,6 +42,7 @@ sleep 2
 # Code's own redraw in any terminal).
 # KEYBOARDS picks the runs (default both); RESIZE_OUT a directory the
 # viewer rows each run ends with are written to (story<KB>.txt).
+# READ_LOOPS repeats the reading-the-history step (default 1).
 OUT=${RESIZE_OUT:-$B/out}
 mkdir -p "$OUT"
 for KB in ${KEYBOARDS:-0 1}; do
@@ -49,6 +50,6 @@ for KB in ${KEYBOARDS:-0 1}; do
   docker exec "$NAME" sh -c "mkdir -p /root/$S && cd /root/$S && SHELL=/usr/local/bin/claude-shell reminal new $S >/dev/null 2>&1"
   read -r ID PIN < <(docker exec "$NAME" sh -c "reminal info $S | grep -E 'Session:|PIN:' | awk '{print \$2}'" | tr '\n' ' '; echo)
   echo "== KEYBOARD=$KB: session $ID (claude $CLAUDE, reminal from ${1:-this tree})"
-  docker run --rm --network "container:$NAME" -v "$DIR:/t:ro" -v "$OUT:/out" -w /tmp -e KEYBOARD=$KB -e DUMP=/out/story$KB.txt "$PW" sh -c \
+  docker run --rm --network "container:$NAME" -v "$DIR:/t:ro" -v "$OUT:/out" -w /tmp -e KEYBOARD=$KB -e READ_LOOPS="${READ_LOOPS:-1}" -e DUMP=/out/story$KB.txt "$PW" sh -c \
     'npm i -s playwright@1.56.0 >/dev/null 2>&1 && cp /t/check.mjs /t/model.mjs . && node check.mjs "$@"' _ "$ID" "$PIN" || exit 1
 done

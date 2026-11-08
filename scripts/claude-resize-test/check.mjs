@@ -191,18 +191,38 @@ console.log(`layout: staircase rows ${stair}, rows wider than ${cols} cols ${wid
 // Someone reading the history when the width changes: scrolled up, the grid
 // narrows, Claude Code redraws, and once it is quiet the agent repaints this
 // viewer (a re-snapshot). The reader must still be up in the history, not
-// jumped to the bottom.
+// jumped to the bottom. Only the width changes: a height shrink scrolls to
+// the bottom on purpose (a phone's keyboard opened to type). READ_LOOPS
+// times (default 1), narrowing and widening in turn.
 const upBy = () => page.evaluate(() => { const b = window.__term.buffer.active; return b.baseY - b.viewportY; });
-await page.evaluate(() => window.__term.scrollLines(-40));
-const upBefore = await upBy();
-await step('reading the history: narrower', 90, trows, 4000);
-const upAfter = await upBy();
-// The viewer's own record of the step (snapshots, sizes), for a failure.
-const diagAfter = await page.evaluate(() => { try { return window.__size().events.slice(-24).map((e) => e.kind + " " + e.d).join(" | "); } catch (_) { return ""; } });
-console.log(`reading the history through a repaint: ${upBefore} rows up before, ${upAfter} after`);
-console.log(`  the viewer's record: ${diagAfter}`);
-const keptPlace = upBefore > 0 && upAfter > 0;
-await step('reading the history: back', cols, trows, 3000);
+const widthTo = async (want) => {
+  for (let i = 0; i < 8; i++) {
+    const [c, r] = await grid();
+    if (c === want) return r;
+    const vp = page.viewportSize();
+    const cw = await page.evaluate(() => window.__term._core._renderService.dimensions.css.cell.width);
+    await page.setViewportSize({ width: Math.max(300, Math.round(vp.width + (want - c) * cw)), height: vp.height });
+    await page.waitForTimeout(500);
+  }
+  return (await grid())[1];
+};
+const record = () => page.evaluate(() => { try { return window.__size().events.slice(-24).map((e) => e.kind + ' ' + e.d).join(' | '); } catch (_) { return ''; } });
+const loops = Number(process.env.READ_LOOPS || 1);
+let keptPlace = true, readFails = 0;
+for (let i = 0; i < loops; i++) {
+  await page.evaluate(() => window.__term.scrollLines(-40));
+  const upBefore = await upBy();
+  const rowsBefore = (await grid())[1];
+  const target = i % 2 === 0 ? cols - 12 : cols;
+  const rowsAfter = await widthTo(target);
+  await page.waitForTimeout(4000);
+  const upAfter = await upBy();
+  const ok = upBefore > 0 && upAfter > 0 && rowsAfter === rowsBefore;
+  if (!ok) { keptPlace = false; readFails++; console.log(`reading the history, loop ${i + 1}: ${upBefore} up before, ${upAfter} after, rows ${rowsBefore} -> ${rowsAfter}\n  the viewer's record: ${await record()}`); }
+  else if (loops === 1 || i === loops - 1) console.log(`reading the history through a repaint: ${upBefore} rows up before, ${upAfter} after (${loops} loop${loops > 1 ? 's' : ''}, ${readFails} lost the place)`);
+}
+await widthTo(cols);
+await page.waitForTimeout(3000);
 
 // A fresh join at the end, for comparison: its history is the agent's,
 // deduped, so a count above the attached viewer's own says a copy is the

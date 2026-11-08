@@ -2926,13 +2926,21 @@ func (a *Agent) snapshotHistory() []string {
 // which starts from dedupBlocks' rule). A pure function of its arguments, so it runs outside
 // screenMu (joinHistory).
 func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int, dropped bool) []string {
+	// Where the first resize the session still remembers falls: lines before
+	// it were written before any reprint could be, and dropRepaints only
+	// drops at or after it, so the index holds through it.
+	resized := len(lines)
+	for _, s := range segs {
+		resized = min(resized, s.start)
+	}
 	if !dropped {
 		lines = dropRepaints(lines, segs, screen)
 	}
 	if maxLines > 0 && len(lines) > maxLines {
+		resized -= len(lines) - maxLines
 		lines = lines[len(lines)-maxLines:]
 	}
-	return dedupRepaints(lines)
+	return dedupRepaintsFrom(lines, max(resized, 0))
 }
 
 // dropResizeRepaints removes, for every resize EXCEPT the newest, the lines its frame
@@ -3728,11 +3736,11 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.viewerSizeMu.Unlock()
 			applied := a.sizeBook.lastApplied()
 			pc, pr := applied.cols, applied.rows
-			// Re-publish the PTY size so the freshly-joined viewer
-			// can size its xterm.js to match. Existing viewers
-			// no-op this since they're already at the right size.
+			// A freshly-joined viewer through the relay is told the
+			// PTY size first thing in its stream (runSender); those
+			// attached on this machine are told here too.
 			if pc > 0 && pr > 0 {
-				a.broadcastSize(pc, pr)
+				a.tellLocalViewers(pc, pr)
 				// Force the shell to repaint its prompt on the
 				// 0→1+ transition only. That covers the true
 				// reattach case (sole viewer dropped, came back)
