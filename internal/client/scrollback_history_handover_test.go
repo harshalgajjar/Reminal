@@ -435,3 +435,47 @@ func TestAYoungSessionsRestartDrawsItsHistoryOnce(t *testing.T) {
 		t.Errorf("the first line is in the history %d times after the restart, want once", n)
 	}
 }
+
+// A ring from the session's first output can still leave history it does not
+// draw: lines an older restart put back, outside the ring. Where the history's
+// tail matches what the ring draws, those go back as before, once.
+func TestARestartKeepsHistoryTheRingDoesNotDraw(t *testing.T) {
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := handoverAgent(t, box)
+	var b strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&b, "young %d the quick brown fox jumps over the lazy dog\r\n", i)
+	}
+	a.record([]byte(b.String()))
+	path, k, err := a.writeScrollbackDump()
+	if err != nil || path == "" {
+		t.Fatalf("dump: %q %v", path, err)
+	}
+	r := handoverAgent(t, box)
+	r.resumeDump = takeScrollbackDump(path, k, a.sessionID)
+	if r.resumeDump == nil || r.resumeDump.Entries[0].Seq != 1 {
+		t.Fatal("fixture: want a ring from its first output")
+	}
+	var earlier []string
+	for i := 1; i <= 30; i++ {
+		earlier = append(earlier, fmt.Sprintf("earlier %d put back by a restart before", i))
+	}
+	r.resumeDump.History = append(earlier, r.resumeDump.History...)
+	r.restoreResumedScrollback()
+	r.screenMu.Lock()
+	history := r.renderedHistory()
+	history = append(history, renderedScreenRows(r.screen)...)
+	r.screenMu.Unlock()
+	for _, want := range []string{"earlier 1 put", "earlier 30 put", "young 1 the", "young 80 the"} {
+		n := 0
+		for _, l := range history {
+			if strings.Contains(stripANSI(l), want) {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%q is in the history %d times after the restart, want once", want, n)
+		}
+	}
+}
