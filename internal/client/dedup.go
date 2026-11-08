@@ -422,7 +422,11 @@ func dedupAgainstFrame(history, screen []string) []string {
 	}
 	dropSeamDebris(history, drop)
 	if dedupStrict {
-		for _, x := range unshownRows(history, drop, screen) {
+		// What it drops is the live frame's re-emission, a reprint; but
+		// whether a resize came between is not known here, so a quote bar
+		// stays text.
+		anywhere := func(int, int) bool { return true }
+		for _, x := range unshownRows(history, drop, screen, anywhere, false) {
 			drop[x] = false
 		}
 	}
@@ -492,13 +496,16 @@ func dedupRepaintsIn(lines []string, marks []lineMark) []string {
 			// Inside a frame a copy at the same width can be a reprint; outside
 			// one only a copy wrapped otherwise can (an app's reprint at a new
 			// width whose resize is forgotten), never one printed as it was.
-			if src.reprintOf(lines[p.i:p.j], words, reversed, !eligible(p)) {
+			// From the bottom, only inside a frame or with a resize between: with
+			// none, text before the same text printed later is the program's own.
+			at, ok := src.reprintOf(lines[p.i:p.j], words, reversed, !eligible(p))
+			if ok && (!reversed || eligible(p) || src.resizes[at] != marks[p.i].resizes) {
 				for x := p.i; x < p.j; x++ {
 					drop[x] = true
 				}
 				continue
 			}
-			src.add(lines[p.i:p.j], words)
+			src.add(lines[p.i:p.j], words, marks[p.i].resizes)
 		}
 	}
 	forward := make([]int, len(paras))
@@ -543,7 +550,7 @@ func dedupRepaintsIn(lines []string, marks []lineMark) []string {
 	// The words decide what is a copy, but a row is its text: one whose text
 	// is shown nowhere else (a ✗ where a ✓ was, WARNING for warning, 1000 for
 	// 100) is not a copy, and its paragraph stays.
-	if unshown := unshownRows(lines, drop, nil); len(unshown) > 0 {
+	if unshown := unshownRows(lines, drop, nil, reprintable(marks, 0), true); len(unshown) > 0 {
 		para := make([]int, len(lines))
 		for k, p := range paras {
 			for x := p.i; x < p.j; x++ {
@@ -562,61 +569,74 @@ func dedupRepaintsIn(lines []string, marks []lineMark) []string {
 // kept nor by also (rows shown elsewhere: the screen). Text is a row's
 // tokens as printed, split at spaces; colours are no text, so a row that
 // differs from a kept one only in colour is shown by it. A dropped row is
-// shown when its text is
+// shown by a kept row whose text it is, whole. Where it can be a reprint of
+// the kept text (loose: asked of the dropped row and the kept one, a line of
+// lines or -1 for one of also; inside a frame, or with a resize between the
+// two) it is shown too when its text is
 //   - an unbroken run of the kept text that crosses from one kept row into
 //     the next, never one inside a single longer row (a shorter line that
 //     only begins as an earlier one did);
 //   - or part of a piece of dropped rows, one after another, whose text is
-//     kept text covering at least one kept row whole: a kept row again, the
-//     same text wrapped at another width (a reprint after a resize), or one
-//     cut at the screen's top or bottom edge.
+//     kept text covering at least one kept row whole: the same text wrapped
+//     at another width, or cut at the screen's top or bottom edge.
 //
-// A quote bar leading a row (quoteGutter) is no text: wrapping repeats it on
-// every row. Only a redraw's debris (redrawDebris) has no text to lose.
-func unshownRows(lines []string, drop []bool, also []string) []int {
-	tokens := func(s string) []string {
-		t := strings.Fields(dedupANSI.ReplaceAllString(s, ""))
-		if len(t) > 1 && quoteGutter[t[0]] {
-			t = t[1:]
+// There, and when quotes says so, a quote bar leading a row (quoteGutter) is
+// no text either: wrapping repeats it on every row. Only a redraw's debris
+// (redrawDebris) has no text to lose.
+func unshownRows(lines []string, drop []bool, also []string, loose func(x, k int) bool, quotes bool) []int {
+	raw := func(s string) []string { return strings.Fields(dedupANSI.ReplaceAllString(s, "")) }
+	bare := func(t []string) []string {
+		if quotes && len(t) > 1 && quoteGutter[t[0]] {
+			return t[1:]
 		}
 		return t
 	}
-	toks := make([][]string, len(lines))
+	key := func(t []string) string { return strings.Join(t, "\x00") }
+	toks := make([][]string, len(lines)) // as printed
 	for x, l := range lines {
-		toks[x] = tokens(l)
+		toks[x] = raw(l)
 	}
 	var stream []string
-	var rowOf []int // the kept row each token of stream is in, by its order
-	row := 0
+	var rowOf []int        // the kept row each token of stream is in, by its order
+	var lineOf []int       // and that row's line (-1: one of also)
 	edge := map[int]bool{} // where in stream a kept row begins or ends
 	at := map[string][]int{}
-	read := func(t []string) {
+	whole := map[string]bool{} // the kept rows' text, as printed
+	row := 0
+	read := func(t []string, line int) {
 		if len(t) == 0 {
 			return
 		}
+		whole[key(t)] = true
+		t = bare(t)
 		row++
 		edge[len(stream)] = true
 		for _, w := range t {
 			at[w] = append(at[w], len(stream))
 			stream = append(stream, w)
 			rowOf = append(rowOf, row)
+			lineOf = append(lineOf, line)
 		}
 		edge[len(stream)] = true
 	}
 	for x := range lines {
 		if !drop[x] {
-			read(toks[x])
+			read(toks[x], x)
 		}
 	}
 	for _, l := range also {
-		read(tokens(l))
+		read(raw(l), -1)
 	}
-	// match is where text is in the kept stream: the starts it had (all, when
-	// nil), narrowed to those it still has once n of its tokens are matched
-	// and the next ones are next.
-	match := func(starts []int, n int, next []string) []int {
+	// match is where text is in the kept stream: the starts it had (those
+	// loose allows for row x, when nil), narrowed to those it still has once
+	// n of its tokens are matched and the next ones are next.
+	match := func(starts []int, x, n int, next []string) []int {
 		if starts == nil {
-			starts = at[next[0]]
+			for _, s := range at[next[0]] {
+				if loose(x, lineOf[s]) {
+					starts = append(starts, s)
+				}
+			}
 		}
 		var out []int
 		for _, s := range starts {
@@ -627,9 +647,9 @@ func unshownRows(lines []string, drop []bool, also []string) []int {
 		}
 		return out
 	}
-	// whole: of the starts of text n tokens long, one covers a kept row whole;
-	// across: one is anywhere but inside one row.
-	place := func(starts []int, n int) (whole, across bool) {
+	// covers: of the starts of text n tokens long, one covers a kept row
+	// whole; across: one is anywhere but inside one row.
+	place := func(starts []int, n int) (covers, across bool) {
 		for _, s := range starts {
 			e := s + n
 			first, last := rowOf[s], rowOf[e-1] // the rows it covers whole
@@ -639,10 +659,10 @@ func unshownRows(lines []string, drop []bool, also []string) []int {
 			if !edge[e] {
 				last--
 			}
-			whole = whole || first <= last
+			covers = covers || first <= last
 			across = across || rowOf[s] != rowOf[e-1]
 		}
-		return whole, across
+		return covers, across
 	}
 	dropped := func(x int) bool { return x < len(lines) && drop[x] && len(toks[x]) > 0 }
 	shown := make([]bool, len(lines))
@@ -651,19 +671,26 @@ func unshownRows(lines []string, drop []bool, also []string) []int {
 			p++
 			continue
 		}
+		if whole[key(toks[p])] {
+			shown[p] = true
+			p++
+			continue
+		}
 		// The longest piece from p whose text is kept text covering a row whole.
 		q, n, starts := p, 0, []int(nil)
 		for k := p; dropped(k); k++ {
-			if starts = match(starts, n, toks[k]); len(starts) == 0 {
+			t := bare(toks[k])
+			if starts = match(starts, p, n, t); len(starts) == 0 {
 				break
 			}
-			n += len(toks[k])
-			if whole, _ := place(starts, n); whole {
+			n += len(t)
+			if covers, _ := place(starts, n); covers {
 				q = k + 1
 			}
 		}
 		if q == p { // no piece: the row on its own
-			_, shown[p] = place(match(nil, 0, toks[p]), len(toks[p]))
+			t := bare(toks[p])
+			_, shown[p] = place(match(nil, p, 0, t), len(t))
 			p++
 			continue
 		}
@@ -683,20 +710,23 @@ func unshownRows(lines []string, drop []bool, also []string) []int {
 
 // reprintSource is the text kept so far in one pass of dedupRepaints: its
 // words as one stream (in reading order, or reversed for the pass from the
-// bottom), where each word starts in it, and its rows as printed.
+// bottom), where each word starts in it, how many resizes came before each
+// word was printed, and its rows as printed.
 type reprintSource struct {
-	words []string
-	at    map[string][]int
-	rows  map[string]bool
+	words   []string
+	at      map[string][]int
+	resizes []int
+	rows    map[string]bool
 }
 
-func (s *reprintSource) add(rows, words []string) {
+func (s *reprintSource) add(rows, words []string, resizes int) {
 	if s.at == nil {
 		s.at, s.rows = map[string][]int{}, map[string]bool{}
 	}
 	for _, w := range words {
 		s.at[w] = append(s.at[w], len(s.words))
 		s.words = append(s.words, w)
+		s.resizes = append(s.resizes, resizes)
 	}
 	for _, r := range rows {
 		if t := dedupRow(r); t != "" {
@@ -706,7 +736,8 @@ func (s *reprintSource) add(rows, words []string) {
 }
 
 // reprintOf reports whether a paragraph (its rows, and its words in the
-// pass's order) is a reprint of the source at another width: all its words,
+// pass's order) is a reprint of the source at another width, and where in
+// the source the run it matched begins: all its words,
 // at least a matched run's worth, in one unbroken run of the source, the
 // last word allowed a resize's cut ("unwrapped" as "unwrapp"); and wrapped
 // otherwise than the source, some row of it printed nowhere in it. Words
@@ -715,9 +746,9 @@ func (s *reprintSource) add(rows, words []string) {
 // file just shown) are the program saying it again, not a reprint.
 // Its blind spot: text the program prints again in one unbroken run, wrapped
 // otherwise (`fmt -w 30` of a file just shown by `cat`), reads as a reprint.
-func (s *reprintSource) reprintOf(rows, words []string, reversed, mustRewrap bool) bool {
+func (s *reprintSource) reprintOf(rows, words []string, reversed, mustRewrap bool) (int, bool) {
 	if len(words) < dedupFrameRunMin || s.at == nil {
-		return false
+		return 0, false
 	}
 	if mustRewrap {
 		rewrapped := false
@@ -728,7 +759,7 @@ func (s *reprintSource) reprintOf(rows, words []string, reversed, mustRewrap boo
 			}
 		}
 		if !rewrapped {
-			return false
+			return 0, false
 		}
 	}
 	cut := len(words) - 1 // the paragraph's last word, wherever the pass puts it
@@ -760,10 +791,10 @@ func (s *reprintSource) reprintOf(rows, words []string, reversed, mustRewrap boo
 			}
 		}
 		if ok {
-			return true
+			return i, true
 		}
 	}
-	return false
+	return 0, false
 }
 
 // dedupRow is a row as read: its text without styling or the space around it.
@@ -1092,6 +1123,20 @@ func redrawDebris(l string) bool {
 
 // redrawDebrisMax is the most characters a redraw's debris row shows.
 const redrawDebrisMax = 3
+
+// reprintable is unshownRows' loose for lines marked by repaintLines: a
+// dropped row can be a reprint of a kept one inside a frame, or with a resize
+// between them; of the screen (k -1), with a resize since it was printed
+// (screenResizes: every resize known).
+func reprintable(marks []lineMark, screenResizes int) func(x, k int) bool {
+	return func(x, k int) bool {
+		other := screenResizes
+		if k >= 0 {
+			other = marks[k].resizes
+		}
+		return marks[x].reprint || marks[x].resizes != other
+	}
+}
 
 // quoteGutter is the bars a program draws down a quote's left side, one per
 // row, however it is wrapped.

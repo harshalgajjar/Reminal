@@ -210,3 +210,20 @@ func TestResizesOutliveATallerScreen(t *testing.T) {
 		}
 	}
 }
+
+// Once the history is as long as its bound its front may have been evicted,
+// so where the resizes happened is no longer known: forgotten, not misused.
+func TestResizesForgottenAtTheCap(t *testing.T) {
+	a := clearingAgent(t, 80, 24)
+	a.scrollbackLines = 50
+	a.screen.Scrollback().SetMaxLines(50)
+	a.record(fillerLines("A", 30))
+	a.resizeScreen(70, 24)
+	if len(a.resizeAt) == 0 {
+		t.Fatal("setup: the resize is not remembered")
+	}
+	a.record(fillerLines("B", 60))
+	if got := a.resizesKnown(a.screen.Scrollback().Len()); got != nil || a.resizeAt != nil {
+		t.Errorf("at the cap: given %v, kept %v, want both forgotten", got, a.resizeAt)
+	}
+}

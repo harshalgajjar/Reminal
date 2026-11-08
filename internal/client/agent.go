@@ -2964,7 +2964,7 @@ func dedupHistory(lines []string, segs []resizeSeg, resizes []int, screen string
 	}
 	reprints := repaintLines(lines, segs, resizes)
 	if drop := dropRepaintsMask(lines, segs, screen); drop != nil {
-		for _, x := range unshownRows(lines, drop, strings.Split(screen, "\n")) {
+		for _, x := range unshownRows(lines, drop, strings.Split(screen, "\n"), reprintable(reprints, len(resizes)), true) {
 			drop[x] = false // a row shown nowhere else is no repaint
 		}
 		lines, reprints = compactDroppedAlong(lines, drop, reprints)

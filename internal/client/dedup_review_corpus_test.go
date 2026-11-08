@@ -30,8 +30,9 @@ import (
 // comes back exactly in every mode: running it again is news, not a reprint.
 // Otherwise, with a resize a copy may go (a paragraph printed again as it was
 // after a resize, or one inside its frame, can be a reprint), but every row
-// is still shown at least once: its text, as printed, not just its words. The one exception is reprint-rewrapped, the
-// same paragraph at two widths: with its frame it goes as
+// is still shown at least once: its text as printed, not just its words,
+// though maybe inside a longer row or wrapped otherwise (reviewCorpusMissing).
+// The one exception is reprint-rewrapped, the same paragraph at two widths: with its frame it goes as
 // reprint-rewrapped.want.txt says (the reprint dropped). Without a frame it
 // is not checked, since a word-level match there is how a reconnect's
 // stacked copies are cleared when the resizes behind them are forgotten.
@@ -129,17 +130,24 @@ func reviewCorpusFrame(lines []string) resizeSeg {
 	return resizeSeg{start: start, maxOver: screen, words: regionWords(lines, max(0, start-screen), start)}
 }
 
-// reviewCorpusMissing is the rows of in whose text (colours and the spaces
-// around it aside) out no longer shows on any row.
+// reviewCorpusMissing is the rows of in whose text out no longer shows: its
+// tokens as printed (split at spaces, colours aside) are no unbroken run of
+// out's, read as one text, rows wrapped however they are.
 func reviewCorpusMissing(in, out []string) []string {
-	shown := map[string]bool{}
-	for _, l := range out {
-		shown[strings.TrimSpace(dedupANSI.ReplaceAllString(l, ""))] = true
+	text := func(l string) string {
+		return strings.Join(strings.Fields(dedupANSI.ReplaceAllString(l, "")), "\x00")
 	}
+	var all []string
+	for _, l := range out {
+		if t := text(l); t != "" {
+			all = append(all, t)
+		}
+	}
+	shown := "\x00" + strings.Join(all, "\x00") + "\x00"
 	var missing []string
 	for _, l := range in {
-		if r := strings.TrimSpace(dedupANSI.ReplaceAllString(l, "")); r != "" && !shown[r] {
-			missing = append(missing, r)
+		if t := text(l); t != "" && !strings.Contains(shown, "\x00"+t+"\x00") {
+			missing = append(missing, strings.TrimSpace(dedupANSI.ReplaceAllString(l, "")))
 		}
 	}
 	return missing
@@ -156,6 +164,14 @@ func TestStrictFramePassKeepsRowsTheScreenChanged(t *testing.T) {
 	got := dedupAgainstFrame(append([]string(nil), history...), screen)
 	if missing := reviewCorpusMissing(history, append(got, screen...)); len(missing) > 0 {
 		t.Errorf("rows no longer shown at all: %q (history kept %q)", missing, got)
+	}
+	// Nor is a line shown only by its quoted form on the screen: whether a
+	// resize came between is not known there.
+	said := "Thanks, the deploy finished at noon and every host came back healthy after the restart"
+	history = []string{said}
+	screen = []string{"> " + said, "Great, closing the ticket now."}
+	if got := dedupAgainstFrame(append([]string(nil), history...), screen); len(got) != 1 {
+		t.Errorf("the line went, shown only quoted on the screen: kept %q", got)
 	}
 }
 
@@ -193,7 +209,8 @@ func TestUnshownRowsReadsReprintsAsShown(t *testing.T) {
 		for x := len(c.kept) + 1; x < len(lines); x++ {
 			drop[x] = true
 		}
-		if got := unshownRows(lines, drop, nil); len(got) != c.want {
+		anywhere := func(int, int) bool { return true }
+		if got := unshownRows(lines, drop, nil, anywhere, true); len(got) != c.want {
 			t.Errorf("%s: %d rows restored, want %d", c.name, len(got), c.want)
 		}
 	}

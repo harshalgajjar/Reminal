@@ -1,0 +1,6 @@
+Thanks, the deploy finished at noon and every host came back healthy after the restart
+
+> Thanks, the deploy finished at noon and every host came back healthy after the restart
+Great, closing the ticket now.
+
+$
