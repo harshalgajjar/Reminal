@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -300,9 +301,11 @@ func restoreCut(d *scrollbackDump, again []string) int {
 }
 
 // ringStartIn is where in history the ring's replay (again) begins: the first
-// of its lines with text, and the two after it, found there together; of
-// several places, the one nearest where the two would end together. Not
-// found, all of history (a line twice rather than one lost).
+// of its lines with text, and the two after it, found there together, at a
+// place from which every row of the history after it is drawn again
+// (drawnAgain), or nothing after it would be lost with it. Of several such
+// places, the one nearest where the two would end together; none, all of
+// history (a line twice rather than one lost).
 func ringStartIn(history, again []string) int {
 	plain := func(l string) string { return strings.TrimRight(stripANSI(l), " ") }
 	at := map[string][]int{}
@@ -311,30 +314,77 @@ func ringStartIn(history, again []string) int {
 			at[p] = append(at[p], i)
 		}
 	}
+	drawn := drawnAgain(again)
 	for j := 0; j < len(again) && j < 64; j++ {
 		first := plain(again[j])
 		if first == "" {
 			continue
 		}
 		n := min(3, len(again)-j)
-		best, near := -1, 0
+		var places []int
 		for _, p := range at[first] {
-			if p+n > len(history) {
-				continue
-			}
-			same := true
+			same := p+n <= len(history)
 			for k := 1; k < n && same; k++ {
 				same = plain(history[p+k]) == plain(again[j+k])
 			}
-			if d := absInt(p - (len(history) - len(again) + j)); same && (best < 0 || d < near) {
-				best, near = p, d
+			if same {
+				places = append(places, p)
 			}
 		}
-		if best >= 0 {
-			return best
+		want := len(history) - len(again) + j
+		slices.SortStableFunc(places, func(a, b int) int { return absInt(a-want) - absInt(b-want) })
+		for _, p := range places {
+			if !slices.ContainsFunc(history[p:], func(l string) bool { return !drawn(l) }) {
+				return p
+			}
 		}
 	}
 	return len(history)
+}
+
+// drawnAgain says of a row whether rows (what a replay draws) show its text:
+// its tokens, split at spaces, an unbroken run of theirs read as one text. Or
+// a redraw's splice of two: the start of one line, cut mid-word, and the rest
+// of another, each shown (the first's last token the start of one of theirs).
+// A row with no text is drawn.
+func drawnAgain(rows []string) func(string) bool {
+	var stream []string
+	at := map[string][]int{}
+	for _, r := range rows {
+		for _, w := range strings.Fields(stripANSI(r)) {
+			at[w] = append(at[w], len(stream))
+			stream = append(stream, w)
+		}
+	}
+	// run says whether t is a run of stream; cut: its last token may be the
+	// start of the one there.
+	run := func(t []string, cut bool) bool {
+		for _, s := range at[t[0]] {
+			if s+len(t) > len(stream) {
+				continue
+			}
+			ok := true
+			for k := 1; k < len(t) && ok; k++ {
+				ok = stream[s+k] == t[k] || cut && k == len(t)-1 && strings.HasPrefix(stream[s+k], t[k])
+			}
+			if ok {
+				return true
+			}
+		}
+		return false
+	}
+	return func(row string) bool {
+		t := strings.Fields(stripANSI(row))
+		if len(t) == 0 || run(t, false) {
+			return true
+		}
+		for k := 2; k <= len(t)-1; k++ {
+			if run(t[:k], true) && run(t[k:], false) {
+				return true
+			}
+		}
+		return false
+	}
 }
 
 // ringFromStart says whether a dump's output ring still holds the session's

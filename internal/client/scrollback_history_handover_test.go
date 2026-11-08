@@ -395,7 +395,8 @@ func TestARestoreLetsGoOfItsScratchEmulator(t *testing.T) {
 // A young session's ring still holds its first output, so replayed it draws
 // the whole history again: a restart does not put the history back as well.
 // Put back, the history came back twice whenever the replay drew a line
-// otherwise than the history held it (here, one line changed in the dump).
+// otherwise than the history held it: here a row a redraw overwrote mid-way
+// (the start of one line, cut, and the rest of the next).
 func TestAYoungSessionsRestartDrawsItsHistoryOnce(t *testing.T) {
 	key, _ := crypto.NewSessionKey()
 	box, _ := crypto.NewBox(key)
@@ -414,7 +415,9 @@ func TestAYoungSessionsRestartDrawsItsHistoryOnce(t *testing.T) {
 	if r.resumeDump == nil || len(r.resumeDump.History) < 40 || r.resumeDump.Entries[0].Seq != 1 {
 		t.Fatal("fixture: want a dump with history and a ring from its first output")
 	}
-	r.resumeDump.History[20] += " (drawn otherwise)"
+	h := r.resumeDump.History
+	h[20] = "young 21 the quick bro" + " fox jumps over the lazy dog"
+	r.resumeDump.History = append(h[:21:21], h[22:]...)
 	r.restoreResumedScrollback()
 	r.screenMu.Lock()
 	history := r.renderedHistory()
@@ -470,6 +473,56 @@ func TestARestartKeepsHistoryTheRingDoesNotDraw(t *testing.T) {
 		}
 		if n != 1 {
 			t.Errorf("%q is in the history %d times after the restart, want once", want, n)
+		}
+	}
+}
+
+// Where the ring's first lines are in the history more than once (an older
+// restart put the same banner back above), the history goes back up to the
+// copy from which all that follows is drawn again: never an older one, whose
+// lines below it the replay does not draw (they were lost). The ring here is
+// a banner, 30 lines and 40 screen rows; each case says what the history
+// holds besides it, and nothing of the history may be missing after.
+func TestARestartCutsTheHistoryWhereNothingIsLost(t *testing.T) {
+	banner := []string{"Welcome to the tool", "Type help for help", "$ make test"}
+	var ring []string
+	ring = append(ring, banner...)
+	for i := 1; i <= 30; i++ {
+		ring = append(ring, fmt.Sprintf("ring line %d of the session", i))
+	}
+	for i := 1; i <= 40; i++ {
+		ring = append(ring, fmt.Sprintf("screen row %d", i))
+	}
+	older := func(gap int) []string {
+		h := append([]string(nil), banner...)
+		h = append(h, "an older session's line")
+		for i := 1; i <= gap; i++ {
+			h = append(h, fmt.Sprintf("between line %d put back by a restart", i))
+		}
+		return h
+	}
+	drawnOtherwise := append([]string{"Welcome to the tool, again", "Type help for help", "$ make test"}, ring[3:]...)
+	for _, c := range []struct {
+		name    string
+		history []string
+		again   []string
+	}{
+		{"an older copy of the banner 10 lines above", append(older(10), ring...), ring},
+		{"an older copy of the banner 40 lines above", append(older(40), ring...), ring},
+		// A full-screen app up: the history holds none of the screen's rows.
+		{"10 lines above, without the screen rows", append(older(10), ring[:33]...), ring},
+		{"40 lines above, without the screen rows", append(older(40), ring[:33]...), ring},
+		{"the session's own start pruned away", append(older(10), ring[20:]...), ring},
+		{"the ring's start drawn otherwise", append(older(10), ring...), drawnOtherwise},
+	} {
+		cut := ringStartIn(c.history, c.again)
+		shown := append(append([]string(nil), c.history[:cut]...), c.again...)
+		drawn := drawnAgain(shown)
+		for _, l := range c.history {
+			if !drawn(l) {
+				t.Errorf("%s: cut at %d of %d, and %q is lost", c.name, cut, len(c.history), l)
+				break
+			}
 		}
 	}
 }
