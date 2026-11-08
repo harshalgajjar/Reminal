@@ -213,14 +213,35 @@ func TestResizesOutliveATallerScreen(t *testing.T) {
 func TestResizesForgottenAtTheCap(t *testing.T) {
 	a := clearingAgent(t, 80, 24)
 	a.scrollbackLines = 50
-	a.screen.Scrollback().SetMaxLines(50)
+	a.screen.SetMaxLines(50)
 	a.record(fillerLines("A", 30))
 	a.resizeScreen(70, 24)
 	if len(a.resizeAt) == 0 {
 		t.Fatal("setup: the resize is not remembered")
 	}
 	a.record(fillerLines("B", 60))
-	if got := a.resizesKnown(a.screen.Scrollback().Len()); got != nil || a.resizeAt != nil {
+	if got := a.resizesKnown(a.screen.HistoryLen()); got != nil || a.resizeAt != nil {
 		t.Errorf("at the cap: given %v, kept %v, want both forgotten", got, a.resizeAt)
+	}
+}
+
+// When the terminal lets the history's oldest lines go (its byte budget),
+// every position counted from the top moved: the resizes before are
+// forgotten, and the one that sees it counts from the top as it is.
+func TestResizesForgottenWhenTheHistoryIsPruned(t *testing.T) {
+	a := clearingAgent(t, 80, 24)
+	a.record(fillerLines("A", 60))
+	a.resizeScreen(70, 24)
+	a.record(fillerLines("B", 30))
+	a.resizeScreen(80, 24)
+	if len(a.resizeAt) != 2 {
+		t.Fatalf("setup: %d resizes remembered, want 2", len(a.resizeAt))
+	}
+	a.screen.mu.Lock()
+	a.screen.pruned = true // as the terminal reports a prune
+	a.screen.mu.Unlock()
+	a.resizeScreen(70, 24)
+	if len(a.resizeAt) != 1 {
+		t.Errorf("%d resizes remembered after a prune, want only the one since", len(a.resizeAt))
 	}
 }
