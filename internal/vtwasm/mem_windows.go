@@ -16,7 +16,10 @@ func reserve(n uint64) ([]byte, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	b := unsafe.Slice((*byte)(unsafe.Pointer(addr)), n)
+	// The address is the system's, not Go's: read as a pointer through a
+	// pointer to it, which vet accepts.
+	p := *(*unsafe.Pointer)(unsafe.Pointer(&addr))
+	b := unsafe.Slice((*byte)(p), n)
 	return b, func() { _ = windows.VirtualFree(addr, 0, windows.MEM_RELEASE) }, nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The module kept in the tree is the one scripts/ghostty-vt/build.sh builds
@@ -226,9 +227,54 @@ func TestGapsComeBackAsSpaces(t *testing.T) {
 		{"\x1b[44m\x1b[4X\x1b[4C", "\x1b[44m    "},
 		{"x\x1b[Cy", "x y"},
 		{"\x1b[0m\x1b[1m\x1b[38;5;2mok\x1b[0m\x1b[1Cz", "\x1b[0m\x1b[1m\x1b[38;5;2mok\x1b[0m z"},
+		// The pen is the style in force, written back once: bold then red
+		// then green is bold green; a colour set again replaces the last.
+		{"\x1b[1m\x1b[31m\x1b[32ma\x1b[1Cb", "\x1b[1m\x1b[31m\x1b[32ma\x1b[0m \x1b[1;32mb"},
+		{"\x1b[38;2;1;2;3;4ma\x1b[1Cb", "\x1b[38;2;1;2;3;4ma\x1b[0m \x1b[4;38;2;1;2;3mb"},
+		{"\x1b[1;3m\x1b[22ma\x1b[1Cb", "\x1b[1;3m\x1b[22ma\x1b[0m \x1b[3mb"},
 	} {
 		if got := stepsToSpaces(c.in); got != c.want {
 			t.Errorf("%q: %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// A call that runs past its time limit closes the instance and is an error,
+// never a caller held for good: the terminal is then unusable (Err), every
+// call after it returns at once, and nothing panics.
+func TestACallPastItsTimeLimitIsAnError(t *testing.T) {
+	v, err := New(80, 24, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	saved := callLimit
+	callLimit = time.Nanosecond
+	defer func() { callLimit = saved }()
+	_, werr := v.Write([]byte("hello\r\n"))
+	if werr == nil || v.Err() == nil {
+		t.Fatalf("a write past its limit: %v, Err %v; want errors", werr, v.Err())
+	}
+	callLimit = saved
+	if _, err := v.Write([]byte("more")); err == nil {
+		t.Error("a write to a terminal that failed was taken")
+	}
+	if h, err := v.History(); h != "" || err == nil {
+		t.Errorf("history of a terminal that failed: %q, %v", h, err)
+	}
+}
+
+// Thousands of style changes before a gap write back one sequence, not all
+// of them: kept as every sequence since a reset, synthetic output made each
+// step over empty cells write them all again (quadratic).
+func TestManyStyleChangesWriteBackOnePen(t *testing.T) {
+	var in strings.Builder
+	for i := 0; i < 5000; i++ {
+		fmt.Fprintf(&in, "\x1b[3%dm", i%8)
+	}
+	in.WriteString("a\x1b[1Cb")
+	out := stepsToSpaces(in.String())
+	if tail := out[strings.LastIndex(out, "\x1b[0m"):]; len(tail) > 32 {
+		t.Errorf("the pen after the gap is %d bytes: %q…", len(tail), tail[:32])
 	}
 }

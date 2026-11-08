@@ -87,3 +87,32 @@ func TestATerminalPastItsMemoryKeepsItsNewestRowsAndGoesOn(t *testing.T) {
 		t.Errorf("a terminal after it shows %q", out)
 	}
 }
+
+// A full scrollback at 200 columns stays near its byte budget: the
+// terminal's memory is what the scrollback reached, never given back, so a
+// cap counted in rows (80,000 of them) kept some 200 MiB for good.
+func TestAFullScrollbackStaysNearItsBudget(t *testing.T) {
+	v, err := New(200, 50, 80000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer v.Close()
+	row := strings.Repeat("x", 199) + "\r\n"
+	var chunk strings.Builder
+	for i := 0; i < 1000; i++ {
+		chunk.WriteString(row)
+	}
+	for i := 0; i < 100; i++ { // 100,000 rows
+		if _, err := v.Write([]byte(chunk.String())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := v.mod.Memory().Size()
+	t.Logf("memory %d MiB, %d rows kept", got>>20, v.ScrollbackRows())
+	if limit := uint32(ScrollbackBytes*2 + 16<<20); got > limit {
+		t.Errorf("memory %d MiB with a full scrollback, want at most %d MiB", got>>20, limit>>20)
+	}
+	if h, err := v.History(); err != nil || h == "" {
+		t.Errorf("the history after: %d bytes, %v", len(h), err)
+	}
+}

@@ -108,8 +108,8 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 		NextSeq: a.buf.LatestSeq(),
 	}
 	dump.BaseCols, dump.BaseRows = a.buf.Base()
+	a.screenMu.Lock()
 	if a.screen != nil {
-		a.screenMu.Lock()
 		// The screen's rows too: what an app left above a frame it repaints
 		// in place never scrolls into scrollback, and its ring holds only the
 		// repaints. Should the replay draw them again, the copy is the
@@ -125,8 +125,8 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 			dump.History = dump.History[n:]
 		}
 		dump.HistoryCols = a.screen.Width()
-		a.screenMu.Unlock()
 	}
+	a.screenMu.Unlock()
 	dump.Entries = make([]scrollDumpEntry, 0, len(raw))
 	for _, e := range raw {
 		de := scrollDumpEntry{Seq: e.Seq, Bar: e.Bar, Cols: e.Cols, Rows: e.Rows}
@@ -272,9 +272,11 @@ func (a *Agent) restoreResumedScrollbackLocked() {
 			agentNotify("  reminal: could not restore scrollback: %v\n", err)
 			return
 		}
-		replayDump(scratch, d)
-		again := append(append([]string(nil), scratch.History()...), renderedScreenRows(scratch)...)
-		scratch.Close()
+		again := func() []string {
+			defer scratch.Close()
+			replayDump(scratch, d)
+			return append(append([]string(nil), scratch.History()...), renderedScreenRows(scratch)...)
+		}()
 		restoreHistory(a.screen, d.History[:historySeam(d.History, again)], d.HistoryCols)
 		a.noteScrollbackLen()
 	}

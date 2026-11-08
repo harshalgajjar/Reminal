@@ -93,13 +93,21 @@ func (a *Agent) takeSnapshotJoiners() (whole, paced []string) {
 // header), and returns them by joiner with the seq they cover. None: nothing
 // to send.
 func (a *Agent) snapshotParts(joiners []string) (map[string][]string, uint64, error) {
-	if a.screen == nil || a.box == nil || len(joiners) == 0 {
+	if a.box == nil || len(joiners) == 0 {
 		return nil, 0, nil
 	}
 	// As snapshotFrame: only a copy under screenMu, the rest outside it
 	// (joinInputs, joinHistory).
 	a.screenMu.Lock()
+	if a.screen == nil {
+		a.screenMu.Unlock()
+		return nil, 0, nil
+	}
 	in := a.joinInputs()
+	if a.dropFailedScreenLocked() {
+		a.screenMu.Unlock()
+		return nil, 0, nil
+	}
 	latest := a.buf.LatestSeq()
 	a.screenMu.Unlock()
 	history := a.joinHistory(in)
@@ -252,11 +260,19 @@ func (a *Agent) snapAcks() <-chan struct{} {
 // resnap: a repaint of viewers that stayed attached, not a join (the screen
 // part says so: partHeader.Resnap).
 func (a *Agent) startPacedSnapshot(conn *websocket.Conn, viewers []string, resnap bool) (uint64, error) {
-	if a.screen == nil || a.box == nil || len(viewers) == 0 {
+	if a.box == nil || len(viewers) == 0 {
 		return 0, nil
 	}
 	a.screenMu.Lock()
+	if a.screen == nil {
+		a.screenMu.Unlock()
+		return 0, nil
+	}
 	in := a.joinInputs()
+	if a.dropFailedScreenLocked() {
+		a.screenMu.Unlock()
+		return 0, nil
+	}
 	latest := a.buf.LatestSeq()
 	a.screenMu.Unlock()
 	id := newSnapshotID()

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"hash/fnv"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +49,8 @@ type sessionScreen struct {
 	// it was at the switch (refreshed at the switch, Write).
 	mainHistory    []string
 	mainHistoryKey string
+	// tail is the end of the last write (entersAltScreen).
+	tail []byte
 }
 
 // newSessionScreen is a screen of cols by rows keeping at most maxLines of
@@ -77,7 +80,16 @@ const historyRowsPerLine = 4
 func (s *sessionScreen) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.t.AltScreen() && entersAltScreen(p) {
+	// The switch can be split across two writes: the end of the last one
+	// is read with the start of this one too.
+	seam := append(s.tail, p[:min(len(p), altTail)]...)
+	sw := entersAltScreen(p) || entersAltScreen(seam)
+	if len(p) >= altTail {
+		s.tail = append(s.tail[:0], p[len(p)-altTail:]...)
+	} else {
+		s.tail = append(s.tail[:0], seam[max(0, len(seam)-altTail):]...)
+	}
+	if !s.t.AltScreen() && sw {
 		// What scrolled off up to now, kept for a join while the program
 		// is on the alternate screen.
 		s.historyLocked()
@@ -86,16 +98,27 @@ func (s *sessionScreen) Write(p []byte) (int, error) {
 	return s.t.Write(p)
 }
 
-// entersAltScreen says p switches to the alternate screen (DECSET 1049,
-// 1047 or 47, as full-screen programs do).
+// entersAltScreen says p switches to the alternate screen: DECSET 1049, 1047
+// or 47, as full-screen programs do, alone or among other modes
+// ("ESC[?1049;2004h").
 func entersAltScreen(p []byte) bool {
-	for _, seq := range []string{"\x1b[?1049h", "\x1b[?1047h", "\x1b[?47h"} {
-		if bytes.Contains(p, []byte(seq)) {
-			return true
+	for _, m := range decset.FindAllSubmatch(p, -1) {
+		for _, mode := range bytes.Split(m[1], []byte(";")) {
+			switch string(mode) {
+			case "1049", "1047", "47":
+				return true
+			}
 		}
 	}
 	return false
 }
+
+// decset is a DEC private mode set, its modes captured.
+var decset = regexp.MustCompile(`\x1b\[\?([0-9;]+)h`)
+
+// altTail is how much of the last write is kept to find a switch split
+// across two: longer than any DECSET that holds one.
+const altTail = 32
 
 // Resize makes it cols by rows, re-wrapping its scrollback. A height change
 // is done as the viewer's xterm.js does it, since what the viewer shows is
@@ -231,6 +254,11 @@ func (s *sessionScreen) SetMaxLines(n int) {
 // ClearScrollback forgets what scrolled off (ED 3, as a program clears it).
 func (s *sessionScreen) ClearScrollback() { _, _ = s.Write([]byte("\x1b[3J")) }
 
+// Err is why its terminal can no longer be used (a call into it trapped,
+// ran past its memory or its time limit), or nil. Once it is not nil every
+// read of it is empty: its owner stops using it (Agent.dropFailedScreenLocked).
+func (s *sessionScreen) Err() error { return s.t.Err() }
+
 // Close frees it.
 func (s *sessionScreen) Close() { s.t.Close() }
 
@@ -257,3 +285,43 @@ func splitRows(out string) []string {
 
 // sgrReset turns every colour and style off.
 const sgrReset = "\x1b[0m"
+
+// dropFailedScreenLocked stops using the session's screen once its terminal
+// has failed (sessionScreen.Err), and says so once: every read of it would
+// be empty, and a join would be painted a blank screen with no history, the
+// attention and login readers would read nothing. Without it, viewers are
+// given the raw output instead, as with REMINAL_SNAPSHOT=0. Caller holds
+// screenMu; true when it was dropped.
+func (a *Agent) dropFailedScreenLocked() bool {
+	if a.screen == nil {
+		return false
+	}
+	err := a.screen.Err()
+	if err == nil {
+		return false
+	}
+	agentNotify("  reminal: the copy of this session's screen stopped working (%v); viewers that join are sent its output instead.\n", err)
+	a.screen.Close()
+	a.screen = nil
+	a.resizeSegs = nil
+	a.segsGen++
+	return true
+}
+
+// haveScreen says the session has a copy of its screen to join from.
+func (a *Agent) haveScreen() bool {
+	a.screenMu.Lock()
+	defer a.screenMu.Unlock()
+	return a.screen != nil
+}
+
+// closeScreen frees the session's copy of its screen as the agent ends: its
+// terminal's memory, reserved whole (vtwasm), is given back.
+func (a *Agent) closeScreen() {
+	a.screenMu.Lock()
+	defer a.screenMu.Unlock()
+	if a.screen != nil {
+		a.screen.Close()
+		a.screen = nil
+	}
+}

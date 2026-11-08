@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -30,20 +31,41 @@ var module []byte
 
 var (
 	compileOnce sync.Once
-	runtime     wazero.Runtime
+	wasmRuntime wazero.Runtime
 	compiled    wazero.CompiledModule
 	compileErr  error
 )
 
-// compile builds the module once for every Terminal.
+// compile builds the module once for every Terminal. A call into an instance
+// is bounded in time (callLimit): past it, the instance is closed and the
+// call gives an error, so a module that spins never holds its caller.
 func compile() (wazero.Runtime, wazero.CompiledModule, error) {
 	compileOnce.Do(func() {
 		ctx := context.Background()
-		runtime = wazero.NewRuntime(ctx)
-		compiled, compileErr = runtime.CompileModule(ctx, module)
+		wasmRuntime = wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
+		compiled, compileErr = wasmRuntime.CompileModule(ctx, module)
 	})
-	return runtime, compiled, compileErr
+	return wasmRuntime, compiled, compileErr
 }
+
+// callLimit bounds one call into the instance: a write of what a program
+// wrote, a resize, a read of one value. formatLimit bounds one into the
+// formatter, which reads the whole scrollback. Variables for the tests.
+var (
+	callLimit   = 2 * time.Second
+	formatLimit = 10 * time.Second
+)
+
+// ScrollbackBytes is the most memory a terminal's scrollback takes: at 200
+// columns some 12,000 rows, at 80 some 30,000. A wasm instance never gives
+// memory back, so what the scrollback reached is what the session keeps.
+var ScrollbackBytes uint64 = 32 << 20
+
+// errAlloc is the instance refusing memory: the call it was for is not made.
+var errAlloc = errors.New("vtwasm: out of memory")
+
+// errRange is a read or write outside the instance's memory.
+var errRange = errors.New("vtwasm: out of range")
 
 // libghostty-vt's C ABI, as its headers number it (include/ghostty/vt).
 const (
@@ -84,6 +106,9 @@ type Terminal struct {
 	mod api.Module
 	fns map[string]api.Function
 	t   uint64 // GhosttyTerminal
+	// limit bounds each call of the operation under way (callLimit when
+	// zero; formatLimit while formatting).
+	limit time.Duration
 	// err is why it can no longer be used (closed, or a call into it
 	// trapped): every call after that does nothing and gives zero, never
 	// a panic in the process it runs in.
@@ -114,18 +139,25 @@ func New(cols, rows, maxLines int) (*Terminal, error) {
 	}
 	v := &Terminal{ctx: ctx, mod: mod, fns: map[string]api.Function{}}
 	slot := v.call("ghostty_wasm_alloc_opaque")
-	if rc := v.call("ghostty_terminal_new", 0, slot, uint64(clamp16(cols)), uint64(clamp16(rows))); rc != 0 {
+	if rc := v.call("ghostty_terminal_new", 0, slot, uint64(clamp16(cols)), uint64(clamp16(rows))); rc != 0 || slot == 0 || v.err != nil {
 		mod.Close(ctx)
-		return nil, fmt.Errorf("vtwasm: ghostty_terminal_new: %d", int32(rc))
+		return nil, fmt.Errorf("vtwasm: ghostty_terminal_new: %d %v", int32(rc), v.err)
 	}
 	v.t = v.call("ghostty_wasm_take_opaque", slot)
 	// Lines bound the scrollback: libghostty's default byte limit keeps a
-	// few hundred rows. Its bytes are bounded too, at half the instance's
-	// memory (mem.go): past that it prunes its oldest pages itself, before
-	// the memory is full, so formatting the rest still has room (at a full
-	// memory the formatter's buffer is refused and a join has nothing).
-	v.setSize(optScrollbackMaxBytes, min(sizeMax, memoryMax/2))
-	v.setSize(optScrollbackMaxLines, uint64(maxLines))
+	// few hundred rows. Its bytes are bounded too, by ScrollbackBytes (and
+	// never past half the instance's memory, mem.go): past that it prunes
+	// its oldest pages itself, so the session's memory stays near the budget
+	// whatever its width, and formatting the rest always has room.
+	err = errors.Join(v.setSize(optScrollbackMaxBytes, min(sizeMax, ScrollbackBytes, memoryMax/2)), v.setSize(optScrollbackMaxLines, uint64(maxLines)))
+	if err == nil {
+		err = v.err
+	}
+	if err != nil {
+		// A terminal whose set-up failed is not handed out.
+		mod.Close(ctx)
+		return nil, fmt.Errorf("vtwasm: setting up: %w", err)
+	}
 	return v, nil
 }
 
@@ -154,10 +186,15 @@ func (v *Terminal) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	buf := v.alloc(len(p))
-	v.mod.Memory().Write(buf, p)
+	buf, err := v.alloc(len(p))
+	if err != nil {
+		return 0, err
+	}
+	defer v.free(buf, len(p))
+	if err := v.put(buf, p); err != nil {
+		return 0, err
+	}
 	v.call("ghostty_terminal_vt_write", v.t, uint64(buf), uint64(len(p)))
-	v.free(buf, len(p))
 	if v.err != nil {
 		return 0, v.err
 	}
@@ -181,7 +218,7 @@ func (v *Terminal) Resize(cols, rows int) error {
 func (v *Terminal) SetMaxLines(n int) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	v.setSize(optScrollbackMaxLines, uint64(max(n, 0)))
+	_ = v.setSize(optScrollbackMaxLines, uint64(max(n, 0)))
 }
 
 // Reset is a full reset (RIS): screen, scrollback and modes, its size kept.
@@ -278,16 +315,23 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 	if v.err != nil {
 		return "", v.err
 	}
+	v.limit = formatLimit
+	defer func() { v.limit = 0 }()
 	slot := v.call("ghostty_wasm_alloc_opaque")
-	if rc := v.call("ghostty_formatter_terminal_new", 0, slot, v.t); rc != 0 {
-		return "", fmt.Errorf("vtwasm: formatter: %d", int32(rc))
+	if rc := v.call("ghostty_formatter_terminal_new", 0, slot, v.t); rc != 0 || slot == 0 || v.err != nil {
+		return "", fmt.Errorf("vtwasm: formatter: %d %v", int32(rc), v.err)
 	}
 	f := v.call("ghostty_wasm_take_opaque", slot)
 	defer v.call("ghostty_formatter_free", f)
-	val := v.alloc(32)
+	val, err := v.alloc(32)
+	if err != nil {
+		return "", err
+	}
 	defer v.free(val, 32)
 	set := func(opt uint64, word uint32) error {
-		v.mod.Memory().WriteUint32Le(val, word)
+		if err := v.put32(val, word); err != nil {
+			return err
+		}
 		if rc := v.call("ghostty_formatter_set", f, opt, uint64(val)); rc != 0 {
 			return fmt.Errorf("vtwasm: formatter option %d: %d", opt, int32(rc))
 		}
@@ -322,16 +366,19 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 			return "", fmt.Errorf("vtwasm: selection: %d", int32(rc))
 		}
 	}
-	out := v.alloc(8)
-	defer v.free(out, 8)
-	if rc := v.call("ghostty_formatter_format_alloc", f, 0, uint64(out), uint64(out+4)); rc != 0 {
-		return "", fmt.Errorf("vtwasm: format: %d", int32(rc))
+	out, err := v.alloc(8)
+	if err != nil {
+		return "", err
 	}
-	ptr, _ := v.mod.Memory().ReadUint32Le(out)
-	n, _ := v.mod.Memory().ReadUint32Le(out + 4)
+	defer v.free(out, 8)
+	if rc := v.call("ghostty_formatter_format_alloc", f, 0, uint64(out), uint64(out+4)); rc != 0 || v.err != nil {
+		return "", fmt.Errorf("vtwasm: format: %d %v", int32(rc), v.err)
+	}
+	ptr, ok1 := v.mod.Memory().ReadUint32Le(out)
+	n, ok2 := v.mod.Memory().ReadUint32Le(out + 4)
 	b, ok := v.mod.Memory().Read(ptr, n)
-	if !ok {
-		return "", errors.New("vtwasm: format: out of range")
+	if !ok1 || !ok2 || !ok {
+		return "", errRange
 	}
 	s := string(b)
 	v.call("ghostty_free", 0, uint64(ptr), uint64(n))
@@ -345,24 +392,35 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 // each on wasm32, then a bool) over a, in wasm memory the caller frees (20
 // bytes).
 func (v *Terminal) selection(a area) (uint32, error) {
-	sel := v.alloc(20)
+	sel, err := v.alloc(20)
+	if err != nil {
+		return 0, err
+	}
 	mem := v.mod.Memory()
 	for i, xy := range [][2]int{{a.x0, a.y0}, {a.x1, a.y1}} {
 		// A GhosttyPoint: a tag, then a union padded to two uint64s (so
 		// 8-aligned) whose {uint16 x; uint32 y} starts it: 24 bytes, passed by
 		// its address on wasm32.
-		pt := v.alloc(24)
-		mem.WriteUint32Le(pt, a.tag)
-		mem.WriteUint16Le(pt+8, uint16(xy[0]))
-		mem.WriteUint32Le(pt+12, uint32(xy[1]))
-		rc := v.call("ghostty_terminal_grid_ref", v.t, uint64(pt), uint64(sel+uint32(i)*8))
+		pt, err := v.alloc(24)
+		if err != nil {
+			v.free(sel, 20)
+			return 0, err
+		}
+		ok := mem.WriteUint32Le(pt, a.tag) && mem.WriteUint16Le(pt+8, uint16(xy[0])) && mem.WriteUint32Le(pt+12, uint32(xy[1]))
+		rc := uint64(1)
+		if ok {
+			rc = v.call("ghostty_terminal_grid_ref", v.t, uint64(pt), uint64(sel+uint32(i)*8))
+		}
 		v.free(pt, 24)
-		if rc != 0 {
+		if rc != 0 || v.err != nil {
 			v.free(sel, 20)
 			return 0, fmt.Errorf("vtwasm: grid ref (%d,%d): %d", xy[0], xy[1], int32(rc))
 		}
 	}
-	mem.WriteUint32Le(sel+16, 0) // not a rectangle
+	if !mem.WriteUint32Le(sel+16, 0) { // not a rectangle
+		v.free(sel, 20)
+		return 0, errRange
+	}
 	return sel, nil
 }
 
@@ -378,7 +436,13 @@ func (v *Terminal) call(name string, args ...uint64) uint64 {
 		}
 		v.fns[name] = f
 	}
-	r, err := f.Call(v.ctx, args...)
+	limit := v.limit
+	if limit == 0 {
+		limit = callLimit
+	}
+	ctx, cancel := context.WithTimeout(v.ctx, limit)
+	defer cancel()
+	r, err := f.Call(ctx, args...)
 	if err != nil {
 		v.err = fmt.Errorf("vtwasm: %s: %w", name, err)
 		return 0
@@ -389,44 +453,82 @@ func (v *Terminal) call(name string, args ...uint64) uint64 {
 	return r[0]
 }
 
-func (v *Terminal) alloc(n int) uint32 { return uint32(v.call("ghostty_wasm_alloc", uint64(n))) }
-
-func (v *Terminal) free(p uint32, n int) { v.call("ghostty_wasm_free", uint64(p), uint64(n)) }
-
-func (v *Terminal) setSize(opt int, val uint64) {
+// alloc is n bytes of the instance's memory, for the caller to free; an
+// error, and no memory, when the instance refuses them.
+func (v *Terminal) alloc(n int) (uint32, error) {
+	p := uint32(v.call("ghostty_wasm_alloc", uint64(n)))
 	if v.err != nil {
-		return
+		return 0, v.err
 	}
-	p := v.alloc(4)
-	v.mod.Memory().WriteUint32Le(p, uint32(val))
+	if p == 0 {
+		return 0, errAlloc
+	}
+	return p, nil
+}
+
+func (v *Terminal) free(p uint32, n int) {
+	if p != 0 {
+		v.call("ghostty_wasm_free", uint64(p), uint64(n))
+	}
+}
+
+// put writes b at p in the instance's memory.
+func (v *Terminal) put(p uint32, b []byte) error {
+	if !v.mod.Memory().Write(p, b) {
+		return errRange
+	}
+	return nil
+}
+
+func (v *Terminal) put32(p uint32, x uint32) error {
+	if !v.mod.Memory().WriteUint32Le(p, x) {
+		return errRange
+	}
+	return nil
+}
+
+func (v *Terminal) setSize(opt int, val uint64) error {
+	if v.err != nil {
+		return v.err
+	}
+	p, err := v.alloc(4)
+	if err != nil {
+		return err
+	}
+	defer v.free(p, 4)
+	if err := v.put32(p, uint32(val)); err != nil {
+		return err
+	}
 	v.call("ghostty_terminal_set", v.t, uint64(opt), uint64(p))
-	v.free(p, 4)
+	return v.err
+}
+
+// get reads 8 bytes of the terminal's data into memory and gives them; zero
+// when it cannot.
+func (v *Terminal) get(data int) uint64 {
+	if v.err != nil {
+		return 0
+	}
+	p, err := v.alloc(8)
+	if err != nil {
+		return 0
+	}
+	defer v.free(p, 8)
+	if !v.mod.Memory().WriteUint64Le(p, 0) {
+		return 0
+	}
+	v.call("ghostty_terminal_get", v.t, uint64(data), uint64(p))
+	x, ok := v.mod.Memory().ReadUint64Le(p)
+	if !ok || v.err != nil {
+		return 0
+	}
+	return x
 }
 
 // get32 and get16 read a uint32 or uint16 of the terminal's data.
-func (v *Terminal) get32(data int) uint32 {
-	if v.err != nil {
-		return 0
-	}
-	p := v.alloc(8)
-	defer v.free(p, 8)
-	v.mod.Memory().WriteUint64Le(p, 0)
-	v.call("ghostty_terminal_get", v.t, uint64(data), uint64(p))
-	x, _ := v.mod.Memory().ReadUint32Le(p)
-	return x
-}
+func (v *Terminal) get32(data int) uint32 { return uint32(v.get(data)) }
 
-func (v *Terminal) get16(data int) uint16 {
-	if v.err != nil {
-		return 0
-	}
-	p := v.alloc(8)
-	defer v.free(p, 8)
-	v.mod.Memory().WriteUint64Le(p, 0)
-	v.call("ghostty_terminal_get", v.t, uint64(data), uint64(p))
-	x, _ := v.mod.Memory().ReadUint16Le(p)
-	return x
-}
+func (v *Terminal) get16(data int) uint16 { return uint16(v.get(data)) }
 
 func clamp16(n int) int { return min(max(n, 1), 0xFFFF) }
 

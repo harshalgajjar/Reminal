@@ -60,7 +60,7 @@ func historyCapped(s *sessionScreen, n int) []string {
 // The line bound is in lines, whatever the width: a session at its 20,000
 // lines of 180 columns narrowed to 60 (a phone joining) keeps them all,
 // three rows each. With the terminal's own cap at 20,000 rows it kept 6,539
-// lines, the oldest two thirds gone (FOSS Innovator 1's measurement).
+// lines, the oldest two thirds gone (measured on a recorded session).
 func TestTheLineBoundHoldsThroughANarrowing(t *testing.T) {
 	const n = 20000
 	s := testScreen(t, 180, 50)
@@ -94,7 +94,7 @@ func TestTheLineBoundHoldsThroughANarrowing(t *testing.T) {
 // own kept the rows below the cursor on the shrink and added blank rows on
 // the grow, so Claude's redraw after a phone keyboard closed left a stale
 // copy of its frame in the history, which every join then showed twice.
-// (FOSS Innovator 1's control: 100 lines at 102x45, the cursor 5 rows up.)
+// (a recorded control: 100 lines at 102x45, the cursor 5 rows up.)
 func TestAHeightChangeIsDoneAsTheViewerDoesIt(t *testing.T) {
 	s := testScreen(t, 102, 45)
 	defer s.Close()
@@ -128,4 +128,24 @@ func TestAHeightChangeIsDoneAsTheViewerDoesIt(t *testing.T) {
 	if n := len(s.History()); n != 51 {
 		t.Errorf("history is %d lines, xterm.js: 51", n)
 	}
+}
+
+// A session's screen whose terminal failed (a call trapped, or ran past its
+// memory or its time) is dropped, and a join is given the raw output instead,
+// as with REMINAL_SNAPSHOT=0: kept, every join was painted a blank screen
+// with no history.
+func TestAFailedScreenIsDroppedAndAJoinFallsBack(t *testing.T) {
+	a := colouredSession(t, 20, 0)
+	if s, _ := a.snapshotFrame(); s == "" {
+		t.Fatal("control: no snapshot from a working screen")
+	}
+	a.screen.t.Close() // as a trap or a deadline leaves it
+	a.record([]byte("after\r\n"))
+	if a.haveScreen() {
+		t.Fatal("the failed screen is still in use")
+	}
+	if s, _ := a.snapshotFrame(); s != "" {
+		t.Fatalf("a join was painted from a failed screen: %d bytes", len(s))
+	}
+	a.resizeScreen(100, 30) // and nothing reads it after
 }

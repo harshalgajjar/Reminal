@@ -96,3 +96,28 @@ func TestADumpWrittenOnTheAltScreenCarriesTheHistory(t *testing.T) {
 		t.Errorf("the alt screen's content is in the history: %q", joined)
 	}
 }
+
+// The switch to the alternate screen is found among other modes ("ESC[?1049;
+// 2004h", as programs combine them) and split across two writes, as a PTY
+// read may cut it: the main screen's history is held either way.
+func TestTheSwitchToTheAltScreenIsFoundCombinedOrSplit(t *testing.T) {
+	for name, writes := range map[string][]string{
+		"combined": {"\x1b[?1049;2004h\x1b[2J\x1b[Hhello from vim"},
+		"split":    {"\x1b[?10", "49h\x1b[2J\x1b[Hhello from vim"},
+	} {
+		s := testScreen(t, 40, 5)
+		for i := 1; i <= 10; i++ {
+			_, _ = s.Write([]byte(fmt.Sprintf("line %d\r\n", i)))
+		}
+		before := len(s.History())
+		for _, w := range writes {
+			_, _ = s.Write([]byte(w))
+		}
+		if !s.IsAltScreen() {
+			t.Fatalf("%s: not on the alternate screen", name)
+		}
+		if got := len(s.History()); got != before || got == 0 {
+			t.Errorf("%s: %d history lines on the alternate screen, want %d", name, got, before)
+		}
+	}
+}
