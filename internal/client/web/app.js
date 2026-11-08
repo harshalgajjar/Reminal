@@ -3256,6 +3256,13 @@
     let manualClose = false;  // user clicked Disconnect; do not auto-reconnect
     let fatal = false;        // unrecoverable (bad PIN, session expired); do not auto-reconnect
     let fatalWords = '';      // what the relay said when it ended or refused the session: kept over the terminal
+    // A relay that has just restarted knows no session until its agent is back,
+    // and a page that was attached is often back first: refused as not ready.
+    // That is a wait, not an end (notReadyWait). liveIn: the session this page
+    // last had live; notReadySince: when the wait for it began.
+    const NOT_READY = 'session not found or not ready';
+    const NOT_READY_WAIT_MS = 120000;
+    let liveIn = '', notReadySince = 0;
     const uploadWaiters = new Set(); // uploads waiting for the link to be back (uploadLinkWhenBack); here, before anything can settle them
     let reconnectTimer = null;
     let backoffMs = 1000;
@@ -7848,6 +7855,7 @@
             agentLive = true;
             hideSleepWakeScreen(); // a woken session: the live terminal takes over its saved screen
             connectedAt = Date.now();
+            liveIn = sessionId; notReadySince = 0;
             backoffMs = 1000;
             redialNow = true; // up: its first close redials at once
             setStatus(sessionId, 'connected'); // green dot already implies "connected"
@@ -7896,6 +7904,7 @@
           connectedAt = Date.now();
           backoffMs = 1000;
           redialNow = true; // up: its first close redials at once (as on 'connected')
+          liveIn = sessionId; notReadySince = 0;
           setStatus(sessionId, 'connected');
           hideOverlay();
           setBtnDisconnect();
@@ -8168,6 +8177,7 @@
           showOverlay(fatalWords);
           break;
         case 'error':
+          if (notReadyWait(msg.error)) break;
           fatal = true;
           settleUploadWaiters('ended');
           fatalWords = msg.error || 'Error';
@@ -8176,6 +8186,20 @@
           showOverlay(fatalWords);
           break;
       }
+    }
+
+    // notReadyWait says whether the relay's refusal (err) is one to wait out:
+    // not ready, for the session this page last had live, within
+    // NOT_READY_WAIT_MS of the first such refusal. The PIN is kept and the
+    // socket's close tries again, backing off (scheduleReconnect). Treated as
+    // the end, the page sat on "session not found" for good while the session
+    // ran on.
+    function notReadyWait(err) {
+      if (err !== NOT_READY || manualClose || !sessionId || sessionId !== liveIn) return false;
+      if (!notReadySince) notReadySince = Date.now();
+      if (Date.now() - notReadySince >= NOT_READY_WAIT_MS) return false;
+      setStatus('Waiting for the session to come back…', 'warn connecting');
+      return true;
     }
 
     // switching: the page goes on to another session at once, whose terminal
