@@ -510,3 +510,65 @@ func TestDedupRepaintsKeepsAPatchworkAndARepeatedLine(t *testing.T) {
 		}
 	}
 }
+
+// Two copies glued with no blank line between, printed at two widths (a
+// real session after a fold opened and closed while Claude Code printed;
+// testdata/dedup/width-seams-*.txt, the history before any dedup and the
+// screen): the tail of a wide reprint ("She had never been able to draw…")
+// right above a narrow copy of another paragraph's end ("handle. The tide
+// had turned…"), and a wide reprint's head ("The Halcyon took Dev away…")
+// right above a narrow copy of the next paragraph ("The reactor was old and
+// tired…"). Read as one paragraph, neither was a copy of anything whole, and
+// a join showed both rows twice. Split where the width changes, each piece
+// goes with the copies it repeats.
+func TestJoinSplitsCopiesGluedAtTwoWidths(t *testing.T) {
+	read := func(name string) []string {
+		data, err := os.ReadFile("testdata/dedup/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	}
+	history, screen := read("width-seams-history.txt"), read("width-seams-screen.txt")
+	// Written after the session's resizes, as a join's history is here.
+	out := dedupAgainstFrame(dedupRepaintsFrom(history, 0), screen)
+	var b strings.Builder
+	for _, l := range append(append([]string{}, out...), screen...) {
+		b.WriteString(strings.TrimSpace(dedupANSI.ReplaceAllString(l, "")) + "\n")
+	}
+	painted := b.String()
+	for _, row := range []string{
+		"She had never been able to draw. This time her hand was steady",
+		"handle. The tide had turned and was beginning",
+		"The Halcyon took Dev away at dawn",
+		"The reactor was old and tired.",
+	} {
+		if n := strings.Count(painted, row); n != 1 {
+			t.Errorf("%q is read %d times, want once", row, n)
+		}
+	}
+	for _, keep := range []string{"VIII. The Return", "Position unconfirmed.", "She opened the door.", "I promise.", "Dev worked through the numbers"} {
+		if !strings.Contains(painted, keep) {
+			t.Errorf("lost %q", keep)
+		}
+	}
+}
+
+// A paragraph a program wraps for one width is not split, its last row short
+// or not; only rows after a sentence's end, two or more, all well narrower.
+func TestWidthSeamOnlyWhereTheWidthChanges(t *testing.T) {
+	wide := strings.Repeat("w", 95)
+	for name, c := range map[string]struct {
+		rows []string
+		want int
+	}{
+		"one width, short last row":  {[]string{wide, wide, "the end."}, 0},
+		"one width, sentence inside": {[]string{wide, wide + " done.", wide, "end"}, 0},
+		"a narrow copy glued after":  {[]string{wide, wide + " done.", strings.Repeat("n", 50), "tail"}, 2},
+		"a narrow single row after":  {[]string{wide, wide + " done.", "one narrow row"}, 0},
+	} {
+		if got := widthSeam(c.rows); got != c.want {
+			t.Errorf("%s: %d, want %d", name, got, c.want)
+		}
+	}
+}
