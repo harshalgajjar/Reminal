@@ -1,0 +1,5 @@
+Deploying service api to cluster prod-east with three replicas and the canary enabled for an hour
+
+Deploying service api to cluster prod-east with three replicas
+
+$
