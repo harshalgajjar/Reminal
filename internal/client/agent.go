@@ -1427,7 +1427,7 @@ func (a *Agent) applyEffectiveSize() {
 	// A width change: once the program's redraw for it has settled, the
 	// attached viewers are painted anew from the deduped history, so the
 	// copy at the old width goes for them as it does on a reload.
-	if prev.cols != 0 && prev.cols != cols {
+	if prev.cols != 0 && prev.cols != cols && screenRewraps {
 		a.armResnapshot()
 	}
 }
