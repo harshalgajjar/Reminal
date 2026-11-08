@@ -397,3 +397,41 @@ func TestARestoreLetsGoOfItsScratchEmulator(t *testing.T) {
 	}
 	runtime.KeepAlive(b)
 }
+
+// A young session's ring still holds its first output, so replayed it draws
+// the whole history again: a restart does not put the history back as well.
+// Put back, the history came back twice whenever the replay drew a line
+// otherwise than the history held it (here, one line changed in the dump).
+func TestAYoungSessionsRestartDrawsItsHistoryOnce(t *testing.T) {
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := handoverAgent(t, box)
+	var b strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&b, "young %d the quick brown fox jumps over the lazy dog\r\n", i)
+	}
+	a.record([]byte(b.String()))
+	path, k, err := a.writeScrollbackDump()
+	if err != nil || path == "" {
+		t.Fatalf("dump: %q %v", path, err)
+	}
+	r := handoverAgent(t, box)
+	r.resumeDump = takeScrollbackDump(path, k, a.sessionID)
+	if r.resumeDump == nil || len(r.resumeDump.History) < 40 || r.resumeDump.Entries[0].Seq != 1 {
+		t.Fatal("fixture: want a dump with history and a ring from its first output")
+	}
+	r.resumeDump.History[20] += " (drawn otherwise)"
+	r.restoreResumedScrollback()
+	r.screenMu.Lock()
+	history := r.renderedHistory()
+	r.screenMu.Unlock()
+	n := 0
+	for _, l := range history {
+		if strings.Contains(stripANSI(l), "young 1 the") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("the first line is in the history %d times after the restart, want once", n)
+	}
+}
