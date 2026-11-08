@@ -187,3 +187,26 @@ func TestResizeSegmentsSnapshotCostAtCap(t *testing.T) {
 		t.Errorf("snapshot too slow at segment cap: %v (budget %v)", elapsed, budget)
 	}
 }
+
+// A taller screen (a phone's keyboard closing) moves the newest history rows
+// back onto it. That is no erase: the resizes before it are still known to
+// the strict rules (resizeAt), any past the history's new end now at it.
+func TestResizesOutliveATallerScreen(t *testing.T) {
+	a := clearingAgent(t, 80, 24)
+	a.record(fillerLines("A", 60))
+	a.resizeScreen(70, 24)
+	a.record(fillerLines("B", 30))
+	a.resizeScreen(70, 16) // the keyboard opens
+	a.record(fillerLines("C", 30))
+	before := len(a.resizeAt)
+	a.resizeScreen(70, 24) // and closes
+	if got := len(a.resizeAt); got != before+1 {
+		t.Fatalf("%d resizes remembered after the screen grew, want %d", got, before+1)
+	}
+	n := a.screen.Scrollback().Len()
+	for i, at := range a.resizeAt {
+		if at > n {
+			t.Errorf("resize %d at %d, past the history's end %d", i, at, n)
+		}
+	}
+}

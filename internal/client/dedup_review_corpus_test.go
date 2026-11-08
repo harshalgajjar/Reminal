@@ -74,7 +74,7 @@ func TestDedupReviewCorpus(t *testing.T) {
 			if m.segs != nil && m.segs[0].words != nil {
 				expect = want
 			}
-			got := dedupHistory(append([]string(nil), lines...), m.segs, "", 0)
+			got := dedupHistory(append([]string(nil), lines...), m.segs, resizesOf(m.segs), "", 0)
 			if m.segs != nil && !reprint && !reviewCorpusCommand(name) {
 				// After a resize a copy can be a reprint and may go: nothing
 				// may be lost, every row still shown at least once.

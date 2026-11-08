@@ -104,6 +104,9 @@ func TestSnapshotSurvivesScrollbackClear(t *testing.T) {
 	if len(a.resizeSegs) != 0 {
 		t.Errorf("stale segments kept across a scrollback clear: %d", len(a.resizeSegs))
 	}
+	if len(a.resizeAt) != 0 {
+		t.Errorf("resizes kept across a scrollback clear: %d", len(a.resizeAt))
+	}
 
 	// And the agent keeps working: more resizes after the clear must rebuild
 	// segments against the NEW scrollback, not the retired indices.

@@ -183,7 +183,13 @@ type Agent struct {
 	// flaw that sank the v2.3.0 position-only band (it swallowed everything between
 	// two resizes, including a fresh agent's entire history). Guarded by screenMu.
 	resizeSegs []resizeSeg
-	// segsGen counts every change to resizeSegs, so a cached snapshot history
+	// resizeAt is the scrollback length at every resize still known, for the
+	// strict dedup rules (a resize between two copies: repaintLines). Unlike
+	// resizeSegs it outlives a taller screen taking rows back out of
+	// scrollback, which is no erase; the default rules never read it, so their
+	// output is as it was. Shared like resizeSegs. Guarded by screenMu.
+	resizeAt []int
+	// segsGen counts every change to resizeSegs or resizeAt, so a cached snapshot history
 	// (joinHistory) is of the segments it was made with. Guarded by screenMu.
 	segsGen uint64
 	// resizedAt is when the screen last changed size. A resize makes every
@@ -202,6 +208,9 @@ type Agent struct {
 	// spot a shrink (an app's ESC[3J) and retire the now-stale segment indices
 	// above. Guarded by screenMu.
 	sbLen int
+	// atLen is sbLen for resizeAt: the scrollback length its positions were
+	// last checked against (noteResizesLen). Guarded by screenMu.
+	atLen int
 	// conhostClear owns ConPTY's WriteClearScreen in the recorded stream
 	// (emulator + viewers). CSI 3 J is never reminal history; CUP+ED2 is
 	// dropped only while a Resize we issued is still echoing. See
@@ -2516,7 +2525,7 @@ func (a *Agent) initScreen() {
 	if a.scrollbackLines > 0 {
 		a.screen.Scrollback().SetMaxLines(a.scrollbackLines)
 	}
-	a.sbLen = 0 // fresh emulator: the shrink watch starts from empty
+	a.sbLen, a.atLen = 0, 0 // fresh emulator: the shrink watch starts from empty
 	scr := a.screen
 	a.screenMu.Unlock()
 	if a.buf != nil {
@@ -2554,6 +2563,7 @@ func (a *Agent) record(p []byte) {
 	if a.screen != nil {
 		_, _ = a.screen.Write(p)
 		a.noteScrollbackLen()
+		a.noteResizesLen(false)
 	}
 	if enc, err := a.box.Encrypt(p); err == nil {
 		a.buf.Append(enc)
@@ -2579,6 +2589,33 @@ func (a *Agent) noteScrollbackLen() {
 		a.segsGen++
 	}
 	a.sbLen = n
+}
+
+// noteResizesLen is noteScrollbackLen for resizeAt, told whether the screen
+// just grew taller (grew): that takes the newest rows back out of
+// scrollback, no erase, so the resizes known are kept, any past the new end
+// now at it. Any other shrink is an erase, and forgets them. Caller holds
+// screenMu.
+func (a *Agent) noteResizesLen(grew bool) {
+	n := a.screen.Scrollback().Len()
+	if n < a.atLen {
+		a.resizeAt = clampedTo(a.resizeAt, n, grew)
+		a.segsGen++
+	}
+	a.atLen = n
+}
+
+// clampedTo is at with every position past n moved to n, a new slice (a
+// join may hold the old one), or nil unless keep.
+func clampedTo(at []int, n int, keep bool) []int {
+	if !keep {
+		return nil
+	}
+	out := make([]int, len(at))
+	for i, p := range at {
+		out[i] = min(p, n)
+	}
+	return out
 }
 
 // resizeSeg is one resize's repaint fingerprint: the scrollback position where its
@@ -2671,6 +2708,7 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	// Reconcile before recording a new segment, or the older segments' absolute
 	// positions would be left pointing past the end of the rendered history.
 	a.noteScrollbackLen()
+	a.noteResizesLen(true)
 	cur := 0
 	if sb := a.screen.Scrollback(); sb != nil {
 		cur = sb.Len()
@@ -2678,6 +2716,10 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 	a.resizeSegs = append(a.resizeSegs, resizeSeg{start: cur, maxOver: prevRows*4 + 8, words: fw})
 	if len(a.resizeSegs) > maxResizeSegs {
 		a.resizeSegs = a.resizeSegs[len(a.resizeSegs)-maxResizeSegs:]
+	}
+	a.resizeAt = append(a.resizeAt, cur)
+	if len(a.resizeAt) > maxResizeSegs {
+		a.resizeAt = a.resizeAt[len(a.resizeAt)-maxResizeSegs:]
 	}
 	a.segsGen++
 	if a.buf != nil {
@@ -2904,7 +2946,7 @@ func (a *Agent) snapshotHistory() []string {
 		segs = a.resizeSegs
 	}
 	screen := a.screen.Render()
-	return dedupAgainstFrame(dedupHistory(lines, segs, screen, a.scrollbackLines), strings.Split(screen, "\n"))
+	return dedupAgainstFrame(dedupHistory(lines, segs, a.resizesKnown(len(lines)), screen, a.scrollbackLines), strings.Split(screen, "\n"))
 }
 
 // dedupHistory is snapshotHistory's middle, of what it is given: the resize
@@ -2912,7 +2954,7 @@ func (a *Agent) snapshotHistory() []string {
 // kept, and the verbatim and cross-width reprints dropped (dedupRepaints,
 // which starts from dedupBlocks' rule). A pure function of its arguments, so it runs outside
 // screenMu (joinHistory).
-func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int) []string {
+func dedupHistory(lines []string, segs []resizeSeg, resizes []int, screen string, maxLines int) []string {
 	if !dedupStrict {
 		lines = dropRepaints(lines, segs, screen)
 		if maxLines > 0 && len(lines) > maxLines {
@@ -2920,7 +2962,7 @@ func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int)
 		}
 		return dedupRepaintsCovered(lines)
 	}
-	reprints := repaintLines(lines, segs)
+	reprints := repaintLines(lines, segs, resizes)
 	if drop := dropRepaintsMask(lines, segs, screen); drop != nil {
 		for _, x := range unshownRows(lines, drop, strings.Split(screen, "\n")) {
 			drop[x] = false // a row shown nowhere else is no repaint
@@ -2943,14 +2985,15 @@ type lineMark struct {
 	resizes int
 }
 
-// repaintLines marks each line (lineMark). Only a line that can be a reprint
+// repaintLines marks each line (lineMark), from the segments and where every
+// resize still known happened (resizes). Only a line that can be a reprint
 // is looked at as one, and a paragraph printed again as it was goes only
 // when a resize came between the two (dedupRepaintsIn); anything else the
 // program printed again is kept, a duplicate shown rather than a line lost.
-func repaintLines(lines []string, segs []resizeSeg) []lineMark {
+func repaintLines(lines []string, segs []resizeSeg, resizes []int) []lineMark {
 	mark := make([]lineMark, len(lines))
-	for _, seg := range segs {
-		if s := max(seg.start, 0); s < len(lines) {
+	for _, at := range resizes {
+		if s := max(at, 0); s < len(lines) {
 			mark[s].resizes++ // summed below: the resizes at or before each line
 		}
 	}
@@ -3008,6 +3051,17 @@ func (a *Agent) staleSegs(n int) bool {
 		return true
 	}
 	return false
+}
+
+// resizesKnown is resizeAt for a history of n lines: nil, and forgotten, once
+// its front may have been evicted (positions would be stale). Caller holds
+// screenMu.
+func (a *Agent) resizesKnown(n int) []int {
+	if a.scrollbackLines > 0 && n >= a.scrollbackLines && a.resizeAt != nil {
+		a.resizeAt = nil
+		a.segsGen++
+	}
+	return a.resizeAt
 }
 
 // dropRepaints removes, for every resize EXCEPT the newest, the lines its frame
@@ -3131,6 +3185,7 @@ type joinIn struct {
 	rows     []uv.Line   // a copy of the scrollback's row list (at its cap the scrollback shifts its own in place); the rows themselves never change
 	histKey  string      // historyKey(rows): what renderedHistory's cache is keyed by
 	segs     []resizeSeg // nil when of no use (staleSegs)
+	resizes  []int       // resizesKnown
 	segsGen  uint64
 	maxLines int
 	view     snapView
@@ -3147,6 +3202,7 @@ func (a *Agent) joinInputs() joinIn {
 		// dropped — each leaves what this slice sees as it was.
 		in.segs = a.resizeSegs
 	}
+	in.resizes = a.resizesKnown(len(rows))
 	in.segsGen = a.segsGen
 	return in
 }
@@ -3187,7 +3243,7 @@ func (a *Agent) joinHistory(in joinIn) []string {
 			a.histCache, a.histKey = rendered, in.histKey
 			a.screenMu.Unlock()
 		}
-		deduped = dedupHistory(rendered, in.segs, in.view.screen, in.maxLines)
+		deduped = dedupHistory(rendered, in.segs, in.resizes, in.view.screen, in.maxLines)
 	}
 	final := dedupAgainstFrame(deduped, strings.Split(in.view.screen, "\n"))
 	a.screenMu.Lock()
