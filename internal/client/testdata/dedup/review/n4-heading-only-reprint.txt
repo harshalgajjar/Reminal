@@ -1,0 +1,7 @@
+## Results
+
+The setup script installs the toolchain, fetches the modules and builds the binary.
+
+## Results
+
+$

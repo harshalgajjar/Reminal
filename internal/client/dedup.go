@@ -445,8 +445,21 @@ func dedupRepaintsIn(lines []string, reprint []bool) []string {
 		}
 		return true
 	}
-	// The verbatim copies first (dedupBlocks' rule), in the same mask.
+	// The verbatim copies first (dedupBlocks' rule), in the same mask, but
+	// only inside a frame: a paragraph printed again as it was anywhere else
+	// is the program saying it again.
 	drop := dedupBlocksMask(lines)
+	for k, p := range paras {
+		if drop[p.i] && !eligible(p) {
+			end := len(lines) // with the blank rows after it that went with it
+			if k+1 < len(paras) {
+				end = paras[k+1].i
+			}
+			for x := p.i; x < end; x++ {
+				drop[x] = false
+			}
+		}
+	}
 	pass := func(order []int, reversed bool) {
 		var src reprintSource
 		for _, k := range order {
@@ -458,7 +471,10 @@ func dedupRepaintsIn(lines []string, reprint []bool) []string {
 			if reversed {
 				slices.Reverse(words)
 			}
-			if eligible(p) && src.reprintOf(lines[p.i:p.j], words, reversed, false) {
+			// Inside a frame a copy at the same width can be a reprint; outside
+			// one only a copy wrapped otherwise can (an app's reprint at a new
+			// width whose resize is forgotten), never one printed as it was.
+			if src.reprintOf(lines[p.i:p.j], words, reversed, !eligible(p)) {
 				for x := p.i; x < p.j; x++ {
 					drop[x] = true
 				}

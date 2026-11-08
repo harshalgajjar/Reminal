@@ -1,0 +1,13 @@
+$ cat doc.md
+
+The setup script installs the toolchain, fetches the modules and builds the binary.
+
+Run the tests with make test; the integration suite needs Docker running locally.
+
+$ cat doc.md
+
+The setup script installs the toolchain, fetches the modules and builds the binary.
+
+Run the tests with make test; the integration suite needs Docker running locally.
+
+$

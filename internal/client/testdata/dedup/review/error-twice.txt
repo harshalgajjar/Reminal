@@ -1,0 +1,11 @@
+10:01:02 ERROR request failed: connection reset by peer while reading the response body from upstream
+  at readBody (http.js:120:9)
+  at fetchJSON (client.js:44:3)
+  at main (app.js:8:1)
+
+10:05:09 ERROR request failed: connection reset by peer while reading the response body from upstream
+  at readBody (http.js:120:9)
+  at fetchJSON (client.js:44:3)
+  at main (app.js:8:1)
+
+$

@@ -1,0 +1,9 @@
+$ cat notes.txt
+alpha bravo charlie delta echo foxtrot golf hotel india juliet
+kilo lima mike november oscar papa quebec romeo sierra tango
+
+$ tail -1 notes.txt
+
+kilo lima mike november oscar papa quebec romeo sierra tango
+
+$

@@ -1,0 +1,10 @@
+alpha bravo charlie delta echo foxtrot golf hotel india juliet
+uniform victor whiskey xray yankee zulu one two three four
+
+kilo lima mike november oscar papa quebec romeo sierra tango
+uniform victor whiskey xray yankee zulu one two three four
+
+alpha bravo charlie delta echo foxtrot golf hotel india juliet
+kilo lima mike november oscar papa quebec romeo sierra tango
+
+$
