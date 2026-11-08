@@ -63,3 +63,28 @@ func TestAResizeIsSentInItsPlaceInTheStream(t *testing.T) {
 		t.Fatalf("the viewer got %v, want %v", got, want)
 	}
 }
+
+// A PTY resize is told to the relay only in its place in the stream: a size
+// sent beside it could overtake output still queued for that socket (behind
+// a paced snapshot's part) and put old-width bytes in the new grid. Viewers
+// attached here are still told beside it.
+func TestAResizeIsNotToldToTheRelayBesideTheStream(t *testing.T) {
+	box, _ := crypto.NewBox(make([]byte, 32))
+	a := &Agent{box: box}
+	relayEnd, relay := wsPair(t)
+	localEnd, local := wsPair(t)
+	a.currentConn = relayEnd
+	a.addLocalConn(localEnd)
+
+	a.tellLocalViewers(90, 40)
+
+	_ = local.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var m protocol.Message
+	if err := local.ReadJSON(&m); err != nil || m.Type != protocol.TypeResize {
+		t.Fatalf("the viewer attached here: %v %v, want the size", m.Type, err)
+	}
+	_ = relay.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if err := relay.ReadJSON(&m); err == nil {
+		t.Fatalf("the relay was sent %s beside the stream", m.Type)
+	}
+}

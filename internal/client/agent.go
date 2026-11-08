@@ -501,6 +501,8 @@ type Agent struct {
 	snapPaced    []string
 	resnapTimer  *time.Timer
 	resnapWanted bool
+	// resnapAt is when the last re-snapshot was owed (resnapEvery).
+	resnapAt time.Time
 	// lastOutputAt is when the program last wrote (UnixNano): the quiet a
 	// re-snapshot waits for is measured from it.
 	lastOutputAt atomic.Int64
@@ -1409,23 +1411,15 @@ func (a *Agent) applyEffectiveSize() {
 	// ConPTY echoing this Resize — BEFORE the PTY hears the new size. If
 	// that opcode lands first, ED2 undoes the screen we just re-anchored.
 	a.resizeScreen(cols, rows)
-	// Tell every viewer the new PTY size so their xterm.js matches.
-	// Without this, the agent shrinks the PTY for a small viewer (e.g.,
-	// phone joining a desktop session), the shell formats output for
-	// the new size, but the original-large viewer is still rendering
-	// at its old size — cursor-positioning escape codes land in the
-	// wrong column and the display goes garbled. Broadcasting keeps
-	// every screen in sync with what the shell actually thinks.
-	//
-	// Told BEFORE the PTY is resized: the size and the output share one
-	// ordered socket per viewer (writeMu), so told first, the size is
-	// there before any output the program writes for it. Told after, the
-	// program's redraw for the new width could reach a viewer still at
-	// the old one: a phone turned back to landscape (55 to 102 columns)
-	// had Claude Code's words placed for 102 columns clamped at its edge,
-	// and its grid then grew under the rest of the frame, which came out
-	// one word a row, stepping right (the staircase).
-	a.broadcastSize(cols, rows)
+	// Every viewer is told the new size in its place in its output stream:
+	// resizeScreen put the marker in the ring, before the PTY hears the
+	// size, so the program's output for the new size comes after it on
+	// every socket (runSender). A size told beside the stream to a viewer
+	// through the relay could overtake output still queued for it (behind
+	// a paced snapshot's part): words placed for the old width then landed
+	// in the new grid, one a row, stepping right (the staircase). Viewers
+	// attached on this machine are also told beside it (tellLocalViewers).
+	a.tellLocalViewers(cols, rows)
 	_ = a.term.Resize(cols, rows)
 	// A width change: once the program's redraw for it has settled, the
 	// attached viewers are painted anew from the deduped history, so the
@@ -3884,7 +3878,7 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			if joiners, paced := a.takeSnapshotJoiners(); len(joiners)+len(paced) > 0 {
 				var from uint64
 				if len(paced) > 0 {
-					latest, err := a.startPacedSnapshot(conn, paced)
+					latest, err := a.startPacedSnapshot(conn, paced, false)
 					if err != nil {
 						return err
 					}
@@ -3942,7 +3936,7 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 		// only: a viewer attached here is a terminal of its own.
 		if !local {
 			if vs := a.takeResnapshot(); len(vs) > 0 {
-				if _, err := a.startPacedSnapshot(conn, vs); err != nil {
+				if _, err := a.startPacedSnapshot(conn, vs, true); err != nil {
 					return err
 				}
 			}

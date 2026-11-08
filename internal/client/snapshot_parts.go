@@ -159,7 +159,9 @@ func newSnapshotID() string {
 
 // partHeader heads a snapshot part, inside its encryption. Ack: a paced part,
 // to be acknowledged. Screen: not a part but the screen alone, painted first,
-// with More saying whether the history's parts follow.
+// with More saying whether the history's parts follow. Resnap: the screen of
+// a repaint of a viewer that stayed attached (resnapshot.go), which shows that
+// screen already: it is not painted, so a reader scrolled up keeps the place.
 type partHeader struct {
 	ID     string `json:"id"`
 	I      int    `json:"i"`
@@ -168,6 +170,7 @@ type partHeader struct {
 	Ack    bool   `json:"ack,omitempty"`
 	Screen bool   `json:"screen,omitempty"`
 	More   bool   `json:"more,omitempty"`
+	Resnap bool   `json:"resnap,omitempty"`
 }
 
 // sealPart encrypts [header length][header][body].
@@ -246,7 +249,9 @@ func (a *Agent) snapAcks() <-chan struct{} {
 
 // startPacedSnapshot sends each viewer the screen alone, then sets its
 // history going in parts (pumpSnapshotParts), and returns the seq both cover.
-func (a *Agent) startPacedSnapshot(conn *websocket.Conn, viewers []string) (uint64, error) {
+// resnap: a repaint of viewers that stayed attached, not a join (the screen
+// part says so: partHeader.Resnap).
+func (a *Agent) startPacedSnapshot(conn *websocket.Conn, viewers []string, resnap bool) (uint64, error) {
 	if a.screen == nil || a.box == nil || len(viewers) == 0 {
 		return 0, nil
 	}
@@ -260,7 +265,7 @@ func (a *Agent) startPacedSnapshot(conn *websocket.Conn, viewers []string) (uint
 	more := len(in.rows) > 0
 	screen := []byte(paintSnapshot(in.view, nil, nil, 0, false))
 	for _, to := range viewers {
-		enc, err := a.sealPart(partHeader{ID: id, To: to, Screen: true, More: more}, screen)
+		enc, err := a.sealPart(partHeader{ID: id, To: to, Screen: true, More: more, Resnap: resnap}, screen)
 		if err != nil {
 			return 0, err
 		}

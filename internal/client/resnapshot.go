@@ -25,6 +25,11 @@ import (
 // hundred milliseconds, and a stream still going pushes it until a gap.
 const resnapQuiet = 300 * time.Millisecond
 
+// resnapEvery is the least time between two re-snapshots: a fold opened and
+// closed five times in a few seconds is one repaint, at the end, not five
+// full snapshots to every attached viewer.
+const resnapEvery = 2 * time.Second
+
 // armResnapshot starts the wait after a width change (applyEffectiveSize).
 func (a *Agent) armResnapshot() {
 	a.snapMu.Lock()
@@ -40,11 +45,16 @@ func (a *Agent) armResnapshot() {
 func (a *Agent) resnapshotWhenQuiet() {
 	since := time.Since(time.Unix(0, a.lastOutputAt.Load()))
 	a.snapMu.Lock()
-	if since < resnapQuiet {
-		a.resnapTimer = time.AfterFunc(resnapQuiet-since, a.resnapshotWhenQuiet)
+	wait := resnapQuiet - since
+	if last := time.Since(a.resnapAt); !a.resnapAt.IsZero() && resnapEvery-last > wait {
+		wait = resnapEvery - last
+	}
+	if wait > 0 {
+		a.resnapTimer = time.AfterFunc(wait, a.resnapshotWhenQuiet)
 		a.snapMu.Unlock()
 		return
 	}
+	a.resnapAt = time.Now()
 	a.resnapWanted = len(a.snapPaced) > 0
 	wake := a.snapWake
 	a.snapMu.Unlock()
@@ -58,6 +68,10 @@ func (a *Agent) resnapshotWhenQuiet() {
 
 // takeResnapshot is who the sender owes a re-snapshot now (the paced
 // viewers), and clears the owing; none until a width change has settled.
+// A viewer still holding a snapshot under way to it (one it never
+// acknowledged to the end: a page closed, an id from an earlier load) is
+// forgotten instead: each one costs a full sealed snapshot per repaint. It
+// is remembered again when it resumes.
 func (a *Agent) takeResnapshot() []string {
 	a.snapMu.Lock()
 	defer a.snapMu.Unlock()
@@ -65,6 +79,9 @@ func (a *Agent) takeResnapshot() []string {
 		return nil
 	}
 	a.resnapWanted = false
+	a.snapPaced = slices.DeleteFunc(a.snapPaced, func(v string) bool {
+		return slices.ContainsFunc(a.snapXfers, func(x *snapXfer) bool { return x.viewer == v })
+	})
 	return slices.Clone(a.snapPaced)
 }
 
@@ -73,8 +90,15 @@ func (a *Agent) takeResnapshot() []string {
 // had, and each one costs a sealed copy of the snapshot per width change.
 const snapPacedMax = 8
 
+// snapViewerMax is the longest viewer id remembered: the page's own are
+// "v-" and 12 characters.
+const snapViewerMax = 64
+
 // rememberPaced records a viewer that takes parts, paced, newest last.
 func (a *Agent) rememberPaced(viewer string) {
+	if len(viewer) > snapViewerMax {
+		return
+	}
 	a.snapPaced = slices.DeleteFunc(a.snapPaced, func(v string) bool { return v == viewer })
 	a.snapPaced = append(a.snapPaced, viewer)
 	if over := len(a.snapPaced) - snapPacedMax; over > 0 {
@@ -87,5 +111,9 @@ func (a *Agent) rememberPaced(viewer string) {
 func (a *Agent) forgetPaced() {
 	a.snapMu.Lock()
 	a.snapPaced, a.resnapWanted = nil, false
+	if a.resnapTimer != nil {
+		a.resnapTimer.Stop()
+		a.resnapTimer = nil
+	}
 	a.snapMu.Unlock()
 }
