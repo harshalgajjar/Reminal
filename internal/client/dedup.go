@@ -567,26 +567,34 @@ func dedupRepaintsIn(lines []string, marks []lineMark) []string {
 //     the next, never one inside a single longer row (a shorter line that
 //     only begins as an earlier one did);
 //   - or part of a piece of dropped rows, one after another, whose text is
-//     kept text from the start of a kept row to the end of one (a kept row
-//     whole, or the same text wrapped at another width: a reprint after a
-//     resize), or, cut at the screen's edge, from one edge of a kept row on
-//     past at least one whole row.
+//     kept text covering at least one kept row whole: a kept row again, the
+//     same text wrapped at another width (a reprint after a resize), or one
+//     cut at the screen's top or bottom edge.
 //
-// Only a redraw's debris (redrawDebris) has no text to lose.
+// A quote bar leading a row (quoteGutter) is no text: wrapping repeats it on
+// every row. Only a redraw's debris (redrawDebris) has no text to lose.
 func unshownRows(lines []string, drop []bool, also []string) []int {
-	tokens := func(s string) []string { return strings.Fields(dedupANSI.ReplaceAllString(s, "")) }
+	tokens := func(s string) []string {
+		t := strings.Fields(dedupANSI.ReplaceAllString(s, ""))
+		if len(t) > 1 && quoteGutter[t[0]] {
+			t = t[1:]
+		}
+		return t
+	}
 	toks := make([][]string, len(lines))
 	for x, l := range lines {
 		toks[x] = tokens(l)
 	}
 	var stream []string
-	var rowOf []int        // the kept row each token of stream is in
+	var rowOf []int // the kept row each token of stream is in, by its order
+	row := 0
 	edge := map[int]bool{} // where in stream a kept row begins or ends
 	at := map[string][]int{}
-	read := func(t []string, row int) {
+	read := func(t []string) {
 		if len(t) == 0 {
 			return
 		}
+		row++
 		edge[len(stream)] = true
 		for _, w := range t {
 			at[w] = append(at[w], len(stream))
@@ -597,11 +605,11 @@ func unshownRows(lines []string, drop []bool, also []string) []int {
 	}
 	for x := range lines {
 		if !drop[x] {
-			read(toks[x], x)
+			read(toks[x])
 		}
 	}
-	for k, l := range also {
-		read(tokens(l), len(lines)+k)
+	for _, l := range also {
+		read(tokens(l))
 	}
 	// match is where text is in the kept stream: the starts it had (all, when
 	// nil), narrowed to those it still has once n of its tokens are matched
@@ -619,17 +627,22 @@ func unshownRows(lines []string, drop []bool, also []string) []int {
 		}
 		return out
 	}
-	// aligned: of the starts of text n tokens long, one runs from a row's edge
-	// to a row's edge, or from one edge past a whole row; across: one is
-	// anywhere but inside one row.
-	place := func(starts []int, n int) (aligned, across bool) {
+	// whole: of the starts of text n tokens long, one covers a kept row whole;
+	// across: one is anywhere but inside one row.
+	place := func(starts []int, n int) (whole, across bool) {
 		for _, s := range starts {
 			e := s + n
-			a := rowOf[s] != rowOf[e-1]
-			across = across || a
-			aligned = aligned || edge[s] && edge[e] || (edge[s] || edge[e]) && a
+			first, last := rowOf[s], rowOf[e-1] // the rows it covers whole
+			if !edge[s] {
+				first++
+			}
+			if !edge[e] {
+				last--
+			}
+			whole = whole || first <= last
+			across = across || rowOf[s] != rowOf[e-1]
 		}
-		return aligned, across
+		return whole, across
 	}
 	dropped := func(x int) bool { return x < len(lines) && drop[x] && len(toks[x]) > 0 }
 	shown := make([]bool, len(lines))
@@ -638,14 +651,14 @@ func unshownRows(lines []string, drop []bool, also []string) []int {
 			p++
 			continue
 		}
-		// The longest piece from p whose text is kept text, aligned.
+		// The longest piece from p whose text is kept text covering a row whole.
 		q, n, starts := p, 0, []int(nil)
 		for k := p; dropped(k); k++ {
 			if starts = match(starts, n, toks[k]); len(starts) == 0 {
 				break
 			}
 			n += len(toks[k])
-			if aligned, _ := place(starts, n); aligned {
+			if whole, _ := place(starts, n); whole {
 				q = k + 1
 			}
 		}
@@ -1079,3 +1092,7 @@ func redrawDebris(l string) bool {
 
 // redrawDebrisMax is the most characters a redraw's debris row shows.
 const redrawDebrisMax = 3
+
+// quoteGutter is the bars a program draws down a quote's left side, one per
+// row, however it is wrapped.
+var quoteGutter = map[string]bool{"▎": true, "▍": true, "▌": true, "▏": true, "│": true, "┃": true, ">": true}

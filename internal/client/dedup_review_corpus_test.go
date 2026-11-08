@@ -4,6 +4,7 @@
 package client
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -155,5 +156,45 @@ func TestStrictFramePassKeepsRowsTheScreenChanged(t *testing.T) {
 	got := dedupAgainstFrame(append([]string(nil), history...), screen)
 	if missing := reviewCorpusMissing(history, append(got, screen...)); len(missing) > 0 {
 		t.Errorf("rows no longer shown at all: %q (history kept %q)", missing, got)
+	}
+}
+
+// What the row-text check counts as shown: a reprint at another width, cut
+// at the screen's top and bottom, and a quote whose bar wrapping repeats on
+// every row. Neither is restored; a shorter line inside one longer row is.
+func TestUnshownRowsReadsReprintsAsShown(t *testing.T) {
+	item := func(n int) string {
+		return fmt.Sprintf("%d. T5L%02d alpha bravo charlie delta echo foxtrot golf-T5L%02d hotel india juliet kilo lima mike ENDT5L%02d", n, n, n, n)
+	}
+	var kept, narrow []string
+	for n := 9; n <= 18; n++ {
+		kept = append(kept, item(n))
+		narrow = append(narrow, dfWrap(item(n), 50)...)
+	}
+	narrow = narrow[1 : len(narrow)-2] // cut at both edges, mid-item
+	quote := "▎ You've met him by now, I expect. He doesn't want anything except for his father to get home safe."
+	cases := []struct {
+		name    string
+		kept    []string
+		dropped []string
+		want    int // rows restored
+	}{
+		{"a reprint cut at both edges", kept, narrow, 0},
+		{"a quote wrapped with its bar", []string{quote}, []string{
+			"▎ You've met him by now, I expect. He doesn't want",
+			"▎ anything except for his father to get home safe.",
+		}, 0},
+		{"a shorter line inside one row", []string{"Deploying service api to cluster prod-east with three replicas and the canary on"},
+			[]string{"Deploying service api to cluster prod-east with three replicas"}, 1},
+	}
+	for _, c := range cases {
+		lines := append(append(append([]string(nil), c.kept...), ""), c.dropped...)
+		drop := make([]bool, len(lines))
+		for x := len(c.kept) + 1; x < len(lines); x++ {
+			drop[x] = true
+		}
+		if got := unshownRows(lines, drop, nil); len(got) != c.want {
+			t.Errorf("%s: %d rows restored, want %d", c.name, len(got), c.want)
+		}
 	}
 }
