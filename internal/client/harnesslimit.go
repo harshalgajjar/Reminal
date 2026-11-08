@@ -239,6 +239,10 @@ var harnessLimitNotices = map[string][]limitNotice{
 			`you.?reoutofextrausage`,
 			`you.?vereachedyour(?:session|weekly|daily|monthly|opus|sonnet|fable|usage)?limit`,
 			`yourorganizationisoutofusagecredits(?:\.contactyouradmintoaddmore)?`,
+			// Claude Code 2.1.319: an organization whose usage is paused,
+			// and a goal paused by it.
+			`usageispausedforyourorganization(?:\.forhelp,pleasecontactsupport\.?)?`,
+			`goalpaused·usageispausedforyourorganization`,
 		)))...),
 	// Codex 0.163–0.165: "You’ve hit your usage limit. … try again at 3:05
 	// PM." (the time on the next row when it wraps), its workspace's limit
@@ -282,6 +286,11 @@ var harnessLimitNotices = map[string][]limitNotice{
 	), onGlyph("✕", wholeRows(`\.?\]?`,
 		`(?:apierror:)?quotaexhausted`,
 		`(?:apierror:)?ratelimitexceeded`,
+		// Qwen Code 0.26.9: its credits used up (the weekly ones too), with
+		// what to do next, and when they come back; led by ✕ as its other
+		// notices are.
+		`you.?veusedupyour(?:weekly)?credits\.(?:pleasetryagainafterthereset|youcanwaitorrun/upgradetogetmorecredits)`,
+		`yourcreditsareexpectedtoresetin`+limitWait,
 	))...),
 	// OpenCode 1.19: "Usage limit reached. It will reset in 3 hours 20
 	// minutes." (a model's name may lead it), what to do now, its Go and

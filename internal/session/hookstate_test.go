@@ -133,7 +133,7 @@ func TestAHookStateIsNotUndoneByACountWrittenBackAroundIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer unlock()
-	if err := UpdateHookBackground("LKLK2345", &Background{Shells: 9}); err != nil {
+	if err := UpdateHookBackground("LKLK2345", &Background{Shells: 9}, false); err != nil {
 		t.Fatal(err)
 	}
 	if hs := ReadHookStateAnyAge("LKLK2345"); hs == nil || hs.Background != nil {
@@ -233,5 +233,53 @@ func TestCleanOtherClampsCounts(t *testing.T) {
 	b.AddOther("monitor", 1)
 	if b.Other["monitor"] != maxKindCount {
 		t.Errorf("added past the bound: %d", b.Other["monitor"])
+	}
+}
+
+// A state written keeping the background (a notification's) carries the
+// record's count as it is when the write lands, under the lock: a count
+// written back around it is not undone. A record past HookStateTTL is no
+// turn's word any more, and its count is not carried.
+func TestAStateKeepingTheBackgroundReadsItUnderTheLock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := WriteHookStateWith("KEEP2345", "done", &Background{Agents: 2}); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockHookState("KEEP2345") // a count being written back
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrote := make(chan error, 1)
+	go func() { wrote <- WriteHookStateKeepingBackground("KEEP2345", "input") }()
+	select {
+	case <-wrote:
+		t.Fatal("written in the middle of another hook's read and write back")
+	case <-time.After(200 * time.Millisecond):
+	}
+	hs := ReadHookStateAnyAge("KEEP2345")
+	hs.Background = &Background{Shells: 1}
+	if err := writeHookState("KEEP2345", *hs); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	if err := <-wrote; err != nil {
+		t.Fatal(err)
+	}
+	if hs := ReadHookStateAnyAge("KEEP2345"); hs == nil || hs.State != "input" || hs.Background == nil || hs.Background.Shells != 1 {
+		t.Fatalf("after: %+v (want the count written back meanwhile)", hs)
+	}
+
+	old := ReadHookStateAnyAge("KEEP2345")
+	old.TS = time.Now().Add(-HookStateTTL - time.Minute)
+	if err := writeHookState("KEEP2345", *old); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteHookStateKeepingBackground("KEEP2345", "done"); err != nil {
+		t.Fatal(err)
+	}
+	if hs := ReadHookStateAnyAge("KEEP2345"); hs == nil || hs.State != "done" || hs.Background != nil {
+		t.Fatalf("after a stale record: %+v (want no count carried)", hs)
 	}
 }

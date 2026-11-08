@@ -19,9 +19,8 @@ func (s censusScreen) ours() bool { return strings.EqualFold(s.name, vdisplayNam
 
 // censusScreen is one screen as the census sees it.
 type censusScreen struct {
-	name    string
-	w, h    int
-	builtin bool // the MacBook's own panel
+	name string
+	w, h int
 }
 
 // censusLid is the MacBook lid as the census sees it.
@@ -30,21 +29,18 @@ type censusLid struct {
 	shut bool
 }
 
-// countRealScreens counts the screens that are real: not ours, and not the
-// built-in panel while the lid is shut. An open lid is a real display however
-// the screens are listed: macOS 13 has been seen listing only ours once it is
-// up, the other display mirrored behind it, and ours must still go when the
-// lid opens. w, h is the first real one's size, or, with none, the size of
-// the first screen of any kind.
+// countRealScreens counts the screens that are real: every one macOS lists
+// but ours, the MacBook's own panel included, lid open or shut. A shut lid
+// with sleep disabled keeps the panel online and main, every window on it
+// and captured from it: ours beside it was a second, empty screen. Only a
+// Mac that lists no display at all is headless. An open lid is a real
+// display however the screens are listed: macOS 13 has been seen listing
+// only ours once it is up, the other display mirrored behind it, and ours
+// must still go when the lid opens. w, h is the first real one's size (0, 0
+// with none).
 func countRealScreens(screens []censusScreen, lid censusLid) (real, w, h int) {
 	for _, s := range screens {
 		if s.ours() {
-			continue
-		}
-		if w == 0 {
-			w, h = s.w, s.h
-		}
-		if s.builtin && lid.shut {
 			continue
 		}
 		if real == 0 {

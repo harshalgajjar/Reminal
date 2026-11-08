@@ -194,9 +194,24 @@ var harnessLoginScreens = map[string][]loginRow{
 		`youraccesstokencouldnotberefreshed\.pleaselogoutandsigninagain`,
 		`yourauthenticationsessioncouldnotberefreshedautomatically\.pleaselogoutandsigninagain`,
 		"chatgptaccountidnotavailable,pleasere-run`?codexlogin`?",
-	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`), loginMarked("■",
-		`yoursessionhasexpired\.pleasereauthenticate`,
-	)),
+		// Codex 0.167.0: signing in by device code (its three rows), and an
+		// enterprise identity provider's session it cannot keep.
+		`preparingdevicecodelogin`,
+		`enterpriseidp(?:sessionhasnorefreshtoken;signinagain|credentialswereremoved;signinagain|identitychanged;signinagainandreconnect)`,
+	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`),
+		// Its device-code steps are its only together: the first, then the second
+		// within the next few rows (the link between them). One numbered step
+		// alone is an agent's own list.
+		loginThen(`1\.openthislinkinyourbrowserandsignin`, `2\.enterthisone-timecodeafteryouaresignedin`), loginMarked("■",
+			`yoursessionhasexpired\.pleasereauthenticate`,
+		)),
+	// Droid 1.6.0 with no login (recorded in Docker, testdata/harness-screens/
+	// droid.txt): "Please login with your Factory account to continue.", its
+	// login menu under it ("> Login", "Sign in to a Factory Custom
+	// Deployment", "Exit"): the sentence is its only with the menu below, as
+	// an agent may write it. ("This Droid is not signed in", a label in its
+	// bundle, is not on that screen: not read until recorded.)
+	"droid": loginThen(`pleaseloginwithyourfactoryaccounttocontinue`, `signintoafactorycustomdeployment`),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), the steps of
 	// setting one up, and a login that lapsed.
@@ -209,6 +224,17 @@ var harnessLoginScreens = map[string][]loginRow{
 		`connectwithanexistingmodelstudioapikey`,
 		`noapikeyfound:setopenai_api_keyorsecurity\.auth\.apikey\.?`,
 		`qwenoauthcredentialsexpired\.pleaseuse/authtore-authenticatewithqwen-oauth`,
+		// Qwen Code 0.26.9: a message turned away for want of a login, its
+		// /auth flow, its signed-out state, no provider set up, signing in
+		// through the browser, and signed in on a plan that has no Qwen Code
+		// in it (the plan's name is the hole).
+		`notsignedin\.run/authtosignin\.?`,
+		`yourqwensessionhasexpired\.run/authtosigninagain\.?`,
+		`yourlogincredentialsarenolongervalid\.run/authtosigninagain\.?`,
+		`signedoutofqwen\.use/authtosignin(?:again|withanotheraccount)\.?`,
+		`use/authtosigninorconfigureamodelfirst\.?`,
+		`openingchat\.qwen\.aiinyourbrowser.{0,3}signintheretoconnectqwencode\.?`,
+		`you.?resignedinwitha[a-z]{0,12}account,whichdoesn.?tincludeqwencode\.chooseplusorproinyourbrowser;thisterminalcontinuesautomaticallyafteryousubscribe\.?`,
 	), loginMarked("✕",
 		`refreshtokenexpiredorinvalid\.pleaseuse.?/auth.?tore-authenticate`,
 	)),

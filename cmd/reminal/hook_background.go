@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"reminal/internal/session"
 )
@@ -29,6 +30,8 @@ import (
 // (fullyIdle): not done stands as "background work", one of it, said with
 // no count (session.BackgroundWork).
 //
+// What it has set to run later rides along, apart (hookScheduled).
+//
 // nil when the payload says nothing of it at all — a harness, or an older
 // build, that does not say — which leaves what the screen says to stand.
 func hookBackground(payload []byte, except string) *session.Background {
@@ -39,16 +42,20 @@ func hookBackground(payload []byte, except string) *session.Background {
 	if json.Unmarshal(payload, &p) != nil {
 		return nil
 	}
+	sched := hookScheduled(payload, time.Now())
 	if p.Tasks == nil {
-		if p.FullyIdle == nil {
+		switch {
+		case p.FullyIdle == nil:
+			// It says nothing of what runs: whatever else it lists is not
+			// taken as "nothing runs" (Claude Code and Qwen Code send their
+			// jobs with background_tasks, always).
 			return nil
+		case *p.FullyIdle:
+			return &session.Background{Scheduled: sched}
 		}
-		if *p.FullyIdle {
-			return &session.Background{}
-		}
-		return &session.Background{Other: map[string]int{session.BackgroundWork: 1}}
+		return &session.Background{Other: map[string]int{session.BackgroundWork: 1}, Scheduled: sched}
 	}
-	bg := &session.Background{}
+	bg := &session.Background{Scheduled: sched}
 	for _, raw := range *p.Tasks {
 		var t struct {
 			ID        json.RawMessage `json:"id"`
@@ -75,6 +82,38 @@ func hookBackground(payload []byte, except string) *session.Background {
 	return bg
 }
 
+// hookScheduled reads, from a hook's payload, what its harness has set to
+// run later: Claude Code's session_crons ({id, schedule, recurring, prompt}
+// each) or Qwen Code's crons ({id, schedule, prompt, recurring, next_run?,
+// last_run?, enabled}). Each counts but one said not enabled; the soonest
+// next_run given is when the next fires. Said at now. nil when it names
+// none: each Stop says the whole of it, so none is what clears one said
+// before.
+func hookScheduled(payload []byte, now time.Time) *session.Scheduled {
+	list := hookScheduledList(payload)
+	if list == nil {
+		return nil
+	}
+	s := &session.Scheduled{At: now}
+	for _, raw := range *list {
+		var j struct {
+			Enabled *bool  `json:"enabled"`
+			NextRun string `json:"next_run"`
+		}
+		if json.Unmarshal(raw, &j) != nil || (j.Enabled != nil && !*j.Enabled) {
+			continue
+		}
+		s.Count++
+		if t, err := time.Parse(time.RFC3339, j.NextRun); err == nil && (s.Next.IsZero() || t.Before(s.Next)) {
+			s.Next = t
+		}
+	}
+	if s.Count == 0 {
+		return nil
+	}
+	return s
+}
+
 // hookAgentID is the subagent a SubagentStop is about.
 func hookAgentID(payload []byte) string {
 	var p struct {
@@ -92,7 +131,30 @@ func hookDebugBackground(id, event string, bg *session.Background) {
 	}
 	said := "no background_tasks"
 	if bg != nil {
-		said = fmt.Sprintf("shells=%d agents=%d other=%d", bg.Shells, bg.Agents, bg.OtherCount())
+		said = fmt.Sprintf("shells=%d agents=%d other=%d scheduled=%d", bg.Shells, bg.Agents, bg.OtherCount(), bg.Scheduled.Jobs())
 	}
 	_ = session.AppendHookDebug(fmt.Sprintf("session=%s event=%s %s", id, event, said))
+}
+
+// hookScheduledList is the jobs list a hook's payload carries (session_crons
+// or crons), nil when it carries none: a payload that names no list says
+// nothing of the jobs, one with an empty list says there are none.
+func hookScheduledList(payload []byte) *[]json.RawMessage {
+	var p struct {
+		Claude *[]json.RawMessage `json:"session_crons"`
+		Qwen   *[]json.RawMessage `json:"crons"`
+	}
+	if json.Unmarshal(payload, &p) != nil {
+		return nil
+	}
+	if p.Claude != nil {
+		return p.Claude
+	}
+	return p.Qwen
+}
+
+// hookSaysScheduled reports whether a hook's payload speaks of the jobs set
+// to run later at all (hookScheduledList).
+func hookSaysScheduled(payload []byte) bool {
+	return hookScheduledList(payload) != nil
 }

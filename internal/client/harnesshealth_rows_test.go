@@ -40,6 +40,25 @@ var loginRowCases = []loginRowCase{
 	{prog: "codex", row: "■ Your authentication session could not be refreshed automatically. Please log out and sign in again."},
 	{prog: "codex", row: "■ ChatGPT account ID not available, please re-run `codex login`"},
 	{prog: "codex", row: "■ ChatGPT account ID not available, please re-run codex login"},
+	// Codex 0.167.0: the device-code sign-in's three rows, and an enterprise
+	// identity provider's session it cannot keep.
+	{prog: "codex", row: "  Preparing device code login"},
+	{prog: "codex", row: "■ enterprise IdP session has no refresh token; sign in again"},
+	{prog: "codex", row: "■ enterprise IdP credentials were removed; sign in again"},
+	{prog: "codex", row: "■ enterprise IdP identity changed; sign in again and reconnect"},
+	// Qwen Code 0.26.9: a message turned away for want of a login, its /auth
+	// flow, its signed-out state, no provider, signing in through the
+	// browser, and a plan without Qwen Code (the plan's name is a hole:
+	// empty, or a name).
+	{prog: "qwen", row: "  Not signed in. Run /auth to sign in."},
+	{prog: "qwen", row: "  Your Qwen session has expired. Run /auth to sign in again."},
+	{prog: "qwen", row: "  Your login credentials are no longer valid. Run /auth to sign in again."},
+	{prog: "qwen", row: "  Signed out of Qwen. Use /auth to sign in again."},
+	{prog: "qwen", row: "  Signed out of Qwen. Use /auth to sign in with another account."},
+	{prog: "qwen", row: "  Use /auth to sign in or configure a model first."},
+	{prog: "qwen", row: "  Opening chat.qwen.ai in your browser… Sign in there to connect Qwen Code."},
+	{prog: "qwen", row: "  You're signed in with a Free account, which doesn't include Qwen Code. Choose Plus or Pro in your browser; this terminal continues automatically after you subscribe."},
+	{prog: "qwen", row: "  You're signed in with a  account, which doesn't include Qwen Code. Choose Plus or Pro in your browser; this terminal continues automatically after you subscribe."},
 
 	{prog: "amp", row: "Would you like to log in to Amp? [(y)es, (n)o]: "},
 	{prog: "amp", row: "No API key found. Starting login flow..."},
@@ -321,6 +340,24 @@ func TestCodexsLoginMenuIsItsItemsTogether(t *testing.T) {
 	}
 }
 
+// Codex 0.167.0's device-code steps are its only together: the first, then
+// the second within the next few rows (the link between them). An agent's
+// own numbered list that starts with the first step's words is not it.
+func TestCodexsDeviceCodeStepsAreItsTogether(t *testing.T) {
+	steps := "  Preparing device code login\n\n  1. Open this link in your browser and sign in\n     https://auth.openai.com/device?user_code=ABCD-EFGH\n\n  2. Enter this one-time code after you are signed in\n     ABCD-EFGH"
+	if !harnessProblemIn(steps+loginRowFrame, "codex") {
+		t.Error("its device-code steps, together, were not read as logged out")
+	}
+	for _, answer := range []string{
+		"● To get the token:\n  1. Open this link in your browser and sign in\n  2. Copy the key into .env\n  3. Run the tests again.",
+		"  2. Enter this one-time code after you are signed in",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "codex") {
+			t.Errorf("an answer's numbered step read as Codex's device-code login:\n%s", answer)
+		}
+	}
+}
+
 // Antigravity's "You are currently not signed in." is its screen's only after
 // its heading's words: alone, it is a sentence anyone may write.
 func TestAntigravitysLoginHeadingIsItsOnlyWhole(t *testing.T) {
@@ -465,6 +502,23 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"a tool's output's last row", "claude", "  ⎿  Fetched https://staging.example.com/api\n     Authentication required.", false},
 		{"a person's text at the prompt", "claude", "────\n❯ why does it say\n  Authentication required.\n────", false},
 		{"what an agent goes on to write", "gemini", "answer" + box + " Authentication required: run the tests again and it works", false},
+		{"Droid's state carried on in an answer", "droid", "● It printed that this Droid is not signed in, and I went on with the next file.\n", false},
+		{"a bundle label of Droid's, never recorded on a screen, ending an answer", "droid", "● It said:\n  This Droid is not signed in\n", false},
+		{"Droid's login sentence in an answer, no menu under it", "droid", "● Please login with your Factory account to continue.\n  Then run droid again and the tests pass.\n", false},
+		{"Codex's IdP row carried on in an answer", "codex", "● The server said enterprise IdP session has no refresh token; sign in again, so I stopped.\n› ", false},
+		// Claude Code 2.1.319: a claude.ai login that ended while another
+		// login profile pays for the usage: the session goes on, and the
+		// footer and its warning only say so; not a login wanted.
+		{"Claude Code's footer after a claude.ai login ended, usage billed elsewhere", "claude", "answer" + box + "  claude.ai login ended · usage now billed to Acme Corp · /login to sign in", false},
+		{"Claude Code's warning of the same", "claude", "  Warning: the claude.ai login on this machine has ended. This run uses the sign-in from ant auth login instead, and its usage is billed to Acme Corp. Run claude auth login to sign in again, or claude auth logout to remove the ended login and keep that sign-in without this warning." + box, false},
+		// Qwen Code 0.26.9: rows that say the session is fine, and its
+		// notices quoted or carried on in an agent's own words.
+		{"Qwen's models that would not load, signed in", "qwen", "answer" + box + "  Could not load models. Your account is still signed in. Please try again.", false},
+		{"Qwen signed in", "qwen", "answer" + box + "  Signed in successfully", false},
+		{"Qwen signed in as", "qwen", "answer" + box + "  Signed in as someone@example.com", false},
+		{"a Qwen command for subscribers only", "qwen", "answer" + box + "  This command is only available with Qwen Subscription login. Use /auth to sign in to Qwen Subscription.", false},
+		{"Qwen's notice in an answer's words", "qwen", "● The docs say: not signed in. Run /auth to sign in, then try again." + box, false},
+		{"Qwen's notice quoted", "qwen", "  \"Your Qwen session has expired. Run /auth to sign in again.\" is what it printed." + box, false},
 	} {
 		if got := harnessProblemIn(c.tail, c.prog); got != c.want {
 			t.Errorf("%s (as %q): logged out %v, want %v:\n%s", c.name, c.prog, got, c.want, c.tail)
