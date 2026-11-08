@@ -29,6 +29,15 @@ func refRenderScrollback(e *sessionScreen, maxLines int) []string {
 
 func refSnapshotHistory(a *Agent) []string {
 	lines := refRenderScrollback(a.screen, 0) // uncapped: segment indices are absolute
+	if !dedupStrict {                         // mirrors dedupHistory's default rules
+		if drop := refDropResizeRepaints(a, lines); drop != nil {
+			lines = compactDropped(lines, drop)
+		}
+		if a.scrollbackLines > 0 && len(lines) > a.scrollbackLines {
+			lines = lines[len(lines)-a.scrollbackLines:]
+		}
+		return refDedupAgainstFrame(dedupRepaintsCovered(lines), strings.Split(a.screen.Render(), "\n"))
+	}
 	// Mirrors dedupHistory, given the segments joinInputs passes: the lines
 	// that can be reprints, carried through the segment pass and the trim.
 	var segs []resizeSeg
