@@ -180,7 +180,7 @@ func refBuildSnapshot(e *vt.Emulator, history, screenRows []string, maxBytes int
 	b.WriteString("\x1b[?25l")            // hide cursor while painting
 	b.WriteString("\x1b[?1049l")          // ensure the main screen is active
 	b.WriteString("\x1b[2J\x1b[3J\x1b[H") // clear screen + the viewer's old scrollback, home
-	b.WriteString("\x1b[?7l")             // disable autowrap so full-width rows don't wrap
+	b.WriteString("\x1b[?7h")             // mirrors paintSnapshot: autowrap on throughout
 
 	// History lines flow into the main buffer's scrollback as the screen
 	// scrolls; each is newline-terminated so the next pushes it up.
@@ -203,7 +203,6 @@ func refBuildSnapshot(e *vt.Emulator, history, screenRows []string, maxBytes int
 		b.WriteString("\x1b[0m")
 	}
 
-	b.WriteString("\x1b[?7h") // restore autowrap
 	pos := e.CursorPosition()
 	if len(history) > 0 && !alt {
 		// The screen is the bottom block of what was painted, and in a viewer
