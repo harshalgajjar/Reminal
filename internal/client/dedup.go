@@ -421,16 +421,30 @@ func dedupAgainstFrame(history, screen []string) []string {
 // heading) a dropped copy carried goes with it (dropOrphanHeadings); a
 // heading printed twice with only a redraw's debris between goes with the
 // debris (dropHeadingDebris).
-func dedupRepaints(lines []string) []string { return dedupRepaintsFrom(lines, len(lines)) }
+func dedupRepaints(lines []string) []string {
+	all := make([]bool, len(lines))
+	for i := range all {
+		all[i] = true
+	}
+	return dedupRepaintsIn(lines, all)
+}
 
-// dedupRepaintsFrom is dedupRepaints for a history whose lines from resized
-// on were written after a resize: a copy there printed as it was (at the
-// same width: the head of a frame reprinted after the height changed) is a
-// reprint too. Before it, only a copy wrapped otherwise is: rows printed
-// again as they were (a `tail` of a file just shown) are the program saying
-// it again.
-func dedupRepaintsFrom(lines []string, resized int) []string {
+// dedupRepaintsIn is dedupRepaints where only the lines marked can be a
+// reprint (repaintLines: inside a resize's window, matching the frame it
+// captured). A paragraph is looked at as a reprint only when all its lines
+// are; there a copy printed as it was (the head of a frame reprinted at the
+// same width) counts as well as one wrapped otherwise. Anything else the
+// program printed again stays: losing a line is worse than a duplicate.
+func dedupRepaintsIn(lines []string, reprint []bool) []string {
 	paras := dedupParagraphs(lines)
+	eligible := func(p dedupPara) bool {
+		for x := p.i; x < p.j; x++ {
+			if !reprint[x] && len(dedupWords(lines[x])) > 0 {
+				return false
+			}
+		}
+		return true
+	}
 	// The verbatim copies first (dedupBlocks' rule), in the same mask.
 	drop := dedupBlocksMask(lines)
 	pass := func(order []int, reversed bool) {
@@ -444,7 +458,7 @@ func dedupRepaintsFrom(lines []string, resized int) []string {
 			if reversed {
 				slices.Reverse(words)
 			}
-			if src.reprintOf(lines[p.i:p.j], words, reversed, p.i < resized) {
+			if eligible(p) && src.reprintOf(lines[p.i:p.j], words, reversed, false) {
 				for x := p.i; x < p.j; x++ {
 					drop[x] = true
 				}
@@ -460,6 +474,33 @@ func dedupRepaintsFrom(lines []string, resized int) []string {
 	}
 	pass(forward, false)
 	pass(backward, true)
+	// keep undoes a drop of paragraph k, with the blank rows after it that
+	// went with it.
+	keep := func(k int) {
+		end := len(lines)
+		if k+1 < len(paras) {
+			end = paras[k+1].i
+		}
+		for x := paras[k].i; x < end; x++ {
+			drop[x] = false
+		}
+	}
+	// A command typed at a shell's prompt, and what follows it, is that
+	// command's output, printed again because it was run again: never a
+	// copy, whether the output is in the command's paragraph or the next.
+	for k := range paras {
+		if dedupShellCommand(lines[paras[k].i]) || (k > 0 && paras[k-1].j-paras[k-1].i == 1 && dedupShellCommand(lines[paras[k-1].i])) {
+			keep(k)
+		}
+	}
+	// A run split where its width changed goes only whole: a piece that is
+	// a copy beside one that is not is kept with it.
+	for k := 0; k+1 < len(paras); k++ {
+		if p, q := paras[k], paras[k+1]; p.split && drop[p.i] != drop[q.i] {
+			keep(k)
+			keep(k + 1)
+		}
+	}
 	dropOrphanHeadings(lines, paras, drop)
 	dropHeadingDebris(lines, paras, drop)
 	return compactDropped(lines, drop)
@@ -558,8 +599,13 @@ func dedupRow(s string) string {
 	return strings.TrimSpace(dedupANSI.ReplaceAllString(s, ""))
 }
 
-// dedupPara is one paragraph of history: lines[i:j].
-type dedupPara struct{ i, j int }
+// dedupPara is one paragraph of history: lines[i:j]. split: it is a piece of
+// a run split where its wrap width changed (widthSeam), whose other piece is
+// the paragraph after it.
+type dedupPara struct {
+	i, j  int
+	split bool
+}
 
 func (p dedupPara) words(lines []string) []string {
 	var w []string
@@ -580,7 +626,7 @@ func dedupParagraphs(lines []string) []dedupPara {
 			continue
 		}
 		if dedupChrome(lines[i]) {
-			paras = append(paras, dedupPara{i, i + 1})
+			paras = append(paras, dedupPara{i: i, j: i + 1})
 			i++
 			continue
 		}
@@ -589,10 +635,10 @@ func dedupParagraphs(lines []string) []dedupPara {
 			j++
 		}
 		if s := widthSeam(lines[i:j]); s > 0 {
-			paras = append(paras, dedupPara{i, i + s})
+			paras = append(paras, dedupPara{i: i, j: i + s, split: true})
 			i += s
 		}
-		paras = append(paras, dedupPara{i, j})
+		paras = append(paras, dedupPara{i: i, j: j})
 		i = j
 	}
 	return paras
@@ -628,7 +674,7 @@ func dropOrphanHeadings(lines []string, paras []dedupPara, drop []bool) {
 	}
 	dropped := func(k int) bool { return k >= 0 && k < len(paras) && drop[paras[k].i] }
 	for k, p := range paras {
-		if drop[p.i] || keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords {
+		if drop[p.i] || keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords || dedupCommand(lines[p.i]) {
 			continue
 		}
 		if count[keys[k]] > 1 && (dropped(k-1) || dropped(k+1)) {
@@ -682,7 +728,7 @@ func dropHeadingDebris(lines []string, paras []dedupPara, drop []bool) {
 		}
 	}
 	for k, p := range paras {
-		if keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords {
+		if keys[k] == "" || len(strings.Split(keys[k], "\x00")) >= dedupMinParaWords || dedupCommand(lines[p.i]) {
 			continue
 		}
 		// The next copy, with only debris on the way to it. Paragraphs
@@ -834,3 +880,26 @@ func widthSeam(rows []string) int {
 	}
 	return 0
 }
+
+// dedupCommand says a row is a command as typed at a prompt ("$ go test
+// ./...", "% make", "❯ ls"): never a heading a reprint carried, however short
+// and however often it was typed.
+func dedupCommand(s string) bool {
+	t := strings.TrimSpace(dedupANSI.ReplaceAllString(s, ""))
+	for _, p := range []string{"$ ", "% ", "# ", "> ", "❯ ", "➜ ", "λ ", "PS "} {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return dedupPrompt.MatchString(t)
+}
+
+// dedupShellCommand is dedupCommand at a shell's prompt, not an app's own
+// input row (Claude Code's "❯", which its reprints carry with them).
+func dedupShellCommand(s string) bool {
+	t := strings.TrimSpace(dedupANSI.ReplaceAllString(s, ""))
+	return dedupCommand(s) && !strings.HasPrefix(t, "❯")
+}
+
+// dedupPrompt is a shell prompt with the user and host before its mark.
+var dedupPrompt = regexp.MustCompile(`^\S+@\S+[^$#%]*[$#%] `)

@@ -1,0 +1,13 @@
+$ cat para.txt
+The lighthouse keeper kept the lamp lit through every storm, and the island was never on a map
+because the surveyors' brass instruments found nothing where the rock should have been.
+
+$ fmt -w 30 para.txt
+The lighthouse keeper kept
+the lamp lit through every
+storm, and the island was
+never on a map because the
+surveyors' brass instruments
+found nothing where the rock
+should have been.
+$

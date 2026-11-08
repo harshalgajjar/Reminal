@@ -2910,21 +2910,62 @@ func (a *Agent) snapshotHistory() []string {
 // which starts from dedupBlocks' rule). A pure function of its arguments, so it runs outside
 // screenMu (joinHistory).
 func dedupHistory(lines []string, segs []resizeSeg, screen string, maxLines int, dropped bool) []string {
-	// Where the first resize the session still remembers falls: lines before
-	// it were written before any reprint could be, and dropRepaints only
-	// drops at or after it, so the index holds through it.
-	resized := len(lines)
-	for _, s := range segs {
-		resized = min(resized, s.start)
-	}
+	reprints := repaintLines(lines, segs)
 	if !dropped {
-		lines = dropRepaints(lines, segs, screen)
+		if drop := dropRepaintsMask(lines, segs, screen); drop != nil {
+			lines, reprints = compactDroppedAlong(lines, drop, reprints)
+		}
 	}
 	if maxLines > 0 && len(lines) > maxLines {
-		resized -= len(lines) - maxLines
-		lines = lines[len(lines)-maxLines:]
+		k := len(lines) - maxLines
+		lines, reprints = lines[k:], reprints[k:]
 	}
-	return dedupRepaintsFrom(lines, max(resized, 0))
+	return dedupRepaintsIn(lines, reprints)
+}
+
+// repaintLines marks the lines that can be an app's reprint of its frame at
+// a resize: inside that resize's window (from where its repaint landed, as
+// far as dropRepaints looks) and matching the frame captured at it. Only
+// those are looked at as reprints (dedupRepaintsIn); anything else the
+// program printed again is kept, a duplicate shown rather than a line lost.
+func repaintLines(lines []string, segs []resizeSeg) []bool {
+	mark := make([]bool, len(lines))
+	for i, seg := range segs {
+		end := min(seg.start+seg.maxOver, len(lines))
+		if i+1 < len(segs) {
+			end = min(end, segs[i+1].start)
+		}
+		if seg.start < 0 || seg.start >= end || len(seg.words) == 0 {
+			continue
+		}
+		for k, m := range frameMatchedDropMask(lines[seg.start:end], seg.words) {
+			if m {
+				mark[seg.start+k] = true
+			}
+		}
+	}
+	return mark
+}
+
+// compactDroppedAlong is compactDropped, carrying a mark per line along.
+func compactDroppedAlong(lines []string, drop, along []bool) ([]string, []bool) {
+	out := make([]string, 0, len(lines))
+	marks := make([]bool, 0, len(lines))
+	justDropped := false
+	for i, l := range lines {
+		if drop[i] {
+			justDropped = true
+			continue
+		}
+		if justDropped && dedupBlank(l) && (len(out) == 0 || dedupBlank(out[len(out)-1])) {
+			justDropped = false
+			continue
+		}
+		justDropped = false
+		out = append(out, l)
+		marks = append(marks, along[i])
+	}
+	return out, marks
 }
 
 // dropResizeRepaints removes, for every resize EXCEPT the newest, the lines its frame
@@ -2961,8 +3002,17 @@ func (a *Agent) staleSegs(n int) bool {
 // dropRepaints is dropResizeRepaints of what it is given: segs (at least two,
 // none stale) and the live screen as rendered. Pure, so outside screenMu.
 func dropRepaints(lines []string, segs []resizeSeg, screenRender string) []string {
+	if drop := dropRepaintsMask(lines, segs, screenRender); drop != nil {
+		return compactDropped(lines, drop)
+	}
+	return lines
+}
+
+// dropRepaintsMask is dropRepaints' drops as a mask over lines, nil when
+// there are none to look for.
+func dropRepaintsMask(lines []string, segs []resizeSeg, screenRender string) []bool {
 	if len(segs) < 2 {
-		return lines
+		return nil
 	}
 	drop := make([]bool, len(lines))
 	// Existence corpus, built newest-to-oldest: a row may be dropped only if its
@@ -3011,7 +3061,7 @@ func dropRepaints(lines []string, segs []resizeSeg, screenRender string) []strin
 		addShingles(corpus, segRegion)
 		addWords(segRegion)
 	}
-	return compactDropped(lines, drop)
+	return drop
 }
 
 func (a *Agent) snapshotFrame() (string, uint64) {
