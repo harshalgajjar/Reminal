@@ -1,0 +1,7 @@
+warning: disk usage on volume data is above the limit set
+for it, and new writes may be refused until space is freed
+
+WARNING: disk usage on volume data is above the limit set
+for it, and new writes may be refused until space is freed
+
+$

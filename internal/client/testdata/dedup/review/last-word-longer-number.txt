@@ -1,0 +1,6 @@
+batch done: every record was read, checked against the schema and then written to the queue; total records queued: 100
+
+batch done: every record was read, checked against the schema and
+then written to the queue; total records queued: 1000
+
+$

@@ -58,7 +58,7 @@ func fillerLines(prefix string, n int) []byte {
 
 // TestSnapshotSurvivesScrollbackClear is the regression test for the Windows
 // crash "panic: runtime error: slice bounds out of range [12:0]" in regionWords
-// (via dropResizeRepaints → snapshotHistory → snapshotFrame). Resize segments
+// (via dropRepaints → snapshotHistory → snapshotFrame). Resize segments
 // hold ABSOLUTE scrollback indices; ESC[3J (erase scrollback) empties the
 // scrollback under them, so the newest segment's start pointed past the end of
 // the rendered history and the region slice inverted. On Windows this fires on
@@ -68,7 +68,7 @@ func fillerLines(prefix string, n int) []byte {
 func TestSnapshotSurvivesScrollbackClear(t *testing.T) {
 	a := clearingAgent(t, 80, 24)
 
-	// Two resizes with output between them: the minimum for dropResizeRepaints
+	// Two resizes with output between them: the minimum for dropRepaints
 	// to do any work at all (it no-ops below two segments).
 	a.record(fillerLines("BEFORE", 40))
 	a.resizeScreen(76, 24)
