@@ -54,6 +54,9 @@ type sessionScreen struct {
 	// failed is the first write the terminal refused (memory it would not
 	// give): from then on its copy is not what the program drew (Err).
 	failed error
+	// pruned says the terminal let the history's oldest lines go since
+	// TakePruned was last asked.
+	pruned bool
 	// count is how many lines its history holds (uncapped) when it held
 	// count.rows rows: kept so a resize need not format all of it
 	// (HistoryLines).
@@ -151,9 +154,11 @@ func (s *sessionScreen) Resize(cols, rows int) {
 	// re-wraps the main screen out of sight: it is counted again later.
 	alt := s.t.AltScreen()
 	var before []string
+	var firstBefore string
 	lines, tracked := 0, false
 	if !alt {
 		lines = s.linesLocked()
+		firstBefore = s.count.first
 		_, h := s.t.Size()
 		before, tracked = s.historyTail(max(h, rows))
 		tracked = tracked && s.count.valid
@@ -164,8 +169,15 @@ func (s *sessionScreen) Resize(cols, rows int) {
 			return
 		}
 		after, ok := s.historyTail(max(rows, len(before)/8))
+		first := s.firstLineLocked()
+		if first != firstBefore {
+			// The re-wrap took the scrollback past its budget: its oldest
+			// lines went.
+			s.pruned = true
+			return
+		}
 		if d, found := tailShift(before, after); ok && found {
-			s.count = lineCount{valid: true, lines: lines + d, rows: s.t.ScrollbackRows()}
+			s.count = lineCount{valid: true, lines: lines + d, rows: s.t.ScrollbackRows(), first: first}
 		}
 	}()
 	if _, h := s.t.Size(); rows < h && !alt {
@@ -246,7 +258,7 @@ func (s *sessionScreen) historyLocked() []string {
 		out = ""
 	}
 	rows := splitRows(out)
-	s.count = lineCount{valid: err == nil, lines: len(rows), rows: s.t.ScrollbackRows()}
+	s.count = lineCount{valid: err == nil, lines: len(rows), rows: s.t.ScrollbackRows(), first: s.firstLineLocked()}
 	if len(rows) > s.maxLines {
 		rows = rows[len(rows)-s.maxLines:]
 	}
@@ -368,10 +380,33 @@ func (a *Agent) closeScreen() {
 	}
 }
 
-// lineCount is a count of the history's lines, as of a number of its rows.
+// lineCount is a count of the history's lines, as of a number of its rows
+// and its first line (first): when the scrollback is at its budget the
+// terminal lets its oldest pages go, and the first line changing says so.
 type lineCount struct {
 	valid       bool
 	lines, rows int
+	first       string
+}
+
+// firstLineLocked is the history's first line, as far as its first rows go.
+func (s *sessionScreen) firstLineLocked() string {
+	out, _ := s.t.HistoryRows(0, 7)
+	if rows := splitRows(out); len(rows) > 0 {
+		return rows[0]
+	}
+	return ""
+}
+
+// TakePruned says the terminal let the history's oldest lines go since it
+// was last asked: every position counted from the top moved (the resize
+// segments: resizeScreen).
+func (s *sessionScreen) TakePruned() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pruned
+	s.pruned = false
+	return p
 }
 
 // HistoryLines is len(History()) without formatting all of it: the count of
@@ -397,6 +432,11 @@ func (s *sessionScreen) HistoryLines() int {
 // count is kept.
 func (s *sessionScreen) linesLocked() int {
 	r := s.t.ScrollbackRows()
+	first := s.firstLineLocked()
+	if s.count.valid && first != s.count.first {
+		// Its oldest lines went: counted again, whole.
+		s.pruned, s.count.valid = true, false
+	}
 	if s.count.valid && r == s.count.rows {
 		return s.count.lines
 	}
@@ -407,13 +447,13 @@ func (s *sessionScreen) linesLocked() int {
 			if s.count.rows > 0 {
 				n--
 			}
-			s.count = lineCount{valid: true, lines: s.count.lines + n, rows: r}
+			s.count = lineCount{valid: true, lines: s.count.lines + n, rows: r, first: first}
 			return s.count.lines
 		}
 	}
 	out, err := s.t.History()
 	n := len(splitRows(out))
-	s.count = lineCount{valid: err == nil, lines: n, rows: r}
+	s.count = lineCount{valid: err == nil, lines: n, rows: r, first: first}
 	return n
 }
 

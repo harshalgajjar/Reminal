@@ -2697,6 +2697,11 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 		return
 	}
 	cur := a.screen.HistoryLines()
+	if a.screen.TakePruned() {
+		// The history's oldest lines went (its byte budget): every older
+		// segment's position moved. This one counts from the top as it is.
+		a.resizeSegs = nil
+	}
 	for _, s := range a.resizeSegs {
 		if s.start > cur {
 			a.resizeSegs = nil
