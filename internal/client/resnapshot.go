@@ -20,6 +20,14 @@ import (
 // the rows change on a phone's keyboard, not the columns, so the keyboard
 // never causes one.
 
+// screenRewraps says the session's copy of its screen re-wraps its history
+// on a resize, as the viewer's own terminal does. Only then is a repaint
+// from it at least as faithful as what an attached viewer holds: a copy
+// that keeps each row at the width it was printed at (charmbracelet/x/vt)
+// repainted a viewer with less than its own re-wrapped scrollback, a whole
+// paragraph gone. Off with that copy; the engine that re-wraps turns it on.
+const screenRewraps = false
+
 // resnapQuiet is how long the program must have been quiet after the width
 // change before the re-snapshot: its redraw follows SIGWINCH within a few
 // hundred milliseconds, and a stream still going pushes it until a gap.

@@ -208,19 +208,30 @@ const widthTo = async (want) => {
 };
 const record = () => page.evaluate(() => { try { return window.__size().events.slice(-24).map((e) => e.kind + ' ' + e.d).join(' | '); } catch (_) { return ''; } });
 const loops = Number(process.env.READ_LOOPS || 1);
-let keptPlace = true, readFails = 0;
+let keptPlace = true, readFails = 0, judged = 0, unjudged = 0;
 for (let i = 0; i < loops; i++) {
   await page.evaluate(() => window.__term.scrollLines(-40));
   const upBefore = await upBy();
   const rowsBefore = (await grid())[1];
-  const target = i % 2 === 0 ? cols - 12 : cols;
-  const rowsAfter = await widthTo(target);
-  await page.waitForTimeout(4000);
+  const target = i % 2 === 0 ? cols - 6 : cols;
+  await widthTo(target);
+  // The rows must not change on the way: the page's own layout can take a
+  // row at some widths, and any shrink scrolls to the bottom on purpose.
+  let rowsMoved = false;
+  for (let w = 0; w < 16; w++) { await page.waitForTimeout(250); if ((await grid())[1] !== rowsBefore) rowsMoved = true; }
+  if (await page.evaluate((r) => window.__size().events.slice(-12).some((e) => e.kind === 'grid' && !e.d.endsWith('x' + r)), rowsBefore)) rowsMoved = true;
   const upAfter = await upBy();
-  const ok = upBefore > 0 && upAfter > 0 && rowsAfter === rowsBefore;
-  if (!ok) { keptPlace = false; readFails++; console.log(`reading the history, loop ${i + 1}: ${upBefore} up before, ${upAfter} after, rows ${rowsBefore} -> ${rowsAfter}\n  the viewer's record: ${await record()}`); }
-  else if (loops === 1 || i === loops - 1) console.log(`reading the history through a repaint: ${upBefore} rows up before, ${upAfter} after (${loops} loop${loops > 1 ? 's' : ''}, ${readFails} lost the place)`);
+  if (rowsMoved) { unjudged++; continue; }
+  judged++;
+  if (!(upBefore > 0 && upAfter > 0)) { readFails++; console.log(`reading the history, loop ${i + 1}: ${upBefore} up before, ${upAfter} after\n  the viewer's record: ${await record()}`); }
 }
+keptPlace = readFails === 0 && judged >= Math.ceil(loops / 2);
+console.log(`reading the history through width changes: ${judged} loops judged, ${readFails} lost the place, ${unjudged} not judged (the page's rows changed on the way)`);
+// Whether this agent repaints an attached viewer after a width change: only
+// one whose copy of the screen re-wraps does. With it the attached viewer is
+// judged like a fresh join; without it, only the fresh join is.
+const repainted = await page.evaluate(() => window.__size().events.some((e) => e.kind === 'snap' && e.d.startsWith('repaint')));
+console.log(`repaints of the attached viewer: `);
 await widthTo(cols);
 await page.waitForTimeout(3000);
 
@@ -244,7 +255,7 @@ if (process.env.DUMP) fs.writeFileSync(process.env.DUMP.replace(/(\.txt)?$/, '-f
 // change every 120 ms): what the program prints for one width lands on the
 // next, in any terminal, and its headings are counted but not judged. With
 // the keyboard, Claude's own redraws count, and the run is judged on layout.
-const once = headings[1] === SECTIONS && freshHeadings[1] === SECTIONS;
+const once = (!repainted || headings[1] === SECTIONS) && freshHeadings[1] === SECTIONS;
 const ok = (keyboard || (lost.length === 0 && once)) && stair === 0 && wide === 0 && splitRules === 0 && keptPlace;
 console.log(ok ? 'PASS' : 'FAIL');
 if (process.env.DUMP) fs.writeFileSync(process.env.DUMP, rows.join('\n'));
