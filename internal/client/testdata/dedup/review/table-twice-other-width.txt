@@ -1,0 +1,23 @@
+┌──────────┬──────────┐
+│ host     │ status   │
+├──────────┼──────────┤
+│ alpha    │ ready    │
+│ bravo    │ ready    │
+│ charlie  │ down     │
+│ delta    │ ready    │
+│ echo     │ busy     │
+│ foxtrot  │ ready    │
+└──────────┴──────────┘
+
+┌─────────────────┬─────────────────┐
+│ host            │ status          │
+├─────────────────┼─────────────────┤
+│ alpha           │ ready           │
+│ bravo           │ ready           │
+│ charlie         │ down            │
+│ delta           │ ready           │
+│ echo            │ busy            │
+│ foxtrot         │ ready           │
+└─────────────────┴─────────────────┘
+
+$
