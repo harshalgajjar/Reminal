@@ -188,6 +188,19 @@ console.log(`grid at the end: ${cols}x${trows}, ${rows.length} rows held`);
 console.log(`sentences: ${ids.length - lost.length}/${ids.length} present${lost.length ? ' (lost: ' + lost.join(' ') + ')' : ''}`);
 console.log(`doubled sentences: ${doubled.length}${doubled.length ? ' (' + doubled.slice(0, 12).join(' ') + (doubled.length > 12 ? ' …' : '') + ')' : ''}; section headings ${headings[0]} and ${headings[1]} for ${SECTIONS} sections each`);
 console.log(`layout: staircase rows ${stair}, rows wider than ${cols} cols ${wide}, rule rows ${rules.length} (${splitRules} short), status rows ${status}`);
+// Someone reading the history when the width changes: scrolled up, the grid
+// narrows, Claude Code redraws, and once it is quiet the agent repaints this
+// viewer (a re-snapshot). The reader must still be up in the history, not
+// jumped to the bottom.
+const upBy = () => page.evaluate(() => { const b = window.__term.buffer.active; return b.baseY - b.viewportY; });
+await page.evaluate(() => window.__term.scrollLines(-40));
+const upBefore = await upBy();
+await step('reading the history: narrower', 90, trows, 4000);
+const upAfter = await upBy();
+console.log(`reading the history through a repaint: ${upBefore} rows up before, ${upAfter} after`);
+const keptPlace = upBefore > 0 && upAfter > 0;
+await step('reading the history: back', cols, trows, 3000);
+
 // A fresh join at the end, for comparison: its history is the agent's,
 // deduped, so a count above the attached viewer's own says a copy is the
 // history's, below it that the attached viewer kept one the history shed.
@@ -209,7 +222,7 @@ if (process.env.DUMP) fs.writeFileSync(process.env.DUMP.replace(/(\.txt)?$/, '-f
 // next, in any terminal, and its headings are counted but not judged. With
 // the keyboard, Claude's own redraws count, and the run is judged on layout.
 const once = headings[1] === SECTIONS && freshHeadings[1] === SECTIONS;
-const ok = (keyboard || (lost.length === 0 && once)) && stair === 0 && wide === 0 && splitRules === 0;
+const ok = (keyboard || (lost.length === 0 && once)) && stair === 0 && wide === 0 && splitRules === 0 && keptPlace;
 console.log(ok ? 'PASS' : 'FAIL');
 if (process.env.DUMP) fs.writeFileSync(process.env.DUMP, rows.join('\n'));
 await b.close();

@@ -6961,9 +6961,18 @@
         // A new snapshot for this connection: whatever was under way is over.
         if (snapAsm) { clearTimeout(snapAsm.timer); snapAsm = null; }
         const seq = typeof msg.seq === 'number' ? msg.seq : 0;
+        // Already showing everything through this snapshot's seq: a repaint
+        // of a viewer that stayed attached (the agent sends one after a
+        // width change settles). Its screen is the one this viewer shows, so
+        // it is not painted: painted alone it wipes the scrollback, and
+        // someone scrolled up reading the history lost their place before
+        // the history came. The history's repaint keeps the distance from the
+        // bottom (flushPendingChunks).
+        const caughtUp = lastSeq > 0 && seq <= lastSeq;
         snapLive = h.more ? { id: h.id, seq, n: 0, parts: null, got: 0, held: [], heldBytes: 0 } : null;
         awaitingSnapshotUntil = 0;
         if (seq > lastSeq || lastSeq === 0) lastSeq = seq;
+        if (caughtUp) return;
         enqueueData(body);
         bytesReceived += body.byteLength;
         return;
