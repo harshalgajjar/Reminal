@@ -670,25 +670,21 @@ func unshownRows(lines []string, drop []bool, also []string) []int {
 
 // reprintSource is the text kept so far in one pass of dedupRepaints: its
 // words as one stream (in reading order, or reversed for the pass from the
-// bottom), where each word starts in it, where each paragraph begins and
-// ends in it, and its rows as printed.
+// bottom), where each word starts in it, and its rows as printed.
 type reprintSource struct {
 	words []string
 	at    map[string][]int
-	edge  map[int]bool
 	rows  map[string]bool
 }
 
 func (s *reprintSource) add(rows, words []string) {
 	if s.at == nil {
-		s.at, s.edge, s.rows = map[string][]int{}, map[int]bool{}, map[string]bool{}
+		s.at, s.rows = map[string][]int{}, map[string]bool{}
 	}
-	s.edge[len(s.words)] = true
 	for _, w := range words {
 		s.at[w] = append(s.at[w], len(s.words))
 		s.words = append(s.words, w)
 	}
-	s.edge[len(s.words)] = true
 	for _, r := range rows {
 		if t := dedupRow(r); t != "" {
 			s.rows[t] = true
@@ -704,9 +700,6 @@ func (s *reprintSource) add(rows, words []string) {
 // gathered from separate places are not a copy (two paragraphs that share
 // halves with a third), and rows printed again as they were (a `tail` of a
 // file just shown) are the program saying it again, not a reprint.
-// Outside a frame (mustRewrap) the run must be a whole paragraph of the
-// source, first word to last: a shorter line that only begins as an earlier
-// one did is the program saying less, not a reprint.
 // Its blind spot: text the program prints again in one unbroken run, wrapped
 // otherwise (`fmt -w 30` of a file just shown by `cat`), reads as a reprint.
 func (s *reprintSource) reprintOf(rows, words []string, reversed, mustRewrap bool) bool {
@@ -743,7 +736,7 @@ func (s *reprintSource) reprintOf(rows, words []string, reversed, mustRewrap boo
 		}
 	}
 	for _, i := range starts {
-		if i+len(words) > len(s.words) || (mustRewrap && !(s.edge[i] && s.edge[i+len(words)])) {
+		if i+len(words) > len(s.words) {
 			continue
 		}
 		ok := true

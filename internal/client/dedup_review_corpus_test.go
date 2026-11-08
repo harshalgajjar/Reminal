@@ -157,24 +157,3 @@ func TestStrictFramePassKeepsRowsTheScreenChanged(t *testing.T) {
 		t.Errorf("rows no longer shown at all: %q (history kept %q)", missing, got)
 	}
 }
-
-// A shorter paragraph that begins as an earlier one did, wrapped otherwise,
-// is the program saying less, not a reprint: with no resize it stays. (Inside
-// a resize's frame it reads exactly as a reprint cut by the screen's top, so
-// it may go there; its text is still shown, in the earlier paragraph.)
-func TestStrictKeepsAShorterParagraphWithNoResize(t *testing.T) {
-	withDedupStrict(t)
-	lines := []string{
-		"Deploying service api to cluster prod-east with three replicas",
-		"and the canary enabled for an hour, then the rest of the fleet",
-		"after the checks pass on every host",
-		"",
-		"Deploying service api to cluster prod-east",
-		"with three replicas and the canary enabled",
-		"",
-		"$",
-	}
-	if got := dedupHistory(append([]string(nil), lines...), nil, nil, "", 0); !slices.Equal(got, lines) {
-		t.Errorf("got\n%s\nwant it as given", strings.Join(got, "\n"))
-	}
-}
