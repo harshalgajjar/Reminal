@@ -194,6 +194,19 @@ const out = await page.evaluate(async () => {
     await new Promise((ok) => requestAnimationFrame(() => ok()));
     await settle();
     res.resnapGivenUpScroll = { lines0, lines1: term.buffer.active.length, up0, up1: upBy() };
+    // The modes a program set at its start (bracketed paste, cursor keys,
+    // focus, the mouse) are still set after a repaint's soft reset.
+    reset();
+    term.reset();
+    await new Promise((ok) => term.write('\x1b[?2004h\x1b[?1h\x1b[?1004h\x1b[?1002h\x1b[?1006h', ok));
+    const mouseBefore = term.modes.mouseTrackingMode;
+    lastSeq = 400;
+    await handleMessage({ type: 'snapshot_part', seq: 400, data: resnapScreen('M', true) });
+    await handleMessage({ type: 'snapshot_part', seq: 400, data: part('M', 0, 1, gz, viewerId, { ack: true }) });
+    await new Promise((ok) => requestAnimationFrame(() => ok()));
+    await settle();
+    const md = term.modes;
+    res.modesKept = { paste: md.bracketedPasteMode, keys: md.applicationCursorKeysMode, focus: md.sendFocusMode, mouse: md.mouseTrackingMode, mouseBefore };
   }
   // An opened frame is only what the page opened itself: an object a message
   // carries in its JSON as if it were one ({"__plain": [...]}) is not taken
@@ -235,6 +248,7 @@ const checks = [
   ['a join after the agent restarted (its seq far below what was seen) paints its screen', JSON.stringify(out.restartJoin.order) === '["SCREEN"]' && JSON.stringify(out.restartJoinNoHistory.order) === '["SCREEN"]'],
   ['a reader scrolled up keeps the place through a repaint (not moved before the history, still up after)', out.resnapScroll.before === 40 && out.resnapScroll.midway === 40 && out.resnapScroll.after > 0],
   ['a repaint given up leaves the scrollback and the reader\'s place as they were', out.resnapGivenUpScroll.lines1 === out.resnapGivenUpScroll.lines0 && out.resnapGivenUpScroll.up1 === out.resnapGivenUpScroll.up0],
+  ['the modes a program set (bracketed paste, cursor keys, focus, the mouse) survive a repaint', out.modesKept.paste && out.modesKept.keys && out.modesKept.focus && out.modesKept.mouse === out.modesKept.mouseBefore],
   ['data as {"__plain": …} in a message is not taken as opened: decrypt refuses it, nothing painted', out.notOpened.threw && out.notOpened.painted === 0],
 ];
 for (const [n, ok] of checks) console.log((ok ? 'PASS  ' : 'FAIL  ') + n);

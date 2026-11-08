@@ -37,11 +37,18 @@ func refRenderScrollback(e *vt.Emulator, maxLines int) []string {
 
 func refSnapshotHistory(a *Agent) []string {
 	lines := refRenderScrollback(a.screen, 0) // uncapped: segment indices are absolute
+	resized := len(lines)                     // mirrors dedupHistory, given the segments joinInputs passes
+	if !a.staleSegs(len(lines)) {
+		for _, s := range a.resizeSegs {
+			resized = min(resized, s.start)
+		}
+	}
 	lines = refDropResizeRepaints(a, lines)
 	if a.scrollbackLines > 0 && len(lines) > a.scrollbackLines {
+		resized -= len(lines) - a.scrollbackLines
 		lines = lines[len(lines)-a.scrollbackLines:]
 	}
-	lines = dedupRepaints(lines)
+	lines = dedupRepaintsFrom(lines, max(resized, 0))
 	return refDedupAgainstFrame(lines, strings.Split(a.screen.Render(), "\n"))
 }
 

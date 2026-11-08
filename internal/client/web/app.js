@@ -6994,13 +6994,38 @@
       // during the history's download may have set some — a scroll region
       // (ESC[3;10r) kept the whole history inside its rows, so all but a few
       // lines of it went. A soft reset and the full region; the kept output
-      // after it sets again whatever the program set.
+      // after it sets again whatever the program set during the download.
+      // What it set before (once, at its start: bracketed paste, cursor keys,
+      // focus, the mouse) the soft reset turned off and the program will not
+      // set again: written back after the history (terminalModes), or after
+      // one repaint a paste into it came unbracketed, each newline a submit.
+      const modes = terminalModes();
       pendingChunks.push(new TextEncoder().encode('\x1b[!p\x1b[r'));
       diag('snap', 'applied, paced, ' + a.n + ' parts');
       pendingChunks.push(whole);
+      if (modes) pendingChunks.push(new TextEncoder().encode(modes));
       bytesReceived += whole.byteLength;
       for (const f of a.held) if (f.seq > a.seq) pendingChunks.push(f.bytes);
       flushPendingChunks();
+    }
+    // terminalModes is the modes a program set in this terminal, as the
+    // sequences that set them: what a soft reset (DECSTR) turns off.
+    function terminalModes() {
+      try {
+        const m = term.modes;
+        let s = '';
+        if (m.applicationCursorKeysMode) s += '\x1b[?1h';
+        if (m.applicationKeypadMode) s += '\x1b=';
+        if (m.insertMode) s += '\x1b[4h';
+        if (m.bracketedPasteMode) s += '\x1b[?2004h';
+        if (m.sendFocusMode) s += '\x1b[?1004h';
+        const track = { x10: '9', vt200: '1000', drag: '1002', any: '1003' }[m.mouseTrackingMode];
+        if (track) s += '\x1b[?' + track + 'h';
+        const ms = term._core && term._core.coreMouseService;
+        const enc = ms && { SGR: '1006', SGR_PIXELS: '1016', URXVT: '1015' }[ms.activeEncoding];
+        if (enc) s += '\x1b[?' + enc + 'h';
+        return s;
+      } catch (_) { return ''; }
     }
     // Output kept for a paced snapshot's repaint; past SNAP_MAX_BYTES of it
     // the history is given up (the screen stays, live).

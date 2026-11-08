@@ -421,7 +421,15 @@ func dedupAgainstFrame(history, screen []string) []string {
 // heading) a dropped copy carried goes with it (dropOrphanHeadings); a
 // heading printed twice with only a redraw's debris between goes with the
 // debris (dropHeadingDebris).
-func dedupRepaints(lines []string) []string {
+func dedupRepaints(lines []string) []string { return dedupRepaintsFrom(lines, len(lines)) }
+
+// dedupRepaintsFrom is dedupRepaints for a history whose lines from resized
+// on were written after a resize: a copy there printed as it was (at the
+// same width: the head of a frame reprinted after the height changed) is a
+// reprint too. Before it, only a copy wrapped otherwise is: rows printed
+// again as they were (a `tail` of a file just shown) are the program saying
+// it again.
+func dedupRepaintsFrom(lines []string, resized int) []string {
 	paras := dedupParagraphs(lines)
 	// The verbatim copies first (dedupBlocks' rule), in the same mask.
 	drop := dedupBlocksMask(lines)
@@ -436,7 +444,7 @@ func dedupRepaints(lines []string) []string {
 			if reversed {
 				slices.Reverse(words)
 			}
-			if src.reprintOf(lines[p.i:p.j], words, reversed) {
+			if src.reprintOf(lines[p.i:p.j], words, reversed, p.i < resized) {
 				for x := p.i; x < p.j; x++ {
 					drop[x] = true
 				}
@@ -489,19 +497,23 @@ func (s *reprintSource) add(rows, words []string) {
 // gathered from separate places are not a copy (two paragraphs that share
 // halves with a third), and rows printed again as they were (a `tail` of a
 // file just shown) are the program saying it again, not a reprint.
-func (s *reprintSource) reprintOf(rows, words []string, reversed bool) bool {
+// Its blind spot: text the program prints again in one unbroken run, wrapped
+// otherwise (`fmt -w 30` of a file just shown by `cat`), reads as a reprint.
+func (s *reprintSource) reprintOf(rows, words []string, reversed, mustRewrap bool) bool {
 	if len(words) < dedupFrameRunMin || s.at == nil {
 		return false
 	}
-	rewrapped := false
-	for _, r := range rows {
-		if t := dedupRow(r); t != "" && !s.rows[t] {
-			rewrapped = true
-			break
+	if mustRewrap {
+		rewrapped := false
+		for _, r := range rows {
+			if t := dedupRow(r); t != "" && !s.rows[t] {
+				rewrapped = true
+				break
+			}
 		}
-	}
-	if !rewrapped {
-		return false
+		if !rewrapped {
+			return false
+		}
 	}
 	cut := len(words) - 1 // the paragraph's last word, wherever the pass puts it
 	if reversed {
