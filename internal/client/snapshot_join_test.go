@@ -172,9 +172,7 @@ func refBuildSnapshot(e screenView, history, screenRows []string, maxBytes int, 
 	b.WriteString("\x1b[?25l")            // hide cursor while painting
 	b.WriteString("\x1b[?1049l")          // ensure the main screen is active
 	b.WriteString("\x1b[2J\x1b[3J\x1b[H") // clear screen + the viewer's old scrollback, home
-
-	// Everything wraps at the viewer's width.
-	b.WriteString("\x1b[?7h")
+	b.WriteString("\x1b[?7h")             // mirrors paintSnapshot: autowrap on throughout
 	for _, ln := range history {
 		b.WriteString(ln)
 		b.WriteString("\x1b[0m\r\n")
