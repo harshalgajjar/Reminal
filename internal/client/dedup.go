@@ -411,54 +411,38 @@ func dedupAgainstFrame(history, screen []string) []string {
 // twice, at two widths. Which copy is whole depends on the order: the rows
 // that scrolled off before a reprint are a partial first copy, the reprint
 // below them complete; or the complete copy came first and the reprint is
-// the frame's tail. So a paragraph goes when every line of it is covered
-// by the text kept BEFORE it (coverageDropMask: matched runs of 8 words
-// that begin where a line begins), and then, over what is left, when it is
-// covered by the text kept AFTER it. A paragraph goes whole or stays whole:
-// dropping some of its lines split a sentence between two places. The
-// app's own rows (its prompt, its spinner and status rows: dedupChrome)
-// bound paragraphs, since a frame's bottom lands them right under its last
-// row of text, and a copy they are glued to would otherwise never match.
-// A short paragraph (a heading) a dropped copy carried goes with it
-// (dropOrphanHeadings); a heading printed twice with only a redraw's debris
-// between goes with the debris (dropHeadingDebris).
+// the frame's tail. So a paragraph goes when it is a reprint of the text
+// kept BEFORE it (reprintOf), and then, over what is left, of the text kept
+// AFTER it. A paragraph goes whole or stays whole: dropping some of its
+// lines split a sentence between two places. The app's own rows (its
+// prompt, its spinner and status rows: dedupChrome) bound paragraphs, since
+// a frame's bottom lands them right under its last row of text, and a copy
+// they are glued to would otherwise never match. A short paragraph (a
+// heading) a dropped copy carried goes with it (dropOrphanHeadings); a
+// heading printed twice with only a redraw's debris between goes with the
+// debris (dropHeadingDebris).
 func dedupRepaints(lines []string) []string {
 	paras := dedupParagraphs(lines)
 	// The verbatim copies first (dedupBlocks' rule), in the same mask.
 	drop := dedupBlocksMask(lines)
-	covered := func(p dedupPara, shingles map[shingle]bool, refWords map[string]bool) bool {
-		whole := false
-		for k, d := range coverageDropMask(lines[p.i:p.j], shingles, refWords) {
-			if len(dedupWords(lines[p.i+k])) == 0 {
-				continue
-			}
-			if !d {
-				return false
-			}
-			whole = true
-		}
-		return whole
-	}
-	// Forward: covered by what is kept above.
-	pass := func(order []int) {
-		shingles := map[shingle]bool{}
-		refWords := map[string]bool{}
+	pass := func(order []int, reversed bool) {
+		var src reprintSource
 		for _, k := range order {
 			p := paras[k]
 			if drop[p.i] {
 				continue
 			}
-			if covered(p, shingles, refWords) {
+			words := p.words(lines)
+			if reversed {
+				slices.Reverse(words)
+			}
+			if src.reprintOf(lines[p.i:p.j], words, reversed) {
 				for x := p.i; x < p.j; x++ {
 					drop[x] = true
 				}
 				continue
 			}
-			words := p.words(lines)
-			addShingles(shingles, words)
-			for _, w := range words {
-				refWords[w] = true
-			}
+			src.add(lines[p.i:p.j], words)
 		}
 	}
 	forward := make([]int, len(paras))
@@ -466,11 +450,100 @@ func dedupRepaints(lines []string) []string {
 	for k := range paras {
 		forward[k], backward[len(paras)-1-k] = k, k
 	}
-	pass(forward)
-	pass(backward)
+	pass(forward, false)
+	pass(backward, true)
 	dropOrphanHeadings(lines, paras, drop)
 	dropHeadingDebris(lines, paras, drop)
 	return compactDropped(lines, drop)
+}
+
+// reprintSource is the text kept so far in one pass of dedupRepaints: its
+// words as one stream (in reading order, or reversed for the pass from the
+// bottom), where each word starts in it, and its rows as printed.
+type reprintSource struct {
+	words []string
+	at    map[string][]int
+	rows  map[string]bool
+}
+
+func (s *reprintSource) add(rows, words []string) {
+	if s.at == nil {
+		s.at, s.rows = map[string][]int{}, map[string]bool{}
+	}
+	for _, w := range words {
+		s.at[w] = append(s.at[w], len(s.words))
+		s.words = append(s.words, w)
+	}
+	for _, r := range rows {
+		if t := dedupRow(r); t != "" {
+			s.rows[t] = true
+		}
+	}
+}
+
+// reprintOf reports whether a paragraph (its rows, and its words in the
+// pass's order) is a reprint of the source at another width: all its words,
+// at least a matched run's worth, in one unbroken run of the source, the
+// last word allowed a resize's cut ("unwrapped" as "unwrapp"); and wrapped
+// otherwise than the source, some row of it printed nowhere in it. Words
+// gathered from separate places are not a copy (two paragraphs that share
+// halves with a third), and rows printed again as they were (a `tail` of a
+// file just shown) are the program saying it again, not a reprint.
+func (s *reprintSource) reprintOf(rows, words []string, reversed bool) bool {
+	if len(words) < dedupFrameRunMin || s.at == nil {
+		return false
+	}
+	rewrapped := false
+	for _, r := range rows {
+		if t := dedupRow(r); t != "" && !s.rows[t] {
+			rewrapped = true
+			break
+		}
+	}
+	if !rewrapped {
+		return false
+	}
+	cut := len(words) - 1 // the paragraph's last word, wherever the pass puts it
+	if reversed {
+		cut = 0
+	}
+	same := func(a, b string, k int) bool {
+		return a == b || (k == cut && len(a) >= 3 && len(b) >= 3 && (strings.HasPrefix(a, b) || strings.HasPrefix(b, a)))
+	}
+	starts := s.at[words[0]]
+	if reversed {
+		// The first word is the cut one: try every place the second is.
+		starts = nil
+		for _, i := range s.at[words[1]] {
+			if i > 0 {
+				starts = append(starts, i-1)
+			}
+		}
+	}
+	for _, i := range starts {
+		if i+len(words) > len(s.words) {
+			continue
+		}
+		ok := true
+		for k, w := range words {
+			if !same(w, s.words[i+k], k) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// dedupRow is a row as read: its text without styling or the space around it.
+func dedupRow(s string) string {
+	if len(dedupWords(s)) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(dedupANSI.ReplaceAllString(s, ""))
 }
 
 // dedupPara is one paragraph of history: lines[i:j].
