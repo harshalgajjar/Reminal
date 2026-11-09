@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,7 +14,6 @@ import (
 	"unsafe"
 
 	uv "github.com/charmbracelet/ultraviolet"
-	"github.com/charmbracelet/x/vt"
 
 	"reminal/internal/atomicfile"
 	"reminal/internal/atrest"
@@ -276,28 +274,16 @@ func (a *Agent) restoreResumedScrollbackLocked() {
 		// Only what the ring will not draw again: replayed into a scratch
 		// emulator first (once, at a restart), what it reproduces is matched
 		// against the history's tail, and the history goes in up to there.
-		scratch := vt.NewEmulator(max(d.BaseCols, 1), max(d.BaseRows, 1))
-		scratch.Scrollback().SetMaxLines(len(d.History) + 1000)
-		// Its answers to what the replay asks of it (a cursor report, say)
-		// are written to a pipe that blocks until read: drained while it
-		// replays.
-		drained := make(chan struct{})
-		go func() {
-			_, _ = io.Copy(io.Discard, scratch)
-			close(drained)
-		}()
-		replayDump(scratch, d)
-		again := append(renderScrollback(scratch, 0), renderedScreenRows(scratch)...)
-		// Then let go of it whole: its pipe closed, the drain reads its end
-		// and returns, and nothing holds the emulator — its scrollback, as
-		// much as the history, goes with it. Not scratch.Close: that sets a
-		// field the drain's Read checks unguarded (a race). Nor its
-		// ClearScrollback: vt keeps the cleared lines reachable, so that
-		// freed nothing and every restored process kept them.
-		if pw, ok := scratch.InputPipe().(io.Closer); ok {
-			_ = pw.Close()
-			<-drained
+		scratch, err := newSessionScreen(max(d.BaseCols, 1), max(d.BaseRows, 1), len(d.History)+1000)
+		if err != nil {
+			agentNotify("  reminal: could not restore scrollback: %v\n", err)
+			return
 		}
+		again := func() []string {
+			defer scratch.Close()
+			replayDump(scratch, d)
+			return append(append([]string(nil), scratch.History()...), renderedScreenRows(scratch)...)
+		}()
 		restoreHistory(a.screen, d.History[:restoreCut(d, again)], d.HistoryCols)
 		a.noteScrollbackLen()
 	}
@@ -445,12 +431,12 @@ func (a *Agent) freshLineAfterRestoreLocked() {
 // push the last of them up, then the screen cleared without pushing (ED 0
 // from home) for the replay to draw on. What the ring itself scrolls again is
 // a copy of the history's tail; the snapshot's dedup drops it (dedupBlocks).
-func restoreHistory(e *vt.Emulator, history []string, cols int) {
+func restoreHistory(e *sessionScreen, history []string, cols int) {
 	if e == nil || len(history) == 0 {
 		return
 	}
 	if cols > 0 && cols != e.Width() {
-		resizeAnchoredBottom(e, cols, e.Height())
+		e.Resize(cols, e.Height())
 	}
 	var b strings.Builder
 	for _, l := range history {
@@ -464,7 +450,7 @@ func restoreHistory(e *vt.Emulator, history []string, cols int) {
 
 // renderedScreenRows is e's screen rendered, a line a row, without the blank rows
 // below its last text.
-func renderedScreenRows(e *vt.Emulator) []string {
+func renderedScreenRows(e *sessionScreen) []string {
 	rows := strings.Split(e.Render(), "\n")
 	for i := range rows {
 		rows[i] = strings.TrimRight(rows[i], " ")
@@ -477,19 +463,19 @@ func renderedScreenRows(e *vt.Emulator) []string {
 
 // replayDump replays a dump's output ring into e, as it was recorded: its
 // sizes and its output, in order. after, if given, runs after each step.
-func replayDump(e *vt.Emulator, d *scrollbackDump, after ...func()) {
+func replayDump(e *sessionScreen, d *scrollbackDump, after ...func()) {
 	step := func() {
 		for _, f := range after {
 			f()
 		}
 	}
 	if d.BaseCols > 0 && d.BaseRows > 0 {
-		resizeAnchoredBottom(e, d.BaseCols, d.BaseRows)
+		e.Resize(d.BaseCols, d.BaseRows)
 		step()
 	}
 	for _, en := range d.Entries {
 		if en.Cols > 0 && en.Rows > 0 {
-			resizeAnchoredBottom(e, en.Cols, en.Rows)
+			e.Resize(en.Cols, en.Rows)
 			step()
 			continue
 		}
@@ -581,12 +567,15 @@ func historySeam(history, again []string) int {
 // values, and the history before the push handed out. Caller holds
 // screenMu; the slice returned is not to be changed.
 func (a *Agent) renderedHistory() []string {
-	lines := a.screen.Scrollback().Lines()
-	key := historyKey(lines)
+	key := a.screen.HistoryKey()
 	if a.histCache != nil && a.histKey == key {
 		return a.histCache
 	}
-	a.histCache, a.histKey = renderScrollback(a.screen, a.scrollbackLines), key
+	h := a.screen.History()
+	if a.scrollbackLines > 0 && len(h) > a.scrollbackLines {
+		h = h[len(h)-a.scrollbackLines:]
+	}
+	a.histCache, a.histKey = h, key
 	return a.histCache
 }
 

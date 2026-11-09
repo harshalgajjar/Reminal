@@ -80,8 +80,8 @@ func TestSnapshotDedupManyResizes(t *testing.T) {
 	key, _ := crypto.NewSessionKey()
 	box, _ := crypto.NewBox(key)
 	a := &Agent{box: box, buf: newScrollback(8 << 20), scrollbackLines: 20000}
-	a.screen = vt.NewEmulator(100, 40)
-	a.screen.Scrollback().SetMaxLines(20000)
+	a.screen = testScreen(t, 100, 40)
+	a.screen.SetMaxLines(20000)
 	a.buf.SetBase(100, 40)
 
 	widths := []int{100, 52, 118, 46, 124, 56, 110, 48, 120}

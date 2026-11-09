@@ -10,3 +10,6 @@ internal/client/web/** -text
 # The pi extension reminal writes for pi, and fingerprints against the copy it
 # carries (internal/piext).
 internal/piext/extension/** -text
+# libghostty-vt built for wasm32, embedded by internal/vtwasm and checked
+# against its recorded sha256.
+internal/vtwasm/ghostty-vt.wasm -text

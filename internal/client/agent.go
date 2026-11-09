@@ -27,7 +27,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/vt"
 	"github.com/gorilla/websocket"
 	xterm "golang.org/x/term"
@@ -170,7 +169,7 @@ type Agent struct {
 	// by screenMu (composite reads during snapshot must not race Write/Resize).
 	// nil when snapshots are disabled (REMINAL_SNAPSHOT=0) — then we fall back
 	// to raw replay.
-	screen          *vt.Emulator
+	screen          *sessionScreen
 	screenMu        sync.Mutex
 	scrollbackLines int // history lines included in a snapshot (0 = screen only)
 	// Captured-frame resize segments (see dropResizeRepaints): an inline TUI repaints
@@ -901,6 +900,10 @@ func (a *Agent) Run() error {
 	_, _ = holdLive(a.sessionID)
 	a.forgetDeadHarness()
 	a.recordActive(0)
+	// The session's copy of its screen is freed last, after everything that
+	// still reads it on the way out (settleRestore's record of the session,
+	// deferred just below, runs first).
+	defer a.closeScreen()
 	defer func() {
 		if !a.restarting.Load() {
 			// Only this agent's own record: another serving the same id
@@ -2480,30 +2483,23 @@ func (a *Agent) initScreen() {
 			_ = a.term.Resize(cols, rows)
 		}
 	}
-	a.screenMu.Lock()
-	a.screen = vt.NewEmulator(int(cols), int(rows))
-	if a.scrollbackLines > 0 {
-		a.screen.Scrollback().SetMaxLines(a.scrollbackLines)
+	if scr, err := newSessionScreen(int(cols), int(rows), a.scrollbackLines); err != nil {
+		// No copy of the screen to join from: viewers are given the raw
+		// replay instead, as with REMINAL_SNAPSHOT=0.
+		log.Printf("no screen copy for joins: %v", err)
+	} else {
+		a.screenMu.Lock()
+		a.screen = scr
+		a.sbLen = 0 // fresh emulator: the shrink watch starts from empty
+		a.screenMu.Unlock()
+		if a.buf != nil {
+			// Seed the replay-geometry baseline for the history rebuild (see
+			// scrollback.SetBase / rebuildView). The rebuild (rebuildView,
+			// rebuild.go, reflow.go, resize_anchor.go) has no caller now
+			// that the screen re-wraps itself: it goes in a follow-up.
+			a.buf.SetBase(int(cols), int(rows))
+		}
 	}
-	a.sbLen = 0 // fresh emulator: the shrink watch starts from empty
-	scr := a.screen
-	a.screenMu.Unlock()
-	if a.buf != nil {
-		// Seed the replay-geometry baseline for the history rebuild (see
-		// scrollback.SetBase / rebuildView).
-		a.buf.SetBase(int(cols), int(rows))
-	}
-
-	// CRITICAL: the emulator answers terminal queries (device attributes,
-	// cursor-position / status reports, etc.) by writing the reply into an
-	// internal pipe. If nothing reads that pipe, the *next* such query makes
-	// Write block forever — which stalls record() and freezes the shell. Apps
-	// like `claude` emit these queries on startup (plain `seq`/`less` don't,
-	// which is why this slipped through). We don't want the emulator's replies
-	// anyway — the real viewer/host terminal answers queries over the normal
-	// stdin→PTY path — so drain and discard them. Runs until the emulator is
-	// closed / the process exits.
-	go func() { _, _ = io.Copy(io.Discard, scr) }()
 
 	// Attention detector: classifies working/awaiting-input/done for `reminal
 	// list`. Always runs; REMINAL_ATTENTION_PROBE adds a raw-sample log. See
@@ -2521,6 +2517,9 @@ func (a *Agent) record(p []byte) {
 	p = a.conhostClear.feed(p)
 	if a.screen != nil {
 		_, _ = a.screen.Write(p)
+		a.dropFailedScreenLocked()
+	}
+	if a.screen != nil {
 		a.noteScrollbackLen()
 	}
 	if enc, err := a.box.Encrypt(p); err == nil {
@@ -2541,7 +2540,7 @@ func (a *Agent) record(p []byte) {
 // "slice bounds out of range [12:0]" panic that killed Windows sessions the
 // moment a viewer resized. Caller holds screenMu.
 func (a *Agent) noteScrollbackLen() {
-	n := a.screen.Scrollback().Len()
+	n := a.screen.HistoryLen()
 	if n < a.sbLen {
 		a.resizeSegs = nil
 		a.segsGen++
@@ -2604,11 +2603,17 @@ const maxResizeSegWords = 1200
 // resizeScreen keeps the emulator's dimensions in step with the PTY so the
 // snapshot matches the size viewers render at.
 func (a *Agent) resizeScreen(cols, rows uint16) {
-	if a.screen == nil || cols == 0 || rows == 0 {
+	if cols == 0 || rows == 0 {
+		return
+	}
+	a.screenMu.Lock()
+	// Read under the lock: a screen that failed is dropped mid-session
+	// (dropFailedScreenLocked).
+	if a.screen == nil {
+		a.screenMu.Unlock()
 		return
 	}
 	defer a.kickAttention() // after the screen lock is let go
-	a.screenMu.Lock()
 	// Arm before the emulator changes size so a racing PTY read cannot
 	// apply the shim to the pre-anchor screen.
 	a.resizedAt = time.Now()
@@ -2627,22 +2632,51 @@ func (a *Agent) resizeScreen(cols, rows uint16) {
 			break
 		}
 	}
-	// Resize bottom-anchored, the way a real terminal does (resizeAnchoredBottom).
-	// It moves lines between the screen and scrollback itself — a shrink scrolls
-	// the top off into history, a grow reveals history back onto the screen — so
-	// the segment's scrollback position is taken AFTER it. Those moved rows are
-	// real history; only the app's later repaint is overflow this segment may
+	// Resize as the viewer's terminal does (sessionScreen.Resize): a shrink
+	// drops the rows under the cursor and scrolls the top off into history,
+	// a grow reveals history back onto the screen, a width change re-wraps.
+	// Lines move between the screen and the scrollback, so the segment's
+	// scrollback position is taken AFTER it. Those moved rows are real
+	// history; only the app's later repaint is overflow this segment may
 	// drop, and recording the position beforehand would put genuine content
 	// inside the drop window.
-	resizeAnchoredBottom(a.screen, int(cols), int(rows))
-	// A grow pulls lines back out of scrollback, so its length can fall here.
-	// Reconcile before recording a new segment, or the older segments' absolute
-	// positions would be left pointing past the end of the rendered history.
-	a.noteScrollbackLen()
-	cur := 0
-	if sb := a.screen.Scrollback(); sb != nil {
-		cur = sb.Len()
+	a.screen.Resize(int(cols), int(rows))
+	if a.dropFailedScreenLocked() {
+		a.screenMu.Unlock()
+		return
 	}
+	// Segments are in lines as the program wrote them, which a resize
+	// re-wraps but never renumbers (History). A grow pulls lines back out of
+	// scrollback, though: one that would leave an older segment past the
+	// end of the history forgets them all, or dropRepaints would slice past
+	// it. And the rows it holds change with the width, so their count is
+	// taken again rather than read as a clear (noteScrollbackLen).
+	// Not counted when the segments would be stale for a join anyway
+	// (staleSegs: a history as long as the bound in rows), and counted
+	// without formatting the whole history when not (HistoryLines).
+	if a.scrollbackLines > 0 && a.screen.HistoryLen() >= a.scrollbackLines {
+		a.resizeSegs = nil
+		a.segsGen++
+		a.sbLen = a.screen.HistoryLen()
+		if a.buf != nil {
+			a.buf.AppendResize(int(cols), int(rows))
+		}
+		a.screenMu.Unlock()
+		return
+	}
+	cur := a.screen.HistoryLines()
+	if a.screen.TakePruned() {
+		// The history's oldest lines went (its byte budget): every older
+		// segment's position moved. This one counts from the top as it is.
+		a.resizeSegs = nil
+	}
+	for _, s := range a.resizeSegs {
+		if s.start > cur {
+			a.resizeSegs = nil
+			break
+		}
+	}
+	a.sbLen = a.screen.HistoryLen()
 	a.resizeSegs = append(a.resizeSegs, resizeSeg{start: cur, maxOver: prevRows*4 + 8, words: fw})
 	if len(a.resizeSegs) > maxResizeSegs {
 		a.resizeSegs = a.resizeSegs[len(a.resizeSegs)-maxResizeSegs:]
@@ -2866,7 +2900,7 @@ func (a *Agent) rebuildView() (history, screen []string, ok bool) {
 // rule since requires a content match; pure position is never sufficient.
 // Caller holds screenMu.
 func (a *Agent) snapshotHistory() []string {
-	lines := renderScrollback(a.screen, 0) // uncapped: segment indices are absolute
+	lines := a.screen.History() // uncapped: segment indices are absolute
 	lines = a.dropResizeRepaints(lines)
 	screen := a.screen.Render()
 	return dedupAgainstFrame(dedupHistory(lines, a.resizeSegs, screen, a.scrollbackLines, true), strings.Split(screen, "\n"))
@@ -2909,7 +2943,7 @@ func (a *Agent) staleSegs(n int) bool {
 	if len(a.resizeSegs) < 2 {
 		return true
 	}
-	if a.scrollbackLines > 0 && n >= a.scrollbackLines {
+	if a.scrollbackLines > 0 && (n >= a.scrollbackLines || a.screen.HistoryLen() >= a.scrollbackLines) {
 		a.resizeSegs = nil // eviction possible: indices stale, start fresh
 		a.segsGen++
 		return true
@@ -2974,9 +3008,6 @@ func dropRepaints(lines []string, segs []resizeSeg, screenRender string) []strin
 }
 
 func (a *Agent) snapshotFrame() (string, uint64) {
-	if a.screen == nil {
-		return "", 0
-	}
 	// Native reconstruction: a.screen faithfully emulates the real terminal, so its
 	// scrollback + screen reproduce exactly what a viewer saw. Committed history that
 	// scrolled past the app's re-render window is 1× by construction (never re-emitted),
@@ -2986,7 +3017,15 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 	// (Verified against real Claude Code: on resize it repaints only its bounded frame,
 	// ~one screen, not the whole session — so scrolled-off history is genuinely clean.)
 	a.screenMu.Lock()
+	if a.screen == nil {
+		a.screenMu.Unlock()
+		return "", 0
+	}
 	in := a.joinInputs()
+	if a.dropFailedScreenLocked() {
+		a.screenMu.Unlock()
+		return "", 0
+	}
 	latest := a.buf.LatestSeq()
 	a.screenMu.Unlock()
 	// What a join paints is made from that copy, outside screenMu: output
@@ -3018,8 +3057,8 @@ func (a *Agent) snapshotFrame() (string, uint64) {
 // joinIn is what a join's snapshot is made of, copied under screenMu
 // (joinInputs) so the rest needs no lock.
 type joinIn struct {
-	rows     []uv.Line   // a copy of the scrollback's row list (at its cap the scrollback shifts its own in place); the rows themselves never change
-	histKey  string      // historyKey(rows): what renderedHistory's cache is keyed by
+	rows     []string    // the history (sessionScreen.History), shared: never changed once made
+	histKey  string      // the screen's Gen it was made at: what renderedHistory's cache is keyed by
 	segs     []resizeSeg // nil when of no use (staleSegs)
 	segsGen  uint64
 	maxLines int
@@ -3029,8 +3068,8 @@ type joinIn struct {
 // joinInputs copies what a join needs. Cheap: one screen rendered, the rows'
 // list and the segments copied, the history's key. Caller holds screenMu.
 func (a *Agent) joinInputs() joinIn {
-	rows := a.screen.Scrollback().Lines()
-	in := joinIn{rows: append([]uv.Line(nil), rows...), histKey: historyKey(rows), maxLines: a.scrollbackLines, view: viewOf(a.screen)}
+	rows := a.screen.History()
+	in := joinIn{rows: rows, histKey: a.screen.HistoryKey(), maxLines: a.scrollbackLines, view: viewOf(a.screen)}
 	if !a.staleSegs(len(rows)) {
 		// Shared, not copied: a segment is never changed once made, and the
 		// list is only appended to (past this one's length), trimmed or
@@ -3072,7 +3111,10 @@ func (a *Agent) joinHistory(in joinIn) []string {
 	a.screenMu.Unlock()
 	if deduped == nil {
 		if rendered == nil {
-			rendered = renderLines(in.rows, in.maxLines)
+			rendered = in.rows
+			if in.maxLines > 0 && len(rendered) > in.maxLines {
+				rendered = rendered[len(rendered)-in.maxLines:]
+			}
 			a.screenMu.Lock()
 			a.histCache, a.histKey = rendered, in.histKey
 			a.screenMu.Unlock()
@@ -3812,7 +3854,7 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 		// "fast-forward replay" — send one snapshot that paints the current
 		// screen + scrollback directly. Tagged with the latest seq so
 		// up-to-date viewers drop it and only the new joiner applies it.
-		if a.screen != nil && cursor <= a.buf.OldestSeq() {
+		if a.haveScreen() && cursor <= a.buf.OldestSeq() {
 			// Joiners that asked for it get the whole history, compressed and
 			// in parts addressed to them; anyone else owed a snapshot gets the
 			// one plain frame as always (snapshot_parts.go).

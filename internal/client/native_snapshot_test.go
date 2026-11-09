@@ -59,9 +59,8 @@ func TestNativeSnapshotCommittedCleanThroughWiden(t *testing.T) {
 	key, _ := crypto.NewSessionKey()
 	box, _ := crypto.NewBox(key)
 	a := &Agent{box: box, buf: newScrollback(8 << 20), scrollbackLines: 20000}
-	a.screen = vt.NewEmulator(70, 24)
-	a.screen.Scrollback().SetMaxLines(20000)
-	go io.Copy(io.Discard, a.screen) // drain terminal-query replies (initScreen does this live)
+	a.screen = testScreen(t, 70, 24)
+	a.screen.SetMaxLines(20000) // drain terminal-query replies (initScreen does this live)
 	a.buf.SetBase(70, 24)
 
 	var b strings.Builder

@@ -20,9 +20,8 @@ func clearingAgent(t *testing.T, cols, rows int) *Agent {
 	key, _ := crypto.NewSessionKey()
 	box, _ := crypto.NewBox(key)
 	a := &Agent{box: box, buf: newScrollback(8 << 20), scrollbackLines: 20000}
-	a.screen = vt.NewEmulator(cols, rows)
-	a.screen.Scrollback().SetMaxLines(20000)
-	go io.Copy(io.Discard, a.screen)
+	a.screen = testScreen(t, cols, rows)
+	a.screen.SetMaxLines(20000)
 	a.buf.SetBase(cols, rows)
 	return a
 }
@@ -84,7 +83,7 @@ func TestSnapshotSurvivesScrollbackClear(t *testing.T) {
 	// not the WriteClearScreen echo resizeScreen guards against.
 	a.conhostClear.reset()
 	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
-	if n := a.screen.Scrollback().Len(); n != 0 {
+	if n := a.screen.HistoryLen(); n != 0 {
 		t.Fatalf("setup: scrollback should be empty after ESC[3J, got %d lines", n)
 	}
 	// Post-clear output, then a snapshot. Before the fix this panicked; the
@@ -130,7 +129,7 @@ func TestRecordKeepsScrollbackWhenResizeEmitsED3(t *testing.T) {
 	a.conhostClear.reset()
 	a.conhostClear.arm()
 	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
-	if n := a.screen.Scrollback().Len(); n == 0 {
+	if n := a.screen.HistoryLen(); n == 0 {
 		t.Fatal("ESC[3J during the post-resize window wiped scrollback")
 	}
 	if lastNonBlankRow(screenRows(a)) < 0 {
@@ -272,7 +271,7 @@ func TestGrowThenConhostClearKeepsBottomAnchor(t *testing.T) {
 	if wantLast != grown-2 {
 		t.Fatalf("setup: last content row %d after grow, want %d", wantLast, grown-2)
 	}
-	sb := a.screen.Scrollback().Len()
+	sb := a.screen.HistoryLen()
 	a.conhostClear.reset()
 	a.conhostClear.arm()
 	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
@@ -284,7 +283,7 @@ func TestGrowThenConhostClearKeepsBottomAnchor(t *testing.T) {
 	if rows[wantLast] != "line-0030" {
 		t.Errorf("row %d is %q, want line-0030 — ED2 undid the bottom-anchor", wantLast, rows[wantLast])
 	}
-	if n := a.screen.Scrollback().Len(); n != sb {
+	if n := a.screen.HistoryLen(); n != sb {
 		t.Errorf("conhost shim changed scrollback from %d to %d", sb, n)
 	}
 }
@@ -298,7 +297,7 @@ func TestRecordStripsSplitConhostClear(t *testing.T) {
 	const grown = 20
 	a.resizeScreen(80, grown)
 	wantLast := lastNonBlankRow(screenRows(a))
-	sb := a.screen.Scrollback().Len()
+	sb := a.screen.HistoryLen()
 	a.conhostClear.reset()
 	a.conhostClear.arm()
 	for _, b := range []byte("\x1b[H\x1b[2J\x1b[3J") {
@@ -308,7 +307,7 @@ func TestRecordStripsSplitConhostClear(t *testing.T) {
 	if got := lastNonBlankRow(rows); got != wantLast {
 		t.Errorf("split shim moved last content from %d to %d", wantLast, got)
 	}
-	if n := a.screen.Scrollback().Len(); n != sb {
+	if n := a.screen.HistoryLen(); n != sb {
 		t.Errorf("split shim changed scrollback from %d to %d", sb, n)
 	}
 }
@@ -346,13 +345,13 @@ func TestRecordInfoThenGrowKeepsBanner(t *testing.T) {
 func TestWindowsTranscriptED3NeverClearsHistory(t *testing.T) {
 	a := clearingAgent(t, 80, 24)
 	a.record(fillerLines("HIST", 40))
-	if a.screen.Scrollback().Len() == 0 {
+	if a.screen.HistoryLen() == 0 {
 		t.Fatal("setup: expected scrollback")
 	}
 	a.conhostClear.reset()
 	a.conhostClear.forceED3 = true
 	a.record([]byte("\x1b[H\x1b[2J\x1b[3J"))
-	if n := a.screen.Scrollback().Len(); n == 0 {
+	if n := a.screen.HistoryLen(); n == 0 {
 		t.Fatal("CSI 3 J wiped reminal history")
 	}
 	if lastNonBlankRow(screenRows(a)) >= 0 {
