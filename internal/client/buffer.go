@@ -77,19 +77,18 @@ func (s *scrollback) append(data string, bar bool) uint64 {
 }
 
 // AppendResize records a PTY geometry change so the snapshot history rebuild
-// can replay each output segment at the width it was emitted for. Consecutive
-// markers coalesce (only the latest geometry before the next output matters),
-// so a burst of resizes with no output in between costs one entry.
+// can replay each output segment at the width it was emitted for. Every
+// resize is kept, a burst with no output between them included: the screen's
+// copy went through each one, and some are lossy (a width shrink cuts rows,
+// a height shrink drops rows under the cursor), so a replay that took only
+// the last of a burst drew a history the copy did not hold, and a restart
+// could not find where to join the two.
 func (s *scrollback) AppendResize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if n := len(s.entries); n > 0 && s.entries[n-1].Cols > 0 {
-		s.entries[n-1].Cols, s.entries[n-1].Rows = cols, rows
-		return
-	}
 	s.nextSeq++
 	s.entries = append(s.entries, scrollEntry{Seq: s.nextSeq, Cols: cols, Rows: rows})
 }
