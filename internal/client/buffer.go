@@ -40,6 +40,11 @@ type scrollEntry struct {
 	Cols, Rows int
 }
 
+// resizeBurstMax is the most resize markers kept in a row with no output
+// between them: a fold flipped a few times, with room to spare. Past it the
+// burst's last marker takes each new size (AppendResize).
+const resizeBurstMax = 16
+
 func newScrollback(maxBytes int) *scrollback {
 	return &scrollback{
 		maxBytes: maxBytes,
@@ -77,18 +82,34 @@ func (s *scrollback) append(data string, bar bool) uint64 {
 }
 
 // AppendResize records a PTY geometry change so the snapshot history rebuild
-// can replay each output segment at the width it was emitted for. Consecutive
-// markers coalesce (only the latest geometry before the next output matters),
-// so a burst of resizes with no output in between costs one entry.
+// can replay each output segment at the width it was emitted for. Every
+// change of size is kept, a burst with no output between them included: the
+// screen's copy went through each one, and some are lossy (a width shrink
+// cuts rows, a height shrink drops rows under the cursor), so a replay that
+// took only the last of a burst drew a history the copy did not hold, and a
+// restart could not find where to join the two. A resize to the size the
+// last marker already has is nothing and is not recorded; and a burst is
+// bounded (resizeBurstMax): past it, the burst's last marker takes the new
+// size, so a viewer reporting a new size every few milliseconds cannot grow
+// the ring without end (a marker holds no bytes, so it evicts no output).
 func (s *scrollback) AppendResize(cols, rows int) {
 	if cols <= 0 || rows <= 0 {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if n := len(s.entries); n > 0 && s.entries[n-1].Cols > 0 {
-		s.entries[n-1].Cols, s.entries[n-1].Rows = cols, rows
-		return
+	burst := 0
+	for i := len(s.entries) - 1; i >= 0 && s.entries[i].Cols > 0; i-- {
+		burst++
+	}
+	if n := len(s.entries); burst > 0 {
+		if last := s.entries[n-1]; last.Cols == cols && last.Rows == rows {
+			return
+		}
+		if burst >= resizeBurstMax {
+			s.entries[n-1].Cols, s.entries[n-1].Rows = cols, rows
+			return
+		}
 	}
 	s.nextSeq++
 	s.entries = append(s.entries, scrollEntry{Seq: s.nextSeq, Cols: cols, Rows: rows})

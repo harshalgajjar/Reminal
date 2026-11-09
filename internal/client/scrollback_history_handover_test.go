@@ -4,8 +4,11 @@
 package client
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -396,4 +399,201 @@ func TestARestoreLetsGoOfItsScratchEmulator(t *testing.T) {
 		t.Errorf("a restore kept %.0f MB past the agent (its scratch emulator, not let go)", kept)
 	}
 	runtime.KeepAlive(b)
+}
+
+// A young session's ring still holds its first output, so replayed it draws
+// the whole history again: a restart does not put the history back as well.
+// Put back, the history came back twice whenever the replay drew a line
+// otherwise than the history held it: here a row a redraw overwrote mid-way
+// (the start of one line, cut, and the rest of the next).
+func TestAYoungSessionsRestartDrawsItsHistoryOnce(t *testing.T) {
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := handoverAgent(t, box)
+	var b strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&b, "young %d the quick brown fox jumps over the lazy dog\r\n", i)
+	}
+	a.record([]byte(b.String()))
+	path, k, err := a.writeScrollbackDump()
+	if err != nil || path == "" {
+		t.Fatalf("dump: %q %v", path, err)
+	}
+	r := handoverAgent(t, box)
+	r.resumeDump = takeScrollbackDump(path, k, a.sessionID)
+	if r.resumeDump == nil || len(r.resumeDump.History) < 40 || r.resumeDump.Entries[0].Seq != 1 {
+		t.Fatal("fixture: want a dump with history and a ring from its first output")
+	}
+	h := r.resumeDump.History
+	h[20] = "young 21 the quick bro" + " fox jumps over the lazy dog"
+	r.resumeDump.History = append(h[:21:21], h[22:]...)
+	r.restoreResumedScrollback()
+	r.screenMu.Lock()
+	history := r.renderedHistory()
+	r.screenMu.Unlock()
+	n := 0
+	for _, l := range history {
+		if strings.Contains(stripANSI(l), "young 1 the") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("the first line is in the history %d times after the restart, want once", n)
+	}
+}
+
+// A ring from the session's first output can still leave history it does not
+// draw: lines an older restart put back, outside the ring. Where the history's
+// tail matches what the ring draws, those go back as before, once.
+func TestARestartKeepsHistoryTheRingDoesNotDraw(t *testing.T) {
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := handoverAgent(t, box)
+	var b strings.Builder
+	for i := 1; i <= 80; i++ {
+		fmt.Fprintf(&b, "young %d the quick brown fox jumps over the lazy dog\r\n", i)
+	}
+	a.record([]byte(b.String()))
+	path, k, err := a.writeScrollbackDump()
+	if err != nil || path == "" {
+		t.Fatalf("dump: %q %v", path, err)
+	}
+	r := handoverAgent(t, box)
+	r.resumeDump = takeScrollbackDump(path, k, a.sessionID)
+	if r.resumeDump == nil || r.resumeDump.Entries[0].Seq != 1 {
+		t.Fatal("fixture: want a ring from its first output")
+	}
+	var earlier []string
+	for i := 1; i <= 30; i++ {
+		earlier = append(earlier, fmt.Sprintf("earlier %d put back by a restart before", i))
+	}
+	r.resumeDump.History = append(earlier, r.resumeDump.History...)
+	r.restoreResumedScrollback()
+	r.screenMu.Lock()
+	history := r.renderedHistory()
+	history = append(history, renderedScreenRows(r.screen)...)
+	r.screenMu.Unlock()
+	for _, want := range []string{"earlier 1 put", "earlier 30 put", "young 1 the", "young 80 the"} {
+		n := 0
+		for _, l := range history {
+			if strings.Contains(stripANSI(l), want) {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%q is in the history %d times after the restart, want once", want, n)
+		}
+	}
+}
+
+// Where the ring's first lines are in the history more than once (an older
+// restart put the same banner back above), the history goes back up to the
+// copy from which all that follows is drawn again: never an older one, whose
+// lines below it the replay does not draw (they were lost). The ring here is
+// a banner, 30 lines and 40 screen rows; each case says what the history
+// holds besides it, and nothing of the history may be missing after.
+func TestARestartCutsTheHistoryWhereNothingIsLost(t *testing.T) {
+	banner := []string{"Welcome to the tool", "Type help for help", "$ make test"}
+	var ring []string
+	ring = append(ring, banner...)
+	for i := 1; i <= 30; i++ {
+		ring = append(ring, fmt.Sprintf("ring line %d of the session", i))
+	}
+	for i := 1; i <= 40; i++ {
+		ring = append(ring, fmt.Sprintf("screen row %d", i))
+	}
+	older := func(gap int) []string {
+		h := append([]string(nil), banner...)
+		h = append(h, "an older session's line")
+		for i := 1; i <= gap; i++ {
+			h = append(h, fmt.Sprintf("between line %d put back by a restart", i))
+		}
+		return h
+	}
+	drawnOtherwise := append([]string{"Welcome to the tool, again", "Type help for help", "$ make test"}, ring[3:]...)
+	for _, c := range []struct {
+		name    string
+		history []string
+		again   []string
+	}{
+		{"an older copy of the banner 10 lines above", append(older(10), ring...), ring},
+		{"an older copy of the banner 40 lines above", append(older(40), ring...), ring},
+		// A full-screen app up: the history holds none of the screen's rows.
+		{"10 lines above, without the screen rows", append(older(10), ring[:33]...), ring},
+		{"40 lines above, without the screen rows", append(older(40), ring[:33]...), ring},
+		{"the session's own start pruned away", append(older(10), ring[20:]...), ring},
+		{"the ring's start drawn otherwise", append(older(10), ring...), drawnOtherwise},
+	} {
+		cut := ringStartIn(c.history, c.again)
+		shown := append(append([]string(nil), c.history[:cut]...), c.again...)
+		drawn := drawnAgain(shown)
+		for _, l := range c.history {
+			if !drawn(l) {
+				t.Errorf("%s: cut at %d of %d, and %q is lost", c.name, cut, len(c.history), l)
+				break
+			}
+		}
+	}
+}
+
+// A restart's dump is of one moment: the history it holds is drawn by the
+// ring it holds. Taken while output arrives, a dump whose history ran a
+// chunk ahead of its ring put all of the history back on a restart, on top
+// of the ring's replay (the ring never drew those last rows, so no cut
+// matched): the same text twice. Output is recorded without pause while
+// dumps are written, and every dump's last history line is in its ring.
+func TestARestartDumpIsOfOneMoment(t *testing.T) {
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := handoverAgent(t, box)
+	a.record([]byte("line 0 of the output\r\n")) // a ring to dump: an empty one writes no file
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 1; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			a.record([]byte(fmt.Sprintf("line %d of the output\r\n", i)))
+		}
+	}()
+	identity := func(b []byte) ([]byte, error) { return b, nil }
+	path := filepath.Join(t.TempDir(), "dump.json")
+	behind := 0
+	const dumps = 60 // read apart, every one of hundreds was behind
+	for i := 0; i < dumps; i++ {
+		if err := a.writeScrollbackDumpTo(path, identity); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var d scrollbackDump
+		if err := json.Unmarshal(raw, &d); err != nil {
+			t.Fatal(err)
+		}
+		last := ""
+		for j := len(d.History) - 1; j >= 0; j-- {
+			if s := strings.TrimSpace(stripANSI(d.History[j])); s != "" {
+				last = s
+				break
+			}
+		}
+		var ring strings.Builder
+		for _, e := range d.Entries {
+			ring.Write(e.Data)
+		}
+		if last != "" && !strings.Contains(ring.String(), last) {
+			behind++
+		}
+	}
+	close(stop)
+	<-done
+	if behind > 0 {
+		t.Errorf("%d of %d dumps hold a history line their ring never drew", behind, dumps)
+	}
 }
