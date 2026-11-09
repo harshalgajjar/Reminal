@@ -4,8 +4,11 @@
 package client
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -530,5 +533,66 @@ func TestARestartCutsTheHistoryWhereNothingIsLost(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// A restart's dump is of one moment: the history it holds is drawn by the
+// ring it holds. Taken while output arrives, a dump whose history ran a
+// chunk ahead of its ring put all of the history back on a restart, on top
+// of the ring's replay (the ring never drew those last rows, so no cut
+// matched): the same text twice. Output is recorded without pause while
+// dumps are written, and every dump's last history line is in its ring.
+func TestARestartDumpIsOfOneMoment(t *testing.T) {
+	key, _ := crypto.NewSessionKey()
+	box, _ := crypto.NewBox(key)
+	a := handoverAgent(t, box)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 1; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			a.record([]byte(fmt.Sprintf("line %d of the output\r\n", i)))
+		}
+	}()
+	identity := func(b []byte) ([]byte, error) { return b, nil }
+	path := filepath.Join(t.TempDir(), "dump.json")
+	behind := 0
+	const dumps = 60 // read apart, every one of hundreds was behind
+	for i := 0; i < dumps; i++ {
+		if err := a.writeScrollbackDumpTo(path, identity); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var d scrollbackDump
+		if err := json.Unmarshal(raw, &d); err != nil {
+			t.Fatal(err)
+		}
+		last := ""
+		for j := len(d.History) - 1; j >= 0; j-- {
+			if s := strings.TrimSpace(stripANSI(d.History[j])); s != "" {
+				last = s
+				break
+			}
+		}
+		var ring strings.Builder
+		for _, e := range d.Entries {
+			ring.Write(e.Data)
+		}
+		if last != "" && !strings.Contains(ring.String(), last) {
+			behind++
+		}
+	}
+	close(stop)
+	<-done
+	if behind > 0 {
+		t.Errorf("%d of %d dumps hold a history line their ring never drew", behind, dumps)
 	}
 }

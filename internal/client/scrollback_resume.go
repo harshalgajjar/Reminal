@@ -102,8 +102,15 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 	if a == nil || a.buf == nil || a.box == nil {
 		return nil
 	}
+	// The ring and the history are read under the one lock record takes to
+	// write both, so they are of one moment. Read apart, a chunk recorded
+	// between the two reads left the history a chunk ahead of the ring: the
+	// replay then never drew the history's last rows, no cut matched, and a
+	// restart put all of the history back on top of the replay, doubled.
+	a.screenMu.Lock()
 	raw := a.buf.From(0)
 	if len(raw) == 0 {
+		a.screenMu.Unlock()
 		return nil
 	}
 	dump := scrollbackDump{
@@ -112,7 +119,6 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 	}
 	dump.BaseCols, dump.BaseRows = a.buf.Base()
 	if a.screen != nil {
-		a.screenMu.Lock()
 		// The screen's rows too: what an app left above a frame it repaints
 		// in place never scrolls into scrollback, and its ring holds only the
 		// repaints. Should the replay draw them again, the copy is the
@@ -128,8 +134,8 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 			dump.History = dump.History[n:]
 		}
 		dump.HistoryCols = a.screen.Width()
-		a.screenMu.Unlock()
 	}
+	a.screenMu.Unlock()
 	dump.Entries = make([]scrollDumpEntry, 0, len(raw))
 	for _, e := range raw {
 		de := scrollDumpEntry{Seq: e.Seq, Bar: e.Bar, Cols: e.Cols, Rows: e.Rows}
