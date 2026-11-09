@@ -304,3 +304,24 @@ func TestAXElectronBundleIsForcedFromTheFirstRead(t *testing.T) {
 		t.Fatalf("calls = %q; want one forced read", calls)
 	}
 }
+
+// A window is named to agent-desktop by its number wherever both sides know
+// it: the CGWindowNumber on macOS, the HWND on Windows. A Windows store app's
+// window is owned by ApplicationFrameHost, so a scope by app name found no
+// window there and the controls never appeared; the number does not care
+// which process hosts the window.
+func TestAXWindowsAreScopedByTheirNumberOnMacAndWindows(t *testing.T) {
+	cases := []struct{ goos, id, want string }{
+		{"darwin", "525184", "525184"},
+		{"darwin", "display:1", ""},
+		{"windows", "hwnd:525184", "525184"},
+		{"windows", "display:1", ""},
+		{"linux", "0x03a00007", ""},
+		{"darwin", "w1", ""},
+	}
+	for _, c := range cases {
+		if got := axWindowNumberOn(c.goos, c.id); got != c.want {
+			t.Errorf("%s %q: number %q, want %q", c.goos, c.id, got, c.want)
+		}
+	}
+}

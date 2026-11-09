@@ -212,14 +212,36 @@ func axStale(err error) bool {
 	return errors.As(err, &ae) && (ae.code == "STALE_REF" || ae.code == "AMBIGUOUS_TARGET" || ae.code == "ELEMENT_NOT_FOUND")
 }
 
-// axScope names a window to agent-desktop. Its macOS window ids are the
-// CGWindowNumber reminal already uses ("w-<n>"); elsewhere the app name
-// scopes it and the bounds pick the window (axSnapshot).
+// axScope names a window to agent-desktop. Its window ids are the numbers
+// reminal already uses, "w-" in front: the CGWindowNumber on macOS and the
+// HWND on Windows. Naming the window beats naming its app: a Windows store
+// app's window belongs to ApplicationFrameHost, the process reminal lists,
+// while agent-desktop files it under the app inside (CalculatorApp.exe), so
+// an app-name scope there finds no window and the controls never appear.
+// Elsewhere the app name scopes it and the bounds pick the window.
 func axScope(w winInfo) []string {
-	if runtime.GOOS == "darwin" && w.ID != "" && !isDisplayID(w.ID) && strings.Trim(w.ID, "0123456789") == "" {
-		return []string{"--window-id", "w-" + w.ID}
+	if n := axWindowNumber(w.ID); n != "" {
+		return []string{"--window-id", "w-" + n}
 	}
 	return []string{"--app", w.App}
+}
+
+// axWindowNumber is the number in a window id agent-desktop also knows, or
+// "" (a display, a Linux X window id, a test's name).
+func axWindowNumber(id string) string { return axWindowNumberOn(runtime.GOOS, id) }
+
+func axWindowNumberOn(goos, id string) string {
+	switch goos {
+	case "windows":
+		id = strings.TrimPrefix(id, "hwnd:")
+	case "darwin":
+	default:
+		return ""
+	}
+	if id == "" || isDisplayID(id) || strings.Trim(id, "0123456789") != "" {
+		return ""
+	}
+	return id
 }
 
 // axNode is the part of agent-desktop's snapshot tree this reads.
