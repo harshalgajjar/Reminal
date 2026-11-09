@@ -546,6 +546,7 @@ func TestARestartDumpIsOfOneMoment(t *testing.T) {
 	key, _ := crypto.NewSessionKey()
 	box, _ := crypto.NewBox(key)
 	a := handoverAgent(t, box)
+	a.record([]byte("line 0 of the output\r\n")) // a ring to dump: an empty one writes no file
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {
