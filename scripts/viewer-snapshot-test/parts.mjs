@@ -132,6 +132,18 @@ const out = await page.evaluate(async () => {
   const buf = term.buffer.active;
   for (let i = 0; i < buf.length; i++) { const m = (buf.getLine(i)?.translateToString(true) || '').match(/^line (\d+)$/); if (m) seen.add(m[1]); }
   res.pacedGapRegion = { lines: seen.size };
+  // The modes a program set at its start (bracketed paste, cursor keys,
+  // focus, the mouse) are still set after the join's soft reset.
+  reset();
+  term.reset();
+  await new Promise((ok) => term.write('\x1b[?2004h\x1b[?1h\x1b[?1004h\x1b[?1002h\x1b[?1006h', ok));
+  const mouseBefore = term.modes.mouseTrackingMode;
+  await handleMessage({ type: 'snapshot_part', seq: 100, data: screenPart('M', true) });
+  await handleMessage({ type: 'snapshot_part', seq: 100, data: part('M', 0, 1, gz, viewerId, { ack: true }) });
+  await new Promise((ok) => requestAnimationFrame(() => ok()));
+  await settle();
+  const md = term.modes;
+  res.modesKept = { paste: md.bracketedPasteMode, keys: md.applicationCursorKeysMode, focus: md.sendFocusMode, mouse: md.mouseTrackingMode, mouseBefore };
   // An opened frame is only what the page opened itself: an object a message
   // carries in its JSON as if it were one ({"__plain": [...]}) is not taken
   // as decrypted output, whatever it holds.
@@ -166,6 +178,7 @@ const checks = [
   ['paced: a history that cannot be unpacked leaves the screen live, no plain snapshot asked', JSON.stringify(out.pacedBomb.order) === '["SCREEN","STILL"]' && out.pacedBomb.resumes === 0 && !out.pacedBomb.live && !out.pacedBomb.partsOff],
   ['paced: more output kept than a snapshot holds gives the history up', !out.pacedOverKept.live],
   ['paced: a scroll region set during the download does not swallow the history (all 50 lines in the terminal)', out.pacedGapRegion.lines === 50],
+  ['the modes a program set (bracketed paste, cursor keys, focus, the mouse) survive a join\'s soft reset', out.modesKept.paste && out.modesKept.keys && out.modesKept.focus && out.modesKept.mouse === out.modesKept.mouseBefore],
   ['data as {"__plain": …} in a message is not taken as opened: decrypt refuses it, nothing painted', out.notOpened.threw && out.notOpened.painted === 0],
 ];
 for (const [n, ok] of checks) console.log((ok ? 'PASS  ' : 'FAIL  ') + n);

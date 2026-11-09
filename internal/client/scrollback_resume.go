@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unsafe"
 
@@ -99,8 +100,15 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 	if a == nil || a.buf == nil || a.box == nil {
 		return nil
 	}
+	// The ring and the history are read under the one lock record takes to
+	// write both, so they are of one moment. Read apart, a chunk recorded
+	// between the two reads left the history a chunk ahead of the ring: the
+	// replay then never drew the history's last rows, no cut matched, and a
+	// restart put all of the history back on top of the replay, doubled.
+	a.screenMu.Lock()
 	raw := a.buf.From(0)
 	if len(raw) == 0 {
+		a.screenMu.Unlock()
 		return nil
 	}
 	dump := scrollbackDump{
@@ -108,7 +116,6 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 		NextSeq: a.buf.LatestSeq(),
 	}
 	dump.BaseCols, dump.BaseRows = a.buf.Base()
-	a.screenMu.Lock()
 	if a.screen != nil {
 		// The screen's rows too: what an app left above a frame it repaints
 		// in place never scrolls into scrollback, and its ring holds only the
@@ -277,11 +284,125 @@ func (a *Agent) restoreResumedScrollbackLocked() {
 			replayDump(scratch, d)
 			return append(append([]string(nil), scratch.History()...), renderedScreenRows(scratch)...)
 		}()
-		restoreHistory(a.screen, d.History[:historySeam(d.History, again)], d.HistoryCols)
+		restoreHistory(a.screen, d.History[:restoreCut(d, again)], d.HistoryCols)
 		a.noteScrollbackLen()
 	}
 	replayDump(a.screen, d, a.noteScrollbackLen)
 	a.freshLineAfterRestoreLocked()
+}
+
+// restoreCut is how much of d's history goes back before its ring is
+// replayed: what the ring does not draw again (again: what it draws). A ring
+// that holds the session's first output (ringFromStart) draws all of the
+// history but what an older restart put back above it, so the history goes
+// back up to where the ring's own first lines are in it (ringStartIn): a
+// line the replay draws otherwise is then the replay's, not a reason to put
+// all of it back (a young session's history came back twice). Any other
+// ring, up to where it starts drawing the history's tail (historySeam).
+func restoreCut(d *scrollbackDump, again []string) int {
+	if ringFromStart(d) {
+		return ringStartIn(d.History, again)
+	}
+	return historySeam(d.History, again)
+}
+
+// ringStartIn is where in history the ring's replay (again) begins: the first
+// of its lines with text, and the two after it, found there together, at a
+// place from which every row of the history after it is drawn again
+// (drawnAgain), or nothing after it would be lost with it. Of several such
+// places, the one nearest where the two would end together; none, all of
+// history (a line twice rather than one lost).
+func ringStartIn(history, again []string) int {
+	plain := func(l string) string { return strings.TrimRight(stripANSI(l), " ") }
+	at := map[string][]int{}
+	for i, l := range history {
+		if p := plain(l); p != "" {
+			at[p] = append(at[p], i)
+		}
+	}
+	drawn := drawnAgain(again)
+	for j := 0; j < len(again) && j < 64; j++ {
+		first := plain(again[j])
+		if first == "" {
+			continue
+		}
+		n := min(3, len(again)-j)
+		var places []int
+		for _, p := range at[first] {
+			same := p+n <= len(history)
+			for k := 1; k < n && same; k++ {
+				same = plain(history[p+k]) == plain(again[j+k])
+			}
+			if same {
+				places = append(places, p)
+			}
+		}
+		want := len(history) - len(again) + j
+		slices.SortStableFunc(places, func(a, b int) int { return absInt(a-want) - absInt(b-want) })
+		for _, p := range places {
+			if !slices.ContainsFunc(history[p:], func(l string) bool { return !drawn(l) }) {
+				return p
+			}
+		}
+	}
+	return len(history)
+}
+
+// drawnAgain says of a row whether rows (what a replay draws) show its text:
+// its tokens, split at spaces, an unbroken run of theirs read as one text. Or
+// a redraw's splice of two: the start of one line, cut mid-word, and the rest
+// of another, each shown (the first's last token the start of one of theirs,
+// shorter: a whole word is no cut, or any two pieces would pass).
+// A row with no text is drawn.
+func drawnAgain(rows []string) func(string) bool {
+	var stream []string
+	at := map[string][]int{}
+	for _, r := range rows {
+		for _, w := range strings.Fields(stripANSI(r)) {
+			at[w] = append(at[w], len(stream))
+			stream = append(stream, w)
+		}
+	}
+	// run says whether t is a run of stream; cut: its last token is the start
+	// of the one there, cut short.
+	run := func(t []string, cut bool) bool {
+		for _, s := range at[t[0]] {
+			if s+len(t) > len(stream) {
+				continue
+			}
+			ok := true
+			for k := 1; k < len(t) && ok; k++ {
+				if cut && k == len(t)-1 {
+					ok = len(t[k]) < len(stream[s+k]) && strings.HasPrefix(stream[s+k], t[k])
+				} else {
+					ok = stream[s+k] == t[k]
+				}
+			}
+			if ok {
+				return true
+			}
+		}
+		return false
+	}
+	return func(row string) bool {
+		t := strings.Fields(stripANSI(row))
+		if len(t) == 0 || run(t, false) {
+			return true
+		}
+		for k := 2; k <= len(t)-1; k++ {
+			if run(t[:k], true) && run(t[k:], false) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// ringFromStart says whether a dump's output ring still holds the session's
+// first output: its first entry is the first ever (seqs start at 1, nothing
+// evicted, and a restart keeps them).
+func ringFromStart(d *scrollbackDump) bool {
+	return len(d.Entries) > 0 && d.Entries[0].Seq == 1
 }
 
 // freshLineAfterRestoreLocked starts what a new shell writes on a line of its

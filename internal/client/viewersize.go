@@ -31,6 +31,12 @@ import (
 const (
 	minTermCols = 20
 	minTermRows = 8
+	// maxTermCols and maxTermRows are the most a viewer's report is taken
+	// at: a grid that size is a wall of screens. Past them it is clamped, so
+	// one viewer saying 65535 by 65535 cannot size the session's terminal,
+	// and its copy here, at hundreds of megabytes.
+	maxTermCols = 1000
+	maxTermRows = 500
 )
 
 // resizeSettle is how long a burst of wrap reports may run before the PTY
@@ -87,10 +93,11 @@ func effectivePTYSize(viewer, host termSize) termSize {
 	return host
 }
 
-// report stores one viewer's wrap. Invalid sizes are ignored. Returns
+// report stores one viewer's wrap, clamped to maxTermCols by maxTermRows.
+// Sizes below the minimums are ignored. Returns
 // true when this is the first settled size (apply the PTY immediately).
 func (b *viewerSizeBook) report(id string, cols, rows uint16) (first bool) {
-	s := termSize{cols, rows}
+	s := termSize{min(cols, maxTermCols), min(rows, maxTermRows)}
 	if !s.valid() {
 		return false
 	}
