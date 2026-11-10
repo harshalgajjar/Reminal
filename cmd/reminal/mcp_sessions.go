@@ -447,6 +447,20 @@ func planSendKeys(keys, key string, enter bool) (sendKeysPlan, error) {
 	return p, nil
 }
 
+// partialSendError says what a failure after sent of the deliveries means to
+// the caller: nothing landed, the text landed but not its Return (tail), or
+// part of it landed.
+func partialSendError(sent int, deliveries [][]byte, tail []byte, err error) error {
+	switch {
+	case sent == 0:
+		return err
+	case tail != nil && sent == len(deliveries)-1:
+		return fmt.Errorf("typed the text but could not press Return: %w", err)
+	default:
+		return fmt.Errorf("sent part of it, then: %w", err)
+	}
+}
+
 func mcpSendKeys(sessionSel, machineSel, keys, key, pin string, enter bool) (string, error) {
 	sessionSel = strings.TrimSpace(sessionSel)
 	machineSel = strings.TrimSpace(machineSel)
@@ -467,10 +481,7 @@ func mcpSendKeys(sessionSel, machineSel, keys, key, pin string, enter bool) (str
 		for i, d := range deliveries[1:] {
 			time.Sleep(client.EnterSettle)
 			if err := send(d); err != nil {
-				if tail != nil && i == len(deliveries)-2 {
-					return fmt.Errorf("typed the text but could not press Return: %w", err)
-				}
-				return fmt.Errorf("sent part of it, then: %w", err)
+				return partialSendError(i+1, deliveries, tail, err)
 			}
 		}
 		return nil
@@ -499,12 +510,11 @@ func mcpSendKeys(sessionSel, machineSel, keys, key, pin string, enter bool) (str
 		if id == "" {
 			id = strings.ToUpper(sessionSel)
 		}
-		send := func(b []byte) error { return client.SendKeysPIN(id, pin, b) }
-		if err := send(deliveries[0]); err != nil {
-			return "", err
-		}
-		if err := sendRest(send); err != nil {
-			return "", err
+		// One connection and one handshake for all of it: the relay paces
+		// PIN handshakes from one address, and one per delivery was refused
+		// as busy after a few calls.
+		if sent, err := client.SendKeysPIN(id, pin, deliveries...); err != nil {
+			return "", partialSendError(sent, deliveries, tail, err)
 		}
 		return report(id), nil
 	}
