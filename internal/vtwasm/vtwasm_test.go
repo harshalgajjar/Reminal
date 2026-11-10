@@ -278,3 +278,62 @@ func TestManyStyleChangesWriteBackOnePen(t *testing.T) {
 		t.Errorf("the pen after the gap is %d bytes: %q…", len(tail), tail[:32])
 	}
 }
+
+// The time limit bounds each call, so a long history goes into a terminal
+// as many writes, not one (the agent's restoreHistory writes it in pieces of
+// 256 KiB): under a limit the pieces each stay within, the same bytes in one
+// write run past it and fail the terminal. The limit is taken from the
+// pieces' own time on this machine, a quarter of their total, so the test
+// holds on a slow machine as on a fast one.
+func TestAWriteInPiecesStaysWithinTheLimitOneWriteDoesNot(t *testing.T) {
+	const piece = 256 << 10
+	const pieces = 64
+	var b strings.Builder
+	for i := 0; b.Len() < piece*pieces; i++ {
+		fmt.Fprintf(&b, "line %06d %s\r\n", i, strings.Repeat("x", 80))
+	}
+	data := []byte(b.String())
+	cut := func() [][]byte {
+		var out [][]byte
+		for i := 0; i < len(data); i += piece {
+			out = append(out, data[i:min(i+piece, len(data))])
+		}
+		return out
+	}
+	// write is the chunks into a fresh terminal: the time they took in all,
+	// the longest of them, and the first error.
+	write := func(chunks [][]byte) (total, longest time.Duration, err error) {
+		v, err := New(120, 40, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer v.Close()
+		for _, c := range chunks {
+			start := time.Now()
+			_, err = v.Write(c)
+			d := time.Since(start)
+			total += d
+			longest = max(longest, d)
+			if err != nil {
+				return total, longest, err
+			}
+		}
+		return total, longest, v.Err()
+	}
+	saved := callLimit
+	defer func() { callLimit = saved }()
+	total, longest, err := write(cut())
+	if err != nil {
+		t.Fatalf("the pieces under the usual limit: %v", err)
+	}
+	callLimit = total / 4
+	if callLimit < 2*longest {
+		t.Skipf("the pieces' times are too uneven for a limit between them: total %v, longest %v", total, longest)
+	}
+	if _, _, err := write([][]byte{data}); err == nil {
+		t.Fatalf("one write of %d bytes finished within %v; the %d pieces took %v in all", len(data), callLimit, pieces, total)
+	}
+	if _, _, err := write(cut()); err != nil {
+		t.Errorf("the same bytes in %d pieces under %v: %v", pieces, callLimit, err)
+	}
+}
