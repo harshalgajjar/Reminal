@@ -12,7 +12,7 @@ import (
 )
 
 // One shared emulator + drain goroutine for all fuzz iterations, reset with RIS
-// each time — the same reuse pattern production uses for a.rebuildEmu. This
+// each time (as the agent's history rebuild once reused its emulator). This
 // avoids both a per-iteration goroutine leak and the data race that Close() would
 // cause against the drain goroutine (vt.Emulator's `closed` field is
 // unsynchronized). The mutex serialises Writes across parallel fuzz goroutines.
@@ -60,10 +60,10 @@ func FuzzVViewWrite(f *testing.F) {
 			go func() { _, _ = io.Copy(io.Discard, e) }() // one drain, never closed
 		}
 		e := fuzzEmu
-		// RIS to a clean state each iteration (as rebuildView does). Guard it: a
-		// prior iteration's adversarial input can leave the shared emulator in a
-		// state where even this direct write panics — not a production concern
-		// (rebuildView recovers around its own RIS), just shared-fixture hygiene.
+		// RIS to a clean state each iteration. Guard it: a prior iteration's
+		// adversarial input can leave the shared emulator in a state where even
+		// this direct write panics — not a production concern (nothing in the
+		// agent writes to this emulator), just shared-fixture hygiene.
 		func() {
 			defer func() { _ = recover() }()
 			_, _ = e.Write([]byte("\x1bc"))

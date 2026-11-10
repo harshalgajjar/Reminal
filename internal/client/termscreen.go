@@ -345,7 +345,8 @@ const sgrReset = "\x1b[0m"
 // be empty, and a join would be painted a blank screen with no history, the
 // attention and login readers would read nothing. Without it, viewers are
 // given the raw output instead, as with REMINAL_SNAPSHOT=0. Caller holds
-// screenMu; true when it was dropped.
+// screenMu, and lets it go with unlockScreen, which gives the notice; true
+// when it was dropped.
 func (a *Agent) dropFailedScreenLocked() bool {
 	if a.screen == nil {
 		return false
@@ -354,13 +355,36 @@ func (a *Agent) dropFailedScreenLocked() bool {
 	if err == nil {
 		return false
 	}
-	agentNotify("  reminal: the copy of this session's screen stopped working (%v); viewers that join are sent its output instead.\n", err)
+	a.notifyLocked("  reminal: the copy of this session's screen stopped working (%v); viewers that join are sent its output instead.\n", err)
 	a.screen.Close()
 	a.screen = nil
 	a.resizeSegs = nil
 	a.segsGen++
 	return true
 }
+
+// notifyLocked keeps a notice for the person at the terminal until screenMu
+// is let go (unlockScreen). agentNotify writes to the terminal, and a write
+// to a terminal can wait (its output stopped, a slow connection) for as long
+// as it likes: given under the lock, the session's output and every join
+// would wait with it. Caller holds screenMu.
+func (a *Agent) notifyLocked(format string, args ...interface{}) {
+	a.screenNotices = append(a.screenNotices, fmt.Sprintf(format, args...))
+}
+
+// unlockScreen lets screenMu go and gives the notices kept under it
+// (notifyLocked), in order, now that nothing waits on the lock.
+func (a *Agent) unlockScreen() {
+	notices := a.screenNotices
+	a.screenNotices = nil
+	a.screenMu.Unlock()
+	for _, n := range notices {
+		screenNotify(n)
+	}
+}
+
+// screenNotify gives a notice kept under screenMu; agentNotify, but for a test.
+var screenNotify = func(notice string) { agentNotify("%s", notice) }
 
 // haveScreen says the session has a copy of its screen to join from.
 func (a *Agent) haveScreen() bool {

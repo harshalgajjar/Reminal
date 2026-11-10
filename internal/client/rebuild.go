@@ -11,7 +11,10 @@ import (
 )
 
 // vviewWriter feeds a recorded output stream into a TALL replay emulator while
-// translating absolute row addressing into a sliding "virtual viewport".
+// translating absolute row addressing into a sliding "virtual viewport". It
+// was the agent's history rebuild; the session's copy of its screen does
+// that itself now, and this stays as the tests' way of replaying a recorded
+// stream (replayCapture).
 //
 // Apps address rows assuming the terminal is `rows` tall: `ESC[H` means "my
 // viewport's top-left", `ESC[2J` means "my whole screen". On the tall replay
@@ -63,8 +66,7 @@ type vviewWriter struct {
 	carry []byte
 	// dead is set if a Write panicked (a malformed scrollback sequence can drive
 	// the emulator into an out-of-range index — see FuzzVViewWrite). Once dead,
-	// further Writes are skipped and rebuildView falls back to a screen-only
-	// snapshot instead of crashing the agent.
+	// further Writes are skipped.
 	dead bool
 }
 
@@ -144,8 +146,7 @@ func (w *vviewWriter) Write(p []byte) {
 	// The replay emulator can panic (out-of-range index) on adversarial escape
 	// sequences recorded in scrollback — found by FuzzVViewWrite with "\x1b[r\x88".
 	// A snapshot must never crash the agent, so contain it here: mark the writer
-	// dead and stop; rebuildView sees w.dead and degrades to a screen-only
-	// snapshot. Non-panicking writes are entirely unaffected.
+	// dead and stop. Non-panicking writes are entirely unaffected.
 	if w.dead {
 		return
 	}

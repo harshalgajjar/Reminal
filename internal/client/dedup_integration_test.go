@@ -16,8 +16,8 @@ import (
 
 // TestSnapshotDedupWiredIntoReconnectPath drives the REAL Ink resize+repaint capture
 // through the actual reconnect snapshot pipeline — record() into the encrypted buffer,
-// AppendResize markers, then snapshotFrame() (which rebuilds history via rebuildView and
-// now runs dedupBlocks). It decrypts the frame exactly like a reconnecting viewer would
+// AppendResize markers, then snapshotFrame() (the session's copy of its screen, with
+// dedupBlocks over its history). It decrypts the frame exactly like a reconnecting viewer would
 // replay it, and asserts the CORRECT invariant: no substantial paragraph is duplicated in
 // the delivered history, and the legitimate cross-draft repeats are preserved. This proves
 // the dedup is wired into the real path, not just callable in isolation.

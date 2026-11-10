@@ -19,11 +19,12 @@ var (
 	rawEmu   *vt.Emulator
 )
 
-// FuzzRawEmulatorWrite feeds arbitrary bytes to a raw vt.Emulator exactly as the
-// live screen (a.screen) does — every byte of shell output, in varying chunk sizes
-// to mimic PTY read boundaries. a.screen.Write has NO recover (agent.go), so any
-// sequence that panics the emulator would crash the agent on its hot path. If this
-// ever fails, the fix is to wrap a.screen.Write in a recover (as rebuildView does).
+// FuzzRawEmulatorWrite feeds arbitrary bytes to a raw vt.Emulator as the live
+// screen (a.screen) once was fed — every byte of shell output, in varying chunk
+// sizes to mimic PTY read boundaries. The property is "never panics": the agent
+// has no recover around its writes to the screen, so a sequence that panicked
+// an emulator would crash it on its hot path. The live screen is vtwasm now
+// (its conformance tests cover it); this guards the emulator the tests still use.
 func FuzzRawEmulatorWrite(f *testing.F) {
 	seeds := [][]byte{
 		[]byte("hello\r\nworld\r\n\x1b[2J"),
