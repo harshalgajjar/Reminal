@@ -74,10 +74,8 @@ func renderLines(lines []uv.Line, maxLines int) []string {
 // the raw output history. History goes into the viewer's scrollback; the
 // viewer lands at the bottom (the live screen) and can scroll up through it.
 //
-// history is pre-rendered (see renderScrollback / Agent.rebuildView) so the
-// caller chooses its source: the agent rebuilds it from the raw output buffer
-// at current geometry, which avoids the duplicate-transcript scars a live
-// incrementally-resized emulator accumulates from inline-TUI re-renders.
+// history is pre-rendered (the session's copy of its screen: joinHistory;
+// renderScrollback in the tests) so the caller chooses its source.
 // maxBytes caps the rendered history size (newest lines kept; 0 = no cap).
 // The visible screen is always included.
 //

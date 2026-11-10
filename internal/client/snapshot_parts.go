@@ -100,11 +100,11 @@ func (a *Agent) snapshotParts(joiners []string) (map[string][]string, uint64, er
 	}
 	in := a.joinInputs()
 	if a.dropFailedScreenLocked() {
-		a.screenMu.Unlock()
+		a.unlockScreen()
 		return nil, 0, nil
 	}
 	latest := a.buf.LatestSeq()
-	a.screenMu.Unlock()
+	a.unlockScreen()
 	history := a.joinHistory(in)
 	snap := paintSnapshot(in.view, history, nil, a.snapshotBudget(), false)
 	if snap == "" {
@@ -260,11 +260,11 @@ func (a *Agent) startPacedSnapshot(conn *websocket.Conn, viewers []string) (uint
 	}
 	in := a.joinInputs()
 	if a.dropFailedScreenLocked() {
-		a.screenMu.Unlock()
+		a.unlockScreen()
 		return 0, nil
 	}
 	latest := a.buf.LatestSeq()
-	a.screenMu.Unlock()
+	a.unlockScreen()
 	id := newSnapshotID()
 	// The history's parts follow only if there is history: else the screen
 	// is the whole of it.
