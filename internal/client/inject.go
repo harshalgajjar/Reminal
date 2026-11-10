@@ -122,53 +122,80 @@ func keysControlWait() time.Duration { return typedHoldMax + searchControlWait }
 
 // SendKeysPIN types into any reminal session you have the id and PIN for,
 // the same path `reminal connect` uses (EKE, then encrypted TypeData). No
-// owner enrollment and no TTY. The connection closes after the keys are sent.
-func SendKeysPIN(sessionID, pin string, data []byte) error {
-	if len(data) == 0 {
-		return fmt.Errorf("keys is empty")
+// owner enrollment and no TTY. Every delivery (a key pressed by name, the
+// text, a Return) goes over the one connection and its one handshake,
+// EnterSettle apart: the relay paces PIN handshakes from one address (a
+// burst, then one a minute), and a handshake per delivery used that up in a
+// few calls, which were then refused as "this machine is busy". sent is how
+// many deliveries were written; the connection closes after them.
+func SendKeysPIN(sessionID, pin string, deliveries ...[]byte) (sent int, err error) {
+	if len(deliveries) == 0 {
+		return 0, fmt.Errorf("keys is empty")
 	}
-	if len(data) > maxInjectBytes {
-		return fmt.Errorf("keys too long (max %d bytes)", maxInjectBytes)
+	for _, d := range deliveries {
+		if len(d) == 0 {
+			return 0, fmt.Errorf("keys is empty")
+		}
+		if len(d) > maxInjectBytes {
+			return 0, fmt.Errorf("keys too long (max %d bytes)", maxInjectBytes)
+		}
 	}
 	v, err := NewViewer(sessionID, pin)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return v.injectOnce(data)
+	return v.inject(deliveries)
 }
 
-func (v *Viewer) injectOnce(data []byte) error {
+// inject connects once, as a viewer, and types the deliveries in order.
+func (v *Viewer) inject(deliveries [][]byte) (sent int, err error) {
 	wsURL := config.SessionWS(v.sessionID, string(protocol.RoleViewer))
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = DirectoryTimeout
 	conn, resp, err := dialer.Dial(wsURL, nil)
 	if err != nil {
 		if resp != nil && resp.StatusCode == 429 {
-			return &rateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
+			return 0, &rateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"))}
 		}
-		return fmt.Errorf("dial: %w", err)
+		return 0, fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
 	conn.SetReadLimit(maxRelayMessageBytes)
 	_ = conn.SetReadDeadline(time.Now().Add(kexTimeout))
 
 	if err := v.authenticate(conn); err != nil {
-		return err
+		return 0, err
 	}
 	if err := v.negotiateSessionKey(conn); err != nil {
-		return err
+		return 0, err
 	}
-	enc, err := v.box.Encrypt(data)
-	if err != nil {
-		return err
+	write := func(d []byte) error {
+		enc, err := v.box.Encrypt(d)
+		if err != nil {
+			return err
+		}
+		return v.writeMsg(conn, protocol.Message{Type: protocol.TypeData, Data: enc})
 	}
-	if err := v.writeMsg(conn, protocol.Message{Type: protocol.TypeData, Data: enc}); err != nil {
-		return err
-	}
+	sent, err = writeDeliveries(write, deliveries, EnterSettle)
 	// WriteMessage returns after the frame is on the socket; a tiny pause
 	// lets the relay forward it before we drop the connection.
 	time.Sleep(50 * time.Millisecond)
-	return nil
+	return sent, err
+}
+
+// writeDeliveries writes each delivery with write, the first at once and
+// the rest settle apart (a program reads a Return on its own, after the text
+// it ends), and says how many were written before the first error.
+func writeDeliveries(write func([]byte) error, deliveries [][]byte, settle time.Duration) (int, error) {
+	for i, d := range deliveries {
+		if i > 0 {
+			time.Sleep(settle)
+		}
+		if err := write(d); err != nil {
+			return i, err
+		}
+	}
+	return len(deliveries), nil
 }
 
 // InjectKeysByID injects into a local session by id.
