@@ -13019,7 +13019,7 @@
       // march of drags. The friction is per 16 ms frame; at 0.97 a flick runs
       // about 530 times its release speed in pixels, close to what a phone does.
       const FLING_FRICTION = 0.97, FLING_MIN_START = 0.08, FLING_MIN_RUN = 0.01; // speeds in window px per ms
-      let vel = { x: 0, y: 0, at: 0 }, flingAt = null, flingRAF = 0;
+      let vel = { x: 0, y: 0, at: 0 }, flingAt = null, flingRAF = 0, gesture = false; // gesture: a finger scroll begun and not yet ended
       const ptrs = new Map();   // active pointerId -> {x, y}
       let pinch = null;         // {d, mx, my, z, px, py} captured at pinch start
       let downAt = 0, moved = false, sx = 0, sy = 0, lastX = 0, lastY = 0, path = null;
@@ -13085,17 +13085,35 @@
 
       // Batch rapid wheel / two-finger scroll deltas into one send per frame so
       // the host isn't flooded (each scroll is an osascript/xdotool call).
-      let scrollAcc = { dx: 0, dy: 0 }, scrollAt = { fx: 0.5, fy: 0.5 }, scrollTimer = null;
+      // Each scroll carries the phase of the gesture it belongs to: none for a
+      // wheel notch; begin, move, end for a finger on the glass; momentum_begin,
+      // momentum, momentum_end for the coast after it. A host that knows
+      // gestures (macOS) posts them as such, so an app treats the coast as
+      // momentum and stops it at the edge of its content, instead of taking
+      // every batch for a fresh finger and stretching past the edge by it.
+      let scrollAcc = { dx: 0, dy: 0, phase: '' }, scrollAt = { fx: 0.5, fy: 0.5 }, scrollTimer = null;
       function flushScroll() {
         scrollTimer = null;
         if (!scrollAcc.dx && !scrollAcc.dy) return;
-        sendWin('window_input', { id: pane.w.id, kind: 'scroll', x: scrollAt.fx, y: scrollAt.fy, dx: scrollAcc.dx, dy: scrollAcc.dy });
-        scrollAcc = { dx: 0, dy: 0 };
+        const m = { id: pane.w.id, kind: 'scroll', x: scrollAt.fx, y: scrollAt.fy, dx: scrollAcc.dx, dy: scrollAcc.dy };
+        if (scrollAcc.phase) m.phase = scrollAcc.phase;
+        sendWin('window_input', m);
+        scrollAcc = { dx: 0, dy: 0, phase: '' };
       }
-      function queueScroll(fx, fy, dx, dy) {
+      // A batch keeps the earliest phase it gathered: a begin that moves
+      // collect into is still the begin.
+      function queueScroll(fx, fy, dx, dy, phase) {
         scrollAt = { fx, fy };
         scrollAcc.dx += dx; scrollAcc.dy += dy;
+        if (phase && !scrollAcc.phase) scrollAcc.phase = phase;
         if (!scrollTimer) scrollTimer = setTimeout(flushScroll, 50);
+      }
+      // The end of a gesture or of its coast goes out at once, after whatever
+      // was still batched, so the host sees the whole movement before its end.
+      function endScroll(phase) {
+        if (scrollTimer) clearTimeout(scrollTimer);
+        flushScroll();
+        sendWin('window_input', { id: pane.w.id, kind: 'scroll', x: scrollAt.fx, y: scrollAt.fy, dx: 0, dy: 0, phase });
       }
       // Window pixels per CSS pixel of the pane. Scrolling in window pixels
       // makes the content travel on the screen as far as the finger (or the
@@ -13121,28 +13139,39 @@
           vel.x += (wx / dt - vel.x) * a; vel.y += (wy / dt - vel.y) * a;
         } else { vel.x = 0; vel.y = 0; }
         vel.at = now; flingAt = f;
-        queueScroll(f.fx, f.fy, wx, wy);
+        queueScroll(f.fx, f.fy, wx, wy, gesture ? 'move' : 'begin');
+        gesture = true;
       }
       // Called when a finger lands: its speed starts from rest, and whatever
       // was still coasting stops under it, as it would on a phone.
       function fingerDown() {
-        if (flingRAF) cancelAnimationFrame(flingRAF);
-        flingRAF = 0; vel = { x: 0, y: 0, at: performance.now() }; flingAt = null;
+        pane.stopFling();
+        vel = { x: 0, y: 0, at: performance.now() }; flingAt = null;
+      }
+      // Called when the finger leaves: its gesture ends, and a flick coasts on.
+      function fingerUp(fling) {
+        if (gesture) { gesture = false; endScroll('end'); }
+        if (fling) startFling();
       }
       function startFling() {
         const f = flingAt;
         // A finger that paused before lifting was placing, not flicking.
         if (!f || performance.now() - vel.at > 100 || Math.hypot(vel.x, vel.y) < FLING_MIN_START) return;
-        let vx = vel.x, vy = vel.y, last = performance.now();
+        let vx = vel.x, vy = vel.y, last = performance.now(), phase = 'momentum_begin';
         const step = (now) => {
           const dt = Math.min(48, now - last); last = now;
-          queueScroll(f.fx, f.fy, vx * dt, vy * dt);
+          queueScroll(f.fx, f.fy, vx * dt, vy * dt, phase); phase = 'momentum';
           const k = Math.pow(FLING_FRICTION, dt / 16); vx *= k; vy *= k;
-          flingRAF = Math.hypot(vx, vy) >= FLING_MIN_RUN ? requestAnimationFrame(step) : 0;
+          if (Math.hypot(vx, vy) >= FLING_MIN_RUN) { flingRAF = requestAnimationFrame(step); return; }
+          flingRAF = 0; endScroll('momentum_end');
         };
         flingRAF = requestAnimationFrame(step);
       }
-      pane.stopFling = () => { if (flingRAF) cancelAnimationFrame(flingRAF); flingRAF = 0; };
+      // Stops a coast where it is; the host hears that it ended.
+      pane.stopFling = () => {
+        if (!flingRAF) return;
+        cancelAnimationFrame(flingRAF); flingRAF = 0; endScroll('momentum_end');
+      };
       function applyTransform() {
         img.style.transform = 'translate(' + pane.panX + 'px,' + pane.panY + 'px) scale(' + pane.zoom + ')';
         place();
@@ -13350,7 +13379,7 @@
               click(touchDirect ? fracAt(pinch.mx, pinch.my) : (pane.cursor || fracAt(pinch.mx, pinch.my)), 'right'); flash();
             }
             // A two-finger swipe that scrolled coasts on; a pinch stays put.
-            if (pinch.mode === 'view' && !pinch.scaled) startFling();
+            fingerUp(pinch.mode === 'view' && !pinch.scaled);
             pinch = null; clampPan(); applyTransform();
             // getBoundingClientRect now reflects the zoomed display size.
             // Re-evaluate capture pixels so zooming does not merely magnify
@@ -13382,7 +13411,7 @@
         if (touchDirect && g !== 'tap') {
           // Direct: the hand leaves nothing pointed at. A swipe coasts on.
           pane.cursor = null; place();
-          if (g !== 'drag' && moved) startFling();
+          fingerUp(g !== 'drag' && moved);
         }
         if (g === 'drag') return;               // a real drag-and-drop completed
         // A quick tap, or a long-press that never dragged, is a click: at the

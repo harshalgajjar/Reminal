@@ -52,26 +52,48 @@ if args.count >= 2, args[1] == "scroll" {
         FileHandle.standardError.write(Data("usage: reminal-capture scroll <x> <y> <dy> <dx>\n".utf8))
         exit(2)
     }
-    let src = CGEventSource(stateID: .hidSystemState)
-    if let mv = CGEvent(mouseEventSource: src, mouseType: .mouseMoved,
-                        mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) {
-        mv.post(tap: .cghidEventTap)
-    }
-    // Modern macOS apps IGNORE phase-less synthetic scroll events (verified on
-    // 14.8: plain wheel events in line or pixel units do nothing) — they only
-    // honor trackpad-style gestures: continuous events carrying a scroll-phase
-    // sequence. Post each call as a minimal gesture: began → changed → ended.
-    func phasedScroll(_ phase: Int64, _ w1: Int32, _ w2: Int32) {
+    postScroll(CGEventSource(stateID: .hidSystemState), CGPoint(x: x, y: y), dy, dx, args.count >= 7 ? args[6] : "")
+    exit(0)
+}
+
+// postScroll moves the pointer to p and posts a pixel scroll there, as the
+// gesture the viewer says it is. Modern macOS apps IGNORE phase-less synthetic
+// scroll events (verified on 14.8: plain wheel events in line or pixel units
+// do nothing); they only honor trackpad-style gestures, continuous events
+// carrying a scroll-phase sequence.
+//
+// phase "" (a wheel notch) is posted as a minimal gesture of its own: began,
+// changed, ended. A finger on the glass is one gesture across many calls:
+// "begin" opens it, "move" continues it, "end" closes it. The coast after a
+// flick is momentum: "momentum_begin", "momentum", "momentum_end". The
+// difference matters at the edge of the content: an app stretches past the
+// edge by whatever a finger gesture moves and springs back when it ends, so a
+// coast posted as fresh gestures threw the content off the window by every
+// batch; posted as momentum it is stopped at the edge, as a trackpad's is.
+func postScroll(_ src: CGEventSource?, _ p: CGPoint, _ dy: Int32, _ dx: Int32, _ phase: String) {
+    CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left)?.post(tap: .cghidEventTap)
+    // scroll: kCGScrollPhase (1 began, 2 changed, 4 ended); momentum:
+    // kCGMomentumScrollPhase (1 began, 2 continue, 3 ended).
+    func ev(_ scroll: Int64, _ momentum: Int64, _ w1: Int32, _ w2: Int32) {
         guard let e = CGEvent(scrollWheelEvent2Source: src, units: .pixel,
                               wheelCount: 2, wheel1: w1, wheel2: w2, wheel3: 0) else { return }
         e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-        e.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+        e.setIntegerValueField(.scrollWheelEventScrollPhase, value: scroll)
+        e.setIntegerValueField(.scrollWheelEventMomentumPhase, value: momentum)
         e.post(tap: .cghidEventTap)
     }
-    phasedScroll(1, dy / 2, dx / 2) // began
-    phasedScroll(2, dy - dy / 2, dx - dx / 2) // changed (remainder — full delta total)
-    phasedScroll(4, 0, 0) // ended
-    exit(0)
+    switch phase {
+    case "begin": ev(1, 0, 0, 0); ev(2, 0, dy, dx)
+    case "move": ev(2, 0, dy, dx)
+    case "end": ev(4, 0, 0, 0)
+    case "momentum_begin": ev(0, 1, dy, dx)
+    case "momentum": ev(0, 2, dy, dx)
+    case "momentum_end": ev(0, 3, 0, 0)
+    default:
+        ev(1, 0, dy / 2, dx / 2) // began
+        ev(2, 0, dy - dy / 2, dx - dx / 2) // changed (remainder: full delta total)
+        ev(4, 0, 0, 0) // ended
+    }
 }
 
 // Keys subcommand: `reminal-capture keys` stays running and injects what it is
@@ -155,22 +177,6 @@ if args.count >= 2, args[1] == "keys" {
         ev(right ? .rightMouseUp : .leftMouseUp)
     }
 
-    // A scroll, as the `scroll` subcommand posts it: apps honour only
-    // trackpad-style phased gestures from a synthetic source.
-    func scroll(_ p: CGPoint, _ dy: Int32, _ dx: Int32) {
-        post(CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left))
-        func phased(_ phase: Int64, _ w1: Int32, _ w2: Int32) {
-            guard let e = CGEvent(scrollWheelEvent2Source: src, units: .pixel,
-                                  wheelCount: 2, wheel1: w1, wheel2: w2, wheel3: 0) else { return }
-            e.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-            e.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
-            post(e)
-        }
-        phased(1, dy / 2, dx / 2)
-        phased(2, dy - dy / 2, dx - dx / 2)
-        phased(4, 0, 0)
-    }
-
     while let line = readLine(strippingNewline: true) {
         if line.isEmpty { continue }
         guard let data = line.data(using: .utf8),
@@ -191,7 +197,7 @@ if args.count >= 2, args[1] == "keys" {
             }
         case "scroll":
             if let x = obj["x"] as? Double, let y = obj["y"] as? Double {
-                scroll(CGPoint(x: x, y: y), Int32(obj["dy"] as? Int ?? 0), Int32(obj["dx"] as? Int ?? 0))
+                postScroll(src, CGPoint(x: x, y: y), Int32(obj["dy"] as? Int ?? 0), Int32(obj["dx"] as? Int ?? 0), obj["phase"] as? String ?? "")
             }
         case "drag":
             if let x = obj["x"] as? Double, let y = obj["y"] as? Double,

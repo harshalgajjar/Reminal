@@ -431,7 +431,7 @@ func TestX11Input(t *testing.T) {
 	if err := b.clickN(w, 0.5, 0.5, 1, true); err != nil {
 		t.Errorf("clickN right: %v", err)
 	}
-	if err := b.scroll(w, 0.5, 0.5, 0, -3); err != nil {
+	if err := b.scroll(w, 0.5, 0.5, 0, -3, ""); err != nil {
 		t.Errorf("scroll: %v", err)
 	}
 	if err := b.drag(w, [][2]float64{{0.3, 0.3}, {0.6, 0.6}}); err != nil {

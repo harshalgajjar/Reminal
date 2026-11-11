@@ -103,8 +103,11 @@ type windowBackend interface {
 	drag(w winInfo, pts [][2]float64) error
 	// scroll injects a scroll-wheel gesture at (fx, fy) — fractions in 0..1 —
 	// by dx/dy pixel-ish deltas (positive dy scrolls the content down, matching
-	// a mouse wheel / a two-finger swipe up).
-	scroll(w winInfo, fx, fy, dx, dy float64) error
+	// a mouse wheel / a two-finger swipe up). phase is the viewer's gesture
+	// phase: "" for a wheel notch; begin, move, end for a finger on the glass;
+	// momentum_begin, momentum, momentum_end for the coast after it (ends carry
+	// no delta). A backend without gestures (wheel notches) ignores it.
+	scroll(w winInfo, fx, fy, dx, dy float64, phase string) error
 	// typeText types literal text into the focused window.
 	typeText(w winInfo, text string) error
 	// key sends a single named special key ("return", "tab", "escape",
@@ -999,7 +1002,7 @@ type windowInput struct {
 	Special string       `json:"special"`
 	Button  string       `json:"button"` // "right" for the secondary button; else left
 	Count   int          `json:"count"`  // viewer-reported click count (1/2/3); 0 = unset
-	Phase   string       `json:"phase"`  // live-drag phase: begin, move, end
+	Phase   string       `json:"phase"`  // live-drag phase: begin, move, end; scroll gesture phase: see windowBackend.scroll
 }
 
 // splitKeyChord parses a viewer key name into modifiers and a base key. It
@@ -1258,7 +1261,7 @@ func applyWindowInput(b windowBackend, st *inputState, ev windowInput, noteMenu 
 		if st.front.needsRaise(ev.ID) {
 			_ = b.focus(w)
 		}
-		_ = b.scroll(w, ev.X, ev.Y, ev.Dx, ev.Dy)
+		_ = b.scroll(w, ev.X, ev.Y, ev.Dx, ev.Dy, ev.Phase)
 	case "key":
 		// Keys land on whatever is focused; the target was focused by clicking
 		// it, so no raise per keystroke — that would add a window raise to
@@ -3168,22 +3171,22 @@ type stubWindows struct{ os string }
 func (s stubWindows) unsupported() string {
 	return "window mirroring isn't supported on " + s.os + " yet"
 }
-func (stubWindows) permissionHint() string                                   { return "" }
-func (stubWindows) captureBlocked() bool                                     { return false }
-func (s stubWindows) list() ([]winInfo, error)                               { return nil, nil }
-func (s stubWindows) capture(winInfo) ([]byte, error)                        { return nil, nil }
-func (s stubWindows) captureRegion(int, int, int, int) ([]byte, error)       { return nil, nil }
-func (s stubWindows) focus(winInfo) error                                    { return nil }
-func (s stubWindows) clickN(winInfo, float64, float64, int, bool) error      { return nil }
-func (s stubWindows) drag(winInfo, [][2]float64) error                       { return nil }
-func (stubWindows) scroll(winInfo, float64, float64, float64, float64) error { return nil }
-func (s stubWindows) exists(string) bool                                     { return true }
-func (s stubWindows) releaseInput() error                                    { return nil }
-func (s stubWindows) typeText(winInfo, string) error                         { return nil }
-func (s stubWindows) key(winInfo, string) error                              { return nil }
-func (s stubWindows) listApps() ([]appInfo, error)                           { return nil, nil }
-func (s stubWindows) openApp(string) error                                   { return nil }
-func (s stubWindows) close(winInfo) error                                    { return nil }
+func (stubWindows) permissionHint() string                                           { return "" }
+func (stubWindows) captureBlocked() bool                                             { return false }
+func (s stubWindows) list() ([]winInfo, error)                                       { return nil, nil }
+func (s stubWindows) capture(winInfo) ([]byte, error)                                { return nil, nil }
+func (s stubWindows) captureRegion(int, int, int, int) ([]byte, error)               { return nil, nil }
+func (s stubWindows) focus(winInfo) error                                            { return nil }
+func (s stubWindows) clickN(winInfo, float64, float64, int, bool) error              { return nil }
+func (s stubWindows) drag(winInfo, [][2]float64) error                               { return nil }
+func (stubWindows) scroll(winInfo, float64, float64, float64, float64, string) error { return nil }
+func (s stubWindows) exists(string) bool                                             { return true }
+func (s stubWindows) releaseInput() error                                            { return nil }
+func (s stubWindows) typeText(winInfo, string) error                                 { return nil }
+func (s stubWindows) key(winInfo, string) error                                      { return nil }
+func (s stubWindows) listApps() ([]appInfo, error)                                   { return nil, nil }
+func (s stubWindows) openApp(string) error                                           { return nil }
+func (s stubWindows) close(winInfo) error                                            { return nil }
 
 // tmpImage writes captured bytes to a temp file path with the given extension
 // so tools that only emit to a file (screencapture) can be read back.
