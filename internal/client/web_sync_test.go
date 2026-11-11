@@ -22,7 +22,15 @@ func TestPaneGestureContracts(t *testing.T) {
 		// Direct touch: one finger scrolls from where it landed, a tap clicks
 		// under it, and a swipe coasts on in both modes.
 		"fingerScroll(fracAt(sx, sy), -(e.clientX - lastX), -(e.clientY - lastY))",
-		"if (pinch.mode === 'view' && !pinch.scaled) startFling()",
+		"fingerUp(pinch.mode === 'view' && !pinch.scaled)",
+		// A scroll carries its gesture phase: a finger's begin/move/end and the
+		// coast's momentum_begin/momentum/momentum_end, with the end sent at
+		// once. The host posts the coast as momentum, which an app stops at
+		// the edge of its content instead of stretching past it per batch.
+		"queueScroll(f.fx, f.fy, wx, wy, gesture ? 'move' : 'begin')",
+		"queueScroll(f.fx, f.fy, vx * dt, vy * dt, phase); phase = 'momentum'",
+		"flingRAF = 0; endScroll('momentum_end');",
+		"if (gesture) { gesture = false; endScroll('end'); }",
 		"const TOUCH_MODE_KEY = 'reminal:touchMode'",
 		"e.deltaX * m * sc.x, e.deltaY * m * sc.y",
 		// Scroll scale is window size over DRAWN frame size: never the canvas
