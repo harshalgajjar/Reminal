@@ -13101,9 +13101,13 @@
       // makes the content travel on the screen as far as the finger (or the
       // wheel) did, however small the window is shown: a half-size pane used to
       // need twice the finger travel for the same page.
+      // Window pixels per CSS pixel of the drawn frame. The window's own size
+      // (pane.w) is the reference: the canvas is the capture, whose size follows
+      // the link's max_width ladder and the host's Retina scale, not the window.
+      // The frame rect, not the element rect, so a letterboxed pop-out is right.
       function windowScale() {
-        const rr = img.getBoundingClientRect();
-        return { x: (img.width || pane.w.w || rr.width) / rr.width, y: (img.height || pane.w.h || rr.height) / rr.height };
+        const fr = frameRect(img.getBoundingClientRect(), img.width, img.height);
+        return { x: (pane.w.w || img.width || fr.width) / (fr.width || 1), y: (pane.w.h || img.height || fr.height) / (fr.height || 1) };
       }
       // A finger's scroll: dx, dy are the CSS pixels the content should move.
       // Its speed is kept for the fling that may follow the lift.
