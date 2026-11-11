@@ -225,7 +225,7 @@ func w32WheelAmount(d float64) int32 {
 	return v
 }
 
-func (win32Windows) scroll(w winInfo, fx, fy, dx, dy float64) error {
+func (win32Windows) scroll(w winInfo, fx, fy, dx, dy float64, _ string) error {
 	// Wheel events land on the window under the cursor, so move there first.
 	x, y := w32Point(w, fx, fy)
 	ins := []w32Input{w32MouseMoveInput(x, y)}

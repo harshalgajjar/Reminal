@@ -43,7 +43,7 @@ func TestMacInputCost(t *testing.T) {
 		t.Logf("%-10s p50 %7.2f ms  p95 %7.2f ms", name, ds[n/2], ds[n*95/100])
 	}
 	cost("click", func() error { return b.clickN(w, 0.5, 0.5, 1, false) })
-	cost("scroll", func() error { return b.scroll(w, 0.5, 0.5, 0, 40) })
+	cost("scroll", func() error { return b.scroll(w, 0.5, 0.5, 0, 40, "") })
 	cost("drag-step", func() error { return b.dragPhase(w, "move", 0.5, 0.5) })
 	cost("key", func() error { return b.key(w, "a") })
 	_ = b.dragPhase(w, "up", 0.5, 0.5)

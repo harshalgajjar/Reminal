@@ -15,6 +15,6 @@ func keyHelperKey(int, []string) bool { return false }
 
 func keyHelperClick(int, int, bool, int) bool { return false }
 
-func keyHelperScroll(int, int, int, int) bool { return false }
+func keyHelperScroll(int, int, int, int, string) bool { return false }
 
 func keyHelperDrag(string, int, int) bool { return false }
