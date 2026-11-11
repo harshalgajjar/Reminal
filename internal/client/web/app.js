@@ -10813,6 +10813,23 @@
     // glyph inherits the page font and renders a taller, mismatched button.
     const ICON_POPOUT = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="8.5" width="12" height="12" rx="1.5"/><path d="M8.5 4.5h10a1 1 0 0 1 1 1v10"/></svg>';
     const ICON_INFO = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9.2"/><path d="M12 11v5"/><path d="M12 7.6h0"/></svg>';
+    // A fingertip with a tap ring: the direct-touch switch's knob.
+    const ICON_TOUCH = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11.5V5.5a2 2 0 0 1 4 0v6"/><path d="M13 10.5a2 2 0 0 1 4 0v1.5a2 2 0 0 1 4 0V17a5 5 0 0 1-5 5h-2.5a5 5 0 0 1-4.5-2.8L6.3 14a1.6 1.6 0 0 1 2.7-1.4V11.5"/><path d="M5.5 5.5a6.5 6.5 0 0 1 11 0"/></svg>';
+    // How a finger drives a mirrored window. One preference for every pane:
+    // it is about the hand, not the window.
+    //  • trackpad (default): one finger moves a floating cursor, a tap clicks
+    //    where the cursor is, two fingers scroll; the finger never covers what
+    //    it points at, which is what makes small targets hittable from a phone.
+    //  • direct: a tap clicks under the finger, one finger scrolls the
+    //    content, a long press grabs and drags, two fingers pinch-zoom.
+    const TOUCH_MODE_KEY = 'reminal:touchMode';
+    let touchDirect = false;
+    try { touchDirect = localStorage.getItem(TOUCH_MODE_KEY) === 'direct'; } catch (_) {}
+    function setTouchDirect(on) {
+      touchDirect = !!on;
+      try { localStorage.setItem(TOUCH_MODE_KEY, touchDirect ? 'direct' : 'trackpad'); } catch (_) {}
+      for (const p of panes.values()) if (p.showTouchMode) p.showTouchMode();
+    }
     // Which transport delivered the most recent window frame — shown in the pane
     // (i) popover. Set by onWindowFrame; 'webrtc' means the P2P DataChannel,
     // 'ws' means the relay. Null until the first frame lands.
@@ -11654,14 +11671,22 @@
       const spacer = document.createElement('span'); spacer.className = 'wpane-spacer';
       const popBtn = document.createElement('button'); popBtn.className = 'wpane-btn wpane-pop'; popBtn.innerHTML = ICON_POPOUT; popBtn.title = 'Open in its own browser window';
       const infoBtn = document.createElement('button'); infoBtn.className = 'wpane-btn wpane-info-btn'; infoBtn.innerHTML = ICON_INFO; infoBtn.title = 'Connection details';
-      const kbdBtn = document.createElement('button'); kbdBtn.className = 'wpane-btn wpane-kbd'; kbdBtn.innerHTML = '<span class="wkbd-knob">' + ICON_KEYBOARD + '</span>';
-      kbdBtn.setAttribute('role', 'switch'); kbdBtn.setAttribute('aria-pressed', 'false');
+      // The two switches share one look (wpane-switch); each keeps its own
+      // class for its visibility rule and for tests that find it by name.
+      const paneSwitch = (cls, icon) => {
+        const b = document.createElement('button'); b.className = 'wpane-btn wpane-switch ' + cls;
+        b.innerHTML = '<span class="wswitch-knob">' + icon + '</span>';
+        b.setAttribute('role', 'switch'); b.setAttribute('aria-pressed', 'false');
+        return b;
+      };
+      const kbdBtn = paneSwitch('wpane-kbd', ICON_KEYBOARD);
       kbdBtn.title = 'Tap to type: off';
+      const touchBtn = paneSwitch('wpane-touch', ICON_TOUCH);
       const closeBtn = document.createElement('button'); closeBtn.className = 'wpane-btn wpane-close'; closeBtn.innerHTML = ICON_CLOSE; closeBtn.title = 'Close';
       // Slot rather than a built pill: notes arrive and change independently of
       // the pane, so the pane keeps a mount point and re-fills it.
       const notesSlot = document.createElement('span'); notesSlot.className = 'wpane-notes';
-      bar.append(title, spacer, notesSlot, popBtn, infoBtn, kbdBtn, closeBtn);
+      bar.append(title, spacer, notesSlot, popBtn, infoBtn, touchBtn, kbdBtn, closeBtn);
 
       const body = document.createElement('div'); body.className = 'wpane-body';
       // Frames render onto a <canvas>, not an <img>: drawImage is atomic and
@@ -11736,6 +11761,19 @@
       // next tap raises the keyboard, where raising it here would throw it up
       // over a page the user has only just loaded and never asked to type into.
       if (geom && geom.kbd) setKbdMode(true, false);
+      // The touch switch shows the shared preference; flipping it on any pane
+      // flips every pane, through setTouchDirect.
+      pane.showTouchMode = () => {
+        touchBtn.setAttribute('aria-pressed', touchDirect ? 'true' : 'false');
+        touchBtn.title = touchDirect ? 'Direct touch: on (tap clicks under your finger, one finger scrolls)' : 'Direct touch: off (one finger moves the cursor, two fingers scroll)';
+        if (!touchDirect) return;
+        // Leaving trackpad mode takes its cursor with it: nothing is "pointed at"
+        // until a finger is down. Going back, the first touch places it again.
+        pane.cursor = null;
+        if (pane.placeCursor) pane.placeCursor();
+      };
+      pane.showTouchMode();
+      touchBtn.addEventListener('click', (e) => { e.stopPropagation(); setTouchDirect(!touchDirect); });
       infoBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         pane.infoShown = !pane.infoShown;
@@ -11836,6 +11874,7 @@
       if (p.lastUrl) URL.revokeObjectURL(p.lastUrl);
       try { if (p.vdec && p.vdec.state !== 'closed') p.vdec.close(); } catch (_) {}
       if (p.renderRAF) { cancelAnimationFrame(p.renderRAF); p.renderRAF = 0; }
+      if (p.stopFling) p.stopFling();
       while (p.renderQ && p.renderQ.length) { try { p.renderQ.shift().f.close(); } catch (_) {} }
       p.el.remove();
       panes.delete(id);
@@ -12964,12 +13003,23 @@
     //  • Mouse (desktop): native feel — an instant click (the agent counts
     //    rapid clicks so double/triple-click work), and mouse-down + move + up
     //    sends a real drag (text selection, sliders, dragging files).
-    //  • Touch (mobile): one finger = a floating trackpad cursor (drag to move,
-    //    tap = click at the cursor); TWO fingers = pinch-zoom + pan of the pane
-    //    (the pane's image is CSS-transformed; clicks still map correctly since
-    //    we read the transformed rect).
+    //  • Touch (mobile), trackpad mode: one finger = a floating trackpad cursor
+    //    (drag to move, tap = click at the cursor); TWO fingers = pinch-zoom +
+    //    pan of the pane (the pane's image is CSS-transformed; clicks still map
+    //    correctly since we read the transformed rect), and a two-finger swipe
+    //    scrolls the window.
+    //  • Touch, direct mode (touchDirect): the finger is the pointer. A tap
+    //    clicks under it, one finger scrolls the content, a long press grabs
+    //    and drags, two fingers pinch-zoom as before.
+    //  Scrolling by finger has momentum in both modes.
     function paneInput(pane, img) {
       const GAIN = 1.5, MAX_ZOOM = 6;
+      // Momentum. A swipe keeps the content moving after the finger lifts and
+      // slows the way a native list does, so a long page is one flick and not a
+      // march of drags. The friction is per 16 ms frame; at 0.97 a flick runs
+      // about 530 times its release speed in pixels, close to what a phone does.
+      const FLING_FRICTION = 0.97, FLING_MIN_START = 0.08, FLING_MIN_RUN = 0.01; // speeds in window px per ms
+      let vel = { x: 0, y: 0, at: 0 }, flingAt = null, flingRAF = 0;
       const ptrs = new Map();   // active pointerId -> {x, y}
       let pinch = null;         // {d, mx, my, z, px, py} captured at pinch start
       let downAt = 0, moved = false, sx = 0, sy = 0, lastX = 0, lastY = 0, path = null;
@@ -13047,6 +13097,52 @@
         scrollAcc.dx += dx; scrollAcc.dy += dy;
         if (!scrollTimer) scrollTimer = setTimeout(flushScroll, 50);
       }
+      // Window pixels per CSS pixel of the pane. Scrolling in window pixels
+      // makes the content travel on the screen as far as the finger (or the
+      // wheel) did, however small the window is shown: a half-size pane used to
+      // need twice the finger travel for the same page.
+      // Window pixels per CSS pixel of the drawn frame. The window's own size
+      // (pane.w) is the reference: the canvas is the capture, whose size follows
+      // the link's max_width ladder and the host's Retina scale, not the window.
+      // The frame rect, not the element rect, so a letterboxed pop-out is right.
+      function windowScale() {
+        const fr = frameRect(img.getBoundingClientRect(), img.width, img.height);
+        return { x: (pane.w.w || img.width || fr.width) / (fr.width || 1), y: (pane.w.h || img.height || fr.height) / (fr.height || 1) };
+      }
+      // A finger's scroll: dx, dy are the CSS pixels the content should move.
+      // Its speed is kept for the fling that may follow the lift.
+      function fingerScroll(f, dx, dy) {
+        const sc = windowScale(), wx = dx * sc.x, wy = dy * sc.y;
+        const now = performance.now(), dt = now - vel.at;
+        if (vel.at && dt > 0 && dt < 150) {
+          // A short average: a flick is often one or two moves, and they must
+          // count in full, while a slow drag that ends fast must not fling hard.
+          const a = Math.min(1, dt / 40);
+          vel.x += (wx / dt - vel.x) * a; vel.y += (wy / dt - vel.y) * a;
+        } else { vel.x = 0; vel.y = 0; }
+        vel.at = now; flingAt = f;
+        queueScroll(f.fx, f.fy, wx, wy);
+      }
+      // Called when a finger lands: its speed starts from rest, and whatever
+      // was still coasting stops under it, as it would on a phone.
+      function fingerDown() {
+        if (flingRAF) cancelAnimationFrame(flingRAF);
+        flingRAF = 0; vel = { x: 0, y: 0, at: performance.now() }; flingAt = null;
+      }
+      function startFling() {
+        const f = flingAt;
+        // A finger that paused before lifting was placing, not flicking.
+        if (!f || performance.now() - vel.at > 100 || Math.hypot(vel.x, vel.y) < FLING_MIN_START) return;
+        let vx = vel.x, vy = vel.y, last = performance.now();
+        const step = (now) => {
+          const dt = Math.min(48, now - last); last = now;
+          queueScroll(f.fx, f.fy, vx * dt, vy * dt);
+          const k = Math.pow(FLING_FRICTION, dt / 16); vx *= k; vy *= k;
+          flingRAF = Math.hypot(vx, vy) >= FLING_MIN_RUN ? requestAnimationFrame(step) : 0;
+        };
+        flingRAF = requestAnimationFrame(step);
+      }
+      pane.stopFling = () => { if (flingRAF) cancelAnimationFrame(flingRAF); flingRAF = 0; };
       function applyTransform() {
         img.style.transform = 'translate(' + pane.panX + 'px,' + pane.panY + 'px) scale(' + pane.zoom + ')';
         place();
@@ -13112,6 +13208,7 @@
         focusPane(pane.w.id);
         ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
         try { img.setPointerCapture(e.pointerId); } catch (_) {}
+        if (e.pointerType !== 'mouse') fingerDown();
         if (ptrs.size === 2 && e.pointerType !== 'mouse') {
           const [a, b] = [...ptrs.values()];
           const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2, d0 = dist(a, b);
@@ -13125,18 +13222,22 @@
         }
         downAt = Date.now(); moved = false; sx = lastX = e.clientX; sy = lastY = e.clientY;
         if (e.pointerType === 'mouse') { mouseBtn = e.button; path = e.button === 0 ? [frac(e)] : null; return; }
-        if (!pane.cursor) pane.cursor = { fx: 0.5, fy: 0.5 };
-        place();
         dragMode = false; dragPath = null;
-        // Long-press (finger held still ~450ms) grabs at the cursor; then moving
-        // the finger drags — touch drag-and-drop. A cursor ring turns red to show
-        // the grab, with a haptic tick where supported.
+        // Long-press (finger held still ~450ms) grabs: at the cursor in trackpad
+        // mode, under the finger in direct mode. Moving then drags — touch
+        // drag-and-drop. The cursor turns into a hand to show the grab, with a
+        // haptic tick where supported.
+        if (touchDirect) { pane.cursor = null; place(); }
+        else { if (!pane.cursor) pane.cursor = { fx: 0.5, fy: 0.5 }; place(); }
         longPress = setTimeout(() => {
-          longPress = null; dragMode = true; dragPath = [{ fx: pane.cursor.fx, fy: pane.cursor.fy }];
+          longPress = null; dragMode = true;
+          if (touchDirect) pane.cursor = fracAt(sx, sy);
+          const at = { fx: pane.cursor.fx, fy: pane.cursor.fy };
+          dragPath = [at];
           // The grab IS the press — send it now rather than reconstructing it
           // from the path after the finger lifts.
-          if (dragPhasesOK()) dragBegin(pane.cursor);
-          pane.cursorEl.classList.add('grabbing');
+          if (dragPhasesOK()) dragBegin(at);
+          place(); pane.cursorEl.classList.add('grabbing');
           if (navigator.vibrate) navigator.vibrate(25);
         }, 450);
       });
@@ -13145,42 +13246,32 @@
         if (!ptrs.has(e.pointerId)) return;
         ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (pinch && ptrs.size >= 2) {
-          const [a, b] = [...ptrs.values()];
-          const d = dist(a, b), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
-          const fingerDX = cx - pinch.lastCx, fingerDY = cy - pinch.lastCy;
-          const scaleMoved = Math.abs(d - pinch.startD) > 16;
-          const midpointMoved = Math.hypot(cx - pinch.mx, cy - pinch.my) > 16;
-          if (!pinch.mode) {
-            if (scaleMoved || midpointMoved) pinch.mode = 'view';
-          }
-          if (scaleMoved) pinch.scaled = true;
-          if (pinch.mode === 'view') {
-            // Once a real distance change wins the threshold, keep the whole
-            // gesture local: combined pinch+pan must not accidentally scroll.
-            if (pinch.scaled) pane.zoom = Math.max(1, Math.min(MAX_ZOOM, pinch.z * (d / pinch.d)));
-            const beforeX = pane.panX, beforeY = pane.panY;
-            pane.panX += fingerDX;
-            pane.panY += fingerDY;
-            clampPan(); applyTransform();
-            if (!pinch.scaled) {
-              // Nested-scroll chaining: consume midpoint travel as local pan
-              // first, then send only the remainder once an axis reaches its
-              // edge. Incremental pan avoids a dead zone when reversing there.
-              const residualX = fingerDX - (pane.panX - beforeX);
-              const residualY = fingerDY - (pane.panY - beforeY);
-              if (Math.abs(residualX) > 0.25 || Math.abs(residualY) > 0.25) {
-                const rr = img.getBoundingClientRect();
-                const scaleX = (pane.w.w || rr.width) / rr.width, scaleY = (pane.w.h || rr.height) / rr.height;
-                const f = fracAt(cx, cy);
-                queueScroll(f.fx, f.fy, -residualX * scaleX, -residualY * scaleY);
-              }
-            }
-          }
-          pinch.lastCx = cx; pinch.lastCy = cy;
+          // Each finger's move is its own event, so between the two the fingers
+          // are read mid-step: a fast two-finger swipe with the fingers side by
+          // side looks, for one event, like they moved apart, and the swipe was
+          // taken for a pinch and never scrolled. Read both fingers once per
+          // frame, after every finger's move for that frame has arrived.
+          if (!pinch.raf) pinch.raf = requestAnimationFrame(pinchFrame);
           return;
         }
         if (!downAt) return;
         if (Math.abs(e.clientX - sx) > 6 || Math.abs(e.clientY - sy) > 6) moved = true;
+        if (e.pointerType !== 'mouse' && touchDirect) {
+          if (dragMode) {
+            const f = frac(e);
+            pane.cursor = f; place();
+            if (dragPath && dragPath.length < 400) dragPath.push(f);
+            if (dragPhasesOK()) dragMove(f);
+          } else if (moved) {
+            if (longPress) { clearTimeout(longPress); longPress = null; } // moved first → a scroll, not a grab
+            // The content follows the finger, so its movement is sent reversed,
+            // from where the finger first landed. The first move carries the
+            // whole travel since then: lastX still holds the landing point.
+            fingerScroll(fracAt(sx, sy), -(e.clientX - lastX), -(e.clientY - lastY));
+            lastX = e.clientX; lastY = e.clientY;
+          }
+          return;
+        }
         if (e.pointerType === 'mouse') {
           if (path && path.length < 300) path.push(frac(e));
           // A mouse has no long-press grab: the drag starts the moment the
@@ -13206,7 +13297,48 @@
         if (dragMode && dragPhasesOK()) dragMove(pane.cursor);
       });
 
+      // One frame of a two-finger gesture, from both fingers' latest positions.
+      function pinchFrame() {
+        if (!pinch) return;
+        pinch.raf = 0;
+        if (ptrs.size < 2) return;
+        {
+          const [a, b] = [...ptrs.values()];
+          const d = dist(a, b), cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+          const fingerDX = cx - pinch.lastCx, fingerDY = cy - pinch.lastCy;
+          const scaleMoved = Math.abs(d - pinch.startD) > 16;
+          const midpointMoved = Math.hypot(cx - pinch.mx, cy - pinch.my) > 16;
+          if (!pinch.mode) {
+            if (scaleMoved || midpointMoved) pinch.mode = 'view';
+          }
+          if (scaleMoved) pinch.scaled = true;
+          if (pinch.mode === 'view') {
+            // Once a real distance change wins the threshold, keep the whole
+            // gesture local: combined pinch+pan must not accidentally scroll.
+            if (pinch.scaled) pane.zoom = Math.max(1, Math.min(MAX_ZOOM, pinch.z * (d / pinch.d)));
+            const beforeX = pane.panX, beforeY = pane.panY;
+            pane.panX += fingerDX;
+            pane.panY += fingerDY;
+            clampPan(); applyTransform();
+            if (!pinch.scaled) {
+              // Nested-scroll chaining: consume midpoint travel as local pan
+              // first, then send only the remainder once an axis reaches its
+              // edge. Incremental pan avoids a dead zone when reversing there.
+              const residualX = fingerDX - (pane.panX - beforeX);
+              const residualY = fingerDY - (pane.panY - beforeY);
+              if (Math.abs(residualX) > 0.25 || Math.abs(residualY) > 0.25) {
+                fingerScroll(fracAt(cx, cy), -residualX, -residualY);
+              }
+            }
+          }
+          pinch.lastCx = cx; pinch.lastCy = cy;
+        }
+      }
+
       function endPointer(e) {
+        // A frame still owed is taken now, with both fingers where they were:
+        // the last of a swipe's movement counts, and sets the speed it leaves at.
+        if (pinch && pinch.raf) { cancelAnimationFrame(pinch.raf); pinchFrame(); }
         ptrs.delete(e.pointerId);
         try { img.releasePointerCapture(e.pointerId); } catch (_) {}
         if (pinch) {
@@ -13215,8 +13347,10 @@
             // two-finger tap → right-click at the cursor (distinct from long-press
             // drag and two-finger scroll/zoom).
             if (pinch.mode === null && Date.now() - pinch.t < 400) {
-              click(pane.cursor || fracAt(pinch.mx, pinch.my), 'right'); flash();
+              click(touchDirect ? fracAt(pinch.mx, pinch.my) : (pane.cursor || fracAt(pinch.mx, pinch.my)), 'right'); flash();
             }
+            // A two-finger swipe that scrolled coasts on; a pinch stays put.
+            if (pinch.mode === 'view' && !pinch.scaled) startFling();
             pinch = null; clampPan(); applyTransform();
             // getBoundingClientRect now reflects the zoomed display size.
             // Re-evaluate capture pixels so zooming does not merely magnify
@@ -13245,9 +13379,20 @@
           return;
         }
         const g = endDrag(true);
+        if (touchDirect && g !== 'tap') {
+          // Direct: the hand leaves nothing pointed at. A swipe coasts on.
+          pane.cursor = null; place();
+          if (g !== 'drag' && moved) startFling();
+        }
         if (g === 'drag') return;               // a real drag-and-drop completed
-        // A quick tap, or a long-press that never dragged, is a click.
+        // A quick tap, or a long-press that never dragged, is a click: at the
+        // cursor in trackpad mode, under the finger in direct mode, where the
+        // cursor shows for a blink so the tap is seen to land.
         if (g === 'tap' || (!moved && dur <= 600)) {
+          if (touchDirect) {
+            pane.cursor = frac(e); place();
+            setTimeout(() => { if (touchDirect && !dragMode) { pane.cursor = null; place(); } }, 160);
+          }
           click(pane.cursor || { fx: 0.5, fy: 0.5 });
           flash();
           // Armed, a tap means "put me in this field": the click above already
@@ -13269,9 +13414,11 @@
       img.addEventListener('wheel', (e) => {
         e.preventDefault(); e.stopPropagation();
         focusPane(pane.w.id);
-        const f = frac(e);
+        const f = frac(e), sc = windowScale();
         const m = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? img.getBoundingClientRect().height : 1);
-        queueScroll(f.fx, f.fy, e.deltaX * m, e.deltaY * m);
+        // In window pixels (windowScale): a wheel notch moves the content on
+        // the screen as far as it would in a window shown at full size.
+        queueScroll(f.fx, f.fy, e.deltaX * m * sc.x, e.deltaY * m * sc.y);
       }, { passive: false });
       // Suppress the browser's long-press image menu ("save/share image") and
       // any native image drag — we handle long-press ourselves.

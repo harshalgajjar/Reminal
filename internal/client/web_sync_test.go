@@ -18,7 +18,17 @@ func TestPaneGestureContracts(t *testing.T) {
 		"}, true);\n    // While the Host dropdown is open",
 		"mode: null, scaled: false",
 		"const residualX = fingerDX - (pane.panX - beforeX)",
-		"queueScroll(f.fx, f.fy, -residualX * scaleX, -residualY * scaleY)",
+		"fingerScroll(fracAt(cx, cy), -residualX, -residualY)",
+		// Direct touch: one finger scrolls from where it landed, a tap clicks
+		// under it, and a swipe coasts on in both modes.
+		"fingerScroll(fracAt(sx, sy), -(e.clientX - lastX), -(e.clientY - lastY))",
+		"if (pinch.mode === 'view' && !pinch.scaled) startFling()",
+		"const TOUCH_MODE_KEY = 'reminal:touchMode'",
+		"e.deltaX * m * sc.x, e.deltaY * m * sc.y",
+		// Scroll scale is window size over DRAWN frame size: never the canvas
+		// (capture) size, which follows link speed and Retina, and the frame
+		// rect rather than the element rect, so a letterboxed pop-out is right.
+		"x: (pane.w.w || img.width || fr.width) / (fr.width || 1), y: (pane.w.h || img.height || fr.height) / (fr.height || 1)",
 		"targets here before preventing touchmove's browser default",
 		"const TermSize = (() => {",
 		"TermSize.adoptPty",
