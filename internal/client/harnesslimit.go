@@ -359,6 +359,12 @@ var harnessLimitNotices = map[string][]limitNotice{
 	"agy": onCased("AI: Out of credits", wholeRows(`\.?`,
 		`ai:outofcredits`,
 	)),
+	// Kiro CLI 3.2: its rate limit (the warning sign before it is not
+	// needed), and its monthly requests, perhaps with when they reset.
+	"kiro": wholeRows(`\.?`,
+		`kiroratelimitreached:?`,
+		`monthlyrequestlimitreached(?:-thelimitsreseton\d{1,2}/01)?`,
+	),
 }
 
 // limitPromptGlyphs are what an input prompt, or a person's message echoed
