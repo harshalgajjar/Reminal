@@ -677,6 +677,47 @@ func TestClaudeRefusingItsLoginIsSaidAsRefused(t *testing.T) {
 	}
 }
 
+// Claude Code 2.1.318–322 on a cloud provider's credential the provider
+// refuses says what lapsed, what to do, and the service's error, on a row of
+// its own: logged out, by a refused credential. The same words quoted in a
+// sentence, or the lead alone with no error after it, are not.
+func TestClaudeRefusingAProviderCredentialIsSaidAsRefused(t *testing.T) {
+	for _, row := range []string{
+		"● AWS credentials expired or invalid · run /login and select \"Claude Platform on AWS · refresh credentials\", or run `aws sso login --profile dev` in another terminal · API Error: 401 The security token included in the request is invalid.",
+		"  ⎿  AWS credentials expired or invalid · run `aws sso login --profile dev` and retry · API Error: 401 ExpiredTokenException: The security token included in the request is expired",
+		"● AWS authentication failed · refresh your AWS credentials (SSO sign-in, access keys, API key or proxy token) and retry · if credentials are current, check AWS permissions and model access · API Error: 403 AccessDeniedException",
+		"● AWS authentication failed · enable this model for your account and region in the Amazon Bedrock console, or run /model to pick another model · API Error: 403 AccessDeniedException: You don't have access to the model with the specified model ID.",
+		"● Google Cloud credentials expired or invalid · refresh your Google Cloud credentials (application default sign-in, or the key file in GOOGLE_APPLICATION_CREDENTIALS) and retry · API Error: 401 Request had invalid authentication credentials.",
+		"● Google Cloud authentication failed · run `gcloud auth application-default login` and retry · if credentials are current, check GCP IAM permissions and Vertex AI model access · API Error: 403 Permission denied",
+		"● Microsoft Foundry authentication failed · refresh your Foundry credential (ANTHROPIC_FOUNDRY_AUTH_TOKEN, ANTHROPIC_FOUNDRY_API_KEY, Azure sign-in for Entra, or your proxy token) and retry · if credentials are current, check access to the Foundry resource · API Error: 401 Unauthorized",
+		"● AWS credentials expired or invalid · credentials are managed by this environment — retry, or contact your administrator · API Error: 401 The security token included in the request is invalid.",
+	} {
+		screen := "❯ hello\n" + row + "\n❯  "
+		if !harnessKeyRefusedBy(harnessTail(screen, harnessRows), "claude") {
+			t.Errorf("not read as a credential refused: %q", row)
+		}
+		a := &Agent{}
+		a.noteForeground("claude", 0)
+		a.noteHarnessHealth(screen, "claude", false)
+		a.noteHarnessHealth(screen, "claude", false)
+		if !a.harnessDown() || a.harnessKeyRefused() != "claude" {
+			t.Errorf("in front: down %v, refused %q; want down, by claude: %q", a.harnessDown(), a.harnessKeyRefused(), row)
+		}
+	}
+	for _, prose := range []string{
+		"● The screen said AWS credentials expired or invalid · run `aws sso login` and retry · API Error: 401, so I signed in again.",
+		"  \"AWS credentials expired or invalid · run `aws sso login` and retry · API Error: 401 expired\" is what it prints.",
+		"● AWS credentials expired or invalid",
+		"● AWS credentials expired or invalid · run `aws sso login` and retry",
+		"● AWS credentials expired or invalid · run `aws sso login` and retry · API Error: 4010",
+		"● I wrote the check: AWS authentication failed · refresh your AWS credentials (SSO sign-in, access keys, API key or proxy token) and retry · API Error: 401 is now one message.",
+	} {
+		if harnessKeyRefusedBy(prose, "claude") || harnessKeyRefusedIn(prose) != "" {
+			t.Errorf("read as a credential refused: %q", prose)
+		}
+	}
+}
+
 // Codex with a key the service refuses says so on a row of its own ("■
 // unexpected status 401 Unauthorized: Incorrect API key provided: …"). With
 // Codex in front, or just before the shell, that is logged out, by a refused
