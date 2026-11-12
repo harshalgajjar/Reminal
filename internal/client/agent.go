@@ -154,6 +154,12 @@ type Agent struct {
 	restorePlan      func() (run, note string)
 	restoreSeq       uint64
 	stopSignal       atomic.Bool
+	// hungUp: the session's own terminal closed (SIGHUP), and termHost is
+	// what held it, so settleRestore can tell a tab closed on purpose (its
+	// host carries on) from a terminal app quitting or the machine going
+	// down (its host goes too). See tabClosed.
+	hungUp   atomic.Bool
+	termHost termHost
 	// restoreMu makes saveRestore one at a time, so two saves can never
 	// interleave their reads and writes of the restore state.
 	restoreMu sync.Mutex
@@ -1151,10 +1157,29 @@ func (a *Agent) Run() error {
 	// leaving stale ~/.reminal/active.json + orphaned caffeinate.
 	sigCh := make(chan os.Signal, 1)
 	notifyAgentSignals(sigCh)
+	if !a.headless {
+		// A foreground session's terminal closing (a tab closed) hangs it
+		// up. Untrapped, SIGHUP ended this process on the spot: no defers,
+		// so its saved session stayed behind and came back as if the
+		// machine had restarted.
+		a.termHost = findTermHost()
+		notifyHangup(sigCh)
+	}
 	defer signal.Stop(sigCh)
 	go func() {
 		first := true
 		for sig := range sigCh {
+			if isHangupSignal(sig) {
+				// Its terminal is gone: end the session the normal way, with
+				// nothing said (there is nowhere to say it). Not counted
+				// against the force-exit budget, so a shutdown's SIGTERM
+				// after it still marks the session as one to bring back.
+				if !a.hungUp.Swap(true) {
+					a.term.Hangup()
+					_ = a.term.Close()
+				}
+				continue
+			}
 			if isPauseSignal(sig) {
 				// `reminal stop` — stop broadcasting, keep the local
 				// shell running. Doesn't count against the force-exit
