@@ -27,6 +27,9 @@ import (
 // Later releases' own words, from their bundles and binaries the same way
 // (2026-10-28): claude 2.1.312, codex 0.165.0, gemini 0.66.0, qwen 0.26.2,
 // opencode 1.19.4, goose 1.56.0, amp 0.0.1793131239, pi 1.4.0, agy 1.4.8.
+// Kiro CLI 3.2.1's, from its binary's strings (2026-11-12); its screen not
+// recorded: "⚠️  Kiro rate limit reached:", "Monthly request limit reached"
+// and " - The limits reset on <MM>/01.".
 // Where a CLI's glyph before its notice is not known, the screen has none.
 //
 // The logged-out screens (TestHarnessLoggedOutScreens) were each captured
@@ -120,6 +123,9 @@ var limitScreens = []struct {
 	{"pi", "  You have hit your ChatGPT usage limit.\n", time.Time{}},
 	{"pi", "  Hugging Face rate limit reached; retry in 30s\n", limitLA(2026, 10, 19, 10, 0).Add(30 * time.Second)},
 	{"agy", "  AI: Out of credits\n", time.Time{}},
+	{"kiro", "\n ⚠️  Kiro rate limit reached:\n", time.Time{}},
+	{"kiro", "Monthly request limit reached - The limits reset on 12/01.\n", time.Time{}},
+	{"kiro", "Monthly request limit reached\n", time.Time{}},
 	{"copilot", "  You've hit your session rate limit.\n", time.Time{}},
 	{"copilot", "  You've reached your weekly rate limit. Learn More (https://docs.github.com/copilot/concepts/rate-limits).\n", time.Time{}},
 	{"copilot", "  You've hit the rate limit for this model. Please switch models or wait for your limit to reset\n", time.Time{}},
@@ -1032,6 +1038,10 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"copilot", "", "You've used all your Copilot Free chat requests for the month.", false},
 		{"pi", "", "Hugging Face rate limit reached; retry in 30s", false},
 		{"agy", "", "AI: Out of credits", false},
+		{"kiro", "⚠️  ", "Kiro rate limit reached:", false},
+		{"kiro", "", "Kiro rate limit reached", false},
+		{"kiro", "", "Monthly request limit reached", false},
+		{"kiro", "", "Monthly request limit reached - The limits reset on 12/01.", false},
 	} {
 		words := strings.TrimRight(n.text, ".")
 		if hit, _ := harnessLimitIn("  "+n.glyph+n.text+"\n", n.prog, limitTestNow); !hit {
@@ -1065,6 +1075,8 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"amp", "  The dashboard shows the\n  usage quota exceeded."},
 		{"pi", "  It stopped once the\n  monthly usage limit reached."},
 		{"agy", "  The status bar then read\n  AI: out of credits."},
+		{"kiro", "  The CLI said its\n  monthly request limit reached."},
+		{"kiro", "  Kiro rate limit reached: I paused the deploy and will retry."},
 		{"claude", "● You've reached your usage limit."},
 		{"claude", "  You've reached your monthly limit."},
 		{"claude", "● The message is:\n\n      Your organization is out of usage credits. Contact your admin to add more."},
