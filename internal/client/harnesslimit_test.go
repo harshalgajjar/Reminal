@@ -30,6 +30,9 @@ import (
 // Kiro CLI 3.2.1's, from its binary's strings (2026-11-12); its screen not
 // recorded: "⚠️  Kiro rate limit reached:", "Monthly request limit reached"
 // and " - The limits reset on <MM>/01.".
+// Claude Code 2.1.318–322's rows about usage credits and 1M context, and
+// the provider-credential rows in harnesshealth_test.go, are from its
+// package the same way (2026-11-11).
 // Where a CLI's glyph before its notice is not known, the screen has none.
 //
 // The logged-out screens (TestHarnessLoggedOutScreens) were each captured
@@ -99,6 +102,16 @@ var limitScreens = []struct {
 	// paused by it, drawn as its other notices are.
 	{"claude", "  ⎿  Usage is paused for your organization. For help, please contact support.\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Goal paused · usage is paused for your organization\n\n❯ ", time.Time{}},
+	// Claude Code 2.1.318–322 (source): a model that needs usage credits the
+	// session has none of, and 1M context asked for without them. Each ends
+	// the turn with what to do next; a long one wraps.
+	{"claude", "  ⎿  Your model policy only allows Fable 5.1, which requires usage credits · /model to set it up\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Auto mode doesn't run on Opus 4.5, and Fable 5.1 requires usage credits · /model to pick another model\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  API Error: Usage credits required for 1M context · run /usage-credits to turn them on (they take effect in a new session), or /model to switch to standard context\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  API Error: Usage credits required for 1M context · run /usage-credits to turn them on (they take effect in a new\n     session), or /model to switch to standard context\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  API Error: Usage credits required for 1M context · run /model to switch to standard context\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  API Error: Usage credits required for 1M context · turn on usage credits at https://claude.ai/admin-settings/usage (they take effect after you restart Claude Code), or use /model to switch to standard context\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  API Error: Usage credits required for 1M context · ask your admin to turn on usage credits (they take effect in a new session)\n\n❯ ", time.Time{}},
 	// Qwen Code 0.26.9: its credits used up, the weekly ones, what to do,
 	// and when they come back (on one row, and wrapped onto two).
 	{"qwen", "✕ You've used up your credits. Please try again after the reset.\n│ > │", time.Time{}},
@@ -1008,6 +1021,13 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		// Claude Code 2.1.319: an organization whose usage is paused.
 		{"claude", "⎿  ", "Usage is paused for your organization. For help, please contact support.", false},
 		{"claude", "⎿  ", "Goal paused · usage is paused for your organization", false},
+		// Claude Code 2.1.318–322: a model that needs usage credits, and 1M
+		// context without them.
+		{"claude", "⎿  ", "Your model policy only allows Fable 5.1, which requires usage credits · /model to set it up", false},
+		{"claude", "⎿  ", "Auto mode doesn't run on Opus 4.5, and Fable 5.1 requires usage credits · /model to pick another model", false},
+		{"claude", "⎿  ", "API Error: Usage credits required for 1M context · run /usage-credits to turn them on (they take effect in a new session), or /model to switch to standard context", false},
+		{"claude", "⎿  ", "API Error: Usage credits required for 1M context · run /model to switch to standard context", false},
+		{"claude", "⎿  ", "API Error: Usage credits required for 1M context · ask your admin to turn on usage credits (they take effect after you restart Claude Code)", false},
 		// Qwen Code 0.26.9: its credits.
 		{"qwen", "✕ ", "You've used up your credits. Please try again after the reset.", false},
 		{"qwen", "✕ ", "You've used up your weekly credits. Please try again after the reset.", false},

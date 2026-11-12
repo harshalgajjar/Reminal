@@ -352,6 +352,25 @@ const piProviders = `amazon-bedrock|ant-ling|anthropic|openai|azure|openai-codex
 // missing: the key is what to change.
 const cursorKeyRefused = `(?:warning:)?theprovidedapikeyisinvalid`
 
+// claudeProviderRefused is Claude Code 2.1.318–322 turned away by the
+// credential a cloud provider holds for it (Bedrock, Vertex, Foundry, a
+// gateway): what lapsed, then what to do about it, then the service's error
+// ("AWS credentials expired or invalid · run /login and select "Claude
+// Platform on AWS · refresh credentials", or run `aws sso login` in another
+// terminal · API Error: 401 …"). The command to run and the sign-in to pick
+// are the row's own only between its words; the error after it is the
+// service's, so the row is read from its start to that error.
+const claudeProviderRefused = `(?:awscredentialsexpiredorinvalid|awsauthenticationfailed|googlecloudcredentialsexpiredorinvalid|googlecloudauthenticationfailed|microsoftfoundryauthenticationfailed)` +
+	`(?:·run/loginandselect"[^"·]{1,40}·refreshcredentials",orrun` + "`[^`]{1,80}`" + `inanotherterminal` +
+	`|·run` + "`[^`]{1,80}`" + `andretry` +
+	`|·refreshyourawscredentials\(ssosign-in,accesskeys,apikeyorproxytoken\)andretry` +
+	`|·refreshyourgooglecloudcredentials\(applicationdefaultsign-in,orthekeyfileingoogle_application_credentials\)andretry` +
+	`|·refreshthegatewaytokenprovidedviaanthropic_auth_token/anthropic_custom_headersandretry` +
+	`|·refreshyourfoundrycredential\(anthropic_foundry_auth_token,anthropic_foundry_api_key,azuresign-inforentra,oryourproxytoken\)andretry` +
+	`|·credentialsaremanagedbythisenvironment—retry,orcontactyouradministrator` +
+	`|·enablethismodelforyouraccountandregionintheamazonbedrockconsole(?:,orrun(?:/|--)modeltopickanothermodel)?)` +
+	`(?:·ifcredentialsarecurrent,check(?:awspermissionsandmodelaccess|gcpiampermissionsandvertexaimodelaccess|gcpiampermissionsandworkspaceaccess|accesstothefoundryresource))?`
+
 // harnessKeyRefusals are, by CLI, the rows that say it refused the key it was
 // given (not that it has none). Unlike harnessLoginScreens they are taken as
 // that CLI's only while it is in front or was just before (noteHarnessHealth):
@@ -363,8 +382,10 @@ var harnessKeyRefusals = map[string][]loginRow{
 	// /login · API Error: 401 OAuth access token is invalid"): it has one,
 	// and it was refused — not one it never had. A line of its own, from
 	// its start, as harnessLoginRefused reads it. And a key from outside it
-	// ("Invalid API key · Fix external API key").
-	"claude": loginAll(loginOpen(`^[^a-z0-9]*(please)?run/login[·:.,\-]*apierror:40[13]([^0-9]|$)`), loginMarked("●⎿",
+	// ("Invalid API key · Fix external API key"). 2.1.318–322: a cloud
+	// provider's credential it ran on, refused (claudeProviderRefused), on a
+	// row of its own led by its glyph.
+	"claude": loginAll(loginOpen(`^[^a-z0-9]*(please)?run/login[·:.,\-]*apierror:40[13]([^0-9]|$)`), loginOpen(`^[●⎿]?`+claudeProviderRefused+`·apierror:40[13]([^0-9]|$)`), loginMarked("●⎿",
 		`invalidapikey·fixexternalapikey`,
 	)),
 	// pi with a login its provider refuses (a token gone stale, a wrong key):
