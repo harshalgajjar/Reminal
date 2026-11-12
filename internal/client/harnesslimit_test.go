@@ -34,6 +34,8 @@ import (
 // the provider-credential rows in harnesshealth_test.go, are from its
 // package the same way (2026-11-11).
 // Where a CLI's glyph before its notice is not known, the screen has none.
+// Qwen Code 0.27.2's credits notice was captured from the CLI itself, its
+// service answered by a stand-in (Docker, 2026-11-12).
 //
 // The logged-out screens (TestHarnessLoggedOutScreens) were each captured
 // from the CLI itself, run with no login.
@@ -119,6 +121,15 @@ var limitScreens = []struct {
 	{"qwen", "✕ You've used up your weekly credits.\n  Please try again after the reset.\n│ > │", time.Time{}},
 	{"qwen", "✕ Your credits are expected to reset in 3 hours.\n│ > │", limitLA(2026, 10, 19, 13, 0)},
 	{"qwen", "✕ Your credits are expected to reset in 2 days 4 hours.\n│ > │", limitLA(2026, 10, 21, 14, 0)},
+	// Qwen Code 0.27.2, captured from the CLI itself (Docker, 2026-11-12,
+	// its service answered by a stand-in in the container), 100 columns: the
+	// notice inside its API error, when the credits come back said in the
+	// same sentence, the request's id and its retry hint after it.
+	{"qwen", "  > hi\n  ✕ [API Error: You've used up your credits. Your credits are expected to reset in 3 hours. Please\n     try again after the reset. (request_id: 7f3c9a1e41b2)] (Press Ctrl+Y to retry)\n────────────────────────────────────────────────────────────────────────────────────────────────────\n>   Type your request, or /usage\n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ➜ work · git:(master) · qwen3.8-max medium", limitLA(2026, 10, 19, 13, 0)},
+	{"qwen", "  > hi\n  ✕ [API Error: You've used up your weekly credits. Your credits are expected to reset in 2 days\n    and 4 hours. You can wait or run /upgrade to get more credits. (request_id: c0ffee01)] (Press\n    Ctrl+Y to retry)\n────────────────────────────────────────────────────────────────────────────────────────────────────\n>   Type your request, or /usage\n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ➜ work · git:(master) · qwen3.8-max medium", limitLA(2026, 10, 21, 14, 0)},
+	{"qwen", "  > hi\n  ✕ [API Error: You've used up your weekly credits. Your credits are expected to reset in 1 hour.\n    You can wait or run /upgrade to get more credits.] (Press Ctrl+Y to retry)\n────────────────────────────────────────────────────────────────────────────────────────────────────\n>   Type your request, or /usage\n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ➜ work · git:(master) · qwen3.8-max medium", limitLA(2026, 10, 19, 11, 0)},
+	{"qwen", "  > hi\n  ✕ [API Error: You've used up your weekly credits. Please try again after the reset.] (Press\n    Ctrl+Y to retry)\n────────────────────────────────────────────────────────────────────────────────────────────────────\n>   Type your request, or /usage\n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ➜ work · git:(master) · qwen3.8-max medium", time.Time{}},
+	{"qwen", "  > hi\n  ✕ [API Error: You've used up your credits. Please try again after the reset.] (Press Ctrl+Y to\n    retry)\n────────────────────────────────────────────────────────────────────────────────────────────────────\n>   Type your request, or /usage\n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ➜ work · git:(master) · qwen3.8-max medium", time.Time{}},
 	{"opencode", "┃  Usage limit reached. To continue using this model now, enable usage from your available balance\n┃", time.Time{}},
 	{"opencode", "┃  Free limit reached\n┃", time.Time{}},
 	{"opencode", "┃  Go limit reached\n┃", time.Time{}},
@@ -1034,6 +1045,9 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"qwen", "✕ ", "You've used up your weekly credits. You can wait or run /upgrade to get more credits.", false},
 		{"qwen", "✕ ", "Your credits are expected to reset in 3 hours.", false},
 		{"qwen", "✕ ", "Your credits are expected to reset in 2 days 4 hours.", false},
+		{"qwen", "✕ ", "[API Error: You've used up your credits. Your credits are expected to reset in 3 hours. Please try again after the reset.]", false},
+		{"qwen", "✕ ", "[API Error: You've used up your weekly credits. Your credits are expected to reset in 2 days and 4 hours. You can wait or run /upgrade to get more credits. (request_id: c0ffee01)] (Press Ctrl+Y to retry)", false},
+		{"qwen", "✕ ", "[API Error: You've used up your credits. Please try again after the reset.] (Press Ctrl+Y to retry)", false},
 		{"opencode", "┃  ", "Usage limit reached. To continue using this model now, enable usage from your available balance", false},
 		{"opencode", "┃  ", "Free limit reached", false},
 		{"opencode", "┃  ", "Go limit reached", false},

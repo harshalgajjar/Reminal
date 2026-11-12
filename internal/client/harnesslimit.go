@@ -197,6 +197,10 @@ func wholeNotices(res ...string) []limitNotice { return wholeRows(claudeEnd, res
 // ("oct21,"), a clock time, perhaps a zone.
 const limitWhen = `(?:on)?(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\d{1,2}(?:st|nd|rd|th)?,?(?:\d{4})?(?:at)?)?\d{1,2}(?::\d{2})?(?:am|pm)?(?:\([a-z0-9_+\-/]+\)|utc|gmt|[pmce][sd]t|bst|cet|cest)?`
 
+// qwenErrorEnd is what may follow a notice inside Qwen Code's API error: the
+// request's id, the error's closing bracket, and its retry hint.
+const qwenErrorEnd = `\.?(?:\(request_id:[a-z0-9._-]{1,128}\))?\](?:\(pressctrl\+ytoretry\))?`
+
 // codexEnd is what may follow a Codex notice: when to try again.
 const codexEnd = `(?:,?ortryagain(?:later|at` + limitWhen + `))?\.?`
 
@@ -298,7 +302,7 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// Qwen Code 0.25–0.26: the service's 429 in its error line, and what it
 	// adds; its own quota's and rate limit's words. Its errors are led by
 	// "✕" (and "[API Error: …]").
-	"qwen": append(wholeRows(`\.?`,
+	"qwen": append(append(wholeRows(`\.?`,
 		`apierror:.{0,200}\(status:429\)\]`,
 		`possiblequotalimitationsinplaceorslowresponsetimesdetected\.pleasewaitandtryagainlater`,
 		`ratelimitexceeded\.(?:pleasewaitandtryagain|tryagainlater)`,
@@ -312,6 +316,14 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// notices are.
 		`you.?veusedupyour(?:weekly)?credits\.(?:pleasetryagainafterthereset|youcanwaitorrun/upgradetogetmorecredits)`,
 		`yourcreditsareexpectedtoresetin`+limitWait,
+	))...), onGlyph("✕", wholeRows(qwenErrorEnd,
+		// Qwen Code 0.27.2, as its screen shows it: inside its API error,
+		// when they come back said in the same sentence, then the request's
+		// id and its retry hint ("✕ [API Error: You've used up your credits.
+		// Your credits are expected to reset in 3 hours. Please try again
+		// after the reset. (request_id: …)] (Press Ctrl+Y to retry)").
+		`apierror:you.?veusedupyour(?:weekly)?credits\.(?:yourcreditsareexpectedtoresetin`+limitWait+`\.)?`+
+			`(?:pleasetryagainafterthereset|youcanwaitorrun/upgradetogetmorecredits)`,
 	))...),
 	// OpenCode 1.19: "Usage limit reached. It will reset in 3 hours 20
 	// minutes." (a model's name may lead it), what to do now, its Go and
