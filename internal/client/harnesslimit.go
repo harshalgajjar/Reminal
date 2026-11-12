@@ -130,6 +130,20 @@ const limitWait = `(?:\d+(?:days?|hours?|hrs?|minutes?|mins?|seconds?|secs?|d|h|
 // claudeModel is a Claude model a notice names, perhaps with its version.
 const claudeModel = `(?:claude|opus|sonnet|haiku|fable)?[0-9.]*`
 
+// creditModel is a model as a notice about usage credits names it, by its
+// shown name ("Opus 4.5", "Fable 5.1", "Claude Opus 4.5 (1M context)"),
+// flattened: never more than a name's worth, and always between the
+// notice's own words.
+const creditModel = `[a-z][a-z0-9.\-()\[\]]{0,31}`
+
+// credits1M is what Claude Code's "Usage credits required for 1M context"
+// notice goes on with: the command that turns credits on (and when that
+// takes effect), the one that leaves 1M context, or where to turn them on
+// (an admin's page) — each of them, and only them.
+const credits1M = `(?:run/usage-creditstoturnthemon\(theytakeeffect(?:inanewsession|afteryourestartclaudecode)\)(?:,or(?:/|--)modeltoswitchtostandardcontext)?` +
+	`|run(?:/|--)modeltoswitchtostandardcontext` +
+	`|(?:turnonusagecreditsat[a-z0-9:/.\-_?=&]{1,80}|askyouradmintoturnonusagecredits)\(theytakeeffect(?:inanewsession|afteryourestartclaudecode)\)(?:,oruse(?:/|--)modeltoswitchtostandardcontext)?)`
+
 // limitCommand is the command a notice may end on, as its row reads with
 // spaces gone and in lower case: "· /usage-credits to keep using Claude",
 // "· run /usage-credits to ask your admin for more" (or "for a higher
@@ -228,6 +242,13 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// Claude Code 2.1.317: a group's pooled budget on the Claude apps
 		// gateway, with the day and time it resets (UTC).
 		`thisrequestexceedsyourgroup.?sbudget\.askyourorganization.?sadminstoraiseit,ortryagainafteritresetson`+limitWhen,
+		// Claude Code 2.1.318–322: a model that needs usage credits the
+		// session has none of — the one its model policy allows, or the one
+		// auto mode would have moved to — and 1M context asked for without
+		// them. Each ends the turn, with what to do next and only that.
+		`yourmodelpolicyonlyallows`+creditModel+`,whichrequiresusagecredits·/modeltosetitup`,
+		`automodedoesn.?trunon`+creditModel+`,and`+creditModel+`requiresusagecredits·/modeltopickanothermodel`,
+		`apierror:usagecreditsrequiredfor1mcontext·`+credits1M,
 	)...),
 		// Bare words that could end any sentence: only on the notice's own row.
 		// "Usage limit reached · continuing automatically at 3pm · esc to
