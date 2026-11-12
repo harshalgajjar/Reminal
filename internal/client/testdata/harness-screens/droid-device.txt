@@ -1,0 +1,40 @@
+
+
+                                 █████████    █████████     ████████    ███   █████████
+                                 ███    ███   ███    ███   ███    ███   ███   ███    ███
+                                 ███    ███   ███    ███   ███    ███   ███   ███    ███
+                                 ███    ███   █████████    ███    ███   ███   ███    ███
+                                 ███    ███   ███    ███   ███    ███   ███   ███    ███
+                                 ███    ███   ███    ███   ███    ███   ███   ███    ███
+                                 █████████    ███    ███    ████████    ███   █████████
+
+                                                         v1.9.0
+
+                         TIP: Run /readiness-report to evaluate this repo for agent readiness.
+
+                                   shift+tab to cycle modes · ctrl+N to cycle models
+                                        ctrl+L for autonomy · tab for reasoning
+
+                                  Skills (…)  MCPs (0) ✗  Connectors (…)  AGENTS.md ✗
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                                                      │
+│ Welcome to Factory CLI                                                                                               │
+│ Factory is an AI-powered software development assistant that helps you build, understand, and improve your code.     │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+If the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to
+complete authentication.
+
+Waiting for authentication to complete...
+
+
+
+
+
+
+
+
+
+

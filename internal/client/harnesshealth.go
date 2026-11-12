@@ -219,7 +219,11 @@ var harnessLoginScreens = map[string][]loginRow{
 	// Deployment", "Exit"): the sentence is its only with the menu below, as
 	// an agent may write it. ("This Droid is not signed in", a label in its
 	// bundle, is not on that screen: not read until recorded.)
-	"droid": loginThen(`pleaseloginwithyourfactoryaccounttocontinue`, `signintoafactorycustomdeployment`),
+	// Droid 1.9.0 after "> Login" (recorded, droid-device.txt): where to
+	// enter its device code, wrapped at the terminal's width, then "Waiting
+	// for authentication to complete..." below it; either alone is not it.
+	"droid": loginAll(loginThen(`pleaseloginwithyourfactoryaccounttocontinue`, `signintoafactorycustomdeployment`),
+		loginThen(`ifthelinkdoesnotopenautomatically,pleasevisithttps?://[^·]+?andentercode[a-z0-9-]+tocompleteauthentication`, `waitingforauthenticationtocomplete`)),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), the steps of
 	// setting one up, and a login that lapsed.
