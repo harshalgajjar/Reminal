@@ -1174,7 +1174,7 @@ func (a *Agent) Run() error {
 				// nothing said (there is nowhere to say it). Not counted
 				// against the force-exit budget, so a shutdown's SIGTERM
 				// after it still marks the session as one to bring back.
-				if !a.hungUp.Swap(true) {
+				if !a.hungUp.Swap(true) && a.term != nil {
 					a.term.Hangup()
 					_ = a.term.Close()
 				}
