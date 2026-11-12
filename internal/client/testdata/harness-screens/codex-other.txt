@@ -1,0 +1,40 @@
+  Welcome to Codex, OpenAI's command-line coding agent
+
+  Sign in another way
+
+> 1. Use an OpenAI API key
+     Pay for what you use
+
+  2. Use Amazon Bedrock
+     Connect using your AWS credentials
+
+  Press enter to continue
+  Press esc to go back
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
