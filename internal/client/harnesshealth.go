@@ -183,8 +183,9 @@ var harnessLoginScreens = map[string][]loginRow{
 	)),
 	// Codex: its sign-in menu (its heading, and its first item with the next
 	// below it: "› 1. Sign in with ChatGPT", "2. Sign in with Device Code"),
-	// the page of its other ways to sign in, signing in through the browser,
-	// and a login it can no longer refresh (its errors led by "■").
+	// the page of its other ways to sign in and its page asking for an API
+	// key, signing in through the browser, and a login it can no longer
+	// refresh (its errors led by "■").
 	"codex": loginAll(loginRows(
 		`finishsigninginviayourbrowser`,
 		`signinwithchatgpttousecodexaspartofyourpaidplan`,
@@ -206,7 +207,10 @@ var harnessLoginScreens = map[string][]loginRow{
 		// Codex 0.167.2: the page its "3. Sign in another way" opens, its
 		// heading with its first item below it ("1. Use an OpenAI API key",
 		// or a provider's when the key is not offered).
-		loginThen(`signinanotherway`, `1\.use(?:anopenaiapikey|amazonbedrock|googlecloudvertexai)`), loginMarked("■",
+		loginThen(`signinanotherway`, `1\.use(?:anopenaiapikey|amazonbedrock|googlecloudvertexai)`),
+		// Its page asking for an API key (that page's "1. Use an OpenAI API
+		// key"): its heading with its ask below it.
+		loginThen(`useyourownopenaiapikeyforusage-basedbilling`, `pasteortypeyourapikeybelow`), loginMarked("■",
 			`yoursessionhasexpired\.pleasereauthenticate`,
 		)),
 	// Droid 1.6.0 with no login (recorded in Docker, testdata/harness-screens/

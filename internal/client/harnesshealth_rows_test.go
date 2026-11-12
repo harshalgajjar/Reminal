@@ -369,6 +369,32 @@ func TestCodexsOtherWaysToSignInAreItsHeadingAndFirstItem(t *testing.T) {
 	}
 }
 
+// Codex's page asking for an API key is its heading with its ask below it
+// ("Paste or type your API key below."; its box under them). The heading
+// alone, or a sentence that carries on past its words, is not it.
+func TestCodexsAPIKeyPageIsItsHeadingAndItsAsk(t *testing.T) {
+	for _, page := range []string{
+		"> Use your own OpenAI API key for usage-based billing\n\n  Paste or type your API key below.\n\n╭API key────╮\n│Paste or type your API key│\n╰───────────╯\n  Press enter to save\n  Press esc to go back",
+		"> Use your own OpenAI API key for usage-based billing\n\n  Paste or type your API key below.\n\n  Detected OPENAI_API_KEY environment variable.\n  Paste a different key if you prefer to use another account.",
+	} {
+		if !harnessProblemIn(page+loginRowFrame, "codex") {
+			t.Errorf("its page asking for an API key was not read as logged out:\n%s", page)
+		}
+	}
+	for _, answer := range []string{
+		"> Use your own OpenAI API key for usage-based billing",
+		"● Use your own OpenAI API key for usage-based billing, then the tests run against the real model.\n  Paste or type your API key below.",
+		"● Paste or type your API key below.",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "codex") {
+			t.Errorf("read as Codex's page asking for an API key:\n%s", answer)
+		}
+	}
+	if harnessProblemIn("> Use your own OpenAI API key for usage-based billing\n\n  Paste or type your API key below."+loginRowFrame, "claude") {
+		t.Error("read as another agent's")
+	}
+}
+
 // Codex 0.167.0's device-code steps are its only together: the first, then
 // the second within the next few rows (the link between them). An agent's
 // own numbered list that starts with the first step's words is not it.
