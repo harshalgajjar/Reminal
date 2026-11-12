@@ -379,7 +379,11 @@ func (a *Agent) tabClosed() bool {
 
 // tabClosedWait is how long a hung-up session watches its terminal's host
 // before taking the hang-up for a tab closed: long enough for a quitting app
-// to be gone, or a shutdown's SIGTERM to arrive.
+// to be gone, or a shutdown's SIGTERM to arrive. Not measured on a real
+// terminal app or editor: a judgement that a quitting app is gone within a
+// few seconds of hanging up its tabs. One slower than this at a shutdown has
+// its sessions forgotten rather than kept, so it errs toward a closed tab
+// staying closed.
 const tabClosedWait = 3 * time.Second
 
 // ---- the command that picks the agent up again ------------------------------
