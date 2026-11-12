@@ -395,6 +395,35 @@ func TestCodexsAPIKeyPageIsItsHeadingAndItsAsk(t *testing.T) {
 	}
 }
 
+// Factory Droid waiting for its device code is its two rows together: where
+// to enter the code (wrapped at the terminal's width), then "Waiting for
+// authentication to complete...". Either alone, or the wait's words in a
+// sentence that carries on, is not it.
+func TestDroidsDeviceCodeWaitIsItsRowsTogether(t *testing.T) {
+	for _, wait := range []string{
+		"If the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to\ncomplete authentication.\nWaiting for authentication to complete...",
+		"If the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to complete authentication.\n\nWaiting for authentication to complete...",
+		"If the link does not open automatically, please visit https://factory.example.com/device and enter\ncode AB12-CD34 to complete authentication.\nWaiting for authentication to complete...",
+	} {
+		if !harnessProblemIn(wait+loginRowFrame, "droid") {
+			t.Errorf("its device-code wait was not read as logged out:\n%s", wait)
+		}
+	}
+	for _, answer := range []string{
+		"Waiting for authentication to complete...",
+		"If the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to complete authentication.",
+		"● It said: if the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to complete authentication.\n  Waiting for authentication to complete... is all it printed, so I restarted it.",
+		"● Waiting for authentication to complete, then the deploy runs.",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "droid") {
+			t.Errorf("read as Droid's device-code wait:\n%s", answer)
+		}
+	}
+	if harnessProblemIn("If the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to complete authentication.\nWaiting for authentication to complete..."+loginRowFrame, "claude") {
+		t.Error("read as another agent's")
+	}
+}
+
 // Codex 0.167.0's device-code steps are its only together: the first, then
 // the second within the next few rows (the link between them). An agent's
 // own numbered list that starts with the first step's words is not it.
