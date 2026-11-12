@@ -49,6 +49,10 @@ func TestAgentsLoginScreensAsTheyDrawThem(t *testing.T) {
 		{"copilot-signedout", "copilot", true},
 		{"copilot-signedout-80", "copilot", true},
 		{"copilot-byok", "copilot", false},
+		// Factory Droid with no login (1.6.0), and 1.9.0 waiting for its
+		// device code to be entered after "> Login".
+		{"droid", "droid", true},
+		{"droid-device", "droid", true},
 	} {
 		raw, err := os.ReadFile(filepath.Join("testdata", "harness-screens", c.file+".txt"))
 		if err != nil {
