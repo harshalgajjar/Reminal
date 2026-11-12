@@ -337,11 +337,17 @@ func (a *Agent) settleRestore() {
 	a.restoreMu.Lock()
 	a.restoreSettled = true
 	a.restoreMu.Unlock()
+	closed := a.tabClosed()
 	if a.stopSignal.Load() {
 		return
 	}
-	if a.term != nil && a.term.EndedBySignal() {
-		return
+	if !closed {
+		if a.hungUp.Load() {
+			return // its terminal app quit, or the machine is going down
+		}
+		if a.term != nil && a.term.EndedBySignal() {
+			return
+		}
 	}
 	// Another agent serving this id (its record still there after this one
 	// cleared only its own) keeps the session coming back.
@@ -350,6 +356,38 @@ func (a *Agent) settleRestore() {
 	}
 	_ = session.ClearRestore(a.sessionID)
 }
+
+// tabClosed reports whether the session ended because its terminal was
+// closed on purpose: it was hung up, and what held its terminal is still
+// running a moment later. A terminal app quitting, or a machine shutting down
+// (whose apps quit before their processes are told to stop), takes the host
+// with it, and that session is kept to come back. A host that cannot be told
+// keeps it too, as before.
+func (a *Agent) tabClosed() bool {
+	if !a.hungUp.Load() || a.termHost == (termHost{}) {
+		return false
+	}
+	deadline := time.Now().Add(tabClosedWait)
+	for time.Now().Before(deadline) {
+		if !a.termHost.alive() || a.stopSignal.Load() {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return a.termHost.alive() && !a.stopSignal.Load()
+}
+
+// tabClosedWait is how long a hung-up session watches its terminal's host
+// before taking the hang-up for a tab closed: long enough for a quitting app
+// (an editor, a busy machine) to be gone, or a shutdown's SIGTERM to arrive.
+// Not measured: the two mistakes are not alike. Taking a slow quit for a
+// closed tab forgets a session a restart should bring back; taking a closed
+// tab for a quit only keeps it, as before this check. So it waits generously,
+// and the cost is a process with no terminal, its shell already gone,
+// lingering that long. While it waits, nothing can reach the session by its
+// id: its record is cleared and its attach socket closed, and it still holds
+// the id live, so nothing restores it (restoreguard.go).
+const tabClosedWait = 10 * time.Second
 
 // ---- the command that picks the agent up again ------------------------------
 

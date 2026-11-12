@@ -27,10 +27,15 @@ import (
 // Later releases' own words, from their bundles and binaries the same way
 // (2026-10-28): claude 2.1.312, codex 0.165.0, gemini 0.66.0, qwen 0.26.2,
 // opencode 1.19.4, goose 1.56.0, amp 0.0.1793131239, pi 1.4.0, agy 1.4.8.
+// Kiro CLI 3.2.1's, from its binary's strings (2026-11-12); its screen not
+// recorded: "⚠️  Kiro rate limit reached:", "Monthly request limit reached"
+// and " - The limits reset on <MM>/01.".
 // Claude Code 2.1.318–322's rows about usage credits and 1M context, and
 // the provider-credential rows in harnesshealth_test.go, are from its
 // package the same way (2026-11-11).
 // Where a CLI's glyph before its notice is not known, the screen has none.
+// Qwen Code 0.27.2's credits notice was captured from the CLI itself, its
+// service answered by a stand-in (Docker, 2026-11-12).
 //
 // The logged-out screens (TestHarnessLoggedOutScreens) were each captured
 // from the CLI itself, run with no login.
@@ -116,6 +121,15 @@ var limitScreens = []struct {
 	{"qwen", "✕ You've used up your weekly credits.\n  Please try again after the reset.\n│ > │", time.Time{}},
 	{"qwen", "✕ Your credits are expected to reset in 3 hours.\n│ > │", limitLA(2026, 10, 19, 13, 0)},
 	{"qwen", "✕ Your credits are expected to reset in 2 days 4 hours.\n│ > │", limitLA(2026, 10, 21, 14, 0)},
+	// Qwen Code 0.27.2, captured from the CLI itself (Docker, 2026-11-12,
+	// its service answered by a stand-in in the container), 100 columns: the
+	// notice inside its API error, when the credits come back said in the
+	// same sentence, the request's id and its retry hint after it.
+	{"qwen", "  > hi\n  ✕ [API Error: You've used up your credits. Your credits are expected to reset in 3 hours. Please\n     try again after the reset. (request_id: 7f3c9a1e41b2)] (Press Ctrl+Y to retry)\n────────────────────────────────────────────────────────────────────────────────────────────────────\n>   Type your request, or /usage\n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ➜ work · git:(master) · qwen3.8-max medium", limitLA(2026, 10, 19, 13, 0)},
+	{"qwen", "  > hi\n  ✕ [API Error: You've used up your weekly credits. Your credits are expected to reset in 2 days\n    and 4 hours. You can wait or run /upgrade to get more credits. (request_id: c0ffee01)] (Press\n    Ctrl+Y to retry)\n────────────────────────────────────────────────────────────────────────────────────────────────────\n>   Type your request, or /usage\n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ➜ work · git:(master) · qwen3.8-max medium", limitLA(2026, 10, 21, 14, 0)},
+	{"qwen", "  > hi\n  ✕ [API Error: You've used up your weekly credits. Your credits are expected to reset in 1 hour.\n    You can wait or run /upgrade to get more credits.] (Press Ctrl+Y to retry)\n────────────────────────────────────────────────────────────────────────────────────────────────────\n>   Type your request, or /usage\n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ➜ work · git:(master) · qwen3.8-max medium", limitLA(2026, 10, 19, 11, 0)},
+	{"qwen", "  > hi\n  ✕ [API Error: You've used up your weekly credits. Please try again after the reset.] (Press\n    Ctrl+Y to retry)\n────────────────────────────────────────────────────────────────────────────────────────────────────\n>   Type your request, or /usage\n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ➜ work · git:(master) · qwen3.8-max medium", time.Time{}},
+	{"qwen", "  > hi\n  ✕ [API Error: You've used up your credits. Please try again after the reset.] (Press Ctrl+Y to\n    retry)\n────────────────────────────────────────────────────────────────────────────────────────────────────\n>   Type your request, or /usage\n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ➜ work · git:(master) · qwen3.8-max medium", time.Time{}},
 	{"opencode", "┃  Usage limit reached. To continue using this model now, enable usage from your available balance\n┃", time.Time{}},
 	{"opencode", "┃  Free limit reached\n┃", time.Time{}},
 	{"opencode", "┃  Go limit reached\n┃", time.Time{}},
@@ -133,6 +147,9 @@ var limitScreens = []struct {
 	{"pi", "  You have hit your ChatGPT usage limit.\n", time.Time{}},
 	{"pi", "  Hugging Face rate limit reached; retry in 30s\n", limitLA(2026, 10, 19, 10, 0).Add(30 * time.Second)},
 	{"agy", "  AI: Out of credits\n", time.Time{}},
+	{"kiro", "\n ⚠️  Kiro rate limit reached:\n", time.Time{}},
+	{"kiro", "Monthly request limit reached - The limits reset on 12/01.\n", time.Time{}},
+	{"kiro", "Monthly request limit reached\n", time.Time{}},
 	{"copilot", "  You've hit your session rate limit.\n", time.Time{}},
 	{"copilot", "  You've reached your weekly rate limit. Learn More (https://docs.github.com/copilot/concepts/rate-limits).\n", time.Time{}},
 	{"copilot", "  You've hit the rate limit for this model. Please switch models or wait for your limit to reset\n", time.Time{}},
@@ -1028,6 +1045,9 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"qwen", "✕ ", "You've used up your weekly credits. You can wait or run /upgrade to get more credits.", false},
 		{"qwen", "✕ ", "Your credits are expected to reset in 3 hours.", false},
 		{"qwen", "✕ ", "Your credits are expected to reset in 2 days 4 hours.", false},
+		{"qwen", "✕ ", "[API Error: You've used up your credits. Your credits are expected to reset in 3 hours. Please try again after the reset.]", false},
+		{"qwen", "✕ ", "[API Error: You've used up your weekly credits. Your credits are expected to reset in 2 days and 4 hours. You can wait or run /upgrade to get more credits. (request_id: c0ffee01)] (Press Ctrl+Y to retry)", false},
+		{"qwen", "✕ ", "[API Error: You've used up your credits. Please try again after the reset.] (Press Ctrl+Y to retry)", false},
 		{"opencode", "┃  ", "Usage limit reached. To continue using this model now, enable usage from your available balance", false},
 		{"opencode", "┃  ", "Free limit reached", false},
 		{"opencode", "┃  ", "Go limit reached", false},
@@ -1052,6 +1072,10 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"copilot", "", "You've used all your Copilot Free chat requests for the month.", false},
 		{"pi", "", "Hugging Face rate limit reached; retry in 30s", false},
 		{"agy", "", "AI: Out of credits", false},
+		{"kiro", "⚠️  ", "Kiro rate limit reached:", false},
+		{"kiro", "", "Kiro rate limit reached", false},
+		{"kiro", "", "Monthly request limit reached", false},
+		{"kiro", "", "Monthly request limit reached - The limits reset on 12/01.", false},
 	} {
 		words := strings.TrimRight(n.text, ".")
 		if hit, _ := harnessLimitIn("  "+n.glyph+n.text+"\n", n.prog, limitTestNow); !hit {
@@ -1085,6 +1109,8 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"amp", "  The dashboard shows the\n  usage quota exceeded."},
 		{"pi", "  It stopped once the\n  monthly usage limit reached."},
 		{"agy", "  The status bar then read\n  AI: out of credits."},
+		{"kiro", "  The CLI said its\n  monthly request limit reached."},
+		{"kiro", "  Kiro rate limit reached: I paused the deploy and will retry."},
 		{"claude", "● You've reached your usage limit."},
 		{"claude", "  You've reached your monthly limit."},
 		{"claude", "● The message is:\n\n      Your organization is out of usage credits. Contact your admin to add more."},
