@@ -31,9 +31,11 @@ func TestAgentsLoginScreensAsTheyDrawThem(t *testing.T) {
 		{"codex-expired", "codex", true},
 		{"codex-expired-start", "codex", false},
 		// Codex 0.167.2: its sign-in menu, reworded ("Choose how you want to
-		// use Codex."), and the page its "3. Sign in another way" opens.
+		// use Codex."), the page its "3. Sign in another way" opens, and
+		// that page's "1. Use an OpenAI API key", asking for the key.
 		{"codex-menu", "codex", true},
 		{"codex-other", "codex", true},
+		{"codex-key", "codex", true},
 		// Gemini CLI 0.62.0: no way to sign in chosen; its Google sign-in
 		// asking for the code; its API key dialog; a key it cannot use.
 		{"gemini-first-start", "gemini", true},
