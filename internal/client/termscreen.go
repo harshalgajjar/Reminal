@@ -99,7 +99,7 @@ func (s *sessionScreen) Write(p []byte) (int, error) {
 	} else {
 		s.tail = append(s.tail[:0], seam[max(0, len(seam)-altTail):]...)
 	}
-	if !s.t.AltScreen() && sw {
+	if sw && !s.t.AltScreen() {
 		// What scrolled off up to now, kept for a join while the program
 		// is on the alternate screen.
 		s.historyLocked()
@@ -116,6 +116,9 @@ func (s *sessionScreen) Write(p []byte) (int, error) {
 // or 47, as full-screen programs do, alone or among other modes
 // ("ESC[?1049;2004h").
 func entersAltScreen(p []byte) bool {
+	if !bytes.Contains(p, decsetStart) {
+		return false // most writes, read without the regexp
+	}
 	for _, m := range decset.FindAllSubmatch(p, -1) {
 		for _, mode := range bytes.Split(m[1], []byte(";")) {
 			switch string(mode) {
@@ -129,6 +132,9 @@ func entersAltScreen(p []byte) bool {
 
 // decset is a DEC private mode set, its modes captured.
 var decset = regexp.MustCompile(`\x1b\[\?([0-9;]+)h`)
+
+// decsetStart is how every DEC private mode sequence starts.
+var decsetStart = []byte("\x1b[?")
 
 // altTail is how much of the last write is kept to find a switch split
 // across two: longer than any DECSET that holds one.

@@ -113,7 +113,37 @@ type Terminal struct {
 	// trapped): every call after that does nothing and gives zero, never
 	// a panic in the process it runs in.
 	err error
+	// scratch is memory of the instance's, taken once, for the small values
+	// passed by address (scratch*): a call into the instance costs as much as
+	// a small read, and taking and freeing memory around each read made one
+	// read three.
+	scratch uint32
+	// in is memory of the instance's kept for what a program writes (inCap
+	// bytes; zero, none yet): the writes of a session come one after another,
+	// most of them small.
+	in    uint32
+	inCap int
+	// data is the terminal's data (get) as read since it last changed, the
+	// data numbers in have (a bit each): what the session reads after every
+	// write (its scrollback, the alternate screen) and every format (its
+	// size) is read from the instance once.
+	data [16]uint64
+	have uint32
 }
+
+// scratch's layout: the value an option or a read is passed in, the pointer
+// and length a format gives back, a selection, a point.
+const (
+	scratchVal   = 0  // 8 bytes
+	scratchOut   = 8  // 8: pointer, length
+	scratchSel   = 16 // 20: GhosttySelection
+	scratchPoint = 40 // 24, 8-aligned: GhosttyPoint
+	scratchSize  = 64
+)
+
+// inKeep is the most memory kept for writes: a larger one (a restored
+// history) takes its own and gives it back.
+const inKeep = 64 << 10
 
 // errClosed is a Terminal used after Close.
 var errClosed = errors.New("vtwasm: closed")
@@ -138,6 +168,10 @@ func New(cols, rows, maxLines int) (*Terminal, error) {
 		return nil, fmt.Errorf("vtwasm: instantiating: %w", err)
 	}
 	v := &Terminal{ctx: ctx, mod: mod, fns: map[string]api.Function{}}
+	if v.scratch, err = v.alloc(scratchSize); err != nil {
+		mod.Close(ctx)
+		return nil, fmt.Errorf("vtwasm: no memory for the terminal: %w", err)
+	}
 	slot := v.call("ghostty_wasm_alloc_opaque")
 	if slot == 0 || v.err != nil {
 		mod.Close(ctx)
@@ -190,20 +224,45 @@ func (v *Terminal) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	buf, err := v.alloc(len(p))
+	buf, err := v.inBuf(len(p))
 	if err != nil {
 		return 0, err
 	}
-	defer v.free(buf, len(p))
+	if buf != v.in {
+		defer v.free(buf, len(p))
+	}
 	if err := v.put(buf, p); err != nil {
 		return 0, err
 	}
+	v.changed()
 	v.call("ghostty_terminal_vt_write", v.t, uint64(buf), uint64(len(p)))
 	if v.err != nil {
 		return 0, v.err
 	}
 	return len(p), nil
 }
+
+// inBuf is memory for a write of n bytes: the kept memory (in), taken or
+// grown to fit when n is within inKeep, else memory of its own the caller
+// frees.
+func (v *Terminal) inBuf(n int) (uint32, error) {
+	if n > inKeep {
+		return v.alloc(n)
+	}
+	if n > v.inCap {
+		v.free(v.in, v.inCap)
+		v.in, v.inCap = 0, 0
+		p, err := v.alloc(max(n, 4<<10))
+		if err != nil {
+			return 0, err
+		}
+		v.in, v.inCap = p, max(n, 4<<10)
+	}
+	return v.in, nil
+}
+
+// changed forgets the data read (data): the terminal is about to change.
+func (v *Terminal) changed() { v.have = 0 }
 
 // Resize makes it cols by rows, re-wrapping its scrollback to the width.
 func (v *Terminal) Resize(cols, rows int) error {
@@ -212,6 +271,7 @@ func (v *Terminal) Resize(cols, rows int) error {
 	if v.err != nil {
 		return v.err
 	}
+	v.changed()
 	if rc := v.call("ghostty_terminal_resize", v.t, uint64(clamp16(cols)), uint64(clamp16(rows)), 0, 0); rc != 0 {
 		return fmt.Errorf("vtwasm: resize: %d", int32(rc))
 	}
@@ -222,6 +282,7 @@ func (v *Terminal) Resize(cols, rows int) error {
 func (v *Terminal) SetMaxLines(n int) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.changed()
 	_ = v.setSize(optScrollbackMaxLines, uint64(max(n, 0)))
 }
 
@@ -229,6 +290,7 @@ func (v *Terminal) SetMaxLines(n int) {
 func (v *Terminal) Reset() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.changed()
 	v.call("ghostty_terminal_reset", v.t)
 }
 
@@ -349,11 +411,7 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 	}
 	f := v.call("ghostty_wasm_take_opaque", slot)
 	defer v.call("ghostty_formatter_free", f)
-	val, err := v.alloc(32)
-	if err != nil {
-		return "", err
-	}
-	defer v.free(val, 32)
+	val := v.scratch + scratchVal
 	set := func(opt uint64, word uint32) error {
 		if err := v.put32(val, word); err != nil {
 			return err
@@ -387,16 +445,11 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		defer v.free(sel, 20)
 		if rc := v.call("ghostty_formatter_set", f, fmtOptSelection, uint64(sel)); rc != 0 {
 			return "", fmt.Errorf("vtwasm: selection: %d", int32(rc))
 		}
 	}
-	out, err := v.alloc(8)
-	if err != nil {
-		return "", err
-	}
-	defer v.free(out, 8)
+	out := v.scratch + scratchOut
 	if rc := v.call("ghostty_formatter_format_alloc", f, 0, uint64(out), uint64(out+4)); rc != 0 || v.err != nil {
 		return "", fmt.Errorf("vtwasm: format: %d %v", int32(rc), v.err)
 	}
@@ -419,36 +472,25 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 }
 
 // selection is a GhosttySelection (start and end GhosttyGridRef, 8 bytes
-// each on wasm32, then a bool) over a, in wasm memory the caller frees (20
-// bytes).
+// each on wasm32, then a bool) over a, in scratch, read by the format it is
+// for.
 func (v *Terminal) selection(a area) (uint32, error) {
-	sel, err := v.alloc(20)
-	if err != nil {
-		return 0, err
-	}
+	sel, pt := v.scratch+scratchSel, v.scratch+scratchPoint
 	mem := v.mod.Memory()
 	for i, xy := range [][2]int{{a.x0, a.y0}, {a.x1, a.y1}} {
 		// A GhosttyPoint: a tag, then a union padded to two uint64s (so
 		// 8-aligned) whose {uint16 x; uint32 y} starts it: 24 bytes, passed by
 		// its address on wasm32.
-		pt, err := v.alloc(24)
-		if err != nil {
-			v.free(sel, 20)
-			return 0, err
-		}
 		ok := mem.WriteUint32Le(pt, a.tag) && mem.WriteUint16Le(pt+8, uint16(xy[0])) && mem.WriteUint32Le(pt+12, uint32(xy[1]))
 		rc := uint64(1)
 		if ok {
 			rc = v.call("ghostty_terminal_grid_ref", v.t, uint64(pt), uint64(sel+uint32(i)*8))
 		}
-		v.free(pt, 24)
 		if rc != 0 || v.err != nil {
-			v.free(sel, 20)
 			return 0, fmt.Errorf("vtwasm: grid ref (%d,%d): %d", xy[0], xy[1], int32(rc))
 		}
 	}
 	if !mem.WriteUint32Le(sel+16, 0) { // not a rectangle
-		v.free(sel, 20)
 		return 0, errRange
 	}
 	return sel, nil
@@ -521,11 +563,7 @@ func (v *Terminal) setSize(opt int, val uint64) error {
 	if v.err != nil {
 		return v.err
 	}
-	p, err := v.alloc(4)
-	if err != nil {
-		return err
-	}
-	defer v.free(p, 4)
+	p := v.scratch + scratchVal
 	if err := v.put32(p, uint32(val)); err != nil {
 		return err
 	}
@@ -533,17 +571,16 @@ func (v *Terminal) setSize(opt int, val uint64) error {
 	return v.err
 }
 
-// get reads 8 bytes of the terminal's data into memory and gives them; zero
-// when it cannot.
+// get reads 8 bytes of the terminal's data and gives them, from the instance
+// once while it has not changed (data); zero when it cannot.
 func (v *Terminal) get(data int) uint64 {
 	if v.err != nil {
 		return 0
 	}
-	p, err := v.alloc(8)
-	if err != nil {
-		return 0
+	if v.have&(1<<data) != 0 {
+		return v.data[data]
 	}
-	defer v.free(p, 8)
+	p := v.scratch + scratchVal
 	if !v.mod.Memory().WriteUint64Le(p, 0) {
 		return 0
 	}
@@ -552,6 +589,7 @@ func (v *Terminal) get(data int) uint64 {
 	if !ok || v.err != nil {
 		return 0
 	}
+	v.data[data], v.have = x, v.have|1<<data
 	return x
 }
 
