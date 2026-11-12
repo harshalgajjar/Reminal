@@ -340,6 +340,35 @@ func TestCodexsLoginMenuIsItsItemsTogether(t *testing.T) {
 	}
 }
 
+// Codex 0.167.2's other ways to sign in ("3. Sign in another way") are a page
+// of their own: its heading, then its first item below it (its own
+// description between). The heading alone, a sentence that carries on past
+// its words, or an agent's own list under them is not it.
+func TestCodexsOtherWaysToSignInAreItsHeadingAndFirstItem(t *testing.T) {
+	for _, page := range []string{
+		"  Sign in another way\n\n> 1. Use an OpenAI API key\n     Pay for what you use\n\n  2. Use Amazon Bedrock\n     Connect using your AWS credentials\n\n  Press enter to continue\n  Press esc to go back",
+		"  Sign in another way\n\n  1. Use an OpenAI API key\n     Pay for what you use\n\n> 2. Use Google Cloud Vertex AI\n     Connect using your Google Cloud credentials",
+		"  Sign in another way\n\n> 1. Use Amazon Bedrock\n     Connect using your AWS credentials",
+	} {
+		if !harnessProblemIn(page+loginRowFrame, "codex") {
+			t.Errorf("its page of other ways to sign in was not read as logged out:\n%s", page)
+		}
+	}
+	for _, answer := range []string{
+		"  Sign in another way",
+		"● Sign in another way if the browser does not open, then run the tests again.\n  1. Use an OpenAI API key",
+		"● Sign in another way:\n  1. Use an SSH key\n  2. Ask an admin for a token",
+		"  3. Sign in another way\n     Use an API key or another provider",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "codex") {
+			t.Errorf("read as Codex's page of other ways to sign in:\n%s", answer)
+		}
+	}
+	if harnessProblemIn("  Sign in another way\n\n> 1. Use an OpenAI API key"+loginRowFrame, "claude") {
+		t.Error("read as another agent's")
+	}
+}
+
 // Codex 0.167.0's device-code steps are its only together: the first, then
 // the second within the next few rows (the link between them). An agent's
 // own numbered list that starts with the first step's words is not it.
