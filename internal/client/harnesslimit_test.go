@@ -33,7 +33,8 @@ import (
 // Claude Code 2.1.318–322's rows about usage credits and 1M context, and
 // the provider-credential rows in harnesshealth_test.go, are from its
 // package the same way (2026-11-11). Claude Code 2.1.323's rows for a turn
-// stopped at a move to usage credits, and its expired login's fallback
+// stopped at a move to usage credits, its credit balance too low, and its
+// expired login's fallback
 // without credit (harnesshealth_rows_test.go), were built from the code
 // that draws them (2026-11-13).
 // Where a CLI's glyph before its notice is not known, the screen has none.
@@ -127,6 +128,10 @@ var limitScreens = []struct {
 	{"claude", "  ⎿  Opus 5.5 now uses usage credits · the prompt to confirm went unanswered — nothing was sent · answer it where this session is running, or /model to change\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Opus 5.5 now uses usage credits · the prompt to confirm was closed from Remote Control without a choice — nothing was sent · it asks again on your next message, or /model to change\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Fable limit reached · continuing on Opus 5.5 uses usage credits · Claude stopped here · send a\n     message to be asked again, or switch models\n\n❯ ", time.Time{}},
+	// Claude Code 2.1.323 (source): the API's credit balance too low, on
+	// one row; narrower than it, the row is clipped before the link.
+	{"claude", "  ⎿  Credit balance too low · Add funds: https://platform.claude.com/settings/billing\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Credit balance too low · Add funds:\n\n❯ ", time.Time{}},
 	// Qwen Code 0.26.9: its credits used up, the weekly ones, what to do,
 	// and when they come back (on one row, and wrapped onto two).
 	{"qwen", "✕ You've used up your credits. Please try again after the reset.\n│ > │", time.Time{}},
@@ -1057,6 +1062,7 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"claude", "⎿  ", "Opus 5.5 now uses usage credits · Claude stopped here · send a message to be asked again, or switch models", false},
 		{"claude", "⎿  ", "Fable limit reached · continuing on Opus 5.5 uses usage credits, and the prompt to confirm went unanswered — nothing was sent · answer it where this session is running, or /model to change", false},
 		{"claude", "⎿  ", "Opus 5.5 now uses usage credits · the prompt to confirm was closed from Remote Control without a choice — nothing was sent · it asks again on your next message, or /model to change", false},
+		{"claude", "⎿  ", "Credit balance too low · Add funds: https://platform.claude.com/settings/billing", true},
 		// Qwen Code 0.26.9: its credits.
 		{"qwen", "✕ ", "You've used up your credits. Please try again after the reset.", false},
 		{"qwen", "✕ ", "You've used up your weekly credits. Please try again after the reset.", false},
@@ -1135,6 +1141,9 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"codex", "• Your workspace is out of credits. Add credits to continue."},
 		{"amp", "  You've exceeded your usage limit of $20."},
 		{"amp", "  You've reached your free usage limit"},
+		// Claude Code 2.1.323's credit row, quoted, and carried on.
+		{"claude", "● The API said \"Credit balance too low · Add funds: https://platform.claude.com/settings/billing\", so I stopped."},
+		{"claude", "  ⎿  Credit balance too low · Add funds: https://platform.claude.com/settings/billing, then rerun the job"},
 	} {
 		if hit, _ := harnessLimitIn(tc.screen, tc.prog, limitTestNow); hit {
 			t.Errorf("%s: read as at its limit: %q", tc.prog, tc.screen)

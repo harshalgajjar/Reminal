@@ -283,6 +283,10 @@ var harnessLimitNotices = map[string][]limitNotice{
 			// or closed from Remote Control (claudeCreditStop). Without its
 			// tail it is the session going on, on another model.
 			`(?:`+creditModel+`limitreached·continuingon`+creditModel+`usesusagecredits|`+creditModel+`nowusesusagecredits)`+claudeCreditStop,
+			// Claude Code 2.1.323: the API's credit balance too low, drawn
+			// on one row that clips what does not fit: the link is gone on
+			// a screen too narrow for it.
+			`creditbalancetoolow·addfunds:(?:https://platform\.claude\.com/settings/billing)?`,
 		)))...),
 	// Codex 0.163–0.165: "You’ve hit your usage limit. … try again at 3:05
 	// PM." (the time on the next row when it wraps), its workspace's limit
