@@ -32,7 +32,10 @@ import (
 // and " - The limits reset on <MM>/01.".
 // Claude Code 2.1.318–322's rows about usage credits and 1M context, and
 // the provider-credential rows in harnesshealth_test.go, are from its
-// package the same way (2026-11-11).
+// package the same way (2026-11-11). Claude Code 2.1.323's rows for a turn
+// stopped at a move to usage credits, and its expired login's fallback
+// without credit (harnesshealth_rows_test.go), were built from the code
+// that draws them (2026-11-13).
 // Where a CLI's glyph before its notice is not known, the screen has none.
 // Qwen Code 0.27.2's credits notice was captured from the CLI itself, its
 // service answered by a stand-in (Docker, 2026-11-12).
@@ -114,6 +117,16 @@ var limitScreens = []struct {
 	{"claude", "  ⎿  API Error: Usage credits required for 1M context · run /model to switch to standard context\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  API Error: Usage credits required for 1M context · turn on usage credits at https://claude.ai/admin-settings/usage (they take effect after you restart Claude Code), or use /model to switch to standard context\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  API Error: Usage credits required for 1M context · ask your admin to turn on usage credits (they take effect in a new session)\n\n❯ ", time.Time{}},
+	// Claude Code 2.1.323 (source): a model's limit, or a model that now
+	// uses usage credits, and the turn stopped there with nothing sent; a
+	// long one wraps.
+	{"claude", "  ⎿  Fable limit reached · continuing on Opus 5.5 uses usage credits · Claude stopped here · send a message to be asked again, or switch models\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Opus 5.5 now uses usage credits · Claude stopped here · send a message to be asked again, or switch models\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Fable limit reached · continuing on Opus 5.5 uses usage credits, and the prompt to confirm went unanswered — nothing was sent · answer it where this session is running, or /model to change\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Fable limit reached · continuing on Opus 5.5 uses usage credits, and the prompt to confirm was closed from Remote Control without a choice — nothing was sent · it asks again on your next message, or /model to change\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Opus 5.5 now uses usage credits · the prompt to confirm went unanswered — nothing was sent · answer it where this session is running, or /model to change\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Opus 5.5 now uses usage credits · the prompt to confirm was closed from Remote Control without a choice — nothing was sent · it asks again on your next message, or /model to change\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Fable limit reached · continuing on Opus 5.5 uses usage credits · Claude stopped here · send a\n     message to be asked again, or switch models\n\n❯ ", time.Time{}},
 	// Qwen Code 0.26.9: its credits used up, the weekly ones, what to do,
 	// and when they come back (on one row, and wrapped onto two).
 	{"qwen", "✕ You've used up your credits. Please try again after the reset.\n│ > │", time.Time{}},
@@ -1039,6 +1052,11 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"claude", "⎿  ", "API Error: Usage credits required for 1M context · run /usage-credits to turn them on (they take effect in a new session), or /model to switch to standard context", false},
 		{"claude", "⎿  ", "API Error: Usage credits required for 1M context · run /model to switch to standard context", false},
 		{"claude", "⎿  ", "API Error: Usage credits required for 1M context · ask your admin to turn on usage credits (they take effect after you restart Claude Code)", false},
+		// Claude Code 2.1.323: a turn stopped at a move to usage credits.
+		{"claude", "⎿  ", "Fable limit reached · continuing on Opus 5.5 uses usage credits · Claude stopped here · send a message to be asked again, or switch models", false},
+		{"claude", "⎿  ", "Opus 5.5 now uses usage credits · Claude stopped here · send a message to be asked again, or switch models", false},
+		{"claude", "⎿  ", "Fable limit reached · continuing on Opus 5.5 uses usage credits, and the prompt to confirm went unanswered — nothing was sent · answer it where this session is running, or /model to change", false},
+		{"claude", "⎿  ", "Opus 5.5 now uses usage credits · the prompt to confirm was closed from Remote Control without a choice — nothing was sent · it asks again on your next message, or /model to change", false},
 		// Qwen Code 0.26.9: its credits.
 		{"qwen", "✕ ", "You've used up your credits. Please try again after the reset.", false},
 		{"qwen", "✕ ", "You've used up your weekly credits. Please try again after the reset.", false},
@@ -1123,9 +1141,12 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		}
 	}
 	// What leaves the agent going: Claude Code going on now on another
-	// model, or once its limit has reset.
+	// model (its row with no stop after it, or an answer saying it did),
+	// or once its limit has reset.
 	for _, screen := range []string{
 		"  ⎿  Fable limit reached · continuing on Opus uses usage credits",
+		"  ⎿  Fable limit reached · continuing on Opus 5.5 uses usage credits",
+		"● Fable limit reached · continuing on Opus 5.5 uses usage credits, so I went on with Opus and finished the review",
 		"  ⎿  Usage limit reset · Continuing automatically",
 		"  ⎿  [Usage limit reached — grace window active. Checkpoint now: finish the",
 	} {

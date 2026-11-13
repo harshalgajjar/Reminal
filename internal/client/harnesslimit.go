@@ -144,6 +144,15 @@ const credits1M = `(?:run/usage-creditstoturnthemon\(theytakeeffect(?:inanewsess
 	`|run(?:/|--)modeltoswitchtostandardcontext` +
 	`|(?:turnonusagecreditsat[a-z0-9:/.\-_?=&]{1,80}|askyouradmintoturnonusagecredits)\(theytakeeffect(?:inanewsession|afteryourestartclaudecode)\)(?:,oruse(?:/|--)modeltoswitchtostandardcontext)?)`
 
+// claudeCreditStop is how Claude Code 2.1.323 says a turn stopped at a move
+// to usage credits, after "continuing on Opus 5.5 uses usage credits" or
+// "Opus 5.5 now uses usage credits": stopped before asking, the prompt left
+// unanswered, or the prompt closed from Remote Control. Each with what to do
+// next, and only that.
+const claudeCreditStop = `(?:·claudestoppedhere·sendamessagetobeaskedagain,orswitchmodels` +
+	`|(?:,and|·)theprompttoconfirm(?:wentunanswered—nothingwassent·answeritwherethissessionisrunning` +
+	`|wasclosedfromremotecontrolwithoutachoice—nothingwassent·itasksagainonyournextmessage),or/modeltochange)`
+
 // limitCommand is the command a notice may end on, as its row reads with
 // spaces gone and in lower case: "· /usage-credits to keep using Claude",
 // "· run /usage-credits to ask your admin for more" (or "for a higher
@@ -268,6 +277,12 @@ var harnessLimitNotices = map[string][]limitNotice{
 			// and a goal paused by it.
 			`usageispausedforyourorganization(?:\.forhelp,pleasecontactsupport\.?)?`,
 			`goalpaused·usageispausedforyourorganization`,
+			// Claude Code 2.1.323: a model's limit, or a model that now
+			// uses usage credits, and the turn stopped there, nothing sent:
+			// the prompt to go on with credits not asked, left unanswered,
+			// or closed from Remote Control (claudeCreditStop). Without its
+			// tail it is the session going on, on another model.
+			`(?:`+creditModel+`limitreached·continuingon`+creditModel+`usesusagecredits|`+creditModel+`nowusesusagecredits)`+claudeCreditStop,
 		)))...),
 	// Codex 0.163–0.165: "You’ve hit your usage limit. … try again at 3:05
 	// PM." (the time on the next row when it wraps), its workspace's limit

@@ -345,6 +345,10 @@ var harnessLoginScreens = map[string][]loginRow{
 		"failedtoauthenticate:thisloginreacheditstimelimit(?:·signinagaintocontinue|andcannotberenewed\\.run`?claudeauthlogin`?tosigninagain,oruse`?claudesetup-token`?andsetclaude_code_oauth_tokenforunattendedjobs)?",
 		`notsignedintothecloudgateway—run/login`,
 		`cloudgatewaytokenexpired—refreshanthropic_auth_tokenandrestart`,
+		// 2.1.323: a claude.ai login that expired, and the credential it
+		// fell back to (a saved Console key, an organization by its name)
+		// without the credit to run on.
+		`loginexpired·pleaserun/login·claudecodetried[^·"]{1,64}instead,butitdoesn.?thaveenoughcredit·oraddfunds:https://platform\.claude\.com/settings/billing`,
 	)),
 }
 

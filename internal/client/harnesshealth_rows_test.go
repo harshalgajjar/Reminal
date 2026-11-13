@@ -89,6 +89,10 @@ var loginRowCases = []loginRowCase{
 	{prog: "claude", row: "  ⎿  Not signed in to the Cloud gateway — run /login."},
 	{prog: "claude", row: "  ⎿  Cloud gateway token expired — refresh ANTHROPIC_AUTH_TOKEN and restart."},
 	{prog: "claude", row: " ✢ Opening browser to sign in with your Claude account…"},
+	// Claude Code 2.1.323 (source): a claude.ai login that expired, and the
+	// credential it fell back to without the credit to run on.
+	{prog: "claude", row: "● Login expired · Please run /login · Claude Code tried your saved Claude Console API key instead, but it doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing"},
+	{prog: "claude", row: "  ⎿  Login expired · Please run /login · Claude Code tried Acme Corp instead, but it doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing"},
 
 	{prog: "gemini", row: "✕ Gemini API key is missing or not configured."},
 
@@ -595,6 +599,11 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		// footer and its warning only say so; not a login wanted.
 		{"Claude Code's footer after a claude.ai login ended, usage billed elsewhere", "claude", "answer" + box + "  claude.ai login ended · usage now billed to Acme Corp · /login to sign in", false},
 		{"Claude Code's warning of the same", "claude", "  Warning: the claude.ai login on this machine has ended. This run uses the sign-in from ant auth login instead, and its usage is billed to Acme Corp. Run claude auth login to sign in again, or claude auth logout to remove the ended login and keep that sign-in without this warning." + box, false},
+		// Claude Code 2.1.323: its login expired and the credential it fell
+		// back to without credit, wrapped; quoted, and carried on.
+		{"Claude Code's expired login, its fallback without credit, wrapped", "claude", "● Login expired · Please run /login · Claude Code tried your saved Claude Console API key instead, but it\n  doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing" + box, true},
+		{"the same quoted mid-sentence", "claude", "● Its screen said \"Login expired · Please run /login · Claude Code tried your saved Claude Console API key instead, but it doesn't have enough credit\", so I waited" + box, false},
+		{"the same carried on", "claude", "● Login expired · Please run /login · Claude Code tried the key instead, but it doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing, which I did, and the build is green" + box, false},
 		// Qwen Code 0.26.9: rows that say the session is fine, and its
 		// notices quoted or carried on in an agent's own words.
 		{"Qwen's models that would not load, signed in", "qwen", "answer" + box + "  Could not load models. Your account is still signed in. Please try again.", false},
