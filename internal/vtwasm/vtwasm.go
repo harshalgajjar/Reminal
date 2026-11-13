@@ -133,6 +133,8 @@ type Terminal struct {
 	have uint32
 	// mark is a GhosttyTrackedGridRef (Mark; zero, none yet).
 	mark uint32
+	// fmts are the formatters made, by kind (formatter).
+	fmts map[fmtKind]uint64
 }
 
 // scratch's layout: the value an option or a read is passed in, the pointer
@@ -171,7 +173,7 @@ func New(cols, rows, maxLines int) (*Terminal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vtwasm: instantiating: %w", err)
 	}
-	v := &Terminal{ctx: ctx, mod: mod, fns: map[string]api.Function{}}
+	v := &Terminal{ctx: ctx, mod: mod, fns: map[string]api.Function{}, fmts: map[fmtKind]uint64{}}
 	if v.scratch, err = v.alloc(scratchSize); err != nil {
 		mod.Close(ctx)
 		return nil, fmt.Errorf("vtwasm: no memory for the terminal: %w", err)
@@ -211,6 +213,9 @@ func (v *Terminal) Close() {
 		return
 	}
 	if v.err == nil {
+		for _, f := range v.fmts {
+			v.call("ghostty_formatter_free", f)
+		}
 		if v.mark != 0 {
 			v.call("ghostty_tracked_grid_ref_free", uint64(v.mark))
 		}
@@ -471,52 +476,20 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 	}
 	v.limit = formatLimit
 	defer func() { v.limit = 0 }()
-	slot := v.call("ghostty_wasm_alloc_opaque")
-	if slot == 0 || v.err != nil {
-		return "", errors.Join(errAlloc, v.err)
-	}
-	if rc := v.call("ghostty_formatter_terminal_new", 0, slot, v.t); rc != 0 || v.err != nil {
-		return "", fmt.Errorf("vtwasm: formatter: %d %v", int32(rc), v.err)
-	}
-	f := v.call("ghostty_wasm_take_opaque", slot)
-	defer v.call("ghostty_formatter_free", f)
-	val := v.scratch + scratchVal
-	set := func(opt uint64, word uint32) error {
-		if err := v.put32(val, word); err != nil {
-			return err
-		}
-		if rc := v.call("ghostty_formatter_set", f, opt, uint64(val)); rc != 0 {
-			return fmt.Errorf("vtwasm: formatter option %d: %d", opt, int32(rc))
-		}
-		return nil
-	}
-	if err := set(fmtOptEmit, emit); err != nil {
+	f, err := v.formatter(fmtKind{emit, unwrap})
+	if err != nil {
 		return "", err
 	}
-	if err := set(fmtOptUnwrap, b2u(unwrap)); err != nil {
-		return "", err
-	}
-	if emit == emitVT {
-		// Styles and links only: no palette, modes or cursor, which belong
-		// to the terminal the text is painted into.
-		if err := set(fmtOptExtras, extraStyle|extraHyperlink); err != nil {
-			return "", err
-		}
-		// Blank rows at the end are kept: a viewer painting what scrolled
-		// off and then the screen below it puts the screen where it was
-		// only with them.
-		if err := set(fmtOptTrim, 0); err != nil {
-			return "", err
-		}
-	}
+	// The selection is set on every format, or cleared for all of it: one
+	// set before is no longer valid once the terminal has changed.
+	var sel uint32
 	if a != nil {
-		sel, err := v.selection(*a)
-		if err != nil {
+		if sel, err = v.selection(*a); err != nil {
 			return "", err
 		}
-		if rc := v.call("ghostty_formatter_set", f, fmtOptSelection, uint64(sel)); rc != 0 {
-			return "", fmt.Errorf("vtwasm: selection: %d", int32(rc))
-		}
+	}
+	if rc := v.call("ghostty_formatter_set", f, fmtOptSelection, uint64(sel)); rc != 0 || v.err != nil {
+		return "", fmt.Errorf("vtwasm: selection: %d %v", int32(rc), v.err)
 	}
 	out := v.scratch + scratchOut
 	if rc := v.call("ghostty_formatter_format_alloc", f, 0, uint64(out), uint64(out+4)); rc != 0 || v.err != nil {
@@ -538,6 +511,55 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 		s = stepsToSpaces(s)
 	}
 	return s, nil
+}
+
+// fmtKind is what a formatter emits, and whether it unwraps long lines.
+type fmtKind struct {
+	emit   uint32
+	unwrap bool
+}
+
+// formatter is the formatter of kind k, made the first time (fmts): its
+// options stay set, and making one and setting them was as many calls into
+// the instance as the format itself.
+func (v *Terminal) formatter(k fmtKind) (uint64, error) {
+	if f, ok := v.fmts[k]; ok {
+		return f, nil
+	}
+	slot := v.call("ghostty_wasm_alloc_opaque")
+	if slot == 0 || v.err != nil {
+		return 0, errors.Join(errAlloc, v.err)
+	}
+	if rc := v.call("ghostty_formatter_terminal_new", 0, slot, v.t); rc != 0 || v.err != nil {
+		return 0, fmt.Errorf("vtwasm: formatter: %d %v", int32(rc), v.err)
+	}
+	f := v.call("ghostty_wasm_take_opaque", slot)
+	val := v.scratch + scratchVal
+	set := func(opt uint64, word uint32) error {
+		if err := v.put32(val, word); err != nil {
+			return err
+		}
+		if rc := v.call("ghostty_formatter_set", f, opt, uint64(val)); rc != 0 {
+			return fmt.Errorf("vtwasm: formatter option %d: %d", opt, int32(rc))
+		}
+		return nil
+	}
+	opts := [][2]uint32{{fmtOptEmit, k.emit}, {fmtOptUnwrap, b2u(k.unwrap)}}
+	if k.emit == emitVT {
+		// Styles and links only: no palette, modes or cursor, which belong
+		// to the terminal the text is painted into. Blank rows at the end
+		// are kept: a viewer painting what scrolled off and then the screen
+		// below it puts the screen where it was only with them.
+		opts = append(opts, [2]uint32{fmtOptExtras, extraStyle | extraHyperlink}, [2]uint32{fmtOptTrim, 0})
+	}
+	for _, o := range opts {
+		if err := set(uint64(o[0]), o[1]); err != nil {
+			v.call("ghostty_formatter_free", f)
+			return 0, err
+		}
+	}
+	v.fmts[k] = f
+	return f, nil
 }
 
 // selection is a GhosttySelection (start and end GhosttyGridRef, 8 bytes
