@@ -153,8 +153,8 @@ func TestAFailedScreenIsDroppedAndAJoinFallsBack(t *testing.T) {
 
 // The count of the history's lines a resize reads (HistoryLines, kept from
 // the rows added since and carried across resizes) is what formatting all of
-// it gives, through writes of every length, width and height changes both
-// ways, a program that leaves rows under its cursor, and clears.
+// it gives, through writes of every length and blank lines, width and height
+// changes both ways, a program that leaves rows under its cursor, and clears.
 func TestTheHistoryLineCountMatchesTheHistory(t *testing.T) {
 	resizes, carried := 0, 0
 	for seed := int64(1); seed <= 40; seed++ {
@@ -171,6 +171,10 @@ func TestTheHistoryLineCountMatchesTheHistory(t *testing.T) {
 			case op < 6:
 				var b strings.Builder
 				for n := rng.Intn(6) + 1; n > 0; n-- {
+					if rng.Intn(6) == 0 {
+						b.WriteString("\r\n") // a blank line
+						continue
+					}
 					if rng.Intn(3) == 0 {
 						// A line long enough to wrap at most widths (Claude Code's
 						// rows are up to 200 wide).

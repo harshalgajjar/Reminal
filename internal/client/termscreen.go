@@ -155,19 +155,17 @@ func (s *sessionScreen) Resize(cols, rows int) {
 	defer s.mu.Unlock()
 	s.gen++
 	// The count of the history's lines is carried across (HistoryLines):
-	// its tail read before and after, and the lines it gained or lost found
-	// between them (tailShift). Not on the alternate screen, whose resize
-	// re-wraps the main screen out of sight: it is counted again later.
+	// the screen's top left marked before, and the lines between where it
+	// went and the screen's top now counted (shiftLocked). Not on the
+	// alternate screen, whose resize re-wraps the main screen out of sight:
+	// it is counted again later.
 	alt := s.t.AltScreen()
-	oldCols, h := s.t.Size()
-	var before []string
 	var firstBefore string
 	lines, tracked := 0, false
 	if !alt {
 		lines = s.linesLocked()
 		firstBefore = s.count.first
-		before, tracked = s.historyTail(tailRows(max(h, rows)))
-		tracked = tracked && s.count.valid
+		tracked = s.count.valid && s.t.Mark() == nil
 	}
 	defer func() {
 		s.count.valid = false
@@ -181,18 +179,8 @@ func (s *sessionScreen) Resize(cols, rows int) {
 			s.pruned = true
 			return
 		}
-		// The lines read before take more rows at a narrower width, and a
-		// shrink moves the screen's rows in after them: the rows read now
-		// hold them all. Formatting rows is most of a resize's cost, so the
-		// tail read with the wide reach of old is only for when that one
-		// does not find them.
-		n := tailRows(max(h, rows))*ceilDiv(oldCols, cols) + max(h-rows, 0)
-		for _, reach := range []int{n, 4 * n} {
-			after, ok := s.historyTail(reach)
-			if d, found := tailShift(before, after); ok && found {
-				s.count = lineCount{valid: true, lines: lines + d, rows: s.t.ScrollbackRows(), first: first}
-				return
-			}
+		if d, ok := s.shiftLocked(); ok {
+			s.count = lineCount{valid: true, lines: lines + d, rows: s.t.ScrollbackRows(), first: first}
 		}
 	}()
 	if _, h := s.t.Size(); rows < h && !alt {
@@ -472,53 +460,46 @@ func (s *sessionScreen) linesLocked() int {
 	return n
 }
 
-// historyTail is the last lines of the history, read from its last n rows:
-// the first may be only the end of a line.
-func (s *sessionScreen) historyTail(n int) ([]string, bool) {
-	r := s.t.ScrollbackRows()
-	out, err := s.t.HistoryRows(r-n, r-1)
-	return splitRows(out), err == nil
+// shiftLocked is how many lines the history gained (or lost, negative) since
+// the screen's top left was marked (Mark): a shrink moves rows off the top
+// of the screen into it, a grow, or a re-wrap to a wider screen, pulls its
+// last rows back down. Those are the lines that start between where the
+// marked cell went and the screen's top now, so only their rows are read;
+// false when the mark is gone.
+func (s *sessionScreen) shiftLocked() (int, bool) {
+	x, y, ok := s.t.Marked()
+	if !ok {
+		return 0, false
+	}
+	// The first row that starts at or after the marked cell: a re-wrap can
+	// join the screen's first row onto the end of the history's last.
+	from := y
+	if x > 0 {
+		from++
+	}
+	top := s.t.ScrollbackRows()
+	var n int
+	var err error
+	if from <= top {
+		n, err = s.lineStartsLocked(from, top-1)
+	} else {
+		n, err = s.lineStartsLocked(top, from-1)
+		n = -n
+	}
+	return n, err == nil
 }
 
-// tailRows is how many of the history's last rows are read across a resize
-// of a screen h rows high: enough for a pair of lines found once in them
-// (tailShift), away from both ends, with room for the rows the resize moves.
-func tailRows(h int) int { return 2*h + 16 }
-
-func ceilDiv(a, b int) int { return (a + max(b, 1) - 1) / max(b, 1) }
-
-// tailShift is how many lines the history gained (or lost, negative) between
-// two reads of its tail, before and after a resize: a shrink moves rows off
-// the top of the screen into it, a grow pulls its last lines back down, and a
-// re-wrap moves neither. Read off a pair of lines found once in each tail,
-// away from both ends (a tail's first line can be the end of one, its last
-// the start of one the screen goes on with); false when there is none.
-func tailShift(old, now []string) (int, bool) {
-	key := func(t []string, i int) string { return t[i-1] + "\x00" + t[i] }
-	where := func(t []string) map[string]int {
-		m := map[string]int{}
-		for i := 2; i <= len(t)-2; i++ {
-			k := key(t, i)
-			if _, seen := m[k]; seen {
-				m[k] = -1
-			} else {
-				m[k] = i
-			}
-		}
-		return m
+// lineStartsLocked is how many of rows y0 to y1 (of scrollback and screen
+// together) start a line, not go on with the one in the row before.
+func (s *sessionScreen) lineStartsLocked(y0, y1 int) (int, error) {
+	if y0 > y1 {
+		return 0, nil
 	}
-	inOld, inNow := where(old), where(now)
-	for i := len(old) - 2; i >= 2; i-- {
-		if len(dedupWords(old[i]))+len(dedupWords(old[i-1])) == 0 {
-			continue
-		}
-		k := key(old, i)
-		if inOld[k] != i {
-			continue
-		}
-		if j, ok := inNow[k]; ok && j > 0 {
-			return (len(now) - 1 - j) - (len(old) - 1 - i), true
-		}
+	if y0 == 0 {
+		out, err := s.t.Rows(0, y1)
+		return len(splitRows(out)), err
 	}
-	return 0, false
+	// From the row before: its line, or the end of it, comes first.
+	out, err := s.t.Rows(y0-1, y1)
+	return len(splitRows(out)) - 1, err
 }
