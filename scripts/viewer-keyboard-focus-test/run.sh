@@ -4,9 +4,9 @@
 #
 # A touch screen's keyboard comes up only when asked (check.mjs): a tap on a
 # remote window whose keyboard is off, a reconnect, and a keyboard put away
-# by hand all leave no input holding focus, while a window's keyboard turned
-# on and a desktop's reconnect still take it. Needs docker; the browser runs
-# in a Playwright container.
+# by hand (a folded phone and split screen too) all leave no input holding
+# focus, while a window's keyboard turned on and a desktop's reconnect still
+# take it. Needs docker; the browser runs in a Playwright container.
 #
 #   scripts/viewer-keyboard-focus-test/run.sh [PAGE_DIR]
 set -euo pipefail

@@ -97,6 +97,26 @@ const focusTerminal = (page) => page.evaluate(() => document.querySelector('.xte
   expect('phone, the keyboard put away by hand', await focused(page), NONE);
   await ctx.close();
 }
+// The screen gets smaller with no keyboard up, as on folding a phone (the
+// width goes too) or going to split screen (the same width), and then the
+// keyboard comes up and is put away there.
+const SMALLER = [
+  ['folded', { width: 840, height: 900 }, { width: 360, height: 780 }],
+  ['in split screen', PHONE.viewport, { width: 412, height: 450 }],
+];
+for (const [what, big, small] of SMALLER) {
+  const { ctx, page } = await open({ ...PHONE, viewport: big });
+  await page.setViewportSize(small);
+  await page.waitForTimeout(800);
+  await focusTerminal(page);
+  await page.setViewportSize({ width: small.width, height: small.height - 250 });
+  await page.waitForTimeout(800);
+  expect(`phone ${what}, the keyboard up for the terminal`, await focused(page), TERM);
+  await page.setViewportSize(small);
+  await page.waitForTimeout(800);
+  expect(`phone ${what}, the keyboard put away by hand`, await focused(page), NONE);
+  await ctx.close();
+}
 {
   const { ctx, page } = await open(PHONE);
   await openPane(page);

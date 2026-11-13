@@ -2785,23 +2785,33 @@
     //     selection): dropHidden().
     // Whether the keyboard is up is read off the viewport: with the page's
     // interactive-widget=resizes-content, Android shrinks the window and the
-    // visual viewport together, so it is measured against the tallest
-    // viewport seen held this way up, not against the window.
+    // visual viewport together, so it is measured against the viewport with
+    // no keyboard. A keyboard is only ever up for a field with focus, so with
+    // none focused the viewport as it is is that height: folding a phone,
+    // split screen or a pop-up view change it with no keyboard involved.
+    // Touch is any pointer, not the primary one: a tablet or foldable with a
+    // mouse or a keyboard cover still raises a soft keyboard when touched.
     const SoftKeyboard = (() => {
-      const touch = matchMedia('(pointer: coarse)');
+      const touch = matchMedia('(any-pointer: coarse)');
       const inputs = [helperTA, document.getElementById('wkey')].filter(Boolean);
       const KEYBOARD_PX = 150;    // shorter than this is browser chrome, not a keyboard
-      let heldAs = null, fullH = 0; // the viewport with no keyboard, held this way up
+      // The viewport's height with no keyboard: for each way the device is
+      // held, and the last seen at all, for a way it has not been held yet
+      // (or one the keyboard seems to turn it to, as an emulator reports).
+      const fullBy = new Map();
+      let lastFull = 0;
       let wasUp = false;
       const viewportH = () => (window.visualViewport ? window.visualViewport.height : window.innerHeight);
-      // The way the device is held: the page's own width moves with its
-      // content and its height with the keyboard, so neither says it turned.
       const wayUp = () => (screen.orientation ? screen.orientation.type : String(window.orientation));
+      const editing = () => {
+        const e = document.activeElement;
+        return !!e && (e.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(e.tagName));
+      };
       function isUp() {
         const way = wayUp(), h = viewportH();
-        if (way !== heldAs) { heldAs = way; fullH = h; wasUp = false; } // turned: measured again
-        fullH = Math.max(fullH, h);
-        return fullH - h > KEYBOARD_PX;
+        if (!editing()) { fullBy.set(way, h); lastFull = h; }
+        const full = fullBy.has(way) ? fullBy.get(way) : lastFull;
+        return Math.max(full, h) - h > KEYBOARD_PX;
       }
       const holder = () => (inputs.includes(document.activeElement) ? document.activeElement : null);
       function release() {
