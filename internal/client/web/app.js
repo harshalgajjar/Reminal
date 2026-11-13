@@ -2769,6 +2769,69 @@
     // on it for the iOS field-mirror.
     const APPLE_MOBILE = /iP(hone|ad|od)/.test(navigator.userAgent) ||
       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    // SoftKeyboard owns a touch screen's keyboard. The keyboard comes up for
+    // whatever text input has focus, and Android keeps that focus after its
+    // keyboard is put away (the back gesture): the next tap, or a focus() no
+    // one asked for, raised it again, so a window whose keyboard was off
+    // brought up the terminal's. One rule keeps that state from existing: on
+    // a touch screen, an input holds focus only while its keyboard is up.
+    // Everything that moves the keys says why:
+    //   - a person asked to type (a tap on the terminal, a window's keyboard
+    //     turned on): focus the input itself, as ever;
+    //   - a person tapped away from typing: release();
+    //   - nobody asked (a reconnect): restoreTerminal(), which never raises a
+    //     keyboard that is down nor takes the keys from another input;
+    //   - something that is not typing must not bring it back (a text
+    //     selection): dropHidden().
+    // Whether the keyboard is up is read off the viewport: with the page's
+    // interactive-widget=resizes-content, Android shrinks the window and the
+    // visual viewport together, so it is measured against the tallest
+    // viewport seen held this way up, not against the window.
+    const SoftKeyboard = (() => {
+      const touch = matchMedia('(pointer: coarse)');
+      const inputs = [helperTA, document.getElementById('wkey')].filter(Boolean);
+      const KEYBOARD_PX = 150;    // shorter than this is browser chrome, not a keyboard
+      let heldAs = null, fullH = 0; // the viewport with no keyboard, held this way up
+      let wasUp = false;
+      const viewportH = () => (window.visualViewport ? window.visualViewport.height : window.innerHeight);
+      // The way the device is held: the page's own width moves with its
+      // content and its height with the keyboard, so neither says it turned.
+      const wayUp = () => (screen.orientation ? screen.orientation.type : String(window.orientation));
+      function isUp() {
+        const way = wayUp(), h = viewportH();
+        if (way !== heldAs) { heldAs = way; fullH = h; wasUp = false; } // turned: measured again
+        fullH = Math.max(fullH, h);
+        return fullH - h > KEYBOARD_PX;
+      }
+      const holder = () => (inputs.includes(document.activeElement) ? document.activeElement : null);
+      function release() {
+        const el = holder();
+        if (el) el.blur();
+      }
+      // check follows the viewport (its resizes, and the layout's poll for
+      // the ones Android drops): a keyboard that went down takes its focus
+      // with it.
+      function check() {
+        const up = isUp();
+        if (wasUp && !up && touch.matches) release();
+        wasUp = up;
+      }
+      if (window.visualViewport) window.visualViewport.addEventListener('resize', check);
+      window.addEventListener('resize', check);
+      check();   // the page opens with no keyboard up: its full height, measured now
+      return {
+        check,
+        release,
+        restoreTerminal() {
+          if (holder() && holder() !== helperTA) return;
+          if (touch.matches && !isUp()) return;
+          term.focus();
+        },
+        dropHidden() {
+          if (touch.matches && !isUp()) release();
+        },
+      };
+    })();
     // imeField: iOS field-mirror — the text we've mirrored to the shell for the
     // current IME field (see the beforeinput handler). Top-level so sendInput
     // can invalidate it when out-of-band input (keybar, paste) edits the line.
@@ -5852,7 +5915,7 @@
       droppedBeforeKey = null;
       if (!(early && early.sock === ws && early.exID === keyExID && !dropped)) sendResume();
       publishSize();
-      term.focus();
+      SoftKeyboard.restoreTerminal();   // typing goes to the terminal again, raising no keyboard
       if (winStreamsNeedRestart) {
         winStreamsNeedRestart = false;
         restartWinStreams();
@@ -9830,6 +9893,7 @@
     setInterval(() => {
       if (document.hidden) return;
       applyViewportHeight();
+      SoftKeyboard.check();   // a keyboard closed with its viewport resize dropped
       const kbTop = keybar ? Math.round(keybar.getBoundingClientRect().top) : 0;
       const wrap = document.getElementById('terminal-wrap');
       const boxDrift = TermSize.boxDrift(wrap);
@@ -9901,16 +9965,8 @@
       // hand-back races this blur. Two attempts to close that race -- a timed
       // no-refocus window, then one tied to the selection's lifetime -- did not
       // remove it and only added state to a file that has plenty, so they were
-      // dropped in favour of the small fix that does the useful part.
-      const kbdIsOpen = () => {
-        const vv = window.visualViewport;
-        return !!vv && (window.innerHeight - vv.height) > 150;
-      };
-      function dropFocusIfKeyboardDown() {
-        if (kbdIsOpen()) return;          // keyboard is up: leave focus alone
-        const el = document.activeElement;
-        if (el && el.classList && el.classList.contains('xterm-helper-textarea')) el.blur();
-      }
+      // dropped in favour of the small fix that does the useful part
+      // (SoftKeyboard.dropHidden).
 
       let active = false;                 // selection mode on
       let sel = null;                     // ordered {start:{col,row}, end:{col,row}} in ABSOLUTE buffer coords
@@ -10096,7 +10152,7 @@
       let dragOff = { x: 0, y: 0 };
       function beginHandleDrag(which, e) {
         e.preventDefault();
-        dropFocusIfKeyboardDown();      // dragging a grip is selection, not typing
+        SoftKeyboard.dropHidden();      // dragging a grip is selection, not typing
         dragWhich = which;
         const cell = which === 'start' ? sel.start : sel.end;
         const pt = cellToPoint(cell.col, cell.row);
@@ -10316,7 +10372,7 @@
         lpTimer = setTimeout(() => {
           lpTimer = null; extending = true; extendMoved = false;
           extendCommitted = false;
-          dropFocusIfKeyboardDown();     // before the selection can bounce focus
+          SoftKeyboard.dropHidden();     // before the selection can bounce focus
           enterSelection(lpStart.cell);
           dragWhich = 'end';                        // let the same finger extend the end
           suppressFocusClick = true;
@@ -13428,13 +13484,13 @@
           // went to the remote window, and the soft keyboard comes up, so
           // tapping a text box leaves you ready to type into it.
           //
-          // Disarmed, a tap is only a click and puts the keyboard away, the way
-          // tapping outside a text field does everywhere else. That has to be
-          // explicit: pane taps preventDefault, which suppresses the browser's
-          // own tap-elsewhere blur. Scrolls and drags are excluded above, so
-          // this only fires on a deliberate tap.
+          // Disarmed, a tap is only a click and puts any keyboard away, the
+          // terminal's too, the way tapping outside a text field does everywhere
+          // else. That has to be explicit: pane taps preventDefault, which
+          // suppresses the browser's own tap-elsewhere blur. Scrolls and drags
+          // are excluded above, so this only fires on a deliberate tap.
           if (pane.kbdMode) wkey.focus();
-          else if (document.activeElement === wkey) wkey.blur();
+          else SoftKeyboard.release();
         }
       }
       img.addEventListener('pointerup', endPointer);
@@ -13472,20 +13528,8 @@
     // bar's ⌫ instead, whose JS-timed repeat works everywhere.
     wkey.addEventListener('focus', () => document.body.classList.add('wkbd-open'));
     wkey.addEventListener('blur', () => { document.body.classList.remove('wkbd-open'); wkey.value = ''; });
-    // Respect the OS keyboard-dismiss gesture (Android back, iOS "done"): the
-    // IME collapses WITHOUT blurring the input, so the page still considers the
-    // user "typing" and the next pane tap re-summons the keyboard. Detect the
-    // dismissal by the visual viewport growing back while our input holds
-    // focus, and release the focus to match. Touch devices only — on desktop a
-    // window resize mid-typing must not eat keyboard focus.
-    if (window.visualViewport && matchMedia('(any-pointer: coarse)').matches) {
-      let vvHeight = visualViewport.height;
-      visualViewport.addEventListener('resize', () => {
-        const grewBy = visualViewport.height - vvHeight;
-        vvHeight = visualViewport.height;
-        if (grewBy > 120 && document.activeElement === wkey) wkey.blur();
-      });
-    }
+    // The OS keyboard-dismiss gesture (Android back, iOS "done") takes
+    // #wkey's focus with it, as it does any input's (SoftKeyboard).
     // Bounds one typed message. Large enough that ordinary input and most
     // pastes go in a single call, small enough that the host never builds an
     // unwieldy script argument out of one.
