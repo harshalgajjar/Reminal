@@ -159,14 +159,14 @@ func (s *sessionScreen) Resize(cols, rows int) {
 	// between them (tailShift). Not on the alternate screen, whose resize
 	// re-wraps the main screen out of sight: it is counted again later.
 	alt := s.t.AltScreen()
+	oldCols, h := s.t.Size()
 	var before []string
 	var firstBefore string
 	lines, tracked := 0, false
 	if !alt {
 		lines = s.linesLocked()
 		firstBefore = s.count.first
-		_, h := s.t.Size()
-		before, tracked = s.historyTail(max(h, rows))
+		before, tracked = s.historyTail(tailRows(max(h, rows)))
 		tracked = tracked && s.count.valid
 	}
 	defer func() {
@@ -174,7 +174,6 @@ func (s *sessionScreen) Resize(cols, rows int) {
 		if !tracked {
 			return
 		}
-		after, ok := s.historyTail(max(rows, len(before)/8))
 		first := s.firstLineLocked()
 		if first != firstBefore {
 			// The re-wrap took the scrollback past its budget: its oldest
@@ -182,8 +181,18 @@ func (s *sessionScreen) Resize(cols, rows int) {
 			s.pruned = true
 			return
 		}
-		if d, found := tailShift(before, after); ok && found {
-			s.count = lineCount{valid: true, lines: lines + d, rows: s.t.ScrollbackRows(), first: first}
+		// The lines read before take more rows at a narrower width, and a
+		// shrink moves the screen's rows in after them: the rows read now
+		// hold them all. Formatting rows is most of a resize's cost, so the
+		// tail read with the wide reach of old is only for when that one
+		// does not find them.
+		n := tailRows(max(h, rows))*ceilDiv(oldCols, cols) + max(h-rows, 0)
+		for _, reach := range []int{n, 4 * n} {
+			after, ok := s.historyTail(reach)
+			if d, found := tailShift(before, after); ok && found {
+				s.count = lineCount{valid: true, lines: lines + d, rows: s.t.ScrollbackRows(), first: first}
+				return
+			}
 		}
 	}()
 	if _, h := s.t.Size(); rows < h && !alt {
@@ -463,14 +472,20 @@ func (s *sessionScreen) linesLocked() int {
 	return n
 }
 
-// historyTail is the last lines of the history, read from its last rows
-// (enough for a screen's height h several times over): the first may be
-// only the end of a line.
-func (s *sessionScreen) historyTail(h int) ([]string, bool) {
+// historyTail is the last lines of the history, read from its last n rows:
+// the first may be only the end of a line.
+func (s *sessionScreen) historyTail(n int) ([]string, bool) {
 	r := s.t.ScrollbackRows()
-	out, err := s.t.HistoryRows(r-(8*h+16), r-1)
+	out, err := s.t.HistoryRows(r-n, r-1)
 	return splitRows(out), err == nil
 }
+
+// tailRows is how many of the history's last rows are read across a resize
+// of a screen h rows high: enough for a pair of lines found once in them
+// (tailShift), away from both ends, with room for the rows the resize moves.
+func tailRows(h int) int { return 2*h + 16 }
+
+func ceilDiv(a, b int) int { return (a + max(b, 1) - 1) / max(b, 1) }
 
 // tailShift is how many lines the history gained (or lost, negative) between
 // two reads of its tail, before and after a resize: a shrink moves rows off
