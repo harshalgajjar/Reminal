@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -116,6 +117,11 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 		NextSeq: a.buf.LatestSeq(),
 	}
 	dump.BaseCols, dump.BaseRows = a.buf.Base()
+	// A copy that has failed (sessionScreen.Err) is not what the program
+	// drew: dropped first, as every other reader drops it, so the dump
+	// carries the ring alone and the successor replays that, instead of a
+	// history that was never on the screen.
+	a.dropFailedScreenLocked()
 	if a.screen != nil {
 		// The screen's rows too: what an app left above a frame it repaints
 		// in place never scrolls into scrollback, and its ring holds only the
@@ -133,7 +139,7 @@ func (a *Agent) writeScrollbackDumpTo(path string, seal func([]byte) ([]byte, er
 		}
 		dump.HistoryCols = a.screen.Width()
 	}
-	a.screenMu.Unlock()
+	a.unlockScreen()
 	dump.Entries = make([]scrollDumpEntry, 0, len(raw))
 	for _, e := range raw {
 		de := scrollDumpEntry{Seq: e.Seq, Bar: e.Bar, Cols: e.Cols, Rows: e.Rows}
@@ -238,7 +244,7 @@ func readScrollbackDump(path string, open func([]byte) ([]byte, error)) *scrollb
 // initScreen and before the PTY pump, or live output interleaves with history.
 func (a *Agent) restoreResumedScrollback() {
 	a.screenMu.Lock()
-	defer a.screenMu.Unlock()
+	defer a.unlockScreen()
 	a.restoreResumedScrollbackLocked()
 }
 
@@ -258,7 +264,7 @@ func (a *Agent) restoreResumedScrollbackLocked() {
 		if len(e.Data) > 0 {
 			enc, err := a.box.Encrypt(e.Data)
 			if err != nil {
-				agentNotify("  reminal: could not restore scrollback: %v\n", err)
+				a.notifyLocked("  reminal: could not restore scrollback: %v\n", err)
 				return
 			}
 			se.Data = enc
@@ -276,7 +282,7 @@ func (a *Agent) restoreResumedScrollbackLocked() {
 		// against the history's tail, and the history goes in up to there.
 		scratch, err := newSessionScreen(max(d.BaseCols, 1), max(d.BaseRows, 1), len(d.History)+1000)
 		if err != nil {
-			agentNotify("  reminal: could not restore scrollback: %v\n", err)
+			a.notifyLocked("  reminal: could not restore scrollback: %v\n", err)
 			return
 		}
 		again := func() []string {
@@ -438,15 +444,37 @@ func restoreHistory(e *sessionScreen, history []string, cols int) {
 	if cols > 0 && cols != e.Width() {
 		e.Resize(cols, e.Height())
 	}
+	writeHistory(e, history, e.Height())
+}
+
+// writeHistory writes history to w a line each, then rows blank lines and the
+// screen cleared without pushing (restoreHistory). In pieces of at most
+// restoreChunk bytes, cut at line ends: a call into the terminal is bounded in
+// time (vtwasm), and a session's whole history in one call could run past
+// the bound on a slow or busy machine, which fails the copy, and a join then
+// gets no history at all.
+func writeHistory(w io.Writer, history []string, rows int) {
 	var b strings.Builder
+	flush := func() {
+		if b.Len() > 0 {
+			_, _ = w.Write([]byte(b.String()))
+			b.Reset()
+		}
+	}
 	for _, l := range history {
 		b.WriteString(l)
 		b.WriteString("\x1b[m\r\n")
+		if b.Len() >= restoreChunk {
+			flush()
+		}
 	}
-	b.WriteString(strings.Repeat("\r\n", e.Height()))
+	b.WriteString(strings.Repeat("\r\n", rows))
 	b.WriteString("\x1b[H\x1b[J")
-	_, _ = e.Write([]byte(b.String()))
+	flush()
 }
+
+// restoreChunk is how much of a history one call into the terminal is given.
+const restoreChunk = 256 << 10
 
 // renderedScreenRows is e's screen rendered, a line a row, without the blank rows
 // below its last text.
