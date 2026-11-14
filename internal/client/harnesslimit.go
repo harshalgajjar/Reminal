@@ -306,7 +306,8 @@ var harnessLimitNotices = map[string][]limitNotice{
 		`you.?vehityourusagelimit(?:for`+limitModel+`)?(?:\.(?:upgradetoplustocontinueusingcodex\(https://chatgpt\.com/explore/plus\)`+
 			`|upgradetopro\(https://chatgpt\.com/explore/pro\),visithttps://chatgpt\.com/settings/usagetopurchasemorecredits`+
 			`|visithttps://chatgpt\.com/settings/usagetopurchasemorecredits|togetmoreaccessnow,sendarequesttoyouradmin))?`,
-		`usagelimitreached\.you.?vereachedyourusagelimit`,
+		// Codex 0.169 goes on with what to do about it.
+		`usagelimitreached\.you.?vereachedyourusagelimit(?:\.increaseyourlimitstocontinueusingcodex)?`,
 		`(?:you.?reoutofcredits\.)?yourworkspaceisoutofcredits\.(?:addcreditstocontinue(?:usingcodex)?`+
 			`|askyourworkspaceownertoaddmore(?:\.notifyowner\?)?|askyourworkspaceownertorefillinordertocontinue)`,
 		`you.?vereachedyourworkspacecreditlimit`,

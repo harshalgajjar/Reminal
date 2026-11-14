@@ -46,6 +46,8 @@ var loginRowCases = []loginRowCase{
 	{prog: "codex", row: "■ enterprise IdP session has no refresh token; sign in again"},
 	{prog: "codex", row: "■ enterprise IdP credentials were removed; sign in again"},
 	{prog: "codex", row: "■ enterprise IdP identity changed; sign in again and reconnect"},
+	// Codex 0.169.0: a Codex account it cannot refresh.
+	{prog: "codex", row: "■ Codex account has no refresh token; sign in again"},
 	// Qwen Code 0.26.9: a message turned away for want of a login, its /auth
 	// flow, its signed-out state, no provider, signing in through the
 	// browser, and a plan without Qwen Code (the plan's name is a hole:
@@ -594,6 +596,8 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"a bundle label of Droid's, never recorded on a screen, ending an answer", "droid", "● It said:\n  This Droid is not signed in\n", false},
 		{"Droid's login sentence in an answer, no menu under it", "droid", "● Please login with your Factory account to continue.\n  Then run droid again and the tests pass.\n", false},
 		{"Codex's IdP row carried on in an answer", "codex", "● The server said enterprise IdP session has no refresh token; sign in again, so I stopped.\n› ", false},
+		{"Codex's refresh-token row carried on", "codex", "■ Codex account has no refresh token; sign in again once the build finishes\n› ", false},
+		{"Codex's refresh-token row quoted", "codex", "• I saw \"Codex account has no refresh token; sign in again\" in the log\n› ", false},
 		// Claude Code 2.1.319: a claude.ai login that ended while another
 		// login profile pays for the usage: the session goes on, and the
 		// footer and its warning only say so; not a login wanted.

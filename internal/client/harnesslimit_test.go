@@ -37,6 +37,8 @@ import (
 // expired login's fallback
 // without credit (harnesshealth_rows_test.go), were built from the code
 // that draws them (2026-11-13), and 2.1.325's the same way (2026-11-14).
+// Codex 0.169.0's usage limit tail and refresh-token row are from its
+// binary's strings (2026-11-14).
 // Where a CLI's glyph before its notice is not known, the screen has none.
 // Qwen Code 0.27.2's credits notice was captured from the CLI itself, its
 // service answered by a stand-in (Docker, 2026-11-12).
@@ -94,6 +96,9 @@ var limitScreens = []struct {
 	{"codex", "■ Your workspace is out of credits. Ask your workspace owner to refill in order to continue.\n› ", time.Time{}},
 	{"codex", "■ You've reached your workspace credit limit\n› ", time.Time{}},
 	{"codex", "■ Your included usage is exhausted. Choose an option below to continue.\n› ", time.Time{}},
+	// Codex 0.169.0 (source): its usage limit, and what to do about it.
+	{"codex", "■ Usage limit reached. You've reached your usage limit.\n› ", time.Time{}},
+	{"codex", "■ Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex.\n› ", time.Time{}},
 	// On a phone's narrow screen: four rows.
 	{"codex", "■ You’ve hit your usage limit. Upgrade to Pro\n(https://chatgpt.com/explore/pro), visit\nhttps://chatgpt.com/settings/usage to purchase\nmore credits or try again at 3:05 PM.\n\n› ", limitLA(2026, 10, 19, 15, 5)},
 	{"gemini", "✕ Rate limit exceeded. Try again later.\n│ > │", time.Time{}},
@@ -1158,6 +1163,9 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		// Claude Code 2.1.323's credit row, quoted, and carried on.
 		{"claude", "● The API said \"Credit balance too low · Add funds: https://platform.claude.com/settings/billing\", so I stopped."},
 		{"claude", "  ⎿  Credit balance too low · Add funds: https://platform.claude.com/settings/billing, then rerun the job"},
+		// Codex 0.169.0's usage limit, carried on and quoted.
+		{"codex", "■ Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex, then rerun the tests.\n› "},
+		{"codex", "• The run stopped with \"Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex.\" earlier\n› "},
 	} {
 		if hit, _ := harnessLimitIn(tc.screen, tc.prog, limitTestNow); hit {
 			t.Errorf("%s: read as at its limit: %q", tc.prog, tc.screen)
