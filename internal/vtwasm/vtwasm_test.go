@@ -278,3 +278,66 @@ func TestManyStyleChangesWriteBackOnePen(t *testing.T) {
 		t.Errorf("the pen after the gap is %d bytes: %q…", len(tail), tail[:32])
 	}
 }
+
+// What is read of the terminal (its size, cursor, scrollback, the alternate
+// screen) is read from the instance once while it has not changed, and every
+// change shows in the next read: a write, a resize, a reset.
+func TestEveryChangeShowsInTheNextRead(t *testing.T) {
+	v := newTerm(t, 80, 24)
+	fmt.Fprint(v, "\x1b[3;4H")
+	if x, y := v.Cursor(); x != 3 || y != 2 {
+		t.Errorf("cursor %d,%d, want 3,2", x, y)
+	}
+	fmt.Fprint(v, "abc")
+	if x, _ := v.Cursor(); x != 6 {
+		t.Errorf("cursor after a write at column %d, want 6", x)
+	}
+	if err := v.Resize(60, 20); err != nil {
+		t.Fatal(err)
+	}
+	if c, r := v.Size(); c != 60 || r != 20 {
+		t.Errorf("size after a resize %dx%d, want 60x20", c, r)
+	}
+	longLines(v, 100)
+	n := v.ScrollbackRows()
+	if n == 0 {
+		t.Fatal("no scrollback after 100 lines")
+	}
+	if again := v.ScrollbackRows(); again != n {
+		t.Errorf("scrollback read twice: %d, then %d", n, again)
+	}
+	fmt.Fprint(v, "\x1b[?1049h")
+	if !v.AltScreen() {
+		t.Error("no alternate screen after ?1049h")
+	}
+	v.Reset()
+	if v.AltScreen() || v.ScrollbackRows() != 0 {
+		t.Errorf("after a reset: alt %v, scrollback %d", v.AltScreen(), v.ScrollbackRows())
+	}
+}
+
+// Writes of every size go in whole, the memory kept for them grown as they
+// do, and one past what is kept goes in from memory of its own.
+func TestWritesOfEverySizeGoInWhole(t *testing.T) {
+	v := newTerm(t, 200, 10)
+	line := func(i, w int) string { return fmt.Sprintf("W%04d %s E%04d\r\n", i, strings.Repeat("x", w), i) }
+	sizes := []int{10, 5000, 100, inKeep + 1000, 50, 30000, 20}
+	for i, w := range sizes {
+		var b strings.Builder
+		for b.Len() < w {
+			b.WriteString(line(i, 100))
+		}
+		if _, err := v.Write([]byte(b.String())); err != nil {
+			t.Fatalf("write %d of %d bytes: %v", i, b.Len(), err)
+		}
+	}
+	text, err := v.Text()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range sizes {
+		if !strings.Contains(text, fmt.Sprintf("W%04d", i)) || !strings.Contains(text, fmt.Sprintf("E%04d", i)) {
+			t.Errorf("write %d is not in what it holds", i)
+		}
+	}
+}

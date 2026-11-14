@@ -77,6 +77,7 @@ const (
 	dataCursorX        = 3  // GHOSTTY_TERMINAL_DATA_CURSOR_X
 	dataCursorY        = 4  // GHOSTTY_TERMINAL_DATA_CURSOR_Y
 	dataActiveScreen   = 6  // GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN (0 primary, 1 alternate)
+	dataTotalRows      = 14 // GHOSTTY_TERMINAL_DATA_TOTAL_ROWS
 	dataScrollbackRows = 15 // GHOSTTY_TERMINAL_DATA_SCROLLBACK_ROWS
 
 	fmtOptEmit      = 1 // GHOSTTY_FORMATTER_OPT_EMIT
@@ -92,6 +93,7 @@ const (
 	extraHyperlink = 1 << 8 // GHOSTTY_FORMATTER_EXTRA_HYPERLINK
 
 	tagActive  = 0 // GHOSTTY_POINT_TAG_ACTIVE
+	tagScreen  = 2 // GHOSTTY_POINT_TAG_SCREEN
 	tagHistory = 3 // GHOSTTY_POINT_TAG_HISTORY
 
 	sizeMax = 0xFFFFFFFF // SIZE_MAX: size_t is 32 bits on wasm32
@@ -113,7 +115,41 @@ type Terminal struct {
 	// trapped): every call after that does nothing and gives zero, never
 	// a panic in the process it runs in.
 	err error
+	// scratch is memory of the instance's, taken once, for the small values
+	// passed by address (scratch*): a call into the instance costs as much as
+	// a small read, and taking and freeing memory around each read made one
+	// read three.
+	scratch uint32
+	// in is memory of the instance's kept for what a program writes (inCap
+	// bytes; zero, none yet): the writes of a session come one after another,
+	// most of them small.
+	in    uint32
+	inCap int
+	// data is the terminal's data (get) as read since it last changed, the
+	// data numbers in have (a bit each): what the session reads after every
+	// write (its scrollback, the alternate screen) and every format (its
+	// size) is read from the instance once.
+	data [16]uint64
+	have uint32
+	// mark is a GhosttyTrackedGridRef (Mark; zero, none yet).
+	mark uint32
+	// fmts are the formatters made, by kind (formatter).
+	fmts map[fmtKind]uint64
 }
+
+// scratch's layout: the value an option or a read is passed in, the pointer
+// and length a format gives back, a selection, a point.
+const (
+	scratchVal   = 0  // 8 bytes
+	scratchOut   = 8  // 8: pointer, length
+	scratchSel   = 16 // 20: GhosttySelection
+	scratchPoint = 40 // 24, 8-aligned: GhosttyPoint
+	scratchSize  = 64
+)
+
+// inKeep is the most memory kept for writes: a larger one (a restored
+// history) takes its own and gives it back.
+const inKeep = 64 << 10
 
 // errClosed is a Terminal used after Close.
 var errClosed = errors.New("vtwasm: closed")
@@ -137,7 +173,11 @@ func New(cols, rows, maxLines int) (*Terminal, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vtwasm: instantiating: %w", err)
 	}
-	v := &Terminal{ctx: ctx, mod: mod, fns: map[string]api.Function{}}
+	v := &Terminal{ctx: ctx, mod: mod, fns: map[string]api.Function{}, fmts: map[fmtKind]uint64{}}
+	if v.scratch, err = v.alloc(scratchSize); err != nil {
+		mod.Close(ctx)
+		return nil, fmt.Errorf("vtwasm: no memory for the terminal: %w", err)
+	}
 	slot := v.call("ghostty_wasm_alloc_opaque")
 	if slot == 0 || v.err != nil {
 		mod.Close(ctx)
@@ -173,6 +213,12 @@ func (v *Terminal) Close() {
 		return
 	}
 	if v.err == nil {
+		for _, f := range v.fmts {
+			v.call("ghostty_formatter_free", f)
+		}
+		if v.mark != 0 {
+			v.call("ghostty_tracked_grid_ref_free", uint64(v.mark))
+		}
 		v.call("ghostty_terminal_free", v.t)
 	}
 	v.mod.Close(v.ctx)
@@ -190,20 +236,45 @@ func (v *Terminal) Write(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
-	buf, err := v.alloc(len(p))
+	buf, err := v.inBuf(len(p))
 	if err != nil {
 		return 0, err
 	}
-	defer v.free(buf, len(p))
+	if buf != v.in {
+		defer v.free(buf, len(p))
+	}
 	if err := v.put(buf, p); err != nil {
 		return 0, err
 	}
+	v.changed()
 	v.call("ghostty_terminal_vt_write", v.t, uint64(buf), uint64(len(p)))
 	if v.err != nil {
 		return 0, v.err
 	}
 	return len(p), nil
 }
+
+// inBuf is memory for a write of n bytes: the kept memory (in), taken or
+// grown to fit when n is within inKeep, else memory of its own the caller
+// frees.
+func (v *Terminal) inBuf(n int) (uint32, error) {
+	if n > inKeep {
+		return v.alloc(n)
+	}
+	if n > v.inCap {
+		v.free(v.in, v.inCap)
+		v.in, v.inCap = 0, 0
+		p, err := v.alloc(max(n, 4<<10))
+		if err != nil {
+			return 0, err
+		}
+		v.in, v.inCap = p, max(n, 4<<10)
+	}
+	return v.in, nil
+}
+
+// changed forgets the data read (data): the terminal is about to change.
+func (v *Terminal) changed() { v.have = 0 }
 
 // Resize makes it cols by rows, re-wrapping its scrollback to the width.
 func (v *Terminal) Resize(cols, rows int) error {
@@ -212,6 +283,7 @@ func (v *Terminal) Resize(cols, rows int) error {
 	if v.err != nil {
 		return v.err
 	}
+	v.changed()
 	if rc := v.call("ghostty_terminal_resize", v.t, uint64(clamp16(cols)), uint64(clamp16(rows)), 0, 0); rc != 0 {
 		return fmt.Errorf("vtwasm: resize: %d", int32(rc))
 	}
@@ -222,6 +294,7 @@ func (v *Terminal) Resize(cols, rows int) error {
 func (v *Terminal) SetMaxLines(n int) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.changed()
 	_ = v.setSize(optScrollbackMaxLines, uint64(max(n, 0)))
 }
 
@@ -229,6 +302,7 @@ func (v *Terminal) SetMaxLines(n int) {
 func (v *Terminal) Reset() {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	v.changed()
 	v.call("ghostty_terminal_reset", v.t)
 }
 
@@ -286,18 +360,80 @@ func (v *Terminal) History() (string, error) {
 // it. Reading only the rows that changed is how a count of the history's
 // lines is kept without formatting all of it.
 func (v *Terminal) HistoryRows(y0, y1 int) (string, error) {
+	return v.rows(tagHistory, dataScrollbackRows, y0, y1)
+}
+
+// Rows is HistoryRows for the rows of scrollback and screen together (0 the
+// oldest), where a mark is (Marked).
+func (v *Terminal) Rows(y0, y1 int) (string, error) {
+	return v.rows(tagScreen, dataTotalRows, y0, y1)
+}
+
+// rows formats rows y0 to y1 of tag's rows, of which there are data's count.
+func (v *Terminal) rows(tag uint32, data, y0, y1 int) (string, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.err != nil {
 		return "", v.err
 	}
-	n := int(v.get32(dataScrollbackRows))
+	n := int(v.get32(data))
 	y0, y1 = max(y0, 0), min(y1, n-1)
 	if n == 0 || y0 > y1 {
 		return "", nil
 	}
 	cols, _ := v.size()
-	return v.format(emitVT, true, &area{tagHistory, 0, y0, cols - 1, y1})
+	return v.format(emitVT, true, &area{tag, 0, y0, cols - 1, y1})
+}
+
+// Mark keeps the screen's top left cell, and follows it through what the
+// terminal does from then on, a resize's re-wrap among them (Marked): where
+// the screen's first row went is where the history gained or lost rows.
+func (v *Terminal) Mark() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.err != nil {
+		return v.err
+	}
+	pt, err := v.point(tagActive, 0, 0)
+	if err != nil {
+		return err
+	}
+	if v.mark == 0 {
+		out := v.scratch + scratchOut
+		if rc := v.call("ghostty_terminal_grid_ref_track", v.t, uint64(pt), uint64(out)); rc != 0 || v.err != nil {
+			return fmt.Errorf("vtwasm: mark: %d %v", int32(rc), v.err)
+		}
+		mark, ok := v.mod.Memory().ReadUint32Le(out)
+		if !ok {
+			return errRange
+		}
+		v.mark = mark
+		return nil
+	}
+	if rc := v.call("ghostty_tracked_grid_ref_set", uint64(v.mark), v.t, uint64(pt)); rc != 0 || v.err != nil {
+		return fmt.Errorf("vtwasm: mark: %d %v", int32(rc), v.err)
+	}
+	return nil
+}
+
+// Marked is where the cell Mark kept is now, in the rows of scrollback and
+// screen together (0 the oldest); false when there is none, or its row was
+// let go.
+func (v *Terminal) Marked() (x, y int, ok bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.mark == 0 || v.err != nil {
+		return 0, 0, false
+	}
+	// A GhosttyPointCoordinate: {uint16 x; uint32 y}, 8 bytes.
+	out := v.scratch + scratchOut
+	if rc := v.call("ghostty_tracked_grid_ref_point", uint64(v.mark), tagScreen, uint64(out)); rc != 0 || v.err != nil {
+		return 0, 0, false
+	}
+	mem := v.mod.Memory()
+	px, ok1 := mem.ReadUint16Le(out)
+	py, ok2 := mem.ReadUint32Le(out + 4)
+	return int(px), int(py), ok1 && ok2
 }
 
 // Screen is the screen as VT sequences, one row a line, as wide as it is.
@@ -340,63 +476,22 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 	}
 	v.limit = formatLimit
 	defer func() { v.limit = 0 }()
-	slot := v.call("ghostty_wasm_alloc_opaque")
-	if slot == 0 || v.err != nil {
-		return "", errors.Join(errAlloc, v.err)
-	}
-	if rc := v.call("ghostty_formatter_terminal_new", 0, slot, v.t); rc != 0 || v.err != nil {
-		return "", fmt.Errorf("vtwasm: formatter: %d %v", int32(rc), v.err)
-	}
-	f := v.call("ghostty_wasm_take_opaque", slot)
-	defer v.call("ghostty_formatter_free", f)
-	val, err := v.alloc(32)
+	f, err := v.formatter(fmtKind{emit, unwrap})
 	if err != nil {
 		return "", err
 	}
-	defer v.free(val, 32)
-	set := func(opt uint64, word uint32) error {
-		if err := v.put32(val, word); err != nil {
-			return err
-		}
-		if rc := v.call("ghostty_formatter_set", f, opt, uint64(val)); rc != 0 {
-			return fmt.Errorf("vtwasm: formatter option %d: %d", opt, int32(rc))
-		}
-		return nil
-	}
-	if err := set(fmtOptEmit, emit); err != nil {
-		return "", err
-	}
-	if err := set(fmtOptUnwrap, b2u(unwrap)); err != nil {
-		return "", err
-	}
-	if emit == emitVT {
-		// Styles and links only: no palette, modes or cursor, which belong
-		// to the terminal the text is painted into.
-		if err := set(fmtOptExtras, extraStyle|extraHyperlink); err != nil {
-			return "", err
-		}
-		// Blank rows at the end are kept: a viewer painting what scrolled
-		// off and then the screen below it puts the screen where it was
-		// only with them.
-		if err := set(fmtOptTrim, 0); err != nil {
-			return "", err
-		}
-	}
+	// The selection is set on every format, or cleared for all of it: one
+	// set before is no longer valid once the terminal has changed.
+	var sel uint32
 	if a != nil {
-		sel, err := v.selection(*a)
-		if err != nil {
+		if sel, err = v.selection(*a); err != nil {
 			return "", err
 		}
-		defer v.free(sel, 20)
-		if rc := v.call("ghostty_formatter_set", f, fmtOptSelection, uint64(sel)); rc != 0 {
-			return "", fmt.Errorf("vtwasm: selection: %d", int32(rc))
-		}
 	}
-	out, err := v.alloc(8)
-	if err != nil {
-		return "", err
+	if rc := v.call("ghostty_formatter_set", f, fmtOptSelection, uint64(sel)); rc != 0 || v.err != nil {
+		return "", fmt.Errorf("vtwasm: selection: %d %v", int32(rc), v.err)
 	}
-	defer v.free(out, 8)
+	out := v.scratch + scratchOut
 	if rc := v.call("ghostty_formatter_format_alloc", f, 0, uint64(out), uint64(out+4)); rc != 0 || v.err != nil {
 		return "", fmt.Errorf("vtwasm: format: %d %v", int32(rc), v.err)
 	}
@@ -418,40 +513,84 @@ func (v *Terminal) format(emit uint32, unwrap bool, a *area) (string, error) {
 	return s, nil
 }
 
-// selection is a GhosttySelection (start and end GhosttyGridRef, 8 bytes
-// each on wasm32, then a bool) over a, in wasm memory the caller frees (20
-// bytes).
-func (v *Terminal) selection(a area) (uint32, error) {
-	sel, err := v.alloc(20)
-	if err != nil {
-		return 0, err
+// fmtKind is what a formatter emits, and whether it unwraps long lines.
+type fmtKind struct {
+	emit   uint32
+	unwrap bool
+}
+
+// formatter is the formatter of kind k, made the first time (fmts): its
+// options stay set, and making one and setting them was as many calls into
+// the instance as the format itself.
+func (v *Terminal) formatter(k fmtKind) (uint64, error) {
+	if f, ok := v.fmts[k]; ok {
+		return f, nil
 	}
-	mem := v.mod.Memory()
-	for i, xy := range [][2]int{{a.x0, a.y0}, {a.x1, a.y1}} {
-		// A GhosttyPoint: a tag, then a union padded to two uint64s (so
-		// 8-aligned) whose {uint16 x; uint32 y} starts it: 24 bytes, passed by
-		// its address on wasm32.
-		pt, err := v.alloc(24)
-		if err != nil {
-			v.free(sel, 20)
+	slot := v.call("ghostty_wasm_alloc_opaque")
+	if slot == 0 || v.err != nil {
+		return 0, errors.Join(errAlloc, v.err)
+	}
+	if rc := v.call("ghostty_formatter_terminal_new", 0, slot, v.t); rc != 0 || v.err != nil {
+		return 0, fmt.Errorf("vtwasm: formatter: %d %v", int32(rc), v.err)
+	}
+	f := v.call("ghostty_wasm_take_opaque", slot)
+	val := v.scratch + scratchVal
+	set := func(opt uint64, word uint32) error {
+		if err := v.put32(val, word); err != nil {
+			return err
+		}
+		if rc := v.call("ghostty_formatter_set", f, opt, uint64(val)); rc != 0 {
+			return fmt.Errorf("vtwasm: formatter option %d: %d", opt, int32(rc))
+		}
+		return nil
+	}
+	opts := [][2]uint32{{fmtOptEmit, k.emit}, {fmtOptUnwrap, b2u(k.unwrap)}}
+	if k.emit == emitVT {
+		// Styles and links only: no palette, modes or cursor, which belong
+		// to the terminal the text is painted into. Blank rows at the end
+		// are kept: a viewer painting what scrolled off and then the screen
+		// below it puts the screen where it was only with them.
+		opts = append(opts, [2]uint32{fmtOptExtras, extraStyle | extraHyperlink}, [2]uint32{fmtOptTrim, 0})
+	}
+	for _, o := range opts {
+		if err := set(uint64(o[0]), o[1]); err != nil {
+			v.call("ghostty_formatter_free", f)
 			return 0, err
 		}
-		ok := mem.WriteUint32Le(pt, a.tag) && mem.WriteUint16Le(pt+8, uint16(xy[0])) && mem.WriteUint32Le(pt+12, uint32(xy[1]))
-		rc := uint64(1)
-		if ok {
-			rc = v.call("ghostty_terminal_grid_ref", v.t, uint64(pt), uint64(sel+uint32(i)*8))
+	}
+	v.fmts[k] = f
+	return f, nil
+}
+
+// selection is a GhosttySelection (start and end GhosttyGridRef, 8 bytes
+// each on wasm32, then a bool) over a, in scratch, read by the format it is
+// for.
+func (v *Terminal) selection(a area) (uint32, error) {
+	sel := v.scratch + scratchSel
+	for i, xy := range [][2]int{{a.x0, a.y0}, {a.x1, a.y1}} {
+		pt, err := v.point(a.tag, xy[0], xy[1])
+		if err != nil {
+			return 0, err
 		}
-		v.free(pt, 24)
-		if rc != 0 || v.err != nil {
-			v.free(sel, 20)
+		if rc := v.call("ghostty_terminal_grid_ref", v.t, uint64(pt), uint64(sel+uint32(i)*8)); rc != 0 || v.err != nil {
 			return 0, fmt.Errorf("vtwasm: grid ref (%d,%d): %d", xy[0], xy[1], int32(rc))
 		}
 	}
-	if !mem.WriteUint32Le(sel+16, 0) { // not a rectangle
-		v.free(sel, 20)
+	if !v.mod.Memory().WriteUint32Le(sel+16, 0) { // not a rectangle
 		return 0, errRange
 	}
 	return sel, nil
+}
+
+// point is a GhosttyPoint in scratch: a tag, then a union padded to two
+// uint64s (so 8-aligned) whose {uint16 x; uint32 y} starts it, 24 bytes,
+// passed by its address on wasm32.
+func (v *Terminal) point(tag uint32, x, y int) (uint32, error) {
+	pt, mem := v.scratch+scratchPoint, v.mod.Memory()
+	if !mem.WriteUint32Le(pt, tag) || !mem.WriteUint16Le(pt+8, uint16(x)) || !mem.WriteUint32Le(pt+12, uint32(y)) {
+		return 0, errRange
+	}
+	return pt, nil
 }
 
 func (v *Terminal) call(name string, args ...uint64) uint64 {
@@ -521,11 +660,7 @@ func (v *Terminal) setSize(opt int, val uint64) error {
 	if v.err != nil {
 		return v.err
 	}
-	p, err := v.alloc(4)
-	if err != nil {
-		return err
-	}
-	defer v.free(p, 4)
+	p := v.scratch + scratchVal
 	if err := v.put32(p, uint32(val)); err != nil {
 		return err
 	}
@@ -533,17 +668,16 @@ func (v *Terminal) setSize(opt int, val uint64) error {
 	return v.err
 }
 
-// get reads 8 bytes of the terminal's data into memory and gives them; zero
-// when it cannot.
+// get reads 8 bytes of the terminal's data and gives them, from the instance
+// once while it has not changed (data); zero when it cannot.
 func (v *Terminal) get(data int) uint64 {
 	if v.err != nil {
 		return 0
 	}
-	p, err := v.alloc(8)
-	if err != nil {
-		return 0
+	if v.have&(1<<data) != 0 {
+		return v.data[data]
 	}
-	defer v.free(p, 8)
+	p := v.scratch + scratchVal
 	if !v.mod.Memory().WriteUint64Le(p, 0) {
 		return 0
 	}
@@ -552,6 +686,7 @@ func (v *Terminal) get(data int) uint64 {
 	if !ok || v.err != nil {
 		return 0
 	}
+	v.data[data], v.have = x, v.have|1<<data
 	return x
 }
 
