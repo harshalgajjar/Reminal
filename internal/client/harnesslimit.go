@@ -144,14 +144,21 @@ const credits1M = `(?:run/usage-creditstoturnthemon\(theytakeeffect(?:inanewsess
 	`|run(?:/|--)modeltoswitchtostandardcontext` +
 	`|(?:turnonusagecreditsat[a-z0-9:/.\-_?=&]{1,80}|askyouradmintoturnonusagecredits)\(theytakeeffect(?:inanewsession|afteryourestartclaudecode)\)(?:,oruse(?:/|--)modeltoswitchtostandardcontext)?)`
 
-// claudeCreditStop is how Claude Code 2.1.323 says a turn stopped at a move
-// to usage credits, after "continuing on Opus 5.5 uses usage credits" or
-// "Opus 5.5 now uses usage credits": stopped before asking, the prompt left
-// unanswered, or the prompt closed from Remote Control. Each with what to do
-// next, and only that.
+// claudeCreditStop is how Claude Code 2.1.323–325 says a turn stopped at a
+// move to usage credits, after "continuing on Opus 5.5 uses usage credits"
+// or "Opus 5.5 now uses usage credits": stopped before asking, the prompt
+// left unanswered, or the prompt closed from Remote Control. Each with what
+// to do next, and only that (2.1.325 parts them with "·", not "—", and says
+// "you'll be asked again").
 const claudeCreditStop = `(?:·claudestoppedhere·sendamessagetobeaskedagain,orswitchmodels` +
-	`|(?:,and|·)theprompttoconfirm(?:wentunanswered—nothingwassent·answeritwherethissessionisrunning` +
-	`|wasclosedfromremotecontrolwithoutachoice—nothingwassent·itasksagainonyournextmessage),or/modeltochange)`
+	`|(?:,and|·)theprompttoconfirm(?:wentunanswered[—·]nothingwassent·answeritwherethissessionisrunning` +
+	`|wasclosedfromremotecontrolwithoutachoice[—·]nothingwassent·(?:itasksagain|you.?llbeaskedagain)onyournextmessage),or/modeltochange)`
+
+// claudeCreditRequired is how Claude Code 2.1.325 says a turn stopped at a
+// model that now requires usage credits, the prompt answered with neither
+// yes nor a switch: with what to do next, and only that.
+const claudeCreditRequired = `claudestoppedherebecause` + creditModel + `nowrequiresusagecredits\.` +
+	`(?:tokeepthisagentgoing,switchmodelsorcontinuewithusagecredits|switchmodels(?:with/model)?,orsendamessagetochooseagain)\.`
 
 // limitCommand is the command a notice may end on, as its row reads with
 // spaces gone and in lower case: "· /usage-credits to keep using Claude",
@@ -283,6 +290,9 @@ var harnessLimitNotices = map[string][]limitNotice{
 			// or closed from Remote Control (claudeCreditStop). Without its
 			// tail it is the session going on, on another model.
 			`(?:`+creditModel+`limitreached·continuingon`+creditModel+`usesusagecredits|`+creditModel+`nowusesusagecredits)`+claudeCreditStop,
+			// Claude Code 2.1.325: the same stop at a model that now
+			// requires usage credits (claudeCreditRequired).
+			claudeCreditRequired,
 			// Claude Code 2.1.323: the API's credit balance too low, drawn
 			// on one row that clips what does not fit: the link is gone on
 			// a screen too narrow for it.

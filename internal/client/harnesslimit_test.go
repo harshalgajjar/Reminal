@@ -36,7 +36,7 @@ import (
 // stopped at a move to usage credits, its credit balance too low, and its
 // expired login's fallback
 // without credit (harnesshealth_rows_test.go), were built from the code
-// that draws them (2026-11-13).
+// that draws them (2026-11-13), and 2.1.325's the same way (2026-11-14).
 // Where a CLI's glyph before its notice is not known, the screen has none.
 // Qwen Code 0.27.2's credits notice was captured from the CLI itself, its
 // service answered by a stand-in (Docker, 2026-11-12).
@@ -132,6 +132,15 @@ var limitScreens = []struct {
 	// one row; narrower than it, the row is clipped before the link.
 	{"claude", "  ⎿  Credit balance too low · Add funds: https://platform.claude.com/settings/billing\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Credit balance too low · Add funds:\n\n❯ ", time.Time{}},
+	// Claude Code 2.1.325 (source): the prompt to go on with usage credits
+	// answered with neither yes nor a switch; a long one wraps. And
+	// 2.1.323's stops as 2.1.325 words them.
+	{"claude", "  ⎿  Claude stopped here because Fable 5.1 now requires usage credits. To keep this agent going, switch models or continue with usage credits.\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Claude stopped here because Fable 5.1 now requires usage credits. Switch models with /model, or send a message to choose again.\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Claude stopped here because Fable 5.1 now requires usage credits. Switch models, or send a message to choose again.\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Claude stopped here because Fable 5.1 now requires usage credits. To keep this agent going, switch\n     models or continue with usage credits.\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Opus 5.5 now uses usage credits · the prompt to confirm went unanswered · nothing was sent · answer it where this session is running, or /model to change\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Fable limit reached · continuing on Opus 5.5 uses usage credits, and the prompt to confirm was closed from Remote Control without a choice · nothing was sent · you’ll be asked again on your next message, or /model to change\n\n❯ ", time.Time{}},
 	// Qwen Code 0.26.9: its credits used up, the weekly ones, what to do,
 	// and when they come back (on one row, and wrapped onto two).
 	{"qwen", "✕ You've used up your credits. Please try again after the reset.\n│ > │", time.Time{}},
@@ -1063,6 +1072,11 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"claude", "⎿  ", "Fable limit reached · continuing on Opus 5.5 uses usage credits, and the prompt to confirm went unanswered — nothing was sent · answer it where this session is running, or /model to change", false},
 		{"claude", "⎿  ", "Opus 5.5 now uses usage credits · the prompt to confirm was closed from Remote Control without a choice — nothing was sent · it asks again on your next message, or /model to change", false},
 		{"claude", "⎿  ", "Credit balance too low · Add funds: https://platform.claude.com/settings/billing", true},
+		// Claude Code 2.1.325: the prompt to go on with usage credits
+		// answered with neither yes nor a switch.
+		{"claude", "⎿  ", "Claude stopped here because Fable 5.1 now requires usage credits. To keep this agent going, switch models or continue with usage credits.", false},
+		{"claude", "⎿  ", "Claude stopped here because Fable 5.1 now requires usage credits. Switch models with /model, or send a message to choose again.", false},
+		{"claude", "⎿  ", "Claude stopped here because Fable 5.1 now requires usage credits. Switch models, or send a message to choose again.", false},
 		// Qwen Code 0.26.9: its credits.
 		{"qwen", "✕ ", "You've used up your credits. Please try again after the reset.", false},
 		{"qwen", "✕ ", "You've used up your weekly credits. Please try again after the reset.", false},
@@ -1156,6 +1170,9 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		"  ⎿  Fable limit reached · continuing on Opus uses usage credits",
 		"  ⎿  Fable limit reached · continuing on Opus 5.5 uses usage credits",
 		"● Fable limit reached · continuing on Opus 5.5 uses usage credits, so I went on with Opus and finished the review",
+		"● Claude stopped here because Fable 5.1 now requires usage credits, so I moved to Opus 5.5 and finished the review",
+		"  ⎿  Now using usage credits for Fable 5.1",
+		"  ⎿  Now using usage credits for Fable 5.1 · Your Fable limit resets 3pm",
 		"  ⎿  Usage limit reset · Continuing automatically",
 		"  ⎿  [Usage limit reached — grace window active. Checkpoint now: finish the",
 	} {
