@@ -199,6 +199,8 @@ var harnessLoginScreens = map[string][]loginRow{
 		// enterprise identity provider's session it cannot keep.
 		`preparingdevicecodelogin`,
 		`enterpriseidp(?:sessionhasnorefreshtoken;signinagain|credentialswereremoved;signinagain|identitychanged;signinagainandreconnect)`,
+		// Codex 0.169.0: a Codex account it cannot refresh.
+		`codexaccounthasnorefreshtoken;signinagain`,
 	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`),
 		// Its device-code steps are its only together: the first, then the second
 		// within the next few rows (the link between them). One numbered step
