@@ -52,9 +52,10 @@ jobs:
           out=$(printf '%s\n' \
             '{"t":"ping"}' \
             '{"t":"scroll","x":1,"y":1,"dy":0,"dx":0}' \
+            '{"t":"scroll","x":1,"y":1,"dy":0,"dx":0,"phase":"momentum_end"}' \
             '{"t":"bogus"}' | ./reminal-capture keys)
           echo "$out"
-          [ "$out" = "$(printf 'ok\nok\nerror')" ]
+          [ "$out" = "$(printf 'ok\nok\nok\nerror')" ]
       - name: A window that never changes keeps streaming, and a stalled helper says so
         if: startsWith(matrix.swift_target, 'arm64')
         run: |

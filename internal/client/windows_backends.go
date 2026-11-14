@@ -592,7 +592,7 @@ ev($.kCGEventLeftMouseUp,pts[pts.length-1][0],pts[pts.length-1][1]);`, sb.String
 	return jxaEvents(body)
 }
 
-func (darwinWindows) scroll(w winInfo, fx, fy, dx, dy float64) error {
+func (darwinWindows) scroll(w winInfo, fx, fy, dx, dy float64, phase string) error {
 	x := w.X + int(fx*float64(w.W))
 	y := w.Y + int(fy*float64(w.H))
 	// Scroll wheel events land on the window under the pointer, so move there
@@ -605,14 +605,23 @@ func (darwinWindows) scroll(w winInfo, fx, fy, dx, dy float64) error {
 	// no-op, so viewer scrolling did nothing (the mouse-move from the same
 	// script works, which is why clicks were fine). The helper is also ~5×
 	// faster per event than an osascript spawn. The running helper is faster
-	// again: no process started at all.
-	if keyHelperScroll(x, y, w1, w2) {
+	// again: no process started at all. The helper posts the phase as the
+	// gesture it is (a finger, or momentum after it), which is what keeps a
+	// coast from stretching an app past the edge of its content.
+	if keyHelperScroll(x, y, w1, w2, phase) {
 		return nil
 	}
 	if p, err := captureHelperPath(); err == nil {
-		if _, err := runHelper(p, "scroll", strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(w1), strconv.Itoa(w2)); err == nil {
+		args := []string{"scroll", strconv.Itoa(x), strconv.Itoa(y), strconv.Itoa(w1), strconv.Itoa(w2)}
+		if phase != "" {
+			args = append(args, phase) // an older helper ignores the extra argument
+		}
+		if _, err := runHelper(p, args...); err == nil {
 			return nil
 		}
+	}
+	if phase == "end" || phase == "momentum_end" {
+		return nil // nothing to post without gestures: the delta was already sent
 	}
 	// Fallback for installs without the helper (may no-op on some macOS
 	// versions — kept because it's still the only path there).
@@ -1423,7 +1432,7 @@ func (linuxWindows) drag(w winInfo, pts [][2]float64) error {
 	return err
 }
 
-func (linuxWindows) scroll(w winInfo, fx, fy, dx, dy float64) error {
+func (linuxWindows) scroll(w winInfo, fx, fy, dx, dy float64, _ string) error {
 	if !have("xdotool") {
 		return fmt.Errorf("install xdotool for input control")
 	}

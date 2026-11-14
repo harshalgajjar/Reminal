@@ -183,8 +183,9 @@ var harnessLoginScreens = map[string][]loginRow{
 	)),
 	// Codex: its sign-in menu (its heading, and its first item with the next
 	// below it: "› 1. Sign in with ChatGPT", "2. Sign in with Device Code"),
-	// signing in through the browser, and a login it can no longer refresh
-	// (its errors led by "■").
+	// the page of its other ways to sign in and its page asking for an API
+	// key, signing in through the browser, and a login it can no longer
+	// refresh (its errors led by "■").
 	"codex": loginAll(loginRows(
 		`finishsigninginviayourbrowser`,
 		`signinwithchatgpttousecodexaspartofyourpaidplan`,
@@ -198,11 +199,20 @@ var harnessLoginScreens = map[string][]loginRow{
 		// enterprise identity provider's session it cannot keep.
 		`preparingdevicecodelogin`,
 		`enterpriseidp(?:sessionhasnorefreshtoken;signinagain|credentialswereremoved;signinagain|identitychanged;signinagainandreconnect)`,
+		// Codex 0.169.0: a Codex account it cannot refresh.
+		`codexaccounthasnorefreshtoken;signinagain`,
 	), loginThen(`1\.signinwithchatgpt`, `[23]\.(?:signinwithdevicecode|provideyourownapikey)`),
 		// Its device-code steps are its only together: the first, then the second
 		// within the next few rows (the link between them). One numbered step
 		// alone is an agent's own list.
-		loginThen(`1\.openthislinkinyourbrowserandsignin`, `2\.enterthisone-timecodeafteryouaresignedin`), loginMarked("■",
+		loginThen(`1\.openthislinkinyourbrowserandsignin`, `2\.enterthisone-timecodeafteryouaresignedin`),
+		// Codex 0.167.2: the page its "3. Sign in another way" opens, its
+		// heading with its first item below it ("1. Use an OpenAI API key",
+		// or a provider's when the key is not offered).
+		loginThen(`signinanotherway`, `1\.use(?:anopenaiapikey|amazonbedrock|googlecloudvertexai)`),
+		// Its page asking for an API key (that page's "1. Use an OpenAI API
+		// key"): its heading with its ask below it.
+		loginThen(`useyourownopenaiapikeyforusage-basedbilling`, `pasteortypeyourapikeybelow`), loginMarked("■",
 			`yoursessionhasexpired\.pleasereauthenticate`,
 		)),
 	// Droid 1.6.0 with no login (recorded in Docker, testdata/harness-screens/
@@ -211,7 +221,11 @@ var harnessLoginScreens = map[string][]loginRow{
 	// Deployment", "Exit"): the sentence is its only with the menu below, as
 	// an agent may write it. ("This Droid is not signed in", a label in its
 	// bundle, is not on that screen: not read until recorded.)
-	"droid": loginThen(`pleaseloginwithyourfactoryaccounttocontinue`, `signintoafactorycustomdeployment`),
+	// Droid 1.9.0 after "> Login" (recorded, droid-device.txt): where to
+	// enter its device code, wrapped at the terminal's width, then "Waiting
+	// for authentication to complete..." below it; either alone is not it.
+	"droid": loginAll(loginThen(`pleaseloginwithyourfactoryaccounttocontinue`, `signintoafactorycustomdeployment`),
+		loginThen(`ifthelinkdoesnotopenautomatically,pleasevisithttps?://[^·]+?andentercode[a-z0-9-]+tocompleteauthentication`, `waitingforauthenticationtocomplete`)),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), the steps of
 	// setting one up, and a login that lapsed.
@@ -333,6 +347,10 @@ var harnessLoginScreens = map[string][]loginRow{
 		"failedtoauthenticate:thisloginreacheditstimelimit(?:·signinagaintocontinue|andcannotberenewed\\.run`?claudeauthlogin`?tosigninagain,oruse`?claudesetup-token`?andsetclaude_code_oauth_tokenforunattendedjobs)?",
 		`notsignedintothecloudgateway—run/login`,
 		`cloudgatewaytokenexpired—refreshanthropic_auth_tokenandrestart`,
+		// 2.1.323: a claude.ai login that expired, and the credential it
+		// fell back to (a saved Console key, an organization by its name)
+		// without the credit to run on.
+		`loginexpired·pleaserun/login·claudecodetried[^·"]{1,64}instead,butitdoesn.?thaveenoughcredit·oraddfunds:https://platform\.claude\.com/settings/billing`,
 	)),
 }
 
@@ -352,6 +370,25 @@ const piProviders = `amazon-bedrock|ant-ling|anthropic|openai|azure|openai-codex
 // missing: the key is what to change.
 const cursorKeyRefused = `(?:warning:)?theprovidedapikeyisinvalid`
 
+// claudeProviderRefused is Claude Code 2.1.318–322 turned away by the
+// credential a cloud provider holds for it (Bedrock, Vertex, Foundry, a
+// gateway): what lapsed, then what to do about it, then the service's error
+// ("AWS credentials expired or invalid · run /login and select "Claude
+// Platform on AWS · refresh credentials", or run `aws sso login` in another
+// terminal · API Error: 401 …"). The command to run and the sign-in to pick
+// are the row's own only between its words; the error after it is the
+// service's, so the row is read from its start to that error.
+const claudeProviderRefused = `(?:awscredentialsexpiredorinvalid|awsauthenticationfailed|googlecloudcredentialsexpiredorinvalid|googlecloudauthenticationfailed|microsoftfoundryauthenticationfailed)` +
+	`(?:·run/loginandselect"[^"·]{1,40}·refreshcredentials",orrun` + "`[^`]{1,80}`" + `inanotherterminal` +
+	`|·run` + "`[^`]{1,80}`" + `andretry` +
+	`|·refreshyourawscredentials\(ssosign-in,accesskeys,apikeyorproxytoken\)andretry` +
+	`|·refreshyourgooglecloudcredentials\(applicationdefaultsign-in,orthekeyfileingoogle_application_credentials\)andretry` +
+	`|·refreshthegatewaytokenprovidedviaanthropic_auth_token/anthropic_custom_headersandretry` +
+	`|·refreshyourfoundrycredential\(anthropic_foundry_auth_token,anthropic_foundry_api_key,azuresign-inforentra,oryourproxytoken\)andretry` +
+	`|·credentialsaremanagedbythisenvironment—retry,orcontactyouradministrator` +
+	`|·enablethismodelforyouraccountandregionintheamazonbedrockconsole(?:,orrun(?:/|--)modeltopickanothermodel)?)` +
+	`(?:·ifcredentialsarecurrent,check(?:awspermissionsandmodelaccess|gcpiampermissionsandvertexaimodelaccess|gcpiampermissionsandworkspaceaccess|accesstothefoundryresource))?`
+
 // harnessKeyRefusals are, by CLI, the rows that say it refused the key it was
 // given (not that it has none). Unlike harnessLoginScreens they are taken as
 // that CLI's only while it is in front or was just before (noteHarnessHealth):
@@ -363,8 +400,10 @@ var harnessKeyRefusals = map[string][]loginRow{
 	// /login · API Error: 401 OAuth access token is invalid"): it has one,
 	// and it was refused — not one it never had. A line of its own, from
 	// its start, as harnessLoginRefused reads it. And a key from outside it
-	// ("Invalid API key · Fix external API key").
-	"claude": loginAll(loginOpen(`^[^a-z0-9]*(please)?run/login[·:.,\-]*apierror:40[13]([^0-9]|$)`), loginMarked("●⎿",
+	// ("Invalid API key · Fix external API key"). 2.1.318–322: a cloud
+	// provider's credential it ran on, refused (claudeProviderRefused), on a
+	// row of its own led by its glyph.
+	"claude": loginAll(loginOpen(`^[^a-z0-9]*(please)?run/login[·:.,\-]*apierror:40[13]([^0-9]|$)`), loginOpen(`^[●⎿]?`+claudeProviderRefused+`·apierror:40[13]([^0-9]|$)`), loginMarked("●⎿",
 		`invalidapikey·fixexternalapikey`,
 	)),
 	// pi with a login its provider refuses (a token gone stale, a wrong key):

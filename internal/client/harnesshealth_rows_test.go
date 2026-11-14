@@ -46,6 +46,8 @@ var loginRowCases = []loginRowCase{
 	{prog: "codex", row: "■ enterprise IdP session has no refresh token; sign in again"},
 	{prog: "codex", row: "■ enterprise IdP credentials were removed; sign in again"},
 	{prog: "codex", row: "■ enterprise IdP identity changed; sign in again and reconnect"},
+	// Codex 0.169.0: a Codex account it cannot refresh.
+	{prog: "codex", row: "■ Codex account has no refresh token; sign in again"},
 	// Qwen Code 0.26.9: a message turned away for want of a login, its /auth
 	// flow, its signed-out state, no provider, signing in through the
 	// browser, and a plan without Qwen Code (the plan's name is a hole:
@@ -89,6 +91,10 @@ var loginRowCases = []loginRowCase{
 	{prog: "claude", row: "  ⎿  Not signed in to the Cloud gateway — run /login."},
 	{prog: "claude", row: "  ⎿  Cloud gateway token expired — refresh ANTHROPIC_AUTH_TOKEN and restart."},
 	{prog: "claude", row: " ✢ Opening browser to sign in with your Claude account…"},
+	// Claude Code 2.1.323 (source): a claude.ai login that expired, and the
+	// credential it fell back to without the credit to run on.
+	{prog: "claude", row: "● Login expired · Please run /login · Claude Code tried your saved Claude Console API key instead, but it doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing"},
+	{prog: "claude", row: "  ⎿  Login expired · Please run /login · Claude Code tried Acme Corp instead, but it doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing"},
 
 	{prog: "gemini", row: "✕ Gemini API key is missing or not configured."},
 
@@ -340,6 +346,90 @@ func TestCodexsLoginMenuIsItsItemsTogether(t *testing.T) {
 	}
 }
 
+// Codex 0.167.2's other ways to sign in ("3. Sign in another way") are a page
+// of their own: its heading, then its first item below it (its own
+// description between). The heading alone, a sentence that carries on past
+// its words, or an agent's own list under them is not it.
+func TestCodexsOtherWaysToSignInAreItsHeadingAndFirstItem(t *testing.T) {
+	for _, page := range []string{
+		"  Sign in another way\n\n> 1. Use an OpenAI API key\n     Pay for what you use\n\n  2. Use Amazon Bedrock\n     Connect using your AWS credentials\n\n  Press enter to continue\n  Press esc to go back",
+		"  Sign in another way\n\n  1. Use an OpenAI API key\n     Pay for what you use\n\n> 2. Use Google Cloud Vertex AI\n     Connect using your Google Cloud credentials",
+		"  Sign in another way\n\n> 1. Use Amazon Bedrock\n     Connect using your AWS credentials",
+	} {
+		if !harnessProblemIn(page+loginRowFrame, "codex") {
+			t.Errorf("its page of other ways to sign in was not read as logged out:\n%s", page)
+		}
+	}
+	for _, answer := range []string{
+		"  Sign in another way",
+		"● Sign in another way if the browser does not open, then run the tests again.\n  1. Use an OpenAI API key",
+		"● Sign in another way:\n  1. Use an SSH key\n  2. Ask an admin for a token",
+		"  3. Sign in another way\n     Use an API key or another provider",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "codex") {
+			t.Errorf("read as Codex's page of other ways to sign in:\n%s", answer)
+		}
+	}
+	if harnessProblemIn("  Sign in another way\n\n> 1. Use an OpenAI API key"+loginRowFrame, "claude") {
+		t.Error("read as another agent's")
+	}
+}
+
+// Codex's page asking for an API key is its heading with its ask below it
+// ("Paste or type your API key below."; its box under them). The heading
+// alone, or a sentence that carries on past its words, is not it.
+func TestCodexsAPIKeyPageIsItsHeadingAndItsAsk(t *testing.T) {
+	for _, page := range []string{
+		"> Use your own OpenAI API key for usage-based billing\n\n  Paste or type your API key below.\n\n╭API key────╮\n│Paste or type your API key│\n╰───────────╯\n  Press enter to save\n  Press esc to go back",
+		"> Use your own OpenAI API key for usage-based billing\n\n  Paste or type your API key below.\n\n  Detected OPENAI_API_KEY environment variable.\n  Paste a different key if you prefer to use another account.",
+	} {
+		if !harnessProblemIn(page+loginRowFrame, "codex") {
+			t.Errorf("its page asking for an API key was not read as logged out:\n%s", page)
+		}
+	}
+	for _, answer := range []string{
+		"> Use your own OpenAI API key for usage-based billing",
+		"● Use your own OpenAI API key for usage-based billing, then the tests run against the real model.\n  Paste or type your API key below.",
+		"● Paste or type your API key below.",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "codex") {
+			t.Errorf("read as Codex's page asking for an API key:\n%s", answer)
+		}
+	}
+	if harnessProblemIn("> Use your own OpenAI API key for usage-based billing\n\n  Paste or type your API key below."+loginRowFrame, "claude") {
+		t.Error("read as another agent's")
+	}
+}
+
+// Factory Droid waiting for its device code is its two rows together: where
+// to enter the code (wrapped at the terminal's width), then "Waiting for
+// authentication to complete...". Either alone, or the wait's words in a
+// sentence that carries on, is not it.
+func TestDroidsDeviceCodeWaitIsItsRowsTogether(t *testing.T) {
+	for _, wait := range []string{
+		"If the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to\ncomplete authentication.\nWaiting for authentication to complete...",
+		"If the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to complete authentication.\n\nWaiting for authentication to complete...",
+		"If the link does not open automatically, please visit https://factory.example.com/device and enter\ncode AB12-CD34 to complete authentication.\nWaiting for authentication to complete...",
+	} {
+		if !harnessProblemIn(wait+loginRowFrame, "droid") {
+			t.Errorf("its device-code wait was not read as logged out:\n%s", wait)
+		}
+	}
+	for _, answer := range []string{
+		"Waiting for authentication to complete...",
+		"If the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to complete authentication.",
+		"● It said: if the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to complete authentication.\n  Waiting for authentication to complete... is all it printed, so I restarted it.",
+		"● Waiting for authentication to complete, then the deploy runs.",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "droid") {
+			t.Errorf("read as Droid's device-code wait:\n%s", answer)
+		}
+	}
+	if harnessProblemIn("If the link does not open automatically, please visit https://auth.factory.ai/device and enter code JNNV-NCGG to complete authentication.\nWaiting for authentication to complete..."+loginRowFrame, "claude") {
+		t.Error("read as another agent's")
+	}
+}
+
 // Codex 0.167.0's device-code steps are its only together: the first, then
 // the second within the next few rows (the link between them). An agent's
 // own numbered list that starts with the first step's words is not it.
@@ -506,11 +596,18 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"a bundle label of Droid's, never recorded on a screen, ending an answer", "droid", "● It said:\n  This Droid is not signed in\n", false},
 		{"Droid's login sentence in an answer, no menu under it", "droid", "● Please login with your Factory account to continue.\n  Then run droid again and the tests pass.\n", false},
 		{"Codex's IdP row carried on in an answer", "codex", "● The server said enterprise IdP session has no refresh token; sign in again, so I stopped.\n› ", false},
+		{"Codex's refresh-token row carried on", "codex", "■ Codex account has no refresh token; sign in again once the build finishes\n› ", false},
+		{"Codex's refresh-token row quoted", "codex", "• I saw \"Codex account has no refresh token; sign in again\" in the log\n› ", false},
 		// Claude Code 2.1.319: a claude.ai login that ended while another
 		// login profile pays for the usage: the session goes on, and the
 		// footer and its warning only say so; not a login wanted.
 		{"Claude Code's footer after a claude.ai login ended, usage billed elsewhere", "claude", "answer" + box + "  claude.ai login ended · usage now billed to Acme Corp · /login to sign in", false},
 		{"Claude Code's warning of the same", "claude", "  Warning: the claude.ai login on this machine has ended. This run uses the sign-in from ant auth login instead, and its usage is billed to Acme Corp. Run claude auth login to sign in again, or claude auth logout to remove the ended login and keep that sign-in without this warning." + box, false},
+		// Claude Code 2.1.323: its login expired and the credential it fell
+		// back to without credit, wrapped; quoted, and carried on.
+		{"Claude Code's expired login, its fallback without credit, wrapped", "claude", "● Login expired · Please run /login · Claude Code tried your saved Claude Console API key instead, but it\n  doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing" + box, true},
+		{"the same quoted mid-sentence", "claude", "● Its screen said \"Login expired · Please run /login · Claude Code tried your saved Claude Console API key instead, but it doesn't have enough credit\", so I waited" + box, false},
+		{"the same carried on", "claude", "● Login expired · Please run /login · Claude Code tried the key instead, but it doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing, which I did, and the build is green" + box, false},
 		// Qwen Code 0.26.9: rows that say the session is fine, and its
 		// notices quoted or carried on in an agent's own words.
 		{"Qwen's models that would not load, signed in", "qwen", "answer" + box + "  Could not load models. Your account is still signed in. Please try again.", false},

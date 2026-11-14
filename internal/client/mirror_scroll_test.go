@@ -216,8 +216,8 @@ func (r *recordingBackend) clickN(w winInfo, fx, fy float64, n int, right bool) 
 	r.calls = append(r.calls, fmt.Sprintf("click(n=%d,right=%v)", n, right))
 	return nil
 }
-func (r *recordingBackend) scroll(w winInfo, fx, fy, dx, dy float64) error {
-	r.calls = append(r.calls, "scroll")
+func (r *recordingBackend) scroll(w winInfo, fx, fy, dx, dy float64, phase string) error {
+	r.calls = append(r.calls, "scroll("+phase+")")
 	return nil
 }
 func (r *recordingBackend) drag(w winInfo, pts [][2]float64) error {
@@ -227,6 +227,23 @@ func (r *recordingBackend) drag(w winInfo, pts [][2]float64) error {
 
 func newRecording() *recordingBackend {
 	return &recordingBackend{wins: []winInfo{{ID: "w1", W: 800, H: 600}}}
+}
+
+// A scroll's gesture phase reaches the backend as the viewer sent it, and an
+// end, which carries no delta, is still delivered: the macOS helper posts it
+// as the end of the gesture or of the momentum, which is what stops a coast
+// at the edge of an app's content.
+func TestScrollPhaseReachesTheBackend(t *testing.T) {
+	b, st := newRecording(), &inputState{}
+	for _, phase := range []string{"", "begin", "move", "end", "momentum_begin", "momentum", "momentum_end"} {
+		applyWindowInput(b, st, windowInput{ID: "w1", Kind: "scroll", X: 0.5, Y: 0.5, Dy: 40, Phase: phase}, nil)
+	}
+	applyWindowInput(b, st, windowInput{ID: "w1", Kind: "scroll", Phase: "momentum_end"}, nil)
+	got := strings.Join(b.calls, " ")
+	want := "scroll() scroll(begin) scroll(move) scroll(end) scroll(momentum_begin) scroll(momentum) scroll(momentum_end) scroll(momentum_end)"
+	if !strings.HasSuffix(got, want) {
+		t.Fatalf("backend saw %q, want it to end with %q", got, want)
+	}
 }
 
 // One dispatcher serves both injection paths. It previously existed twice and

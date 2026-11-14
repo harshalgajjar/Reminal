@@ -130,6 +130,36 @@ const limitWait = `(?:\d+(?:days?|hours?|hrs?|minutes?|mins?|seconds?|secs?|d|h|
 // claudeModel is a Claude model a notice names, perhaps with its version.
 const claudeModel = `(?:claude|opus|sonnet|haiku|fable)?[0-9.]*`
 
+// creditModel is a model as a notice about usage credits names it, by its
+// shown name ("Opus 4.5", "Fable 5.1", "Claude Opus 4.5 (1M context)"),
+// flattened: never more than a name's worth, and always between the
+// notice's own words.
+const creditModel = `[a-z][a-z0-9.\-()\[\]]{0,31}`
+
+// credits1M is what Claude Code's "Usage credits required for 1M context"
+// notice goes on with: the command that turns credits on (and when that
+// takes effect), the one that leaves 1M context, or where to turn them on
+// (an admin's page) — each of them, and only them.
+const credits1M = `(?:run/usage-creditstoturnthemon\(theytakeeffect(?:inanewsession|afteryourestartclaudecode)\)(?:,or(?:/|--)modeltoswitchtostandardcontext)?` +
+	`|run(?:/|--)modeltoswitchtostandardcontext` +
+	`|(?:turnonusagecreditsat[a-z0-9:/.\-_?=&]{1,80}|askyouradmintoturnonusagecredits)\(theytakeeffect(?:inanewsession|afteryourestartclaudecode)\)(?:,oruse(?:/|--)modeltoswitchtostandardcontext)?)`
+
+// claudeCreditStop is how Claude Code 2.1.323–325 says a turn stopped at a
+// move to usage credits, after "continuing on Opus 5.5 uses usage credits"
+// or "Opus 5.5 now uses usage credits": stopped before asking, the prompt
+// left unanswered, or the prompt closed from Remote Control. Each with what
+// to do next, and only that (2.1.325 parts them with "·", not "—", and says
+// "you'll be asked again").
+const claudeCreditStop = `(?:·claudestoppedhere·sendamessagetobeaskedagain,orswitchmodels` +
+	`|(?:,and|·)theprompttoconfirm(?:wentunanswered[—·]nothingwassent·answeritwherethissessionisrunning` +
+	`|wasclosedfromremotecontrolwithoutachoice[—·]nothingwassent·(?:itasksagain|you.?llbeaskedagain)onyournextmessage),or/modeltochange)`
+
+// claudeCreditRequired is how Claude Code 2.1.325 says a turn stopped at a
+// model that now requires usage credits, the prompt answered with neither
+// yes nor a switch: with what to do next, and only that.
+const claudeCreditRequired = `claudestoppedherebecause` + creditModel + `nowrequiresusagecredits\.` +
+	`(?:tokeepthisagentgoing,switchmodelsorcontinuewithusagecredits|switchmodels(?:with/model)?,orsendamessagetochooseagain)\.`
+
 // limitCommand is the command a notice may end on, as its row reads with
 // spaces gone and in lower case: "· /usage-credits to keep using Claude",
 // "· run /usage-credits to ask your admin for more" (or "for a higher
@@ -183,6 +213,10 @@ func wholeNotices(res ...string) []limitNotice { return wholeRows(claudeEnd, res
 // ("oct21,"), a clock time, perhaps a zone.
 const limitWhen = `(?:on)?(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\d{1,2}(?:st|nd|rd|th)?,?(?:\d{4})?(?:at)?)?\d{1,2}(?::\d{2})?(?:am|pm)?(?:\([a-z0-9_+\-/]+\)|utc|gmt|[pmce][sd]t|bst|cet|cest)?`
 
+// qwenErrorEnd is what may follow a notice inside Qwen Code's API error: the
+// request's id, the error's closing bracket, and its retry hint.
+const qwenErrorEnd = `\.?(?:\(request_id:[a-z0-9._-]{1,128}\))?\](?:\(pressctrl\+ytoretry\))?`
+
 // codexEnd is what may follow a Codex notice: when to try again.
 const codexEnd = `(?:,?ortryagain(?:later|at` + limitWhen + `))?\.?`
 
@@ -224,6 +258,13 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// Claude Code 2.1.317: a group's pooled budget on the Claude apps
 		// gateway, with the day and time it resets (UTC).
 		`thisrequestexceedsyourgroup.?sbudget\.askyourorganization.?sadminstoraiseit,ortryagainafteritresetson`+limitWhen,
+		// Claude Code 2.1.318–322: a model that needs usage credits the
+		// session has none of — the one its model policy allows, or the one
+		// auto mode would have moved to — and 1M context asked for without
+		// them. Each ends the turn, with what to do next and only that.
+		`yourmodelpolicyonlyallows`+creditModel+`,whichrequiresusagecredits·/modeltosetitup`,
+		`automodedoesn.?trunon`+creditModel+`,and`+creditModel+`requiresusagecredits·/modeltopickanothermodel`,
+		`apierror:usagecreditsrequiredfor1mcontext·`+credits1M,
 	)...),
 		// Bare words that could end any sentence: only on the notice's own row.
 		// "Usage limit reached · continuing automatically at 3pm · esc to
@@ -243,6 +284,19 @@ var harnessLimitNotices = map[string][]limitNotice{
 			// and a goal paused by it.
 			`usageispausedforyourorganization(?:\.forhelp,pleasecontactsupport\.?)?`,
 			`goalpaused·usageispausedforyourorganization`,
+			// Claude Code 2.1.323: a model's limit, or a model that now
+			// uses usage credits, and the turn stopped there, nothing sent:
+			// the prompt to go on with credits not asked, left unanswered,
+			// or closed from Remote Control (claudeCreditStop). Without its
+			// tail it is the session going on, on another model.
+			`(?:`+creditModel+`limitreached·continuingon`+creditModel+`usesusagecredits|`+creditModel+`nowusesusagecredits)`+claudeCreditStop,
+			// Claude Code 2.1.325: the same stop at a model that now
+			// requires usage credits (claudeCreditRequired).
+			claudeCreditRequired,
+			// Claude Code 2.1.323: the API's credit balance too low, drawn
+			// on one row that clips what does not fit: the link is gone on
+			// a screen too narrow for it.
+			`creditbalancetoolow·addfunds:(?:https://platform\.claude\.com/settings/billing)?`,
 		)))...),
 	// Codex 0.163–0.165: "You’ve hit your usage limit. … try again at 3:05
 	// PM." (the time on the next row when it wraps), its workspace's limit
@@ -252,7 +306,8 @@ var harnessLimitNotices = map[string][]limitNotice{
 		`you.?vehityourusagelimit(?:for`+limitModel+`)?(?:\.(?:upgradetoplustocontinueusingcodex\(https://chatgpt\.com/explore/plus\)`+
 			`|upgradetopro\(https://chatgpt\.com/explore/pro\),visithttps://chatgpt\.com/settings/usagetopurchasemorecredits`+
 			`|visithttps://chatgpt\.com/settings/usagetopurchasemorecredits|togetmoreaccessnow,sendarequesttoyouradmin))?`,
-		`usagelimitreached\.you.?vereachedyourusagelimit`,
+		// Codex 0.169 goes on with what to do about it.
+		`usagelimitreached\.you.?vereachedyourusagelimit(?:\.increaseyourlimitstocontinueusingcodex)?`,
 		`(?:you.?reoutofcredits\.)?yourworkspaceisoutofcredits\.(?:addcreditstocontinue(?:usingcodex)?`+
 			`|askyourworkspaceownertoaddmore(?:\.notifyowner\?)?|askyourworkspaceownertorefillinordertocontinue)`,
 		`you.?vereachedyourworkspacecreditlimit`,
@@ -277,7 +332,7 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// Qwen Code 0.25–0.26: the service's 429 in its error line, and what it
 	// adds; its own quota's and rate limit's words. Its errors are led by
 	// "✕" (and "[API Error: …]").
-	"qwen": append(wholeRows(`\.?`,
+	"qwen": append(append(wholeRows(`\.?`,
 		`apierror:.{0,200}\(status:429\)\]`,
 		`possiblequotalimitationsinplaceorslowresponsetimesdetected\.pleasewaitandtryagainlater`,
 		`ratelimitexceeded\.(?:pleasewaitandtryagain|tryagainlater)`,
@@ -291,6 +346,14 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// notices are.
 		`you.?veusedupyour(?:weekly)?credits\.(?:pleasetryagainafterthereset|youcanwaitorrun/upgradetogetmorecredits)`,
 		`yourcreditsareexpectedtoresetin`+limitWait,
+	))...), onGlyph("✕", wholeRows(qwenErrorEnd,
+		// Qwen Code 0.27.2, as its screen shows it: inside its API error,
+		// when they come back said in the same sentence, then the request's
+		// id and its retry hint ("✕ [API Error: You've used up your credits.
+		// Your credits are expected to reset in 3 hours. Please try again
+		// after the reset. (request_id: …)] (Press Ctrl+Y to retry)").
+		`apierror:you.?veusedupyour(?:weekly)?credits\.(?:yourcreditsareexpectedtoresetin`+limitWait+`\.)?`+
+			`(?:pleasetryagainafterthereset|youcanwaitorrun/upgradetogetmorecredits)`,
 	))...),
 	// OpenCode 1.19: "Usage limit reached. It will reset in 3 hours 20
 	// minutes." (a model's name may lead it), what to do now, its Go and
@@ -359,6 +422,12 @@ var harnessLimitNotices = map[string][]limitNotice{
 	"agy": onCased("AI: Out of credits", wholeRows(`\.?`,
 		`ai:outofcredits`,
 	)),
+	// Kiro CLI 3.2: its rate limit (the warning sign before it is not
+	// needed), and its monthly requests, perhaps with when they reset.
+	"kiro": wholeRows(`\.?`,
+		`kiroratelimitreached:?`,
+		`monthlyrequestlimitreached(?:-thelimitsreseton\d{1,2}/01)?`,
+	),
 }
 
 // limitPromptGlyphs are what an input prompt, or a person's message echoed

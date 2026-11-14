@@ -172,8 +172,12 @@ func keyHelperClick(x, y int, right bool, count int) bool {
 }
 
 // keyHelperScroll scrolls at a screen point by wheel deltas (CGEvent sign).
-func keyHelperScroll(x, y, dy, dx int) bool {
-	return keysHelper.send(map[string]any{"t": "scroll", "x": x, "y": y, "dy": dy, "dx": dx})
+func keyHelperScroll(x, y, dy, dx int, phase string) bool {
+	m := map[string]any{"t": "scroll", "x": x, "y": y, "dy": dy, "dx": dx}
+	if phase != "" {
+		m["phase"] = phase // an older helper ignores the key
+	}
+	return keysHelper.send(m)
 }
 
 // keyHelperDrag posts one step of a live drag: down, move or up.

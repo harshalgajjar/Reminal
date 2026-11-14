@@ -18,7 +18,25 @@ func TestPaneGestureContracts(t *testing.T) {
 		"}, true);\n    // While the Host dropdown is open",
 		"mode: null, scaled: false",
 		"const residualX = fingerDX - (pane.panX - beforeX)",
-		"queueScroll(f.fx, f.fy, -residualX * scaleX, -residualY * scaleY)",
+		"fingerScroll(fracAt(cx, cy), -residualX, -residualY)",
+		// Direct touch: one finger scrolls from where it landed, a tap clicks
+		// under it, and a swipe coasts on in both modes.
+		"fingerScroll(fracAt(sx, sy), -(e.clientX - lastX), -(e.clientY - lastY))",
+		"fingerUp(pinch.mode === 'view' && !pinch.scaled)",
+		// A scroll carries its gesture phase: a finger's begin/move/end and the
+		// coast's momentum_begin/momentum/momentum_end, with the end sent at
+		// once. The host posts the coast as momentum, which an app stops at
+		// the edge of its content instead of stretching past it per batch.
+		"queueScroll(f.fx, f.fy, wx, wy, gesture ? 'move' : 'begin')",
+		"queueScroll(f.fx, f.fy, vx * dt, vy * dt, phase); phase = 'momentum'",
+		"flingRAF = 0; endScroll('momentum_end');",
+		"if (gesture) { gesture = false; endScroll('end'); }",
+		"const TOUCH_MODE_KEY = 'reminal:touchMode'",
+		"e.deltaX * m * sc.x, e.deltaY * m * sc.y",
+		// Scroll scale is window size over DRAWN frame size: never the canvas
+		// (capture) size, which follows link speed and Retina, and the frame
+		// rect rather than the element rect, so a letterboxed pop-out is right.
+		"x: (pane.w.w || img.width || fr.width) / (fr.width || 1), y: (pane.w.h || img.height || fr.height) / (fr.height || 1)",
 		"targets here before preventing touchmove's browser default",
 		"const TermSize = (() => {",
 		"TermSize.adoptPty",

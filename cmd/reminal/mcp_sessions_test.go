@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"maps"
 	"regexp"
 	"strings"
@@ -222,6 +223,27 @@ func TestFleetMachineRowCarriesBackground(t *testing.T) {
 	for _, f := range []string{`"agents"`, `"other"`} {
 		if strings.Contains(string(body), f) {
 			t.Fatalf("a session with none should carry no %s: %s", f, body)
+		}
+	}
+}
+
+// What a failure part-way through a send means to the caller: nothing
+// landed, the text landed without its Return, or part of it landed.
+func TestAPartialSendSaysWhatLanded(t *testing.T) {
+	fail := errors.New("busy")
+	ds := [][]byte{[]byte("\x15"), []byte("ls"), []byte("\r")}
+	for _, tc := range []struct {
+		sent int
+		tail []byte
+		want string
+	}{
+		{0, ds[2], "busy"},
+		{1, ds[2], "sent part of it, then: busy"},
+		{2, ds[2], "typed the text but could not press Return: busy"},
+		{2, nil, "sent part of it, then: busy"},
+	} {
+		if got := partialSendError(tc.sent, ds, tc.tail, fail).Error(); got != tc.want {
+			t.Errorf("sent %d, tail %q: %q, want %q", tc.sent, tc.tail, got, tc.want)
 		}
 	}
 }

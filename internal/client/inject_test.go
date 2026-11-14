@@ -36,7 +36,7 @@ func TestPrepareInjectKeysEnterAndNewline(t *testing.T) {
 }
 
 func TestSendKeysPINRejectsBadPIN(t *testing.T) {
-	if err := SendKeysPIN("ABCDEFGH", "12", []byte("x")); err == nil {
+	if _, err := SendKeysPIN("ABCDEFGH", "12", []byte("x")); err == nil {
 		t.Fatal("expected PIN validation error")
 	}
 }
