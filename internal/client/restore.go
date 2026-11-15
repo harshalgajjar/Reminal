@@ -891,6 +891,9 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 		sh := config.Shell()
 		argv, note := resumePlanFor(*r, peers, sh)
 		if argv == nil {
+			if note == "" {
+				note = lostAgentNote(*r, peers, sh)
+			}
 			return "", note
 		}
 		if why := resumeTooBig(*r); why != "" {
