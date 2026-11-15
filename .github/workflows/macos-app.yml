@@ -1,0 +1,62 @@
+# The Mac app as it ships: signed with the hardened runtime, which kills a
+# process that runs code it compiled in memory unless the app is entitled to.
+# The terminal engine does exactly that, and 3.20.0 shipped without the
+# entitlement: every session on a Mac died as it started. Only the release
+# built the signed app, so nothing before it could see that. This builds the
+# app for both release architectures on every change, signs it the same way
+# (ad hoc: same flags and entitlements, no certificate or secrets), and starts
+# its engine; the x86_64 app runs under Rosetta. A control signed without the
+# entitlement must be killed, so a check that cannot fail fails the job.
+name: macOS app
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            swift_target: arm64-apple-macos12.3
+          - goarch: amd64
+            swift_target: x86_64-apple-macos12.3
+    name: signed app (${{ matrix.goarch }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Rosetta, for the x86_64 app
+        if: matrix.goarch == 'amd64'
+        run: arch -x86_64 /usr/bin/true 2>/dev/null || softwareupdate --install-rosetta --agree-to-license
+      - name: Build reminal and its helpers
+        env:
+          GOOS: darwin
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build -trimpath -o reminal ./cmd/reminal
+          swiftc -O -target ${{ matrix.swift_target }} -o reminal-capture native/reminal-capture/main.swift
+          swiftc -O -target ${{ matrix.swift_target }} -o reminal-overlay native/reminal-overlay/main.swift
+      - name: Assemble and sign the app, and start its engine
+        run: bash scripts/build-app.sh . . -
+      - name: "Control: the app signed without its entitlement is killed"
+        run: |
+          cp -R reminal.app control.app
+          codesign --force --timestamp=none --options runtime --sign - control.app
+          run=(control.app/Contents/MacOS/reminal)
+          [ "${{ matrix.goarch }}" = amd64 ] && run=(arch -x86_64 "${run[@]}")
+          if "${run[@]}" __engine-check; then
+            echo "::error title=The engine check cannot fail::the app ran its engine without the entitlement, so the check above proves nothing on ${{ matrix.goarch }}"
+            exit 1
+          fi
+          echo "control: killed without the entitlement, as it should be"

@@ -74,10 +74,24 @@ codesign --verify --deep --strict "$APP"
 
 # The signed app starts its terminal engine, as every session does: a build
 # the hardened runtime would kill (2.8.0 / 3.20.0 shipped one) fails here.
-# Only where this Mac can run the binary's architecture.
-if [ "$(lipo -archs "$APP/Contents/MacOS/reminal" 2>/dev/null)" = "$(uname -m)" ]; then
-  "$APP/Contents/MacOS/reminal" __engine-check || { echo "build-app: the signed reminal cannot start its terminal engine" >&2; exit 1; }
+# An x86_64 build on Apple silicon runs it under Rosetta. A build this Mac
+# cannot run fails too: a skipped check is a release nobody checked.
+# REMINAL_SKIP_ENGINE_CHECK=1 skips it, for a local build only.
+bin="$APP/Contents/MacOS/reminal"
+archs="$(lipo -archs "$bin" 2>/dev/null || true)"
+run=()
+case "$archs/$(uname -m)" in
+  arm64/arm64 | x86_64/x86_64) run=("$bin") ;;
+  x86_64/arm64)
+    arch -x86_64 /usr/bin/true 2>/dev/null || { echo "build-app: the x86_64 engine check needs Rosetta (softwareupdate --install-rosetta --agree-to-license)" >&2; exit 1; }
+    run=(arch -x86_64 "$bin") ;;
+esac
+if [ "${REMINAL_SKIP_ENGINE_CHECK:-}" = 1 ]; then
+  echo "build-app: engine check SKIPPED (REMINAL_SKIP_ENGINE_CHECK=1): never for a release" >&2
+elif [ ${#run[@]} -eq 0 ]; then
+  echo "build-app: cannot run the engine check: the binary is ${archs:-unknown}, this Mac is $(uname -m)" >&2
+  exit 1
 else
-  echo "build-app: engine check skipped (binary is $(lipo -archs "$APP/Contents/MacOS/reminal" 2>/dev/null), this Mac is $(uname -m))"
+  "${run[@]}" __engine-check || { echo "build-app: the signed reminal ($archs) cannot start its terminal engine" >&2; exit 1; }
 fi
 echo "built: $APP  (identity: ${IDENTITY}, version: ${VERSION})"
