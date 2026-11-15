@@ -71,3 +71,28 @@ func TestARestoreWhoseRecordLostItsAgentSaysHowToResumeIt(t *testing.T) {
 		t.Errorf("a folder with control characters reached the screen: %q", n)
 	}
 }
+
+// A conversation resumed from another folder goes on there: the note's cd
+// is to the folder its file names last, not first.
+func TestTheLostAgentNoteFollowsAConversationThatMoved(t *testing.T) {
+	isolateHome(t)
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	first, now := t.TempDir(), t.TempDir()
+	const conv = "a1b2c3d4-0002-4e5f-8a9b-0123456789ab"
+	d := filepath.Join(cfg, "projects", "-somewhere")
+	if err := os.MkdirAll(d, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"user","cwd":"` + first + `"}` + "\n" + `{"type":"user","cwd":"` + now + `"}` + "\n"
+	if err := os.WriteFile(filepath.Join(d, conv+".jsonl"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := session.Restore{ID: "MOVED001", Cwd: t.TempDir()}
+	if err := session.WriteConv(r.ID, conv); err != nil {
+		t.Fatal(err)
+	}
+	if n := lostAgentNote(r, nil, "/bin/zsh"); !strings.Contains(n, "cd "+now+" && ") {
+		t.Errorf("note %q: want the folder the conversation is in now (%s)", n, now)
+	}
+}

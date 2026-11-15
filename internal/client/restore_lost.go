@@ -6,6 +6,7 @@ package client
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -69,8 +70,11 @@ func convAgent(conv string) string {
 	return ""
 }
 
-// convCwd is the folder agent's conversation conv ran in, as its own file
-// says: Claude Code writes it into each entry ("cwd"). "" when not known.
+// convCwd is the folder agent's conversation conv was last in, as its own
+// file says: Claude Code writes it into each entry ("cwd"), and the LAST
+// one is where it is now (a conversation resumed from another folder, or a
+// worktree, goes on with the new one). Read from the end of the file, which
+// can be hundreds of megabytes. "" when not known.
 func convCwd(agent, conv string) string {
 	if agent != "claude" {
 		return ""
@@ -84,18 +88,30 @@ func convCwd(agent, conv string) string {
 		return ""
 	}
 	defer f.Close()
+	const tail = 1 << 20
+	if fi, err := f.Stat(); err == nil && fi.Size() > tail {
+		if _, err := f.Seek(fi.Size()-tail, io.SeekStart); err != nil {
+			return ""
+		}
+	}
+	last := ""
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
-	for i := 0; i < 50 && sc.Scan(); i++ {
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	for sc.Scan() {
 		var e struct {
 			Cwd string `json:"cwd"`
 		}
+		// A partial first line from the seek does not decode: skipped.
 		// Shown on the screen: nothing a terminal would act on.
 		if json.Unmarshal(sc.Bytes(), &e) == nil && filepath.IsAbs(e.Cwd) && !hasControl(e.Cwd) {
-			if fi, err := os.Stat(e.Cwd); err == nil && fi.IsDir() {
-				return e.Cwd
-			}
+			last = e.Cwd
 		}
 	}
-	return ""
+	if last == "" {
+		return ""
+	}
+	if fi, err := os.Stat(last); err != nil || !fi.IsDir() {
+		return ""
+	}
+	return last
 }

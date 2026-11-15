@@ -551,3 +551,32 @@ func ReadConvAt(id string) (string, time.Time) {
 	}
 	return conv, fi.ModTime()
 }
+
+// PeekRestore reads one session's sealed restore record and nothing else:
+// unlike ReadRestore, a record that will not open is left where it is
+// (never quarantined, which moves its .conv and scrollback away too), and a
+// plain one from before sealing is not read or migrated. For looking, as the
+// restore log does, never for deciding what a restore does.
+func PeekRestore(id string) (*Restore, error) {
+	id = strings.ToUpper(id)
+	p, err := restorePath(id, ".sealed")
+	if err != nil {
+		return nil, err
+	}
+	blob, err := readRecord(p, maxRestoreRecord)
+	if err != nil {
+		return nil, err
+	}
+	data, err := atrest.Open(kindRestore, id, blob)
+	if err != nil {
+		return nil, err
+	}
+	var r Restore
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, err
+	}
+	if strings.ToUpper(r.ID) != id {
+		return nil, atrest.ErrCorrupt
+	}
+	return &r, nil
+}
