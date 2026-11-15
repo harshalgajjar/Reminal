@@ -71,9 +71,12 @@ codesign --force --timestamp=none "${rt[@]}" ${kc[@]+"${kc[@]}"} --identifier sh
 codesign --force --timestamp=none "${rt[@]}" ${kc[@]+"${kc[@]}"} --entitlements "$here/reminal.entitlements" --sign "$IDENTITY" "$APP"
 
 codesign --verify --deep --strict "$APP"
+bash "$here/check-app-signature.sh" "$APP"
 
-# The signed app starts its terminal engine, as every session does: a build
-# the hardened runtime would kill (2.8.0 / 3.20.0 shipped one) fails here.
+# The signed app starts its terminal engine, as every session does: an engine
+# that does not run on this architecture fails here. Whether the hardened
+# runtime lets it run is check-app-signature.sh's to say (above): a Mac with
+# System Integrity Protection off, like GitHub's runners, runs it regardless.
 # An x86_64 build on Apple silicon runs it under Rosetta. A build this Mac
 # cannot run fails too: a skipped check is a release nobody checked.
 # REMINAL_SKIP_ENGINE_CHECK=1 skips it, for a local build only.

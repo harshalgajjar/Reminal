@@ -4,9 +4,12 @@
 # entitlement: every session on a Mac died as it started. Only the release
 # built the signed app, so nothing before it could see that. This builds the
 # app for both release architectures on every change, signs it the same way
-# (ad hoc: same flags and entitlements, no certificate or secrets), and starts
-# its engine; the x86_64 app runs under Rosetta. A control signed without the
-# entitlement must be killed, so a check that cannot fail fails the job.
+# (ad hoc: same flags and entitlements, no certificate or secrets), checks
+# its signature carries the entitlement (check-app-signature.sh) and starts
+# its engine; the x86_64 app runs under Rosetta. These runners have System
+# Integrity Protection off and run the engine with or without the
+# entitlement, so the signature is the gate here: a control signed without it
+# must be refused. That a Mac with SIP on runs the app is the upgrade test's.
 name: macOS app
 
 on:
@@ -49,25 +52,17 @@ jobs:
           swiftc -O -target ${{ matrix.swift_target }} -o reminal-overlay native/reminal-overlay/main.swift
       - name: Assemble and sign the app, and start its engine
         run: bash scripts/build-app.sh . . -
-      - name: "Control: the app signed without its entitlement is killed"
+      - name: "Control: the app signed without its entitlement is refused"
         run: |
+          # GitHub's macOS runners have System Integrity Protection off: the
+          # app below starts its engine with or without the entitlement (both
+          # architectures, checked), so running it proves nothing about the
+          # hardened runtime. The signature does: a copy signed without the
+          # entitlement must be refused by the check build-app.sh ran.
           cp -R reminal.app control.app
           codesign --force --timestamp=none --options runtime --sign - control.app
-          run=(control.app/Contents/MacOS/reminal)
-          [ "${{ matrix.goarch }}" = amd64 ] && run=(arch -x86_64 "${run[@]}")
-          if "${run[@]}" __engine-check; then
-            echo "::error title=The engine check cannot fail::the app ran its engine without the entitlement, so the check above proves nothing on ${{ matrix.goarch }}"
+          if bash scripts/check-app-signature.sh control.app; then
+            echo "::error title=The signature check cannot fail::it passed an app signed without the entitlement"
             exit 1
           fi
-          echo "control: killed without the entitlement, as it should be"
-      - name: "Diagnostics (temporary): what the runner enforces"
-        if: always()
-        run: |
-          csrutil status || true
-          sw_vers || true
-          echo "--- app entitlements"; codesign -d --entitlements - reminal.app 2>&1 || true
-          echo "--- control entitlements"; codesign -d --entitlements - control.app 2>&1 || true
-          echo "--- control flags"; codesign -dvvv control.app 2>&1 | grep -Ei "flags|runtime|Signature" || true
-          nvram boot-args 2>&1 || true
-          spctl --status 2>&1 || true
-          DevToolsSecurity -status 2>&1 || true
+          echo "control: refused without the entitlement, as it should be"
