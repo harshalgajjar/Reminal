@@ -2876,9 +2876,8 @@
       helperTA.setAttribute('spellcheck', isAppleMobile ? 'true' : 'false');
       // inputmode="url" is the only reliable way to disable Android Gboard's
       // autocorrect (it ignores autocorrect="off"). But on iOS the URL keyboard
-      // ALSO removes the dictation MIC button — and iOS Safari *does* honour
-      // autocorrect="off", so it never needed the URL trick. So: a text
-      // inputmode on iOS (mic returns, attributes keep autocorrect off), and
+      // ALSO removes the dictation MIC button, and iOS wants its corrections
+      // anyway (above). So: a text inputmode on iOS (the mic stays), and
       // "url" on Android where it's load-bearing.
       helperTA.setAttribute('inputmode', isAppleMobile ? 'text' : 'url');
       helperTA.setAttribute('enterkeyhint', 'done');
