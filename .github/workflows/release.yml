@@ -344,10 +344,13 @@ jobs:
         with:
           body_path: release-notes.md
           files: reminal_*.tar.gz
-          # Any tag with a hyphen (v2.2.0-rc.1, -beta…) is a prerelease, so it
-          # doesn't become /releases/latest — install.sh keeps resolving the last
-          # stable for everyone while we validate a candidate.
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Any tag with a hyphen (v2.2.0-rc.1, -beta…) is a candidate, and its
+          # release is a DRAFT: not /releases/latest, and not in releases.atom,
+          # the feed every machine reads for What's new and its upgrade offer.
+          # A prerelease is in that feed, and a 3.20.3 build ignores the suffix,
+          # so a published candidate is shown and can be offered before its gate
+          # has passed. The gate downloads a draft's builds with gh.
+          draft: ${{ contains(github.ref_name, '-') }}
 
   # Each platform uploads its own build, and a failing job does not stop its
   # siblings — so one job dying leaves a published release, marked latest,

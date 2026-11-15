@@ -149,6 +149,33 @@ func TestOfferAndNotesAreOneAnswer(t *testing.T) {
 	}
 }
 
+// GitHub's feed lists prereleases beside releases. They are neither notes
+// nor somewhere to upgrade to: v3.20.3-rc.1 and rc.2 showed in "what's new"
+// under v3.20.3, each tagged as the version you are on, and an rc on top of
+// the feed became the cached latest the upgrade offer reads.
+func TestPrereleasesAreNeitherNotesNorAnOffer(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	stubFeed(t, "v3.20.4-rc.1", "v3.20.3", "v3.20.3-rc.2", "v3.20.3-rc.1", "v3.20.2")
+
+	rels, err := ReleasesSince(context.Background(), "3.20.3", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rels) != 1 || rels[0].Version != "3.20.3" || !rels[0].Current {
+		t.Fatalf("notes for a 3.20.3 host: %+v", rels)
+	}
+	rels, _ = ReleasesSince(context.Background(), "3.20.2", 20)
+	if len(rels) != 2 || rels[0].Version != "3.20.3" || rels[1].Version != "3.20.2" {
+		t.Fatalf("notes for a 3.20.2 host: %+v", rels)
+	}
+	if got := Available("3.20.2"); got != "3.20.3" {
+		t.Fatalf("a 3.20.2 host was offered %q", got)
+	}
+	if got := Available("3.20.3"); got != "" {
+		t.Fatalf("a 3.20.3 host was offered %q", got)
+	}
+}
+
 // One fetch serves every consumer for feedTTL. Opening the Host panel asks; a
 // viewer opening it in a loop — or a PIN guest sending the message by hand —
 // must not become a stream of requests at GitHub.

@@ -274,7 +274,6 @@ func capReleases(rs []Release, limit int) []Release {
 	return rs
 }
 
-// fetchReleases reads the list endpoint: every stable release, newest first.
 // fetchReleases reads GitHub's releases Atom feed and returns every stable
 // release, newest first, with its notes. The Atom route is not rate-limited the
 // way the JSON API is (see releasesURL), so a busy machine still gets "what's
@@ -316,7 +315,12 @@ func fetchReleases(ctx context.Context) ([]Release, error) {
 	var out []Release
 	for _, e := range feed.Entries {
 		ver := strings.TrimPrefix(strings.TrimSpace(e.Title), "v")
-		if ver == "" {
+		// The feed lists prereleases too (v3.20.3-rc.1), and the comparison
+		// ignores the suffix, so one counted as its final release: it showed
+		// in "what's new" tagged as the version you are on, and as the
+		// newest entry it became the machine's cached latest, an upgrade
+		// offered before the release was out.
+		if ver == "" || strings.Contains(ver, "-") {
 			continue
 		}
 		out = append(out, Release{
