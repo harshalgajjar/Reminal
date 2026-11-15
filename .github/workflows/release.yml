@@ -190,6 +190,10 @@ jobs:
           swiftc -O -target ${{ matrix.swift_target }} -o reminal-overlay native/reminal-overlay/main.swift
           codesign --force --sign - reminal-overlay || true
 
+      - name: Rosetta, for the x86_64 app's engine check (macOS)
+        if: matrix.goos == 'darwin' && matrix.goarch == 'amd64'
+        run: arch -x86_64 /usr/bin/true 2>/dev/null || softwareupdate --install-rosetta --agree-to-license
+
       - name: Assemble & sign reminal.app (macOS)
         if: matrix.goos == 'darwin'
         env:

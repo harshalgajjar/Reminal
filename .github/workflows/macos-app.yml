@@ -1,0 +1,68 @@
+# The Mac app as it ships: signed with the hardened runtime, which kills a
+# process that runs code it compiled in memory unless the app is entitled to.
+# The terminal engine does exactly that, and 3.20.0 shipped without the
+# entitlement: every session on a Mac died as it started. Only the release
+# built the signed app, so nothing before it could see that. This builds the
+# app for both release architectures on every change, signs it the same way
+# (ad hoc: same flags and entitlements, no certificate or secrets), checks
+# its signature carries the entitlement (check-app-signature.sh) and starts
+# its engine; the x86_64 app runs under Rosetta. These runners have System
+# Integrity Protection off and run the engine with or without the
+# entitlement, so the signature is the gate here: a control signed without it
+# must be refused. That a Mac with SIP on runs the app is the upgrade test's.
+name: macOS app
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            swift_target: arm64-apple-macos12.3
+          - goarch: amd64
+            swift_target: x86_64-apple-macos12.3
+    name: signed app (${{ matrix.goarch }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Rosetta, for the x86_64 app
+        if: matrix.goarch == 'amd64'
+        run: arch -x86_64 /usr/bin/true 2>/dev/null || softwareupdate --install-rosetta --agree-to-license
+      - name: Build reminal and its helpers
+        env:
+          GOOS: darwin
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          go build -trimpath -o reminal ./cmd/reminal
+          swiftc -O -target ${{ matrix.swift_target }} -o reminal-capture native/reminal-capture/main.swift
+          swiftc -O -target ${{ matrix.swift_target }} -o reminal-overlay native/reminal-overlay/main.swift
+      - name: Assemble and sign the app, and start its engine
+        run: bash scripts/build-app.sh . . -
+      - name: "Control: the app signed without its entitlement is refused"
+        run: |
+          # GitHub's macOS runners have System Integrity Protection off: the
+          # app below starts its engine with or without the entitlement (both
+          # architectures, checked), so running it proves nothing about the
+          # hardened runtime. The signature does: a copy signed without the
+          # entitlement must be refused by the check build-app.sh ran.
+          cp -R reminal.app control.app
+          codesign --force --timestamp=none --options runtime --sign - control.app
+          if bash scripts/check-app-signature.sh control.app; then
+            echo "::error title=The signature check cannot fail::it passed an app signed without the entitlement"
+            exit 1
+          fi
+          echo "control: refused without the entitlement, as it should be"
