@@ -181,6 +181,13 @@ type HostInfo struct {
 	// goes back to idle, or its pill sticks on the last non-idle state forever.
 	// (That was a real bug: `omitempty` swallowed the idle transition.)
 	Attn string `json:"attn"`
+	// Battery* are the machine's power state, as the directory reply carries
+	// them (same names, same meaning), so the Host panel shows the battery the
+	// machines list does. A machine with no battery, and an older host, send
+	// none of them, and the panel shows no battery row.
+	BatteryPct   *int   `json:"battery_pct,omitempty"`
+	BatteryState string `json:"battery_state,omitempty"`
+	BatteryMins  int    `json:"battery_mins,omitempty"`
 }
 
 // gatherHostInfo collects the cross-platform basics, then lets the per-OS hook
@@ -207,6 +214,10 @@ func gatherHostInfo() HostInfo {
 	fillHostInfo(&h) // platform-specific (hostinfo_darwin.go / _linux.go / _other.go)
 	if pct, ok := cachedCPUPercent(); ok {
 		h.CPUPercent = &pct
+	}
+	if b := CurrentBattery(); b != nil && b.Pct != nil {
+		pct := *b.Pct
+		h.BatteryPct, h.BatteryState, h.BatteryMins = &pct, b.State, b.Mins
 	}
 	return h
 }

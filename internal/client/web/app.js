@@ -348,7 +348,7 @@
     // viewer joins hosts it does not control, and these are interpolated into
     // the panel's markup as numbers — so a host must not be able to send text
     // where a number is expected. Strings are escaped where they are used.
-    const HOST_NUMERIC = ['cpus', 'mem_total', 'mem_used', 'cpu_pct', 'load1', 'load5', 'load15', 'uptime', 'sessions'];
+    const HOST_NUMERIC = ['cpus', 'mem_total', 'mem_used', 'cpu_pct', 'load1', 'load5', 'load15', 'uptime', 'sessions', 'battery_pct', 'battery_mins'];
     function cleanHostInfo(info) {
       if (!info || typeof info !== 'object') return {};
       for (const k of HOST_NUMERIC) {
@@ -528,11 +528,11 @@
       if (p >= 65) return '#d29922';
       return '#3fb950';
     }
-    function hostMeter(label, valueHTML, pct) {
+    function hostMeter(label, valueHTML, pct, color) {
       const p = Math.max(0, Math.min(100, Math.round(pct)));
       return '<div class="host-m">'
         + '<div class="top"><span class="l">' + label + '</span><span class="r">' + valueHTML + '</span></div>'
-        + '<div class="bar"><span style="width:' + p + '%;background-color:' + meterColor(p) + '"></span></div>'
+        + '<div class="bar"><span style="width:' + p + '%;background-color:' + (color || meterColor(p)) + '"></span></div>'
         + '</div>';
     }
     // ---- Own this machine (browser device identity) --------------------------
@@ -1881,6 +1881,20 @@
         const p = i.load1 / i.cpus * 100;
         html += hostMeter('Load',
           '<b>' + i.load1.toFixed(2) + '</b> <span class="dim">· ' + Math.round(i.cpus) + ' cores</span>', p);
+      }
+      // Battery, as the machines list shows it: none at all on a machine
+      // without one (or a host too old to say). The bar runs the other way
+      // from CPU and memory, where full is the alarming end: here it is empty.
+      const batt = battFromResp(i);
+      if (batt) {
+        const dur = battDur(batt.mins);
+        let est;
+        if (batt.state === 'charging') est = 'charging' + (dur ? ' · ' + dur + ' to full' : '');
+        else if (batt.state === 'charged') est = 'charged';
+        else est = dur ? dur + ' left' : '';
+        const color = batt.state === 'charging' || batt.state === 'charged' || batt.pct > 20 ? meterColor(0)
+          : batt.pct > 10 ? meterColor(65) : meterColor(100);
+        html += hostMeter('Battery', '<b>' + batt.pct + '%</b>' + (est ? ' <span class="dim">· ' + est + '</span>' : ''), batt.pct, color);
       }
       // Load and uptime finish the machine's vitals, so they sit with the
       // meters. They used to land between the version and the button that
