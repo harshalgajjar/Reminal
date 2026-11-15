@@ -31,7 +31,7 @@ func TestMergeEnvRefreshesStalePath(t *testing.T) {
 	machine := map[string]string{"Path": `C:\Windows\system32;C:\Windows`}
 	user := map[string]string{"Path": `C:\Users\harsh\.local\bin`}
 
-	got := envMap(mergeEnv(inherited, machine, user))
+	got := envMap(mergeEnv(inherited, machine, user, nil))
 
 	want := `C:\Windows\system32;C:\Windows;C:\Users\harsh\.local\bin`
 	if got["PATH"] != want {
@@ -83,6 +83,7 @@ func TestMergeEnvIsCaseInsensitive(t *testing.T) {
 		[]string{`PATH=C:\old`, `TeMp=C:\old\temp`},
 		map[string]string{"Path": `C:\new`},
 		map[string]string{"TMP": `C:\new\tmp`, "Temp": `C:\new\temp`},
+		nil,
 	)
 	var paths, temps int
 	for _, kv := range merged {
@@ -115,8 +116,32 @@ func TestMergeEnvAddsNewVariables(t *testing.T) {
 		[]string{`USERPROFILE=C:\Users\harsh`},
 		nil,
 		map[string]string{"ANTHROPIC_BASE_URL": "https://example.test"},
+		nil,
 	))
 	if got["ANTHROPIC_BASE_URL"] != "https://example.test" {
 		t.Error("a variable defined only in the registry never reached the shell")
+	}
+}
+
+// The machine key's USERNAME is SYSTEM, a placeholder for processes with no
+// logon. Folded in like any other variable it made every session's shell
+// SYSTEM's; a logon's own USERNAME (Volatile Environment, folded in last) or,
+// without one, the inherited one is the person's.
+func TestMergeEnvKeepsThePersonsUsername(t *testing.T) {
+	machine := map[string]string{"USERNAME": "SYSTEM", "OS": "Windows_NT"}
+	inherited := []string{"USERNAME=alice", `USERPROFILE=C:\Users\alice`}
+
+	got := envMap(mergeEnv(inherited, machine, nil, nil))
+	if got["USERNAME"] != "alice" {
+		t.Errorf("USERNAME = %q with no logon key, want the inherited alice", got["USERNAME"])
+	}
+	if got["OS"] != "Windows_NT" {
+		t.Errorf("OS = %q: the rest of the machine key must still apply", got["OS"])
+	}
+
+	volatile := map[string]string{"USERNAME": "bob", "USERPROFILE": `C:\Users\bob`}
+	got = envMap(mergeEnv(inherited, machine, nil, volatile))
+	if got["USERNAME"] != "bob" || got["USERPROFILE"] != `C:\Users\bob` {
+		t.Errorf("USERNAME, USERPROFILE = %q, %q: the logon's own values come last and win", got["USERNAME"], got["USERPROFILE"])
 	}
 }
