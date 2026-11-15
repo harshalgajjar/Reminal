@@ -41,38 +41,26 @@ const resizePollInterval = 400 * time.Millisecond
 // watchResize delivers a tick whenever the host terminal's size changes,
 // by polling. The tick value is a dummy signal — consumers only use the
 // channel as an edge trigger and re-read the size themselves.
+//
+// The size is read off the console's output side: stdout, else stderr, else
+// the console itself (CONOUT$). Read off stdin it failed every time, so a
+// window resized never resized its session.
 func watchResize() (<-chan os.Signal, func()) {
-	ch := make(chan os.Signal, 1)
-	stop := make(chan struct{})
-	go func() {
-		fd := int(os.Stdin.Fd())
-		lastW, lastH, _ := term.GetSize(fd)
-		t := time.NewTicker(resizePollInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-t.C:
-				w, h, err := term.GetSize(fd)
-				if err != nil || (w == lastW && h == lastH) {
-					continue
-				}
-				lastW, lastH = w, h
-				select {
-				case ch <- syscall.Signal(0):
-				default: // a pending tick already queued — coalesce
-				}
+	read := firstWorking(consoleSize(os.Stdout), consoleSize(os.Stderr))
+	if read == nil {
+		// Both redirected: the console itself, kept open while watched.
+		if f, err := os.OpenFile("CONOUT$", os.O_RDWR, 0); err == nil {
+			if read = firstWorking(consoleSize(f)); read == nil {
+				_ = f.Close()
 			}
 		}
-	}()
-	var once bool
-	return ch, func() {
-		if !once {
-			once = true
-			close(stop)
-		}
 	}
+	return pollSize(read, resizePollInterval)
+}
+
+// consoleSize reads f's console size.
+func consoleSize(f *os.File) sizeReader {
+	return func() (int, int, error) { return term.GetSize(int(f.Fd())) }
 }
 
 // respawnDaemonAfterUpgrade hands the daemon off to the freshly-upgraded
