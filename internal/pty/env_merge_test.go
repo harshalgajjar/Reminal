@@ -125,23 +125,29 @@ func TestMergeEnvAddsNewVariables(t *testing.T) {
 
 // The machine key's USERNAME is SYSTEM, a placeholder for processes with no
 // logon. Folded in like any other variable it made every session's shell
-// SYSTEM's; a logon's own USERNAME (Volatile Environment, folded in last) or,
-// without one, the inherited one is the person's.
+// SYSTEM's; the inherited one is the person's.
 func TestMergeEnvKeepsThePersonsUsername(t *testing.T) {
 	machine := map[string]string{"USERNAME": "SYSTEM", "OS": "Windows_NT"}
-	inherited := []string{"USERNAME=alice", `USERPROFILE=C:\Users\alice`}
-
-	got := envMap(mergeEnv(inherited, machine, nil, nil))
+	got := envMap(mergeEnv([]string{"USERNAME=alice"}, machine, nil, nil))
 	if got["USERNAME"] != "alice" {
-		t.Errorf("USERNAME = %q with no logon key, want the inherited alice", got["USERNAME"])
+		t.Errorf("USERNAME = %q, want the inherited alice", got["USERNAME"])
 	}
 	if got["OS"] != "Windows_NT" {
 		t.Errorf("OS = %q: the rest of the machine key must still apply", got["OS"])
 	}
+}
 
-	volatile := map[string]string{"USERNAME": "bob", "USERPROFILE": `C:\Users\bob`}
-	got = envMap(mergeEnv(inherited, machine, nil, volatile))
-	if got["USERNAME"] != "bob" || got["USERPROFILE"] != `C:\Users\bob` {
-		t.Errorf("USERNAME, USERPROFILE = %q, %q: the logon's own values come last and win", got["USERNAME"], got["USERPROFILE"])
+// The logon's own values (Volatile Environment) fill in what was not
+// inherited, and nothing that was: a reminal started with a profile of its
+// own (an isolated home, a service account, runas) keeps handing it on.
+func TestMergeEnvLogonValuesOnlyFillGaps(t *testing.T) {
+	machine := map[string]string{"USERNAME": "SYSTEM"}
+	volatile := map[string]string{"USERNAME": "bob", "USERPROFILE": `C:\Users\bob`, "APPDATA": `C:\Users\bob\AppData\Roaming`}
+	got := envMap(mergeEnv([]string{`USERPROFILE=C:\iso`}, machine, nil, volatile))
+	if got["USERPROFILE"] != `C:\iso` {
+		t.Errorf("USERPROFILE = %q: the profile this reminal was started with was replaced", got["USERPROFILE"])
+	}
+	if got["USERNAME"] != "bob" || got["APPDATA"] != `C:\Users\bob\AppData\Roaming` {
+		t.Errorf("USERNAME, APPDATA = %q, %q: the logon's values should fill what was not inherited", got["USERNAME"], got["APPDATA"])
 	}
 }

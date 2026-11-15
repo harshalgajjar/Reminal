@@ -43,10 +43,12 @@ func shellEnv(extra []string) []string {
 }
 
 // mergeEnv folds a persistent environment (Windows' registry keys) into an
-// inherited one, in the order a logon builds it: the machine's, the user's,
-// then the logon's own (volatile: USERNAME, USERPROFILE, APPDATA and the
-// like). Split from the registry read so the merge — the part with the sharp
-// edges — is testable on any platform.
+// inherited one: the machine's, then the user's. The logon's own (volatile:
+// USERNAME, USERPROFILE, APPDATA and the like) only fills in what was not
+// inherited: a reminal started with a profile of its own (an isolated home, a
+// service account, runas) hands its shells that one, and TEMP, expanded
+// against it, still agrees. Split from the registry read so the merge — the
+// part with the sharp edges — is testable on any platform.
 func mergeEnv(env []string, machine, user, volatile map[string]string) []string {
 	// Case-insensitive: Windows environment names are, so a "Path" written by
 	// one tool must still override a "PATH" inherited from another.
@@ -63,8 +65,16 @@ func mergeEnv(env []string, machine, user, volatile map[string]string) []string 
 	for k, v := range user {
 		replace[strings.ToUpper(k)] = v
 	}
+	inherited := map[string]bool{}
+	for _, kv := range env {
+		if name, _, ok := strings.Cut(kv, "="); ok {
+			inherited[strings.ToUpper(name)] = true
+		}
+	}
 	for k, v := range volatile {
-		replace[strings.ToUpper(k)] = v
+		if up := strings.ToUpper(k); !inherited[up] {
+			replace[up] = v
+		}
 	}
 	if p := pathFor(machine, user); p != "" {
 		replace["PATH"] = p
