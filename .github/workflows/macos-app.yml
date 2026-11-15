@@ -60,3 +60,14 @@ jobs:
             exit 1
           fi
           echo "control: killed without the entitlement, as it should be"
+      - name: "Diagnostics (temporary): what the runner enforces"
+        if: always()
+        run: |
+          csrutil status || true
+          sw_vers || true
+          echo "--- app entitlements"; codesign -d --entitlements - reminal.app 2>&1 || true
+          echo "--- control entitlements"; codesign -d --entitlements - control.app 2>&1 || true
+          echo "--- control flags"; codesign -dvvv control.app 2>&1 | grep -Ei "flags|runtime|Signature" || true
+          nvram boot-args 2>&1 || true
+          spctl --status 2>&1 || true
+          DevToolsSecurity -status 2>&1 || true
