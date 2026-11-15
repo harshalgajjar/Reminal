@@ -2846,6 +2846,12 @@
     // current IME field (see the beforeinput handler). Top-level so sendInput
     // can invalidate it when out-of-band input (keybar, paste) edits the line.
     let imeField = '';
+    // IOS_REST: what the field holds on iOS while the mirror is empty. iOS
+    // repeats a held delete key only while the field has text to delete: on an
+    // empty field it sends one Backspace and stops. One space, never sent and
+    // never deleted (the Backspace that would delete it is the shell's), keeps
+    // the hold repeating.
+    const IOS_REST = ' ';
     // Android: where the IME double-fires (Samsung Keyboard commits a tap
     // through composition and then sends the same character again as
     // insertText). The filters for that are for it alone: a keyboard
@@ -2871,6 +2877,10 @@
       helperTA.style.setProperty('top', '0', 'important');
       helperTA.style.setProperty('width', '1px', 'important');
       helperTA.style.setProperty('height', '1px', 'important');
+      // xterm's nowrap collapses a field of only spaces to nothing, and iOS
+      // then takes it for empty: IOS_REST would not keep a held delete key
+      // repeating. pre keeps the field one line and its spaces as they are.
+      if (isAppleMobile) helperTA.style.setProperty('white-space', 'pre', 'important');
       helperTA.addEventListener('focus', applyViewportHeight);
       helperTA.addEventListener('input', applyViewportHeight, true);
       // Intercept autocorrect/replacement events at beforeinput so the
@@ -2970,8 +2980,8 @@
             // keydown (so the browser never edits the field and beforeinput
             // never fires) and emit its own \x7f — invisible to the mirror.
             e.stopPropagation();
-            if (helperTA.value === '') {
-              // Nothing in the field for the browser to delete, but a real
+            if (imeField === '') {
+              // Nothing mirrored for the browser to delete, but a real
               // backspace must still reach the shell (a TUI, a line that
               // predates this page, a hardware keyboard whose typed chars
               // never enter the field). Same timing gate as elsewhere, so
@@ -2984,10 +2994,14 @@
                 realBackspacesPending++;
                 sendInput('\x7f', { ime: true });
               }
+              // The field is the mirror's to keep: whatever is left in it
+              // (nothing, or text an abandoned mirror let go) becomes the
+              // rest, so a held key goes on repeating.
+              helperTA.value = IOS_REST;
               e.preventDefault(); // no edit to perform; also stops a spurious empty delete event
             }
-            // Field non-empty: let the browser's default edit run — the
-            // beforeinput deleteContentBackward below mirrors it as \x7f.
+            // Text mirrored: let the browser's default edit run — the
+            // beforeinput handler below mirrors it as \x7f.
             return;
           }
           return;
@@ -3021,10 +3035,27 @@
       // run. Without the resync, the next mirrored edit would diff against ''
       // and re-send the composed text.
       if (isAppleMobile) {
-        helperTA.addEventListener('compositionstart', () => { iosComposing = true; });
+        // What the field held that was never the line's (the rest, or text
+        // an abandoned mirror let go) when a composition began on an empty
+        // mirror: xterm sends only what was composed, so only that is the
+        // line's.
+        let compositionBase = '';
+        helperTA.addEventListener('compositionstart', () => {
+          iosComposing = true;
+          compositionBase = imeField === '' ? helperTA.value : '';
+        });
         helperTA.addEventListener('compositionend', () => {
           iosComposing = false;
-          setTimeout(() => { imeField = helperTA.value; }, 0);
+          setTimeout(() => {
+            const v = helperTA.value;
+            if (compositionBase && v.startsWith(compositionBase)) {
+              imeField = v.slice(compositionBase.length);
+              helperTA.value = imeField || IOS_REST;
+            } else {
+              imeField = v;
+            }
+            compositionBase = '';
+          }, 0);
         });
       }
 
@@ -3089,6 +3120,12 @@
             // split the pair.
             next = (a === b) ? Array.from(cur.slice(0, a)).slice(0, -1).join('') + cur.slice(b)
                              : cur.slice(0, a) + cur.slice(b);
+          } else if (t === 'deleteWordBackward') {
+            // A held delete key speeds up to whole words after about two
+            // seconds. Left to the browser, the word left the field without a
+            // \x7f for the shell, and an emptied field ended the repeat.
+            next = (a === b) ? cur.slice(0, a).replace(/\S*\s*$/, '') + cur.slice(b)
+                             : cur.slice(0, a) + cur.slice(b);
           } else if (t === 'deleteContentForward') {
             next = (a === b) ? cur.slice(0, a) + Array.from(cur.slice(b)).slice(1).join('')
                              : cur.slice(0, a) + cur.slice(b);
@@ -3134,8 +3171,10 @@
               }
             }
             imeField = next;
-            helperTA.value = next;
-            try { helperTA.setSelectionRange(next.length, next.length); } catch (_) {}
+            // An emptied line leaves the rest behind, so a delete key held
+            // through the last mirrored character goes on into the shell's.
+            helperTA.value = next || IOS_REST;
+            try { helperTA.setSelectionRange(helperTA.value.length, helperTA.value.length); } catch (_) {}
             lastCommittedData = e.data;
             lastCommittedAt = performance.now();
             return;

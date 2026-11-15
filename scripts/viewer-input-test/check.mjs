@@ -120,6 +120,67 @@ async function open(opts) {
   dbl === '.' ? ok('android: one tap handed to sendInput twice is sent once') : fail(`android: one tap handed twice gave ${JSON.stringify(dbl)}`);
   await ctx.close();
 }
+// ---- iOS: a held delete key goes on repeating ----
+// iOS repeats a held delete key only while the field has text it can see:
+// one Backspace, then nothing, on an empty field (iOS Simulator, iOS 17.2).
+// What that needs of the page: the field never empty, its spaces kept, and
+// every Backspace one \x7f for the shell.
+{
+  const { ctx, page } = await open({
+    viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true,
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1',
+  });
+  const r = await page.evaluate(async () => {
+    const ta = document.querySelector('.xterm-helper-textarea');
+    ta.focus();
+    const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+    const backspace = (repeat) => {
+      const e = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Backspace', keyCode: 8, repeat });
+      ta.dispatchEvent(e);
+      return e;
+    };
+    const edit = (inputType, data) => {
+      ta.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType, data }));
+    };
+    const out = { whiteSpace: getComputedStyle(ta).whiteSpace };
+    window.__got = '';
+    ta.value = '';
+    const first = backspace(false);
+    out.first = { got: window.__got, field: ta.value, prevented: first.defaultPrevented };
+    window.__got = '';
+    for (let i = 0; i < 5; i++) { await wait(100); backspace(true); }
+    out.repeats = { got: window.__got, field: ta.value };
+    window.__got = '';
+    edit('insertText', 'a'); edit('insertText', 'b');
+    out.typed = { got: window.__got, field: ta.value };
+    window.__got = '';
+    for (const c of 'ls foo') edit('insertText', c);
+    edit('deleteWordBackward', null);
+    out.word = { got: window.__got, field: ta.value };
+    window.__got = '';
+    for (let i = 0; i < 'abls '.length; i++) edit('deleteContentBackward', null);
+    out.emptied = { got: window.__got, field: ta.value };
+    return out;
+  });
+  const bs = (n) => '\x7f'.repeat(n);
+  r.whiteSpace === 'pre' ? ok('ios: the field keeps its spaces (white-space: pre)') : fail(`ios: the field's white-space is ${r.whiteSpace}: a field of spaces reads as empty`);
+  r.first.got === bs(1) && r.first.field === ' ' && r.first.prevented
+    ? ok('ios: a Backspace on an empty line is one \\x7f, and leaves the field a space')
+    : fail(`ios: a Backspace on an empty line: sent ${JSON.stringify(r.first.got)}, field ${JSON.stringify(r.first.field)}, prevented ${r.first.prevented}`);
+  r.repeats.got === bs(5) && r.repeats.field === ' '
+    ? ok('ios: a held key\'s five repeats are five \\x7f, the field still a space')
+    : fail(`ios: five repeats sent ${JSON.stringify(r.repeats.got)}, field ${JSON.stringify(r.repeats.field)}`);
+  r.typed.got === 'ab' && r.typed.field === 'ab'
+    ? ok('ios: typing after the space sends what was typed, never the space')
+    : fail(`ios: typing "ab" after the space sent ${JSON.stringify(r.typed.got)}, field ${JSON.stringify(r.typed.field)}`);
+  r.word.got === 'ls foo' + bs(3) && r.word.field === 'abls '
+    ? ok('ios: a held key\'s word delete sends a \\x7f for each character of the word')
+    : fail(`ios: a word delete after "ls foo" sent ${JSON.stringify(r.word.got)}, field ${JSON.stringify(r.word.field)}`);
+  r.emptied.got === bs(5) && r.emptied.field === ' '
+    ? ok('ios: deleting the last character leaves the field a space, so the key goes on repeating')
+    : fail(`ios: emptying the line sent ${JSON.stringify(r.emptied.got)}, field ${JSON.stringify(r.emptied.field)}`);
+  await ctx.close();
+}
 await b.close();
 console.log(fails ? `FAIL (${fails})` : 'PASS');
 process.exit(fails);

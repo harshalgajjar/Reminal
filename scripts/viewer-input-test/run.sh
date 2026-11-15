@@ -6,7 +6,9 @@
 # desktop every key reaches the session — a key typed twice fast ("44",
 # "$(("), a key held down — and on Android the IME's double-fire (a tap
 # committed through composition, then the same character again as
-# insertText) is still dropped. The page as served, no host behind it.
+# insertText) is still dropped, and on iOS a held delete key keeps
+# repeating (the field never empty, its spaces kept, one \x7f per
+# Backspace). The page as served, no host behind it.
 # Needs docker; the browser runs in a Playwright container.
 #
 #   scripts/viewer-input-test/run.sh [PAGE_DIR]   (default: the page built from internal/client/web)
