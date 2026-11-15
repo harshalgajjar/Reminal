@@ -190,6 +190,101 @@ async function open(opts) {
     : fail(`ios: a suggestion over the space sent ${JSON.stringify(r.suggestion.got)}, field ${JSON.stringify(r.suggestion.field)}`);
   await ctx.close();
 }
+// ---- iOS: the keyboard corrects, suggests, punctuates and dictates ----
+// The field must hold what is being typed, or the keyboard has no word to
+// work on: a key is the browser's to type into it (iOS Simulator, iOS 17.2:
+// keydown, beforeinput insertText, keyup), and whatever the keyboard then
+// does to the field reaches the shell as what the line became. The events
+// below are the shapes iOS sent there; dictation's are from a device trace
+// (the whole phrase rewritten as it grows, then word by word).
+{
+  const { ctx, page } = await open({
+    viewport: { width: 393, height: 852 }, isMobile: true, hasTouch: true,
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1',
+  });
+  const r = await page.evaluate(async () => {
+    const ta = document.querySelector('.xterm-helper-textarea');
+    ta.focus();
+    // The line the shell holds after what was sent (\x7f deletes one).
+    const line = (s) => { let l = []; for (const c of Array.from(s)) { if (c === '\x7f') l.pop(); else l.push(c); } return l.join(''); };
+    const edit = (inputType, data) => {
+      const e = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType, data });
+      ta.dispatchEvent(e);
+      // An edit left to the browser happens: the field takes it.
+      if (!e.defaultPrevented && inputType === 'insertText') {
+        const a = ta.selectionStart, b = ta.selectionEnd;
+        ta.value = ta.value.slice(0, a) + data + ta.value.slice(b);
+        ta.setSelectionRange(a + data.length, a + data.length);
+      }
+    };
+    // A key as iOS sends it: keydown and keypress, then (when nothing
+    // cancelled them) the edit.
+    const key = (k) => {
+      const down = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: k, keyCode: k.toUpperCase().charCodeAt(0) });
+      ta.dispatchEvent(down);
+      const press = new KeyboardEvent('keypress', { bubbles: true, cancelable: true, key: k, charCode: k.charCodeAt(0), keyCode: k.charCodeAt(0) });
+      ta.dispatchEvent(press);
+      if (!down.defaultPrevented && !press.defaultPrevented) edit('insertText', k);
+    };
+    const selectWord = (w) => { const i = ta.value.lastIndexOf(w); ta.setSelectionRange(i, i + w.length); };
+    const out = {};
+    window.__got = ''; ta.value = '';
+    for (const c of 'echo teh') key(c);
+    out.typed = { line: line(window.__got), field: ta.value };
+    selectWord('teh'); edit('insertReplacementText', 'the'); key(' ');
+    out.corrected = { line: line(window.__got), field: ta.value };
+    for (const c of 'hel') key(c);
+    selectWord('hel'); edit('insertReplacementText', 'help'); edit('insertText', ' ');
+    out.suggested = line(window.__got);
+    for (const c of 'dont') key(c);
+    selectWord('dont'); edit('insertReplacementText', 'don’t'); key(' ');
+    out.apostrophe = line(window.__got);
+    key('-'); edit('deleteContentBackward', null); edit('insertText', '—'); key(' ');
+    key('“'); key('x'); key('”');
+    out.punct = line(window.__got);
+    // Dictation on a fresh line.
+    ta.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Enter', keyCode: 13 }));
+    window.__got = ''; ta.value = '';
+    for (const phrase of ['Hello', 'Hello, how are?', 'Hello, how are you?', 'hello,', 'hello, how', 'hello, how are you’re', 'hello, how are you?']) {
+      ta.setSelectionRange(0, ta.value.length);
+      edit('insertText', phrase);
+    }
+    out.dictated = { line: line(window.__got), field: ta.value };
+    // A paste is the shell's as it was copied.
+    edit('insertFromPaste', ' ‘q’');
+    out.pasted = line(window.__got);
+    // Ctrl combinations stay the terminal's.
+    window.__got = '';
+    ta.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'c', keyCode: 67, ctrlKey: true }));
+    out.ctrl = window.__got;
+    return out;
+  });
+  r.typed.line === 'echo teh' && r.typed.field === 'echo teh'
+    ? ok('ios: typed keys reach the shell once each and stay in the field for the keyboard to work on')
+    : fail(`ios: typing "echo teh" sent the line ${JSON.stringify(r.typed.line)}, field ${JSON.stringify(r.typed.field)}`);
+  r.corrected.line === 'echo the ' && r.corrected.field === 'echo the '
+    ? ok('ios: an autocorrection ("teh" → "the") reaches the shell')
+    : fail(`ios: an autocorrection left the line ${JSON.stringify(r.corrected.line)}, field ${JSON.stringify(r.corrected.field)}`);
+  r.suggested === 'echo the help '
+    ? ok('ios: a tapped suggestion ("hel" → "help") reaches the shell')
+    : fail(`ios: a suggestion left the line ${JSON.stringify(r.suggested)}`);
+  r.apostrophe === 'echo the help don\'t '
+    ? ok('ios: a correction\'s curly apostrophe reaches the shell as \'')
+    : fail(`ios: "don’t" left the line ${JSON.stringify(r.apostrophe)}`);
+  r.punct === 'echo the help don\'t -- "x"'
+    ? ok('ios: smart punctuation reaches the shell as ASCII (-- and "")')
+    : fail(`ios: smart punctuation left the line ${JSON.stringify(r.punct)}`);
+  r.dictated.line === 'hello, how are you?' && r.dictated.field === 'hello, how are you?'
+    ? ok('ios: dictation\'s rewrites leave the shell with the final phrase, once')
+    : fail(`ios: dictation left the line ${JSON.stringify(r.dictated.line)}, field ${JSON.stringify(r.dictated.field)}`);
+  r.pasted === 'hello, how are you? ‘q’'
+    ? ok('ios: a paste reaches the shell as it was copied')
+    : fail(`ios: a paste left the line ${JSON.stringify(r.pasted)}`);
+  r.ctrl === '\x03'
+    ? ok('ios: Ctrl-C is still the terminal\'s')
+    : fail(`ios: Ctrl-C sent ${JSON.stringify(r.ctrl)}`);
+  await ctx.close();
+}
 await b.close();
 console.log(fails ? `FAIL (${fails})` : 'PASS');
 process.exit(fails);
