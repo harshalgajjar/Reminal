@@ -345,11 +345,12 @@ jobs:
           body_path: release-notes.md
           files: reminal_*.tar.gz
           # Any tag with a hyphen (v2.2.0-rc.1, -beta…) is a candidate, and its
-          # release is a DRAFT: not /releases/latest, and not in releases.atom,
-          # the feed every machine reads for What's new and its upgrade offer.
-          # A prerelease is in that feed, and a 3.20.3 build ignores the suffix,
-          # so a published candidate is shown and can be offered before its gate
-          # has passed. The gate downloads a draft's builds with gh.
+          # release is a DRAFT, so its builds are not public; the gate downloads
+          # them with gh. The draft is not what hides it, though: releases.atom,
+          # the feed every machine reads for What's new and its upgrade offer,
+          # lists TAGS, and builds up to 3.20.3 read v3.20.4-rc.1 as v3.20.4.
+          # Delete a candidate's tag from origin as soon as this run ends; the
+          # draft keeps its builds.
           draft: ${{ contains(github.ref_name, '-') }}
 
   # Each platform uploads its own build, and a failing job does not stop its
