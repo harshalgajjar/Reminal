@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- The terminal engine (internal/vtwasm) runs under wazero, which
+	     compiles it to machine code in memory at start. Without this the
+	     hardened runtime kills the process the first time it runs that code
+	     (SIGKILL, Code Signature Invalid). allow-jit is not enough: wazero
+	     maps its code without MAP_JIT. -->
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+</dict>
+</plist>

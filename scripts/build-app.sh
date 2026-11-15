@@ -54,17 +54,30 @@ kc=(); [ -n "$KEYCHAIN" ] && kc=(--keychain "$KEYCHAIN")
 # Sign the nested helper (its own identifier), then seal the bundle — the main
 # `reminal` inherits CFBundleIdentifier sh.reminal from Info.plist.
 #
-# Every binary is signed with the hardened runtime (--options runtime) and no
-# entitlements: the dynamic loader ignores DYLD_* variables for them and they
-# load only libraries signed by Apple or by this same certificate. These
-# processes hold the app's Screen Recording and Accessibility grants, so
-# nothing else gets to run code inside them. The flag is not part of the
-# Designated Requirement (identifier + certificate), so grants made to an
-# earlier build still match.
+# Every binary is signed with the hardened runtime (--options runtime): the
+# dynamic loader ignores DYLD_* variables for them and they load only
+# libraries signed by Apple or by this same certificate. These processes hold
+# the app's Screen Recording and Accessibility grants, so nothing else gets to
+# run code inside them. The flag is not part of the Designated Requirement
+# (identifier + certificate), so grants made to an earlier build still match.
+#
+# The helpers carry no entitlements. The main reminal carries one
+# (reminal.entitlements): its terminal engine is compiled to machine code in
+# memory, which the hardened runtime otherwise kills it for. Library
+# validation and the DYLD_* rule stay as they are.
 rt=(--options runtime)
 codesign --force --timestamp=none "${rt[@]}" ${kc[@]+"${kc[@]}"} --identifier sh.reminal.capture --sign "$IDENTITY" "$APP/Contents/MacOS/reminal-capture"
 [ -f "$APP/Contents/MacOS/reminal-overlay" ] && codesign --force --timestamp=none "${rt[@]}" ${kc[@]+"${kc[@]}"} --identifier sh.reminal.overlay --sign "$IDENTITY" "$APP/Contents/MacOS/reminal-overlay"
-codesign --force --timestamp=none "${rt[@]}" ${kc[@]+"${kc[@]}"} --sign "$IDENTITY" "$APP"
+codesign --force --timestamp=none "${rt[@]}" ${kc[@]+"${kc[@]}"} --entitlements "$here/reminal.entitlements" --sign "$IDENTITY" "$APP"
 
 codesign --verify --deep --strict "$APP"
+
+# The signed app starts its terminal engine, as every session does: a build
+# the hardened runtime would kill (2.8.0 / 3.20.0 shipped one) fails here.
+# Only where this Mac can run the binary's architecture.
+if [ "$(lipo -archs "$APP/Contents/MacOS/reminal" 2>/dev/null)" = "$(uname -m)" ]; then
+  "$APP/Contents/MacOS/reminal" __engine-check || { echo "build-app: the signed reminal cannot start its terminal engine" >&2; exit 1; }
+else
+  echo "build-app: engine check skipped (binary is $(lipo -archs "$APP/Contents/MacOS/reminal" 2>/dev/null), this Mac is $(uname -m))"
+fi
 echo "built: $APP  (identity: ${IDENTITY}, version: ${VERSION})"
