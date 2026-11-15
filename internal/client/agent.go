@@ -2510,6 +2510,7 @@ func (a *Agent) initScreen() {
 		// replay instead, as with REMINAL_SNAPSHOT=0.
 		log.Printf("no screen copy for joins: %v", err)
 	} else {
+		scr.growAsConhost = filterHostMirror // Windows: grown as its console grows
 		a.screenMu.Lock()
 		a.screen = scr
 		a.sbLen = 0 // fresh emulator: the shrink watch starts from empty
