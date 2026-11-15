@@ -8,7 +8,9 @@
 # committed through composition, then the same character again as
 # insertText) is still dropped, and on iOS a held delete key keeps
 # repeating (the field never empty, its spaces kept, one \x7f per
-# Backspace). The page as served, no host behind it.
+# Backspace) and its keyboard works as it does elsewhere: corrections,
+# suggestions, smart punctuation (as ASCII) and dictation reach the
+# shell. The page as served, no host behind it.
 # Needs docker; the browser runs in a Playwright container.
 #
 #   scripts/viewer-input-test/run.sh [PAGE_DIR]   (default: the page built from internal/client/web)
