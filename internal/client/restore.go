@@ -111,11 +111,47 @@ func (a *Agent) saveRestore() {
 		r.NoTurn = !a.turnSeenIn(r)
 	}
 	if r.Fg == "" && holdPreviousAgent(a.restoring, a.restoreAgentSeen, atPrompt, typed, time.Since(a.startedAt), sinceAgent) {
-		if prev, err := session.ReadRestore(a.sessionID); err == nil {
+		if prev, err := session.PeekRestore(a.sessionID); err == nil {
 			r.Fg, r.FgArgs, r.Conv, r.NoTurn = prev.Fg, prev.FgArgs, prev.Conv, prev.NoTurn
 		}
 	}
 	r.ConvSince = a.convSince(r.Conv, now)
+	// What the record said before this save, for restore/events.log: kept
+	// from this process's last save, read once at its first. Looked at,
+	// never quarantined (PeekRestore): a record that will not open must not
+	// take the session's .conv and scrollback away with it.
+	prevFg, prevConv := a.savedFg, a.savedConv
+	first := !a.savedFgKnown
+	who := fmt.Sprintf("reminal %s (pid %d)", a.version, os.Getpid())
+	if first {
+		prev, err := session.PeekRestore(a.sessionID)
+		switch {
+		case err == nil:
+			prevFg, prevConv = prev.Fg, prev.Conv
+		case !errors.Is(err, os.ErrNotExist):
+			session.LogRestore(a.sessionID, "first save by %s: the previous record is unreadable: %v", who, err)
+		}
+	}
+	if first && a.resumed {
+		// A restore or a hot restart taking the record over: the handoff a
+		// record is most likely written over in.
+		how := "a hot restart"
+		if a.restoring {
+			how = "a restore"
+		}
+		session.LogRestore(a.sessionID, "first save after %s, by %s: names %q (conv %q); the record named %q (conv %q)",
+			how, who, r.Fg, r.Conv, prevFg, prevConv)
+	}
+	if r.Fg == "" && prevFg != "" {
+		// About to forget an agent the record named: why, for the day a
+		// session comes back without one (a restore types nothing for it).
+		seen := "never in this process"
+		if !a.agentLastSeen.IsZero() {
+			seen = sinceAgent.Round(time.Second).String() + " ago"
+		}
+		session.LogRestore(a.sessionID, "record no longer names %s (conv %q), saved by %s: in front %q (pid %d), at its prompt %v, typed since %v, agent last seen %s, restoring %v (agent seen %v), up %s",
+			prevFg, prevConv, who, prog, pid, atPrompt, typed, seen, a.restoring, a.restoreAgentSeen, time.Since(a.startedAt).Round(time.Second))
+	}
 	if err := session.WriteRestore(r); err != nil {
 		if errors.Is(err, atrest.ErrCurrentKeyMissing) && !a.saveStalled {
 			a.saveStalled = true
@@ -124,6 +160,7 @@ func (a *Agent) saveRestore() {
 		return // the keystore will not give the key up yet: try next tick
 	}
 	a.saveStalled = false
+	a.savedFg, a.savedConv, a.savedFgKnown = r.Fg, r.Conv, true
 	if seq := a.buf.LatestSeq(); seq != a.restoreSeq {
 		if p, err := session.RestoreScrollbackPath(a.sessionID); err == nil {
 			id := a.sessionID
@@ -155,7 +192,7 @@ func (a *Agent) turnSeenIn(r session.Restore) bool {
 	if r.Conv != "" && session.ConvWritten(a.sessionID, r.Conv) {
 		return true
 	}
-	if prev, err := session.ReadRestore(a.sessionID); err == nil && prev.Fg == r.Fg && prev.Conv == r.Conv && !prev.NoTurn {
+	if prev, err := session.PeekRestore(a.sessionID); err == nil && prev.Fg == r.Fg && prev.Conv == r.Conv && !prev.NoTurn {
 		return true
 	}
 	// A hook that says which conversation it is in says when one is
@@ -285,7 +322,7 @@ func (a *Agent) convSince(conv string, now time.Time) time.Time {
 	}
 	if conv != a.restoreConv {
 		since := now
-		if prev, err := session.ReadRestore(a.sessionID); err == nil && prev.Conv == conv && !prev.ConvSince.IsZero() {
+		if prev, err := session.PeekRestore(a.sessionID); err == nil && prev.Conv == conv && !prev.ConvSince.IsZero() {
 			since = prev.ConvSince
 		}
 		a.restoreConv, a.restoreConvSince = conv, since
@@ -891,6 +928,12 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 		sh := config.Shell()
 		argv, note := resumePlanFor(*r, peers, sh)
 		if argv == nil {
+			if note == "" {
+				note = lostAgentNote(*r, peers, sh)
+			}
+			if note != "" {
+				session.LogRestore(r.ID, "restored with nothing to start (pid %d): record names %q; said: %q", os.Getpid(), r.Fg, note)
+			}
 			return "", note
 		}
 		if why := resumeTooBig(*r); why != "" {

@@ -375,18 +375,7 @@ func killLocalSession(id string) error {
 		// to SIGKILL if the shell ignores SIGTERM.
 		_ = session.ClearActive(a.ID)
 		_ = session.ClearRestore(a.ID) // killed on purpose: never to be restored
-		go func(pid int) {
-			deadline := time.Now().Add(3 * time.Second)
-			for time.Now().Before(deadline) {
-				if !proc.Alive(pid) {
-					return
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
-			if proc.Alive(pid) {
-				_ = proc.Kill(pid)
-			}
-		}(pid)
+		go forgetWhenGone(a.ID, pid, proc.Alive, proc.Kill, 3*time.Second)
 		return nil
 	}
 	// Asleep: nothing is running to stop; ending it is forgetting it.
@@ -394,6 +383,26 @@ func killLocalSession(id string) error {
 		return ForgetSleeper(id)
 	}
 	return fmt.Errorf("session not found")
+}
+
+// forgetWhenGone waits for a session's agent, sent SIGTERM, to be gone, kills
+// it if it is still there after grace, and then forgets its restore record
+// again. The agent goes on saving it until it is gone (a save tick in the
+// moments it takes to die), and a record written back then brought a session
+// killed on purpose back at the next login.
+func forgetWhenGone(id string, pid int, alive func(int) bool, kill func(int) error, grace time.Duration) {
+	defer func() { _ = session.ClearRestore(id) }()
+	deadline := time.Now().Add(grace)
+	for alive(pid) && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !alive(pid) {
+		return
+	}
+	_ = kill(pid)
+	for i := 0; i < 20 && alive(pid); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // renameLocalSession finds a live shell session by id and asks its agent to

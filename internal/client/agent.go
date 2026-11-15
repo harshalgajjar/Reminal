@@ -164,6 +164,11 @@ type Agent struct {
 	// (settleRestore); no save after it writes the record again. Under
 	// restoreMu.
 	restoreSettled bool
+	// savedFg is the agent the last record this process saved names
+	// (savedFgKnown: one was saved, or read at its first save): what says a
+	// save is about to forget one (session.LogRestore). Under restoreMu.
+	savedFg, savedConv string
+	savedFgKnown       bool
 
 	// screen is a headless terminal emulator fed the same plaintext output
 	// that goes to viewers. On a fresh attach we serialize its current state
