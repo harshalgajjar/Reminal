@@ -2866,11 +2866,6 @@
     // never deleted (the Backspace that would delete it is the shell's), keeps
     // the hold repeating.
     const IOS_REST = ' ';
-    // plainPunct: the iOS keyboard's smart punctuation, as the ASCII it
-    // stands for (see the mirror's insertText).
-    const plainPunct = (s) => s.replace(/[‘’‚‛′]/g, "'")
-      .replace(/[“”„‟″]/g, '"')
-      .replace(/—/g, '--').replace(/…/g, '...');
     // Android: where the IME double-fires (Samsung Keyboard commits a tap
     // through composition and then sends the same character again as
     // insertText). The filters for that are for it alone: a keyboard
@@ -2879,19 +2874,15 @@
     const ANDROID = /Android/i.test(navigator.userAgent);
     if (helperTA) {
       const isAppleMobile = APPLE_MOBILE;
-      // iOS: the keyboard as it is everywhere else on it (corrections, the
-      // suggestions bar, dictation), since every edit it makes reaches the
-      // shell through the field mirror (the beforeinput handler) as what the
-      // line became. Not capitalized: a command's first letter is not a
-      // sentence's.
-      helperTA.setAttribute('autocorrect', isAppleMobile ? 'on' : 'off');
+      helperTA.setAttribute('autocorrect', 'off');
       helperTA.setAttribute('autocomplete', 'off');
       helperTA.setAttribute('autocapitalize', 'none');
-      helperTA.setAttribute('spellcheck', isAppleMobile ? 'true' : 'false');
+      helperTA.setAttribute('spellcheck', 'false');
       // inputmode="url" is the only reliable way to disable Android Gboard's
       // autocorrect (it ignores autocorrect="off"). But on iOS the URL keyboard
-      // ALSO removes the dictation MIC button, and iOS wants its corrections
-      // anyway (above). So: a text inputmode on iOS (the mic stays), and
+      // ALSO removes the dictation MIC button — and iOS Safari *does* honour
+      // autocorrect="off", so it never needed the URL trick. So: a text
+      // inputmode on iOS (mic returns, attributes keep autocorrect off), and
       // "url" on Android where it's load-bearing.
       helperTA.setAttribute('inputmode', isAppleMobile ? 'text' : 'url');
       helperTA.setAttribute('enterkeyhint', 'done');
@@ -2987,19 +2978,6 @@
       let lastBackspaceCreditAt = -Infinity;
       const BS_MIN_INTERVAL_MS = 20;
 
-      // iOS: a key that types one character (no Ctrl, Alt or Cmd), which the
-      // field takes rather than xterm. See the keydown handler.
-      const iosTypesIntoField = (e) =>
-        !iosComposing && !e.ctrlKey && !e.metaKey && !e.altKey && !!e.key && Array.from(e.key).length === 1;
-      // xterm sends a key from keypress when its keydown didn't: that send
-      // goes around the mirror, which then drops the field's text. So the
-      // keypress of a key the field takes is the field's too.
-      if (isAppleMobile) {
-        document.addEventListener('keypress', (e) => {
-          if (isHelperTarget(e) && iosTypesIntoField(e)) e.stopPropagation();
-        }, true);
-      }
-
       document.addEventListener('keydown', (e) => {
         if (!isHelperTarget(e)) return;
         if (isAppleMobile) {
@@ -3040,13 +3018,6 @@
             // beforeinput handler below mirrors it as \x7f.
             return;
           }
-          // A character key types into the field, not into xterm: xterm would
-          // send it from the keydown and cancel the edit, so the field stayed
-          // empty and the keyboard had no word to correct, suggest the rest
-          // of, or punctuate after. The browser's own edit reaches the shell
-          // through the mirror (the beforeinput handler) like any other.
-          // Ctrl, Alt and Cmd combinations stay xterm's.
-          if (iosTypesIntoField(e)) e.stopPropagation();
           return;
         }
         if (e.key === 'Backspace') {
@@ -3154,15 +3125,9 @@
             b = 0;
           }
           let next = null;
-          if (t === 'insertFromPaste') {
+          if (t === 'insertText' || t === 'insertReplacementText' ||
+              t === 'insertFromPaste' || t === 'insertFromDictation') {
             next = cur.slice(0, a) + (e.data || '') + cur.slice(b);
-          } else if (t === 'insertText' || t === 'insertReplacementText' || t === 'insertFromDictation') {
-            // Smart punctuation, a correction ("dont" → "don’t") and dictation
-            // write curly quotes, an em dash for "--" and an ellipsis, which a
-            // shell reads as other characters than the ones meant: 'x' quotes,
-            // --flag is a flag. Typed, they reach the shell as plain ASCII; a
-            // paste is left as it is.
-            next = cur.slice(0, a) + plainPunct(e.data || '') + cur.slice(b);
           } else if (t === 'deleteContentBackward' || t === 'deleteContent') {
             // A collapsed-caret delete removes one CHARACTER, which in UTF-16
             // can be a surrogate pair (emoji) — slicing one code unit would
