@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -75,6 +76,21 @@ func waitShown(t *testing.T, a *Agent, s string, within time.Duration) time.Dura
 	}
 	t.Fatalf("%q not shown within %v; shown: %q", s, within, a.shown(t))
 	return 0
+}
+
+// restoreInBackground starts a's restore and has the test end it: the
+// restore is released (signalRegistered) and waited for, by end or else by
+// a cleanup that runs before the shell is closed. Released, it still waits
+// for the prompt and types its resume (up to 10 s, a look every 100 ms):
+// left running, that outlived the test.
+func restoreInBackground(t *testing.T, a *Agent) (end func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { defer close(done); a.restoreStart() }()
+	var once sync.Once
+	end = func() { once.Do(func() { a.signalRegistered(); <-done }) }
+	t.Cleanup(end)
+	return end
 }
 
 // The new shell's prompt is usually drawn while the restore waits for the
@@ -152,10 +168,10 @@ func TestKeysHeldWhileTheRelayIsSlowAreTypedWithinTheHoldsBound(t *testing.T) {
 	}
 	old := typedHoldMax
 	typedHoldMax = time.Second
-	defer func() { typedHoldMax = old }()
+	t.Cleanup(func() { typedHoldMax = old }) // after the restore has ended
 	a := quietShell(t, `printf 'ready$ '`)
 	a.holdTyped()
-	go a.restoreStart() // its relay never answers here: the resume waits
+	end := restoreInBackground(t, a) // its relay never answers here: the resume waits
 	time.Sleep(200 * time.Millisecond)
 	_, _ = a.typeIn([]byte("zq-typed"))
 	took := waitShown(t, a, "zq-typed", 3*time.Second)
@@ -165,7 +181,7 @@ func TestKeysHeldWhileTheRelayIsSlowAreTypedWithinTheHoldsBound(t *testing.T) {
 	if strings.Contains(a.shown(t), "echo resumed-42") {
 		t.Fatal("the resume was typed without its relay's answer")
 	}
-	a.signalRegistered() // let it end
+	end()
 }
 
 // An agent's keys (the keys control: MCP send_keys) sent while a restored
@@ -202,13 +218,12 @@ func TestTheKeysVerbWaitsOutARestoresHoldThroughTheControlSocket(t *testing.T) {
 	defer os.RemoveAll(home)
 	t.Setenv("HOME", home)
 	old := typedHoldMax
-	typedHoldMax = 4 * time.Second // past the 3 s the other verbs are given
-	defer func() { typedHoldMax = old }()
+	typedHoldMax = 4 * time.Second           // past the 3 s the other verbs are given
+	t.Cleanup(func() { typedHoldMax = old }) // after the restore has ended
 	a := quietShell(t, `printf 'ready$ '`)
-	stop := a.listenControl()
-	defer stop()
+	t.Cleanup(a.listenControl())
 	a.holdTyped()
-	go a.restoreStart() // its relay never answers here: the hold lasts
+	end := restoreInBackground(t, a) // its relay never answers here: the hold lasts
 	began := time.Now()
 	if err := InjectAgentKeys(os.Getpid(), []byte("zq-agent")); err != nil {
 		t.Fatalf("the keys verb failed after %v: %v", time.Since(began).Round(100*time.Millisecond), err)
@@ -217,5 +232,5 @@ func TestTheKeysVerbWaitsOutARestoresHoldThroughTheControlSocket(t *testing.T) {
 	if n := strings.Count(a.shown(t), "zq-agent"); n != 1 {
 		t.Fatalf("its keys shown %d times", n)
 	}
-	a.signalRegistered() // let it end
+	end()
 }
