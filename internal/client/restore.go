@@ -116,6 +116,24 @@ func (a *Agent) saveRestore() {
 		}
 	}
 	r.ConvSince = a.convSince(r.Conv, now)
+	if r.Fg == "" {
+		// About to forget an agent the record named: why, for the day a
+		// session comes back without one (a restore types nothing for it).
+		prevFg := a.savedFg
+		if !a.savedFgKnown {
+			if prev, err := session.ReadRestore(a.sessionID); err == nil {
+				prevFg = prev.Fg
+			}
+		}
+		if prevFg != "" {
+			seen := "never in this process"
+			if !a.agentLastSeen.IsZero() {
+				seen = sinceAgent.Round(time.Second).String() + " ago"
+			}
+			session.LogRestore(a.sessionID, "record no longer names %s: in front %q (pid %d), at its prompt %v, typed since %v, agent last seen %s, restoring %v (agent seen %v), up %s",
+				prevFg, prog, pid, atPrompt, typed, seen, a.restoring, a.restoreAgentSeen, time.Since(a.startedAt).Round(time.Second))
+		}
+	}
 	if err := session.WriteRestore(r); err != nil {
 		if errors.Is(err, atrest.ErrCurrentKeyMissing) && !a.saveStalled {
 			a.saveStalled = true
@@ -124,6 +142,7 @@ func (a *Agent) saveRestore() {
 		return // the keystore will not give the key up yet: try next tick
 	}
 	a.saveStalled = false
+	a.savedFg, a.savedFgKnown = r.Fg, true
 	if seq := a.buf.LatestSeq(); seq != a.restoreSeq {
 		if p, err := session.RestoreScrollbackPath(a.sessionID); err == nil {
 			id := a.sessionID
@@ -893,6 +912,9 @@ func LoadRestoreState(id string) (*ResumeState, func() (run, note string), error
 		if argv == nil {
 			if note == "" {
 				note = lostAgentNote(*r, peers, sh)
+			}
+			if note != "" {
+				session.LogRestore(r.ID, "restored with nothing to start: record names %q; said: %q", r.Fg, note)
 			}
 			return "", note
 		}
