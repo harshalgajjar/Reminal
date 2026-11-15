@@ -30,6 +30,9 @@ import "golang.org/x/sys/windows/registry"
 const (
 	machineEnvKey = `SYSTEM\CurrentControlSet\Control\Session Manager\Environment`
 	userEnvKey    = `Environment`
+	// volatileEnvKey is what this logon set: USERNAME, USERPROFILE, APPDATA,
+	// LOCALAPPDATA, HOMEDRIVE/HOMEPATH. Explorer folds it in last.
+	volatileEnvKey = `Volatile Environment`
 )
 
 // freshenEnv returns env with the persistent (registry) environment folded in.
@@ -45,7 +48,7 @@ func freshenEnv(env []string) []string {
 	if len(machine) == 0 && len(user) == 0 {
 		return env // registry unreadable: inherited is all we have, and it works
 	}
-	return mergeEnv(env, machine, user)
+	return mergeEnv(env, machine, user, readEnvKey(registry.CURRENT_USER, volatileEnvKey))
 }
 
 // readEnvKey reads one environment key, expanding REG_EXPAND_SZ values the way

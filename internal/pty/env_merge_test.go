@@ -31,7 +31,7 @@ func TestMergeEnvRefreshesStalePath(t *testing.T) {
 	machine := map[string]string{"Path": `C:\Windows\system32;C:\Windows`}
 	user := map[string]string{"Path": `C:\Users\harsh\.local\bin`}
 
-	got := envMap(mergeEnv(inherited, machine, user))
+	got := envMap(mergeEnv(inherited, machine, user, nil))
 
 	want := `C:\Windows\system32;C:\Windows;C:\Users\harsh\.local\bin`
 	if got["PATH"] != want {
@@ -83,6 +83,7 @@ func TestMergeEnvIsCaseInsensitive(t *testing.T) {
 		[]string{`PATH=C:\old`, `TeMp=C:\old\temp`},
 		map[string]string{"Path": `C:\new`},
 		map[string]string{"TMP": `C:\new\tmp`, "Temp": `C:\new\temp`},
+		nil,
 	)
 	var paths, temps int
 	for _, kv := range merged {
@@ -115,8 +116,38 @@ func TestMergeEnvAddsNewVariables(t *testing.T) {
 		[]string{`USERPROFILE=C:\Users\harsh`},
 		nil,
 		map[string]string{"ANTHROPIC_BASE_URL": "https://example.test"},
+		nil,
 	))
 	if got["ANTHROPIC_BASE_URL"] != "https://example.test" {
 		t.Error("a variable defined only in the registry never reached the shell")
+	}
+}
+
+// The machine key's USERNAME is SYSTEM, a placeholder for processes with no
+// logon. Folded in like any other variable it made every session's shell
+// SYSTEM's; the inherited one is the person's.
+func TestMergeEnvKeepsThePersonsUsername(t *testing.T) {
+	machine := map[string]string{"USERNAME": "SYSTEM", "OS": "Windows_NT"}
+	got := envMap(mergeEnv([]string{"USERNAME=alice"}, machine, nil, nil))
+	if got["USERNAME"] != "alice" {
+		t.Errorf("USERNAME = %q, want the inherited alice", got["USERNAME"])
+	}
+	if got["OS"] != "Windows_NT" {
+		t.Errorf("OS = %q: the rest of the machine key must still apply", got["OS"])
+	}
+}
+
+// The logon's own values (Volatile Environment) fill in what was not
+// inherited, and nothing that was: a reminal started with a profile of its
+// own (an isolated home, a service account, runas) keeps handing it on.
+func TestMergeEnvLogonValuesOnlyFillGaps(t *testing.T) {
+	machine := map[string]string{"USERNAME": "SYSTEM"}
+	volatile := map[string]string{"USERNAME": "bob", "USERPROFILE": `C:\Users\bob`, "APPDATA": `C:\Users\bob\AppData\Roaming`}
+	got := envMap(mergeEnv([]string{`USERPROFILE=C:\iso`}, machine, nil, volatile))
+	if got["USERPROFILE"] != `C:\iso` {
+		t.Errorf("USERPROFILE = %q: the profile this reminal was started with was replaced", got["USERPROFILE"])
+	}
+	if got["USERNAME"] != "bob" || got["APPDATA"] != `C:\Users\bob\AppData\Roaming` {
+		t.Errorf("USERNAME, APPDATA = %q, %q: the logon's values should fill what was not inherited", got["USERNAME"], got["APPDATA"])
 	}
 }
