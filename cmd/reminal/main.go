@@ -30,6 +30,7 @@ import (
 	"reminal/internal/session"
 	"reminal/internal/subreap"
 	"reminal/internal/updater"
+	"reminal/internal/vtwasm"
 )
 
 // version, buildDate, and commit are stamped at build time via
@@ -126,6 +127,28 @@ func main() {
 				fmt.Fprintf(os.Stderr, "ptyhold: %v\n", err)
 				os.Exit(1)
 			}
+			return
+		case "__engine-check":
+			// Hidden: start the terminal engine, write a line into it and
+			// read the screen back. build-app.sh runs it in the signed app:
+			// the hardened runtime kills a build that may not run the
+			// engine's compiled code, on its first session.
+			t, err := vtwasm.New(80, 24, 100)
+			if err == nil {
+				_, err = t.Write([]byte("reminal\r\n"))
+			}
+			if err == nil {
+				var scr string
+				if scr, err = t.Screen(); err == nil && !strings.Contains(scr, "reminal") {
+					err = fmt.Errorf("the screen does not show what was written")
+				}
+				t.Close()
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "engine-check: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("engine ok")
 			return
 		case "relay":
 			port := ""
