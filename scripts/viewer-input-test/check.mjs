@@ -160,6 +160,12 @@ async function open(opts) {
     window.__got = '';
     for (let i = 0; i < 'abls '.length; i++) edit('deleteContentBackward', null);
     out.emptied = { got: window.__got, field: ta.value };
+    // A suggestion tapped with only the space in the field: what iOS puts
+    // there replaces the field, the space with it.
+    window.__got = '';
+    ta.setSelectionRange(0, ta.value.length);
+    edit('insertReplacementText', 'Hello');
+    out.suggestion = { got: window.__got, field: ta.value };
     return out;
   });
   const bs = (n) => '\x7f'.repeat(n);
@@ -179,6 +185,9 @@ async function open(opts) {
   r.emptied.got === bs(5) && r.emptied.field === ' '
     ? ok('ios: deleting the last character leaves the field a space, so the key goes on repeating')
     : fail(`ios: emptying the line sent ${JSON.stringify(r.emptied.got)}, field ${JSON.stringify(r.emptied.field)}`);
+  r.suggestion.got === 'Hello' && r.suggestion.field === 'Hello'
+    ? ok('ios: a suggestion tapped over the space sends the suggestion alone')
+    : fail(`ios: a suggestion over the space sent ${JSON.stringify(r.suggestion.got)}, field ${JSON.stringify(r.suggestion.field)}`);
   await ctx.close();
 }
 await b.close();
