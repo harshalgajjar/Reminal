@@ -61,6 +61,14 @@ type sessionScreen struct {
 	// count.rows rows: kept so a resize need not format all of it
 	// (HistoryLines).
 	count lineCount
+	// growAsConhost makes a taller screen keep its top where it was, the
+	// new rows blank at the bottom, as Windows' console does with its own
+	// buffer, instead of pulling the history's last rows back down as a
+	// terminal does. After a resize ConPTY repaints every row of its screen
+	// from the top: laid over rows pulled down, that repaint lost them, or,
+	// where it left some of them, wrote its lines into the history again.
+	// Set for a session's own screen on Windows (filterHostMirror).
+	growAsConhost bool
 }
 
 // newSessionScreen is a screen of cols by rows keeping at most maxLines of
@@ -160,12 +168,16 @@ func (s *sessionScreen) Resize(cols, rows int) {
 	// alternate screen, whose resize re-wraps the main screen out of sight:
 	// it is counted again later.
 	alt := s.t.AltScreen()
+	_, h0 := s.t.Size()
+	conhostGrow := s.growAsConhost && !alt && rows > h0
 	var firstBefore string
 	lines, tracked := 0, false
 	if !alt {
 		lines = s.linesLocked()
 		firstBefore = s.count.first
-		tracked = s.count.valid && s.t.Mark() == nil
+		if s.count.valid || conhostGrow {
+			tracked = s.t.Mark() == nil && s.count.valid
+		}
 	}
 	defer func() {
 		s.count.valid = false
@@ -194,6 +206,26 @@ func (s *sessionScreen) Resize(cols, rows int) {
 		}
 	}
 	_ = s.t.Resize(cols, rows)
+	if conhostGrow {
+		s.keepTopLocked(rows)
+	}
+}
+
+// keepTopLocked undoes a grow's pull of the history's rows back onto the
+// screen (growAsConhost): the rows above where the screen's old top cell went
+// are scrolled back into the history from the bottom row, and the cursor goes
+// back up with its line, which leaves the new rows blank at the bottom.
+func (s *sessionScreen) keepTopLocked(rows int) {
+	_, y, ok := s.t.Marked()
+	if !ok {
+		return
+	}
+	pulled := y - s.t.ScrollbackRows()
+	if pulled <= 0 {
+		return
+	}
+	cx, cy := s.t.Cursor()
+	_, _ = s.t.Write([]byte(fmt.Sprintf("\x1b[%d;1H%s\x1b[%d;%dH", rows, strings.Repeat("\n", pulled), max(cy-pulled, 0)+1, cx+1)))
 }
 
 // Gen is how many times it has changed: what a cache of it is kept by.
