@@ -56,12 +56,23 @@ func PrepareInjectKeys(s string, enter bool) ([]byte, error) {
 // its own small chunk a moment later, and every reader -- shell or full-screen
 // app -- treats that as the key being pressed.
 //
-// tail is nil when the caller asked for no Return, or when the text already
-// ends in one (the Return is then part of what the caller wrote, and splitting
-// it off would change their bytes).
+// tail is nil when the caller asked for no Return and the text does not end
+// in one, or when the whole of it is a single Return (keys="" with enter, or
+// keys="\n": the bare Return that submits text already in the input box).
+//
+// A Return the caller wrote at the end of the text is split off the same as
+// one asked for with enter. The bytes are the same either way; only their
+// timing changes. Left on the end of the text, it went inside the paste
+// markers (wrapPaste), and zsh, which turns bracketed paste on by itself,
+// put it in the line as a newline instead of running it: "echo AAA\n" in
+// one call sat at the prompt, while the text and then "\r" ran.
 func PrepareInjectKeysSplit(s string, enter bool) (body, tail []byte, err error) {
-	if enter && s != "" && !strings.HasSuffix(s, "\n") && !strings.HasSuffix(s, "\r") {
-		b, err := PrepareInjectKeys(s, false)
+	text := s
+	if strings.HasSuffix(text, "\n") || strings.HasSuffix(text, "\r") {
+		text, enter = text[:len(text)-1], true
+	}
+	if enter && text != "" {
+		b, err := PrepareInjectKeys(text, false)
 		if err != nil {
 			return nil, nil, err
 		}
