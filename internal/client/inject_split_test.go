@@ -3,7 +3,10 @@
 
 package client
 
-import "testing"
+import (
+	"bytes"
+	"testing"
+)
 
 func TestPrepareInjectKeysSplit(t *testing.T) {
 	cases := []struct {
@@ -28,19 +31,44 @@ func TestPrepareInjectKeysSplit(t *testing.T) {
 			wantTail: "",
 		},
 		{
-			// The caller's own trailing newline is their bytes. Splitting it off
-			// would send something different from what they wrote.
+			// The caller's own trailing newline is split off like enter's:
+			// the same bytes, but the Return no longer rides inside the
+			// paste, where zsh files it as a newline in the line.
 			name:     "text already ends in a newline",
 			in:       "hello\n",
 			enter:    true,
-			wantBody: "hello\r",
-			wantTail: "",
+			wantBody: "hello",
+			wantTail: "\r",
+		},
+		{
+			name:     "a trailing newline is a Return without enter too",
+			in:       "echo AAA\n",
+			enter:    false,
+			wantBody: "echo AAA",
+			wantTail: "\r",
 		},
 		{
 			name:     "text already ends in a carriage return",
-			in:       "hello\r",
-			enter:    true,
+			in:       "echo AAA\r",
+			enter:    false,
+			wantBody: "echo AAA",
+			wantTail: "\r",
+		},
+		{
+			// Only the last Return is split; one before it stays in the text.
+			name:     "two trailing newlines",
+			in:       "hello\n\n",
+			enter:    false,
 			wantBody: "hello\r",
+			wantTail: "\r",
+		},
+		{
+			// A lone newline is the bare Return that submits what is
+			// already in the input box: nothing to split it from.
+			name:     "a lone newline stays one bare Return",
+			in:       "\n",
+			enter:    false,
+			wantBody: "\r",
 			wantTail: "",
 		},
 		{
@@ -96,6 +124,32 @@ func TestPrepareInjectKeysSplitBareReturn(t *testing.T) {
 	}
 	if string(body) != "\r" || tail != nil {
 		t.Fatalf("body=%q tail=%q, want body=\"\\r\" and no tail", body, tail)
+	}
+}
+
+// The report (issue 20261116-101644-9FT4RXH2): send_keys "echo AAA\r" in one
+// call sat unsubmitted at a zsh prompt. zsh turns bracketed paste on, the
+// text was long enough to be wrapped as a paste, and the Return went inside
+// the markers. Every Return a send_keys call presses has to reach the program
+// outside any paste.
+func TestTrailingReturnIsNeverInsideThePaste(t *testing.T) {
+	a := &Agent{}
+	a.bracketedPaste.Store(true)
+	for _, keys := range []string{"echo AAA\r", "echo AAA\n", "/full/path/to/claude --dangerously-skip-permissions\n"} {
+		body, tail, err := PrepareInjectKeysSplit(keys, false)
+		if err != nil {
+			t.Fatalf("%q: %v", keys, err)
+		}
+		pasted := a.wrapPaste(body)
+		if !bytes.HasPrefix(pasted, pasteStart) {
+			t.Fatalf("%q: test premise: the text should be wrapped as a paste, got %q", keys, pasted)
+		}
+		if bytes.HasSuffix(bytes.TrimSuffix(pasted, pasteEnd), []byte{'\r'}) {
+			t.Errorf("%q: the Return is inside the paste: %q", keys, pasted)
+		}
+		if string(a.wrapPaste(tail)) != "\r" {
+			t.Errorf("%q: the Return should follow as its own bare key, got tail %q", keys, tail)
+		}
 	}
 }
 

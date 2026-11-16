@@ -155,7 +155,7 @@ func TestSendKeysNamedKeysGoFirstAndKeysStayLiteral(t *testing.T) {
 		{"ls", "ctrl-c", true, []string{"\x03", "ls", "\r"}},
 		{"", "esc,esc", false, []string{"\x1b", "\x1b"}},
 		{"", "ctrl-c", true, []string{"\x03", "\r"}},
-		{"echo hi\n", "ctrl-u", false, []string{"\x15", "echo hi\r"}},
+		{"echo hi\n", "ctrl-u", false, []string{"\x15", "echo hi", "\r"}},
 		{"ls", "", true, []string{"ls", "\r"}},
 		// Typed as written: nothing in keys is decoded.
 		{`\u0003 \x03 ^C C:\new`, "", false, []string{`\u0003 \x03 ^C C:\new`}},
