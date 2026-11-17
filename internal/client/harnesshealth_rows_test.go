@@ -4,6 +4,8 @@
 package client
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -453,6 +455,43 @@ func TestCodexsDeviceCodeStepsAreItsTogether(t *testing.T) {
 func TestAntigravitysLoginHeadingIsItsOnlyWhole(t *testing.T) {
 	if harnessProblemIn("● Done.\n You are currently not signed in."+loginRowFrame, "agy") {
 		t.Error("the words alone read as its sign-in screen")
+	}
+}
+
+// Antigravity's code step and its failed code, and Kiro's login steps, are
+// theirs only with the row each draws below: the first row alone, or carried
+// on in an agent's words, is a sentence anyone may write.
+func TestAgyAndKiroSignInStepsAreTheirsOnlyTogether(t *testing.T) {
+	for _, c := range []struct{ prog, rows string }{
+		{"agy", " If you aren't automatically redirected, paste the authorization code below:"},
+		{"agy", " If you aren't automatically redirected, paste the authorization code below:\n I did that and it worked."},
+		{"agy", ` Got an error: token exchange failed: oauth2: "invalid_grant" "Bad Request"`},
+		{"agy", " Got an error: token exchange failed: so I signed in again.\n Press any key to go back to the menu, it said."},
+		{"kiro", "  You are not logged in. Login now?"},
+		{"kiro", "  You are not logged in. Login now? I answered no.\n  Yes, that was the prompt."},
+		{"kiro", " Select login method in the settings, it said."},
+		{"kiro", " Select login method in the settings file, then restart."},
+		{"kiro", "Confirm the following code in the browser"},
+		{"kiro", "Confirm the following code in the browser, then come back.\nCode: ABCD-EFGH is what it showed."},
+	} {
+		for _, prog := range []string{c.prog, ""} {
+			if harnessProblemIn("● Done.\n"+c.rows+loginRowFrame, prog) {
+				t.Errorf("%s (as %q): read as signed out:\n%s", c.prog, prog, c.rows)
+			}
+		}
+	}
+	// And another CLI's session showing these screens (a tool's output) is
+	// not that CLI signed out.
+	// (Kiro's "Select login method" is also Claude Code's own menu heading,
+	// read as Claude's already: that screen is left out here.)
+	for _, f := range []string{"agy-code", "agy-badcode", "kiro-login", "kiro-device"} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "harness-screens", f+".txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if harnessProblemIn(harnessTail(string(raw), harnessRows), "claude") {
+			t.Errorf("%s: read as Claude Code signed out", f)
+		}
 	}
 }
 

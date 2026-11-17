@@ -1,0 +1,13 @@
+
+     ▄▀▀▄
+    ▀▀▀▀▀▀
+   ▀▀▀▀▀▀▀▀
+  ▄▀▀    ▀▀▄
+ ▄▀▀      ▀▀▄
+ Your browser should open automatically. If not:
+ https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=0000000000-example.apps.googleusercontent.com&code
+ _challenge=EXAMPLE&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fexample.invalid%2Foauth&response_
+ type=code&scope=openid&state=EXAMPLE
+ If you aren't automatically redirected, paste the authorization code below:
+ authorization code...
+  shift+up/down Navigate

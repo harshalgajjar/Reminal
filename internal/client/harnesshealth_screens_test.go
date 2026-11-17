@@ -59,6 +59,17 @@ func TestAgentsLoginScreensAsTheyDrawThem(t *testing.T) {
 		// device code to be entered after "> Login".
 		{"droid", "droid", true},
 		{"droid-device", "droid", true},
+		// Antigravity CLI 1.5.10 signing in from a machine with no browser:
+		// its step waiting for the authorization code, and a code it could
+		// not use ("Press any key to go back" — not a question for the
+		// agent: it is still signed out).
+		{"agy-code", "agy", true},
+		{"agy-badcode", "agy", true},
+		// Kiro CLI 3.4.0 with no login: its question, its login methods,
+		// and its device code waiting to be confirmed.
+		{"kiro-login", "kiro", true},
+		{"kiro-method", "kiro", true},
+		{"kiro-device", "kiro", true},
 	} {
 		raw, err := os.ReadFile(filepath.Join("testdata", "harness-screens", c.file+".txt"))
 		if err != nil {
