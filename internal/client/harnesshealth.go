@@ -151,7 +151,27 @@ var harnessLoginScreens = map[string][]loginRow{
 	), loginBottom(
 		`signinrequired`,
 		`thenpastetheauthorizationcode,orthefullurlofthepageyoulandon,andpressenter:?`,
-	)),
+	),
+		// 1.5.10, signing in where no browser opens: its ask for the code,
+		// with its input below it ("authorization code..."); and a code it
+		// could not use, with its "Press any key to go back." below. That
+		// last reads as a question for the agent if not read here, and the
+		// session is still signed out. Each row alone is a sentence an agent
+		// could write.
+		loginThen(`ifyouaren.?tautomaticallyredirected,pastetheauthorizationcodebelow:`, `authorizationcode`),
+		loginThen(`gotanerror:tokenexchangefailed:.+`, `pressanykeytogoback`),
+	),
+	// Kiro CLI 3.4.0 with no login (`kiro-cli chat`): its question, with its
+	// first answer below it ("❯ Yes"), and the same once answered ("✔ You
+	// are not logged in. Login now? · Yes"); its login methods, the heading
+	// with its first below it; and its device code, the ask with the code
+	// below it. ("Not logged in", its whoami, is the shared status line.)
+	"kiro": loginAll(
+		loginThen(`youarenotloggedin\.loginnow\?`, `yes`),
+		loginRows(`youarenotloggedin\.loginnow\?·(?:yes|no)`),
+		loginThen(`selectloginmethod`, `usewithbuilderid`),
+		loginThen(`confirmthefollowingcodeinthebrowser`, `code:[a-z0-9]{4}-[a-z0-9]{4}`),
+	),
 	// Gemini CLI: no way to sign in chosen yet; its Google sign-in waiting
 	// for the code; its API key dialog; no key at all; and a key it cannot
 	// use. That last is the service's own words, inside the JSON of the
