@@ -59,6 +59,11 @@ type limitNotice struct {
 	// hint: an answer or a tool's output that quotes a notice drawn as one
 	// (●, ⎿) and goes on is not it (review).
 	last bool
+	// spans: the notice is an error that runs on in the service's words,
+	// wrapped over the rows below, and is read from its start through the
+	// rows it wraps onto, not as a whole row. Only on a row its glyph alone
+	// leads: an answer that quotes it (● before it) is not it.
+	spans bool
 }
 
 // modelLed is ns, each allowed to start with a model's id in lower case.
@@ -113,6 +118,16 @@ func notices(res ...string) []limitNotice {
 	out := make([]limitNotice, len(res))
 	for i, r := range res {
 		out[i] = limitNotice{re: regexp.MustCompile("^(?:" + r + ")")}
+	}
+	return out
+}
+
+// spanning are notices that run on over the rows they wrap onto (spans),
+// each on a row led by glyph alone.
+func spanning(glyph string, res ...string) []limitNotice {
+	out := notices(res...)
+	for i := range out {
+		out[i].glyph, out[i].spans = glyph, true
 	}
 	return out
 }
@@ -426,10 +441,18 @@ var harnessLimitNotices = map[string][]limitNotice{
 		`you.?vebeenratelimitedonthecurrentmodel\.wouldyouliketoswitchto[a-z0-9.\-]{1,40}tocontinue\?`,
 		`you.?veusedallyourcopilotfreechatrequestsforthemonth`,
 	),
-	// Antigravity 1.4: out of credits, as its status row says it.
-	"agy": onCased("AI: Out of credits", wholeRows(`\.?`,
+	// Antigravity 1.4: out of credits, as its status row says it. 1.5.11
+	// stops the turn at once on a used-up daily quota, a spend cap or
+	// prepaid credits gone: its error row, led by "⚠", with the service's
+	// 429 and RESOURCE_EXHAUSTED in it ("⚠ agent executor error: generating
+	// and executing: Error 429, Message: …, Status: RESOURCE_EXHAUSTED,
+	// Details: …"). A per-minute limit it waits out, the turn going on
+	// ("Model unavailable (attempt 1/9), retrying in 33s..."): not one.
+	"agy": append(onCased("AI: Out of credits", wholeRows(`\.?`,
 		`ai:outofcredits`,
-	)),
+	)), spanning("⚠",
+		`agentexecutorerror:generatingandexecuting:error429,message:.{1,300}?,status:resource_exhausted(?:,|$)`,
+	)...),
 	// Kiro CLI 3.2: its rate limit (the warning sign before it is not
 	// needed), and its monthly requests, perhaps with when they reset.
 	"kiro": wholeRows(`\.?`,
@@ -782,6 +805,17 @@ func limitRowIn(lead, core, row string, more, rest []string, prog string) (bool,
 	match := func(ns []limitNotice) (bool, int) {
 		for _, n := range ns {
 			if n.glyph != "" && !strings.ContainsAny(lead, n.glyph) {
+				continue
+			}
+			if n.spans {
+				if lead != n.glyph {
+					continue
+				}
+				for used, j := range joins {
+					if n.re.MatchString(j) {
+						return true, used
+					}
+				}
 				continue
 			}
 			if !n.whole {
