@@ -174,6 +174,22 @@ var limitScreens = []struct {
 	{"amp", "  Upgrade to a paid tier, or add credits to keep using Amp.\n", time.Time{}},
 	{"amp", "  Rate limit exceeded. Try again shortly.\n", time.Time{}},
 	{"amp", "  Usage Quota Exceeded\n", time.Time{}},
+	// Claude Code 2.1.326's fast limit, reworded, with and without when it
+	// resets; its credits headline with the model switch joined on, the
+	// action rows under it or on its own row; Amp's headline with the plan
+	// it offers next, any plan, hourly or monthly. From the CLIs' own
+	// strings, 2026-11-18; no screen recorded at the limit.
+	{"claude", "  ⎿  Fast limit reached, fast mode paused\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Fast limit reached, fast mode paused · resets in 2h 30m\n❯ ", limitLA(2026, 10, 19, 12, 30)},
+	{"claude", "  ⎿  Fast limit reached and temporarily disabled\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You're out of usage credits. Switch to another model/\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You're out of usage credits. Switch to another model\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You're out of usage credits. Switch to another model/\n     Run /usage-credits to raise it and keep using\n     or switch models to continue this chat.\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You're out of usage credits. Switch to another model/Run /usage-credits to raise it and keep using or switch models to continue this chat.\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You're out of usage credits. Switch to another model/Run /usage-credits to raise it and keep using Claude or switch models to continue this chat.\n❯ ", time.Time{}},
+	{"amp", "  Upgrade to Megawatt for more included usage, or add credits to keep using Amp.\n  You can also wait until the next hour starts for more free usage.\n", time.Time{}},
+	{"amp", "  Upgrade to Gigawatt for more included usage, or add credits to keep using Amp.\n", time.Time{}},
+	{"amp", "  Acme usage is at its monthly limit, and no paid credits are available.\n  Upgrade to Megawatt for more included usage, or add paid credits to continue now.\n  Add paid credits to continue now.\n", time.Time{}},
 	{"pi", "  Monthly usage limit reached\n", time.Time{}},
 	{"pi", "  You've reached your ChatGPT workspace's usage limit. Ask your workspace admin to increase it at admin.openai.com → Workspace → Usage limits.\n", time.Time{}},
 	{"pi", "  You have hit your ChatGPT usage limit.\n", time.Time{}},
@@ -261,6 +277,14 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		// Bare words at the start of a row with no ⎿ before them (review).
 		{"claude", "● It stopped because the review session had run\n  out of usage credits.", "an answer's wrapped last row"},
 		{"claude", "  ⎿  Fast mode disabled ·\n     Out of usage credits", "fast mode off, wrapped on a narrow screen"},
+		// Fast mode out for a moment, or refused by the provider: the
+		// session carries on, on its base model.
+		{"claude", "  ⎿  Fast mode is busy right now · resets in 5m", "fast mode busy, the session carries on"},
+		{"claude", "  ⎿  Fast mode paused: your cloud provider refused a fast request", "fast mode refused, the session carries on"},
+		{"claude", "● Fast limit reached, fast mode paused · resets in 2h is the new row, so I added a test.", "an answer quoting the notice"},
+		{"claude", "● You're out of usage credits. Switch to another model/ is what it prints, and then it waits.", "an answer quoting the notice"},
+		{"amp", "  Upgrade to Megawatt for more included usage, or add credits to keep using Amp, the docs say.", "an answer quoting the notice"},
+		{"amp", "  Upgrade to the new plan for more included usage and better models.", "an answer about plans"},
 		{"claude", "● It prints this:\n\n  Out of usage credits", "shown in an answer"},
 		{"claude", "● The banner it showed said its\n  usage limit reached.", "an answer's wrapped last row"},
 		{"claude", "  ⎿  Continue now at lower priority after reaching your 5-hour limit; run again to stop", "an option that keeps it going"},

@@ -240,8 +240,10 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// never one.
 	"claude": append(append(append(onGlyph("⎿", asLast(wholeNotices(claudeHitLimit...))), onGlyph("●", asLast(wholeRows(claudeEndTold, claudeHitLimit...)))...), wholeNotices(
 		// Claude Code 2.1.312: what to do next after it ("You're out of
-		// usage credits. /model to switch models.").
-		`you.?reoutofusagecredits(?:\.(?:/modeltoswitchmodels|switchtoanothermodel))?`,
+		// usage credits. /model to switch models."). 2.1.326 joins the model
+		// switch on with a "/" ("Switch to another model/"), and its action
+		// may follow on the same row: only that action's own words.
+		`you.?reoutofusagecredits(?:\.(?:/modeltoswitchmodels|switchtoanothermodel(?:/(?:(?:run)?/usage-creditstoraiseitandkeepusing`+claudeModel+`(?:orswitchmodelstocontinuethischat)?)?)?))?`,
 		// Claude Code 2.1.312: a limit that could not be lifted, and the
 		// automatic continue that gave up. Each with its own row ending only.
 		// ("Fast mode disabled · Out of usage credits" is not one: fast mode
@@ -251,7 +253,10 @@ var harnessLimitNotices = map[string][]limitNotice{
 		`a5-hourlimitresetisn.?tavailablerightnow`,
 		`automaticcontinuestoppedafterrepeatedusagelimithits(?:·thistaskwillnotresumeonitsown\(/rate-limit-optionstotryagain\))?`,
 		`paused·usagelimit`,
-		`fastlimitreachedandtemporarilydisabled`,
+		// Claude Code 2.1.326 words it "Fast limit reached, fast mode
+		// paused · resets in 2h". ("Fast mode is busy right now" is not
+		// one: fast mode is out for a moment and the session carries on.)
+		`fastlimitreached(?:andtemporarilydisabled|,fastmodepaused(?:·resetsin`+limitWait+`)?)`,
 		// Claude Code 2.1.317: a goal paused at its limit, waiting for a
 		// message after the reset or going on by itself then.
 		`goalpaused·usagelimitreached(?:·sendamessageafteritresetstocontinue|·continuesautomaticallywhenitresets)?`,
@@ -391,12 +396,15 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// Amp 0.0.1793131239: out of credits, what to do about it, its rate
 	// limit and quota. ("You've reached your free usage limit" and "You've
 	// exceeded your usage limit of $20" are words an answer may say too, and
-	// the mark Amp draws before its notices is not known: not read.)
+	// the mark Amp draws before its notices is not known: not read.) Amp
+	// 0.0.1794945632 names the plan it offers next, whichever that is
+	// ("Upgrade to Megawatt for more included usage, ..."), and has a
+	// monthly twin that ends "or add paid credits to continue now".
 	"amp": wholeRows(`\.?`,
 		`youareoutofcredits\.addpaidcreditsorchooseapaidtier`,
 		`addcreditstokeepusingamp(?:rightnow,orwaituntilthenexthourstartsformorefreeusage)?`,
 		`upgradetoapaidtier,oraddcreditstokeepusingamp`,
-		`upgradetogigawattformoreincludedusage,oraddcreditstokeepusingamp`,
+		`upgradeto[a-z0-9]{1,24}formoreincludedusage,or(?:addcreditstokeepusingamp|addpaidcreditstocontinuenow)`,
 		`ratelimitexceeded\.tryagainshortly`,
 		`usagequotaexceeded`,
 	),
