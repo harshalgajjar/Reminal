@@ -226,6 +226,13 @@ var harnessLoginScreens = map[string][]loginRow{
 		// within the next few rows (the link between them). One numbered step
 		// alone is an agent's own list.
 		loginThen(`1\.openthislinkinyourbrowserandsignin`, `2\.enterthisone-timecodeafteryouaresignedin`),
+		// Codex 0.170.0 signing in to a provider's gateway: its steps the
+		// same way, and its heading with the first step below it.
+		loginThen(`1\.openthislinkinabrowser`, `2\.enterthisone-timecodewhenprompted`),
+		loginThen(`signintoyourgateway`, `1\.openthislinkinabrowser`),
+		// Codex 0.170.0's Amazon Bedrock setup pages: its welcome with the
+		// page's heading below it. Either alone is words an agent may write.
+		loginThen(`welcometocodex,openai.?scommand-linecodingagent`, `setupamazonbedrock`),
 		// Codex 0.167.2: the page its "3. Sign in another way" opens, its
 		// heading with its first item below it ("1. Use an OpenAI API key",
 		// or a provider's when the key is not offered).

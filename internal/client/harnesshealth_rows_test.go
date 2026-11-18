@@ -709,3 +709,66 @@ func TestLoginStatusHowToEndsTheRow(t *testing.T) {
 		}
 	}
 }
+
+// Codex 0.170.0 signing in to a provider's gateway: its two steps together,
+// the first then the second a few rows below (the link between them), or its
+// heading with the first step under it. Recorded in Docker, 2026-11-18. One
+// step alone, or an agent's own list that starts with its words, is not it.
+func TestCodexsGatewaySignInIsItsStepsTogether(t *testing.T) {
+	screen := "  Sign in to your gateway\n\n  1. Open this link in a browser\n\n  http://127.0.0.1:8765/activate\n\n  2. Enter this one-time code when prompted\n\n  ABCD-EFGH\n\n  Continue only if you started this login in Codex. If a website or another person gave you this code, cancel.\n\n  Press esc to cancel"
+	for _, page := range []string{
+		screen,
+		"  1. Open this link in a browser\n\n  http://127.0.0.1:8765/activate\n\n  2. Enter this one-time code when prompted\n\n  ABCD-EFGH",
+		"  Sign in to your gateway\n\n  1. Open this link in a browser\n\n  http://127.0.0.1:8765/activate",
+	} {
+		if !harnessProblemIn(page+loginRowFrame, "codex") {
+			t.Errorf("its gateway sign-in was not read as logged out:\n%s", page)
+		}
+	}
+	for _, answer := range []string{
+		"  Sign in to your gateway",
+		"  1. Open this link in a browser",
+		"  2. Enter this one-time code when prompted",
+		"● To check the page:\n  1. Open this link in a browser\n  2. Click the second tab\n  3. Run the tests again.",
+		"● Sign in to your gateway first, then retry.\n  1. Open this link in a browser",
+		"  1. Open this link in a browser and check the header.\n  2. Enter this one-time code when prompted, it said.",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "codex") {
+			t.Errorf("read as Codex's gateway sign-in:\n%s", answer)
+		}
+	}
+	if harnessProblemIn(screen+loginRowFrame, "claude") {
+		t.Error("read as another agent's")
+	}
+}
+
+// Codex 0.170.0's Amazon Bedrock setup pages ("3. Sign in another way",
+// then "2. Use Amazon Bedrock"): its welcome with the page's heading below
+// it, on each of them. Recorded in Docker, 2026-11-18. The heading alone,
+// or the welcome alone, is not it.
+func TestCodexsBedrockSetupIsItsWelcomeAndHeading(t *testing.T) {
+	const welcome = "  Welcome to Codex, OpenAI's command-line coding agent\n\n"
+	for _, page := range []string{
+		welcome + "> Set up Amazon Bedrock\n\n  Enter the name of your AWS profile.\n\n  AWS profile:\n\n  Press enter to continue\n  Press esc to go back",
+		welcome + "> Set up Amazon Bedrock\n\n  No AWS credentials found.\n  Choose how you authenticate with AWS.\n\n> 1. AWS profile\n     Use AWS SSO or a named profile\n  2. AWS access keys\n     Enter an access key ID and secret access key\n  3. Environment variables\n     Use AWS credentials exported in your shell\n  4. Bedrock API key\n     Enter a Bedrock API key\n\n  Press enter to continue\n  Press esc to go back",
+		welcome + "> Set up Amazon Bedrock\n\n  Export AWS credentials, then run `codex --no-daemon` in that shell.\n  Setup guide: https://learn.chatgpt.com/docs/amazon-bedrock\n\n> 1. Choose another sign-in method",
+		welcome + "> Set up Amazon Bedrock\n\n  Enter your Amazon Bedrock API key.\n\n  Bedrock API key:",
+	} {
+		if !harnessProblemIn(page+loginRowFrame, "codex") {
+			t.Errorf("its Bedrock setup was not read as logged out:\n%s", page)
+		}
+	}
+	for _, answer := range []string{
+		"> Set up Amazon Bedrock\n\n  Enter your Amazon Bedrock API key.",
+		"  Welcome to Codex, OpenAI's command-line coding agent",
+		"● Set up Amazon Bedrock before the deploy, then rerun it.",
+		"● Welcome to Codex, OpenAI's command-line coding agent, is what it prints first.\n  Set up Amazon Bedrock",
+	} {
+		if harnessProblemIn(answer+loginRowFrame, "codex") {
+			t.Errorf("read as Codex's Bedrock setup:\n%s", answer)
+		}
+	}
+	if harnessProblemIn(welcome+"> Set up Amazon Bedrock"+loginRowFrame, "claude") {
+		t.Error("read as another agent's")
+	}
+}
