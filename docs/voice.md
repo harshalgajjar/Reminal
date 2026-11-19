@@ -43,6 +43,19 @@ its turn is over. Which agents can is one table (`HookReportsWaiting`), kept
 equal to the integrations' hooks by a test. Codex, Cursor and Amp have no
 hook reminal can hear, so voice does not type into them.
 
+Where reminal knows the shape of an agent's input box (Claude Code, Qwen,
+Gemini in `voiceBoxMarks`; OpenCode and Kilo in `attnPromptMarks`), words go
+in only while that box is on screen, near the bottom: a hook reports some
+kinds of prompt but not all (Gemini's and Qwen's report tool approvals, not
+question pickers or trust screens), and every dialog replaces the box. An
+agent with a hook and no known box (Copilot, pi, Antigravity) rests on its
+hook and the wording list for the prompts its hook does not report.
+
+Known limits: a hook's report does not say which program made it, so with a
+second agent started inside the first, the outer one's report counts for the
+inner one. On Linux a process's start time is read to the second, so a
+report written in the second before the agent started can count.
+
 ## The frame's files (`internal/client/web/voice/`)
 
 | File | What it does |

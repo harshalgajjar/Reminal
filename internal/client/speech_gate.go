@@ -90,9 +90,9 @@ func (a *Agent) inFront() (state, fg string, since time.Time) {
 // reported at all. For one that cannot (Antigravity reports only a turn's
 // start and end), a dialog it draws mid-turn would go unseen, so it is typed
 // into only while its last report says its turn is over. An agent with no
-// hook is not here: it never reports, and is not typed into (unless its
-// input box has a mark of its own). cmd/reminal's tests keep this table equal
-// to what each integration's hooks map.
+// hook is not here: it never reports, and is not typed into, box or no box.
+// cmd/reminal's tests keep this table equal to what each integration's
+// hooks map.
 var HookReportsWaiting = map[string]bool{
 	"claude": true, "copilot": true, "gemini": true, "qwen": true, // hooks with an "input" (or split "notify") event
 	"opencode": true, "kilo": true, // the plugin's permission.* events
