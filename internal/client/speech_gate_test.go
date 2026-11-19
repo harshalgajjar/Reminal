@@ -319,8 +319,8 @@ func TestSpeechTypesOnlyWhileTheAgentsBoxIsOnScreen(t *testing.T) {
 		{"qwen", "styled/qwen/after-voice.ans", ""},
 		{"qwen", "qwen-approval.txt", speechAsking},
 		{"qwen", "qwen-question.txt", speechAsking},
-		{"gemini", "gemini-start.txt", ""},
-		{"gemini", "gemini-after-voice.txt", ""},
+		{"gemini", "styled/gemini-drafts/fresh-empty-w120.ans", ""}, // its placeholder is told from a draft by its colour
+		{"gemini", "styled/gemini-drafts/empty-at-rest-w120-b.ans", ""},
 		{"gemini", "gemini-shell-approval.txt", speechAsking},
 		{"gemini", "gemini-question.txt", speechAsking},
 	} {

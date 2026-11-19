@@ -1,0 +1,24 @@
+  [38;5;103mTips: Type / to open the command popup; Tab
+[39m  [38;5;103mautocompletes slash commands and saved prompts.
+[39m  ●︎ Auto mode enabled.
+       An LLM classifier evaluates each tool call — safe
+    actions auto-approve,
+       risky ones are blocked. Exit: Shift+Tab or
+    /approval-mode default.
+  ●︎ Extensions changed on disk. Run /reload-plugins to
+    apply updates.
+  ●︎ Read context files: ~/.qwen/output-language.md
+
+  [38;5;183m>[39m [38;5;183mhello
+[39m  [38;5;151m✓[39m [1mspeak (reminal MCP Server)[0m[39m[49m [38;5;103m{"text":"Hello from the
+[39m    [38;5;103mstand-in."}
+[39m    Not spoken: no one is listening by voice right now.
+    Reply on screen only.
+
+  [38;5;183m◆︎[39m done.
+
+[38;5;153m────────────────────────────────────────────────────────────
+> [4m[39m [0m[38;5;103m[49m Type your message or @path/to/file
+[38;5;153m────────────────────────────────────────────────────────────
+[39m  [38;5;183m➜ w · m
+[39m  [38;5;153mAuto mode[38;5;103m (shift + tab to cycle)

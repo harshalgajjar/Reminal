@@ -59,10 +59,11 @@ func TestVoiceBoxDraftCells(t *testing.T) {
 		{"claude empty, cursor at the start", "claude", box("❯ \x1b[0m\x1b[7m "), false},
 		{"claude empty, no cursor", "claude", box("❯ "), false},
 		{"claude draft before the cursor", "claude", box("❯ hello\x1b[0m\x1b[7m "), true},
-		{"claude placeholder (not pinned): a draft", "claude", box("❯ \x1b[7mT\x1b[0m\x1b[2mry \"fix the tests\""), true},
 		{"qwen empty with its placeholder", "qwen", rule + "\n\x1b[38;5;183m> \x1b[0m\x1b[4m \x1b[0m\x1b[38;5;103m Type your message or @path/to/file\n" + rule + "\n", false},
 		{"qwen draft", "qwen", rule + "\n\x1b[38;5;183m> \x1b[0mhello\x1b[4m \x1b[0m\n" + rule + "\n", true},
-		{"gemini empty with its placeholder", "gemini", strings.Repeat("▄", 60) + "\n >   Type your message or @path/to/file\n" + strings.Repeat("▀", 60) + "\n", false},
+		{"gemini empty with its placeholder", "gemini", strings.Repeat("▄", 60) + "\n\x1b[38;5;183m> \x1b[0m\x1b[7m \x1b[0m\x1b[38;5;248m Type your message or @path/to/file\n" + strings.Repeat("▀", 60) + "\n", false},
+		{"gemini placeholder words without its colour: a draft", "gemini", strings.Repeat("▄", 60) + "\n >   Type your message or @path/to/file\n" + strings.Repeat("▀", 60) + "\n", true},
+		{"qwen empty, zero-width space", "qwen", rule + "\n\x1b[38;5;183m> \x1b[0m\u200b\n" + rule + "\n", false},
 		{"gemini draft", "gemini", strings.Repeat("▄", 60) + "\n > hello\n" + strings.Repeat("▀", 60) + "\n", true},
 		{"claude draft on a second row", "claude", rule + "\n❯ first\n  second\n" + rule + "\n", true},
 	} {
@@ -82,5 +83,60 @@ func TestSpeechOwnWordsAreNotADraft(t *testing.T) {
 	}
 	if got := a.speechBlockedAfterWords(); got != "" {
 		t.Fatalf("after our own words: speechBlockedAfterWords = %q, want it allowed", got)
+	}
+}
+
+// Raw styled captures of each agent's box, empty and with a draft (Gemini
+// 0.69.0 and Qwen 0.28.0 at 120, 80 and 60 columns; Claude Code 2.1.328 and
+// 2.1.326): empty boxes typed into, drafts refused.
+func TestSpeechDraftCapturesOfEachAgent(t *testing.T) {
+	size := func(name string) (int, int) {
+		switch {
+		case strings.Contains(name, "w80"):
+			return 80, 24
+		case strings.Contains(name, "w60"):
+			return 60, 24
+		}
+		return 120, 40
+	}
+	for _, c := range []struct{ prog, dir string }{{"gemini", "gemini-drafts"}, {"qwen", "qwen-drafts"}, {"claude", "claude-drafts"}} {
+		files, _ := filepath.Glob(filepath.Join("testdata", "voice-screens", "styled", c.dir, "*.ans"))
+		if len(files) == 0 {
+			t.Fatalf("no captures in %s", c.dir)
+		}
+		for _, f := range files {
+			name := filepath.Base(f)
+			cols, rows := size(name)
+			got := styledScreen(t, c.prog, filepath.Join(c.dir, name), cols, rows).speechBlocked()
+			// Gemini's "empty-at-rest-after-turns" captures hold "ls -la" in the
+			// box: a draft, whatever their name.
+			held := c.prog == "gemini" && strings.Contains(name, "after-turns")
+			empty := !held && (strings.Contains(name, "empty") || strings.Contains(name, "first-run") ||
+				strings.Contains(name, "after-turn") || strings.Contains(name, "after-clear-2"))
+			switch {
+			case empty && got != "":
+				t.Errorf("%s %s (empty box): speechBlocked = %q, want it allowed", c.prog, name, got)
+			case !empty && got == "":
+				t.Errorf("%s %s (a draft): typed into, want it refused", c.prog, name)
+			}
+		}
+	}
+}
+
+// Claude Code drew no placeholder in any captured state; a suggestion shown
+// to a signed-in user is read as a placeholder when it is drawn faint only
+// (typed text never is), so voice still works at that empty box. Typed
+// text beside it is a draft.
+func TestVoiceClaudeFaintSuggestionIsNotADraft(t *testing.T) {
+	rule := strings.Repeat("─", 60)
+	box := func(row string) string { return rule + "\n" + row + "\n" + rule + "\n" }
+	if voiceBoxDraft("claude", box("❯ \x1b[0m\x1b[7m \x1b[0m\x1b[2mTry \"fix the tests\"")) {
+		t.Error("a faint suggestion after the cursor read as a draft")
+	}
+	if !voiceBoxDraft("claude", box("❯ hi \x1b[2mTry \"fix the tests\"")) {
+		t.Error("typed text beside a faint suggestion not read as a draft")
+	}
+	if !voiceBoxDraft("claude", box("❯ Try \"fix the tests\"")) {
+		t.Error("the same words not faint (typed) not read as a draft")
 	}
 }

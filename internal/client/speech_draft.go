@@ -17,11 +17,15 @@ import (
 // from typed text.
 //   - The cursor: a space cell drawn in reverse video (Claude Code) or
 //     underlined (Qwen).
-//   - A placeholder, by agent, as captured: Qwen draws "Type your message or
-//     @path/to/file" in 256-colour 103. Gemini draws the same words, but its
-//     captures hold no styles yet, so for Gemini that exact text is read as
-//     empty. Claude Code 2.1.328 draws none; a placeholder it might draw is
-//     not pinned, so any text after its sign is a draft (refused).
+//   - A placeholder, by agent, as captured (raw styled screens of each):
+//     Qwen Code 0.28.0 draws "Type your message or @path/to/file" in
+//     256-colour 103; Gemini CLI 0.69.0 the same words in 256-colour 248
+//     (its typed text is 231). Claude Code 2.1.328 and 2.1.326 drew none in
+//     any captured state (fresh, after a turn, after /clear, after a cleared
+//     draft); a suggestion shown only to a signed-in user could not be
+//     captured, so for Claude text drawn only faint is read as a
+//     placeholder (typed text is never faint), and anything else as typed.
+//   - Qwen ends a draft's rows with a zero-width space: not typed text.
 //   - Anything else after the sign, or on the draft's own rows before the
 //     box's closing edge, is typed text.
 // A row that cannot be read is a draft: refusing costs a spoken line; typing
@@ -29,16 +33,18 @@ import (
 
 const speechDraft = "draft" // the box holds something typed: never pasted after it
 
-// voicePlaceholderText is, by agent, the placeholder text read as empty
-// where its style is not pinned from a capture.
-var voicePlaceholderText = map[string]string{
-	"gemini": "Type your message or @path/to/file",
-}
-
-// voicePlaceholderFG is, by agent, the foreground colour its placeholder is
-// drawn in, as the screen holds it ("38;5;103" for 256-colour 103).
-var voicePlaceholderFG = map[string]string{
-	"qwen": "38;5;103",
+// voicePlaceholder reports whether a cell is prog's placeholder, by its
+// style as the screen holds it.
+func voicePlaceholder(prog string, c styledCell) bool {
+	switch prog {
+	case "qwen":
+		return c.fg == "38;5;103"
+	case "gemini":
+		return c.fg == "38;5;248"
+	case "claude":
+		return c.faint
+	}
+	return false
 }
 
 // voiceBoxDraft reports whether prog's box is on screen with something typed
@@ -93,7 +99,7 @@ func voiceBottomRowsStyled(render string) (plain, styled []string) {
 func typedAfterSign(prog, row string) bool {
 	cells := styledCells(row)
 	i := 0
-	for i < len(cells) && (cells[i].r == ' ' || cells[i].r == ' ') {
+	for i < len(cells) && (cells[i].r == ' ' || cells[i].r == '\u00a0') {
 		i++
 	}
 	if i < len(cells) && (cells[i].r == '❯' || cells[i].r == '>') {
@@ -101,7 +107,7 @@ func typedAfterSign(prog, row string) bool {
 	} else {
 		return true // no sign where it should be: cannot be read
 	}
-	if i < len(cells) && (cells[i].r == ' ' || cells[i].r == ' ') && !cells[i].cursor() {
+	if i < len(cells) && (cells[i].r == ' ' || cells[i].r == '\u00a0') && !cells[i].cursor() {
 		i++
 	}
 	return typedCells(prog, cells[i:])
@@ -112,35 +118,29 @@ func typedAfterSign(prog, row string) bool {
 func typedIn(prog, row string) bool { return typedCells(prog, styledCells(row)) }
 
 func typedCells(prog string, cells []styledCell) bool {
-	var rest strings.Builder
-	phFG := voicePlaceholderFG[prog]
 	for _, c := range cells {
 		switch {
-		case c.cursor():
-		case phFG != "" && c.fg == phFG:
+		case c.cursor(), voicePlaceholder(prog, c):
+		case c.r == ' ' || c.r == '\u00a0' || c.r == '\u200b':
 		default:
-			rest.WriteRune(c.r)
+			return true
 		}
 	}
-	text := strings.TrimSpace(strings.ReplaceAll(rest.String(), " ", " "))
-	if text == "" {
-		return false
-	}
-	if ph := voicePlaceholderText[prog]; ph != "" && text == ph {
-		return false
-	}
-	return true
+	return false
 }
 
 type styledCell struct {
 	r                 rune
+	faint             bool
 	reverse, underlne bool
 	fg                string
 }
 
 // cursor reports whether the cell is the cursor: a space drawn in reverse
 // video or underlined.
-func (c styledCell) cursor() bool { return (c.r == ' ' || c.r == ' ') && (c.reverse || c.underlne) }
+func (c styledCell) cursor() bool {
+	return (c.r == ' ' || c.r == '\u00a0') && (c.reverse || c.underlne)
+}
 
 var sgrSeq = regexp.MustCompile(`^\x1b\[([0-9;:]*)m`)
 
@@ -187,6 +187,10 @@ func applySGR(c *styledCell, params string) {
 		switch p := ps[i]; {
 		case p == "0":
 			*c = styledCell{}
+		case p == "2":
+			c.faint = true
+		case p == "22":
+			c.faint = false
 		case p == "7":
 			c.reverse = true
 		case p == "27":
