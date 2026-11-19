@@ -19,7 +19,8 @@ import (
 //   - Claude Code, Qwen Code, Gemini CLI: SessionStart (startup, resume,
 //     clear), at their prompt.
 //   - Copilot CLI: sessionStart, with its first prompt.
-//   - Cursor CLI: sessionStart, as a new chat starts.
+//   - Cursor CLI: sessionStart, as a new chat starts (and its turns:
+//     beforeSubmitPrompt, stop).
 //   - Antigravity CLI: its SessionStart comes with the first message, just
 //     before PreInvocation: nothing "working" does not say already.
 //   - Codex CLI: none written; its hooks run in an app-server shared by every
@@ -111,68 +112,137 @@ func TestGeminiSaysWhenItIsReady(t *testing.T) {
 	}
 }
 
-// Cursor CLI: a ~/.cursor/hooks.json of its shape ({version: 1, hooks:
-// {sessionStart: [{command}]}}), the person's own hooks in it kept, once
-// however often integrate runs, and taken out again by --remove.
-func TestCursorSaysWhenItIsReady(t *testing.T) {
+// Cursor CLI: a turn's start and end and its own start, in a
+// ~/.cursor/hooks.json of its shape ({version: 1, hooks: {event:
+// [{command}]}}). Merged into the person's own file: their hooks and their
+// version field kept, ours once however often integrate runs. --remove takes
+// out only ours, and deletes the file only if reminal made it and nothing
+// else is in it. The plan line says it is merged.
+func TestCursorHooksMergeIntoThePersonsFile(t *testing.T) {
 	exe := "/usr/local/bin/reminal"
 	c := targetNamed(t, "cursor-agent")
 	if c.hooks == nil {
 		t.Fatal("Cursor CLI has no hooks")
 	}
-	// Nothing there yet.
-	home := t.TempDir()
-	if err := applyHooks(c.hooks, home, exe, false); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(c.hooks.planNote, "~/.cursor/hooks.json") || !strings.Contains(c.hooks.planNote, "merged") {
+		t.Errorf("plan line: %q", c.hooks.planNote)
 	}
-	path := filepath.Join(home, ".cursor", "hooks.json")
-	b, _ := os.ReadFile(path)
-	var fresh map[string]any
-	if err := json.Unmarshal(b, &fresh); err != nil {
-		t.Fatal(err)
-	}
-	if v, _ := fresh["version"].(float64); v != 1 {
-		t.Errorf("no version 1: %s", b)
-	}
-	hooks, _ := fresh["hooks"].(map[string]any)
-	list, _ := hooks["sessionStart"].([]any)
-	if len(list) != 1 || list[0].(map[string]any)["command"] != exe+" hook ready" {
-		t.Errorf("sessionStart: %s", b)
-	}
-
-	// The person's own hooks file.
-	home = t.TempDir()
-	path = filepath.Join(home, ".cursor", "hooks.json")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	theirs := `{"version":1,"hooks":{"sessionStart":[{"command":"./audit.sh"}],"stop":[{"command":"say done"}]}}`
-	if err := os.WriteFile(path, []byte(theirs), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 3; i++ {
-		if err := applyHooks(c.hooks, home, exe, false); err != nil {
+	want := map[string]string{"beforeSubmitPrompt": "working", "stop": "done", "sessionStart": "ready"}
+	read := func(path string) map[string]any {
+		b, err := os.ReadFile(path)
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	b, _ = os.ReadFile(path)
-	if n := strings.Count(string(b), "reminal hook ready"); n != 1 {
-		t.Errorf("ours %d times, want 1: %s", n, b)
-	}
-	for _, keep := range []string{"./audit.sh", "say done"} {
-		if !strings.Contains(string(b), keep) {
-			t.Errorf("the person's %q is gone: %s", keep, b)
+		m := map[string]any{}
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatalf("%v: %s", err, b)
 		}
+		return m
+	}
+	ours := func(m map[string]any) map[string]int {
+		n := map[string]int{}
+		hooks, _ := m["hooks"].(map[string]any)
+		for ev, v := range hooks {
+			list, _ := v.([]any)
+			for _, item := range list {
+				if e, ok := item.(map[string]any); ok && e["command"] == exe+" hook "+want[ev] {
+					n[ev]++
+				}
+			}
+		}
+		return n
+	}
+	apply := func(home string, remove bool, times int) {
+		for i := 0; i < times; i++ {
+			if err := applyHooks(c.hooks, home, exe, remove); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// Nothing there: made, then gone with ours (after several runs, so a
+	// backup of reminal's own file is there too).
+	home := t.TempDir()
+	path := filepath.Join(home, ".cursor", "hooks.json")
+	apply(home, false, 3)
+	m := read(path)
+	if v, _ := m["version"].(float64); v != 1 {
+		t.Errorf("no version 1: %v", m)
+	}
+	if n := ours(m); len(n) != 3 || n["beforeSubmitPrompt"] != 1 || n["stop"] != 1 || n["sessionStart"] != 1 {
+		t.Errorf("ours: %v", n)
 	}
 	if !hooksInstalled(c.hooks, home) {
 		t.Error("check does not read it back")
 	}
-	if err := applyHooks(c.hooks, home, exe, true); err != nil {
-		t.Fatal(err)
+	apply(home, true, 1)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("a file reminal made is still there after --remove: %v", err)
 	}
-	b, _ = os.ReadFile(path)
-	if strings.Contains(string(b), "reminal hook") || !strings.Contains(string(b), "./audit.sh") || !strings.Contains(string(b), "say done") {
-		t.Errorf("after --remove: %s", b)
+	if _, err := os.Stat(path + ".bak"); !os.IsNotExist(err) {
+		t.Errorf("its backup is still there: %v", err)
+	}
+
+	// Made by reminal, and the person added a hook of their own since: kept.
+	home = t.TempDir()
+	path = filepath.Join(home, ".cursor", "hooks.json")
+	apply(home, false, 1)
+	m = read(path)
+	m["hooks"].(map[string]any)["afterFileEdit"] = []any{map[string]any{"command": "./fmt.sh"}}
+	writeJSONFile(t, path, m)
+	apply(home, true, 1)
+	if m := read(path); len(ours(m)) != 0 || !strings.Contains(string(mustJSON(t, m)), "./fmt.sh") {
+		t.Errorf("after --remove, with a hook of theirs: %v", m)
+	}
+
+	// The person's own file, its version theirs: merged into, and left as it
+	// was by --remove (not deleted, though only an empty list of theirs is
+	// in it).
+	for name, theirs := range map[string]string{
+		"hooks of theirs": `{"version":1,"hooks":{"sessionStart":[{"command":"./audit.sh"}],"stop":[{"command":"say done"}]}}`,
+		"another version": `{"version":2,"hooks":{"stop":[{"command":"say done"}]}}`,
+		"nothing in it":   `{"version":1,"hooks":{}}`,
+	} {
+		home := t.TempDir()
+		path := filepath.Join(home, ".cursor", "hooks.json")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(theirs), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		apply(home, false, 3)
+		m := read(path)
+		if n := ours(m); len(n) != 3 || n["stop"] != 1 {
+			t.Errorf("%s: ours %v", name, n)
+		}
+		before := map[string]any{}
+		_ = json.Unmarshal([]byte(theirs), &before)
+		if m["version"] != before["version"] {
+			t.Errorf("%s: version %v, theirs was %v", name, m["version"], before["version"])
+		}
+		for _, keep := range []string{"./audit.sh", "say done"} {
+			if strings.Contains(theirs, keep) && !strings.Contains(string(mustJSON(t, m)), keep) {
+				t.Errorf("%s: their %q is gone", name, keep)
+			}
+		}
+		apply(home, true, 1)
+		after := read(path)
+		if len(ours(after)) != 0 || after["version"] != before["version"] {
+			t.Errorf("%s: after --remove: %v", name, after)
+		}
+		for _, keep := range []string{"./audit.sh", "say done"} {
+			if strings.Contains(theirs, keep) && !strings.Contains(string(mustJSON(t, after)), keep) {
+				t.Errorf("%s: after --remove, their %q is gone", name, keep)
+			}
+		}
+	}
+}
+
+func writeJSONFile(t *testing.T, path string, v any) {
+	t.Helper()
+	if err := os.WriteFile(path, mustJSON(t, v), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -183,4 +253,22 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// An agent whose hooks say "ready" says when its turns start ("working")
+// too: one that said only "ready" would read as at its prompt for the whole
+// of its life, mid-turn and at its own questions as well.
+func TestReadyComesWithTurns(t *testing.T) {
+	for _, a := range agentTargets() {
+		if a.hooks == nil {
+			continue
+		}
+		has := map[string]bool{}
+		for _, e := range a.hooks.events {
+			has[e.State] = true
+		}
+		if has["ready"] && !has["working"] {
+			t.Errorf("%s: says ready, never working", a.Name)
+		}
+	}
 }
