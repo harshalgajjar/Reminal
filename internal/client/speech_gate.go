@@ -150,12 +150,14 @@ func (a *Agent) hookReportSince(since time.Time) string {
 // of prompt (Gemini's and Qwen's hooks report tool approvals only). Kept
 // apart from attnPromptMarks, which also decides the attention state: a mark
 // that misses a layout here costs a refused line, not a wrong badge.
-// Each is the box's top edge with the prompt row right under it; the row
-// must not be a numbered choice ("❯ 1. Yes").
+// Each is the box's top edge with the prompt row right under it (its text
+// after the prompt sign captured): Claude Code's "❯" (or "!" in its shell
+// mode), Qwen's and Gemini's ">". The sign is followed by a space, a no-break
+// space (Claude Code draws one) or nothing.
 var voiceBoxMarks = map[string]*regexp.Regexp{
-	"claude": regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n[ \t]*❯(?:[ \t\x{00a0}]*$|[ \t\x{00a0}]+(?:[^0-9 \t\x{00a0}]|[0-9]+[^.0-9]))`),
-	"qwen":   regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n>(?:[ \t\x{00a0}]|$)`),
-	"gemini": regexp.MustCompile(`(?m)^[ \t]*▄{20,}\S?[ \t]*\n[ \t]*>(?:[ \t\x{00a0}]|$)`),
+	"claude": regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n[ \t]*[❯!]([ \t\x{00a0}][^\n]*)?$`),
+	"qwen":   regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n>([ \t\x{00a0}][^\n]*)?$`),
+	"gemini": regexp.MustCompile(`(?m)^[ \t]*▄{20,}\S?[ \t]*\n[ \t]*>([ \t\x{00a0}][^\n]*)?$`),
 }
 
 // voiceBoxRows is how many non-empty rows from the bottom the box is looked
@@ -163,7 +165,13 @@ var voiceBoxMarks = map[string]*regexp.Regexp{
 // bottom, because Gemini draws the messages already sent in the same box
 // shape, and a dialog drawn under one of them must not pass for the box.
 // Blank rows are skipped (some agents paint every row, some leave a gap).
+// More than about four footer rows under a box push it out: refused, the
+// safe side.
 const voiceBoxRows = 7
+
+var (
+	numberedRow = regexp.MustCompile(`^[ \t\x{00a0}]*[0-9]+\.[ \t\x{00a0}]`)
+)
 
 func voiceBoxDrawn(prog, render string) bool {
 	re := voiceBoxMarks[prog]
@@ -179,7 +187,24 @@ func voiceBoxDrawn(prog, render string) bool {
 	if len(rows) > voiceBoxRows {
 		rows = rows[len(rows)-voiceBoxRows:]
 	}
-	return re.MatchString(strings.Join(rows, "\n"))
+	text := strings.Join(rows, "\n")
+	for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
+		// A prompt row that reads as a numbered choice ("❯ 1. Yes") is one
+		// only when another numbered row follows it, as in a list of choices;
+		// a draft that starts with a number ("❯ 1. buy milk", "❯ 42") is not.
+		after := ""
+		if m[2] >= 0 {
+			after = text[m[2]:m[3]]
+		}
+		if numberedRow.MatchString(after) {
+			next := strings.SplitN(text[m[1]:], "\n", 3)
+			if len(next) > 1 && numberedRow.MatchString(next[1]) {
+				continue
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // promptOnScreenNow reads the screen itself: the attention state settles a

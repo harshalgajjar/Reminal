@@ -373,3 +373,39 @@ func TestSpeechStaleInputAtTheBoxIsTypedInto(t *testing.T) {
 		t.Fatalf("question picker up, hook input: speechBlocked = %q, want %q", got, speechAsking)
 	}
 }
+
+// Claude Code's box with a draft in it: a draft that is a number is still
+// the box; so is its shell mode ("!"). A numbered row with another under it
+// is a list of choices, not the box. (A hand-typed draft that starts like
+// "1. " is refused by the prompt wording list, which reads it as a choice.)
+func TestSpeechClaudeBoxDraftsAndShellMode(t *testing.T) {
+	rule := strings.Repeat("─", 60)
+	box := func(row string) string {
+		return "\r\n" + rule + "\r\n" + row + "\r\n" + rule + "\r\n  ? for shortcuts\r\n"
+	}
+	for _, c := range []struct{ name, screen, want string }{
+		{"draft that is a number", box("❯ 42"), ""},
+		{"shell mode", box("! ls -la"), ""},
+		{"empty, no-break space", box("❯ "), ""},
+		{"a list of choices under a rule", "\r\n" + rule + "\r\n❯ 1. Yes\r\n  2. No\r\n" + rule + "\r\n", speechAsking},
+	} {
+		if got := gateAgent(t, "claude", "done", c.screen).speechBlocked(); got != c.want {
+			t.Errorf("%s: speechBlocked = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// The Claude Code fixtures are raw captures: its prompt sign is followed by
+// a no-break space, which a fixture rebuilt by hand would lose (and with it
+// what the box shape must accept).
+func TestVoiceFixturesKeepClaudesNoBreakSpace(t *testing.T) {
+	for _, f := range []string{"claude-fresh.txt", "claude-rest.txt", "claude-after-escape.txt"} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "voice-screens", f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), "❯ ") {
+			t.Errorf("%s has no \"❯\" followed by a no-break space: not a raw capture", f)
+		}
+	}
+}
