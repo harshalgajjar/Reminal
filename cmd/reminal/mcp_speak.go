@@ -77,6 +77,15 @@ func speakReport(reply string) string {
 		return "Not spoken: you have said a lot in the last minute. Say less, and reply on screen."
 	case reply == client.SpeakEmpty:
 		return "Nothing to say: text was empty."
+	case reply == client.SpeakNoVoice || strings.HasPrefix(reply, client.SpeakNoVoice+" "):
+		s := "Not spoken: the person's device has no voice to say it with right now. Reply on screen only."
+		if earlier := strings.TrimSpace(strings.TrimPrefix(reply, client.SpeakNoVoice)); earlier != "" {
+			s += fmt.Sprintf(" What you said before this was not heard either: %q.", earlier)
+		}
+		return s
+	case strings.HasPrefix(reply, client.SpeakSpokenUnheard+" "):
+		earlier := strings.TrimSpace(strings.TrimPrefix(reply, client.SpeakSpokenUnheard))
+		return fmt.Sprintf("Spoken. But what you said before this was not heard (the person's device could not say it): %q. Say it again if it matters.", earlier)
 	}
 	return "Not spoken (" + reply + "). Reply on screen only."
 }

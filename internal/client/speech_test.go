@@ -128,6 +128,72 @@ func TestSpeakOnlyWhileSomeoneListensAndNotAfterACut(t *testing.T) {
 	}
 }
 
+// The device's voice failed: a line it could not say, already reported
+// spoken, is told to the agent on its next speak; while the viewer has no
+// voice at all, speak sends nothing and says so; once it has one again,
+// "Spoken." as before. A viewer from before "voice" was sent has a voice.
+func TestSpeakSaysWhatTheDeviceCouldNotSay(t *testing.T) {
+	a, _, _ := speechAgent(t)
+	a.speech.now = func() time.Time { return time.Unix(1000, 0) }
+	var sent []string
+	a.speech.out = func(o speechOut) error { sent = append(sent, o.Text); return nil }
+
+	speechIn(t, a, map[string]any{"kind": "listening", "on": true})
+	if got, err := a.speak("Here is the plan."); err != nil || got != "spoken" {
+		t.Fatalf("first line: %q, %v", got, err)
+	}
+	// The frame could not say it, and has the natural voice ready (Auto).
+	speechIn(t, a, map[string]any{"kind": "unheard", "text": "Here is the plan."})
+	if got, _ := a.speak("It has three steps."); got != "spoken-unheard Here is the plan." {
+		t.Fatalf("after a line not heard: %q", got)
+	}
+	if got, _ := a.speak("First, the build."); got != "spoken" {
+		t.Fatalf("told once: %q", got)
+	}
+
+	// No voice (the person picked the device's, which has none; or Auto
+	// while the natural voice loads): nothing is sent.
+	speechIn(t, a, map[string]any{"kind": "unheard", "text": "First, the build."})
+	speechIn(t, a, map[string]any{"kind": "listening", "on": true, "voice": false})
+	n := len(sent)
+	if got, _ := a.speak("Second, the tests."); got != "no-voice First, the build." {
+		t.Fatalf("no voice, a line not heard before: %q", got)
+	}
+	if got, _ := a.speak("Third."); got != "no-voice" {
+		t.Fatalf("no voice: %q", got)
+	}
+	if len(sent) != n {
+		t.Fatalf("sent with no voice: %q", sent[n:])
+	}
+	// A voice again.
+	speechIn(t, a, map[string]any{"kind": "listening", "on": true, "voice": true})
+	if got, _ := a.speak("Done."); got != "spoken" {
+		t.Fatalf("a voice again: %q", got)
+	}
+	speechIn(t, a, map[string]any{"kind": "listening", "on": true, "voice": false})
+	speechIn(t, a, map[string]any{"kind": "listening", "on": true})
+	if got, _ := a.speak("Done."); got != "spoken" {
+		t.Fatalf("listening without voice (an older viewer): %q", got)
+	}
+
+	// Voice off forgets lines not heard; a blank one is nothing.
+	speechIn(t, a, map[string]any{"kind": "unheard", "text": "lost"})
+	speechIn(t, a, map[string]any{"kind": "unheard", "text": "  "})
+	speechIn(t, a, map[string]any{"kind": "listening", "on": false})
+	speechIn(t, a, map[string]any{"kind": "listening", "on": true})
+	if got, _ := a.speak("Hello."); got != "spoken" {
+		t.Fatalf("after voice off and on: %q", got)
+	}
+	// What is kept of many is its end, capped.
+	for i := 0; i < 40; i++ {
+		speechIn(t, a, map[string]any{"kind": "unheard", "text": "one two three four five six seven eight nine ten."})
+	}
+	got, _ := a.speak("x")
+	if u := strings.TrimPrefix(got, "spoken-unheard "); u == got || len([]rune(u)) > speechMaxUnheard+3 || !strings.HasSuffix(u, "ten.") {
+		t.Fatalf("many lines not heard: %q", got)
+	}
+}
+
 // What they heard is kept short: its end, which is where they stopped it.
 func TestSpeechCutKeepsTheEndOfWhatWasHeard(t *testing.T) {
 	a, _, _ := speechAgent(t)
@@ -202,7 +268,7 @@ func TestSpeechKindsMatchTheViewers(t *testing.T) {
 	for _, m := range regexp.MustCompile(`kind: '([a-z_]+)'`).FindAllStringSubmatch(string(js), -1) {
 		sent[m[1]] = true
 	}
-	handled := map[string]bool{speechListening: true, speechSaid: true, speechPart: true, speechCut: true}
+	handled := map[string]bool{speechListening: true, speechSaid: true, speechPart: true, speechCut: true, speechUnheard: true}
 	for k := range sent {
 		if !handled[k] {
 			t.Errorf("voiceui.js sends kind %q, which handleSpeechIn ignores", k)

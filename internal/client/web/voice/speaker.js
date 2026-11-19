@@ -20,7 +20,9 @@ export function newReply(fields) {
 }
 
 export class Speaker {
-  // on: { started(r, what), heard(r), finished(r) }
+  // on: { started(r, what), heard(r), finished(r), failed(r, text, why) }
+  // failed: the device's voice could not say text (a browser with no speech
+  // engine says "synthesis-failed" and makes no sound).
   constructor(on) { this.on = on; this.clips = { ack: [], nod: [] }; this.lastAck = ''; this.lastNodT = 0; this.nodUntil = 0; this.buf = ''; }
 
   // natural: Kokoro through `tts` (its worker), at `speed` x real time; else
@@ -93,7 +95,14 @@ export class Speaker {
     const u = new SpeechSynthesisUtterance(s);
     u.rate = this.pace;
     u.onstart = () => { if (this.current !== r) return; r.playing = true; this.on.started(r, 'its answer'); };
-    u.onend = () => { if (this.current === r) { r.heard += s; this.on.heard(r); } };
+    let failed = false;
+    u.onend = () => { if (!failed && this.current === r) { r.heard += s; this.on.heard(r); } };
+    // Stopped on purpose (talked over, cancelled) is not a failure.
+    u.onerror = (e) => {
+      if (/^(interrupted|canceled)$/.test(e.error)) return;
+      failed = true;
+      if (this.on.failed) this.on.failed(r, s, e.error || 'error');
+    };
     speechSynthesis.speak(u);
   }
 
