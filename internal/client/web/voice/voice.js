@@ -225,6 +225,9 @@ document.addEventListener('keyup', (e) => { if (e.code === 'Space') talk.holdUp(
 $('pace').addEventListener('change', () => speaker && speaker.setPace(+$('pace').value));
 $('who').addEventListener('change', () => speaker && speaker.setVoice($('who').value));
 const lacking = missing();
+// Start is off in the page until here, where everything it needs is wired:
+// a tap before this would do nothing.
+panel.startButton({ label: 'Start', disabled: !!lacking });
 panel.initSettings(() => talk.running || starting).then(() => {
   if (!lacking) return;
   panel.startButton({ label: 'Start', disabled: true });

@@ -64,13 +64,18 @@ export function naturalVoiceChosen() {
   return s.voice === 'kokoro' || (s.voice === 'auto' && !MOBILE);
 }
 
+// What a first start downloads, in MB, from the mirror's manifest: the
+// runtimes, voice activity and turn models (50), the hearing model's files
+// (4, plus its weights: 8-bit on the CPU, larger with the GPU), and the
+// natural voice (93) when it is used. Rounded to the nearest 10.
+const MB = { shared: 54, hearing: { base: [63, 154], tiny: [28, 76] }, natural: 93 };
 function sizeNote() {
-  const s = settings(), base = s.stt.includes('base');
-  const mb = (base ? (s.gpu ? 150 : 65) : (s.gpu ? 60 : 30)) + (naturalVoiceChosen() ? 92 : 0) + 9 + 2;
+  const s = settings(), w = MB.hearing[s.stt.includes('base') ? 'base' : 'tiny'][s.gpu ? 1 : 0];
+  const mb = Math.round((MB.shared + w + (naturalVoiceChosen() ? MB.natural : 0)) / 10) * 10;
   loadingNote(`First start downloads about ${mb} MB (once; after that it starts in seconds).`);
 }
 
-// The GPU by default on a computer that has one (the voice is several times
+// The GPU by default on a computer that has one (hearing is several times
 // faster); not on a phone, where it is a far larger first download.
 export async function initSettings(isRunning) {
   try { if (!MOBILE && 'gpu' in navigator && await navigator.gpu.requestAdapter()) $('gpu').checked = true; } catch (_) {}
