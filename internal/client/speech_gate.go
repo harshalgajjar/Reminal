@@ -211,6 +211,20 @@ func voiceShellMode(prog, render string) bool {
 	return re != nil && re.MatchString(voiceBottomRows(render))
 }
 
+// voiceBoxBottoms are, by program, the box's closing edge: the input box is
+// bracketed, an edge above its prompt rows and one below (Claude Code and
+// Qwen draw "─" for both, Gemini "▄" above and "▀" below). An option row in a
+// dialog is not, whatever its text.
+var voiceBoxBottoms = map[string]*regexp.Regexp{
+	"claude": regexp.MustCompile(`^[ \t]*─{20,}\S?[ \t]*$`),
+	"qwen":   regexp.MustCompile(`^[ \t]*─{20,}\S?[ \t]*$`),
+	"gemini": regexp.MustCompile(`^[ \t]*▀{20,}\S?[ \t]*$`),
+}
+
+// voiceBoxDraftRows is how many rows of a draft may sit between the prompt
+// row and the box's closing edge (a draft runs on over several rows).
+const voiceBoxDraftRows = 4
+
 func voiceBoxDrawn(prog, render string) bool {
 	re := voiceBoxMarks[prog]
 	if re == nil {
@@ -218,10 +232,31 @@ func voiceBoxDrawn(prog, render string) bool {
 	}
 	text := voiceBottomRows(render)
 	for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
-		if m[2] >= 0 && isChoiceRow(text[m[2]:m[3]], text[m[1]:]) {
+		below := text[m[1]:]
+		if !closedBelow(voiceBoxBottoms[prog], below) {
+			continue
+		}
+		// Claude Code's question picker has a rule between its options, so
+		// an option can sit between two rules: the list is told apart too.
+		if m[2] >= 0 && isChoiceRow(text[m[2]:m[3]], below) {
 			continue
 		}
 		return true
+	}
+	return false
+}
+
+// closedBelow reports whether the box's closing edge follows the prompt row
+// within a draft's rows.
+func closedBelow(bottom *regexp.Regexp, below string) bool {
+	rows := strings.Split(strings.TrimPrefix(below, "\n"), "\n")
+	for i, row := range rows {
+		if i > voiceBoxDraftRows {
+			return false
+		}
+		if bottom.MatchString(row) {
+			return true
+		}
 	}
 	return false
 }

@@ -444,3 +444,34 @@ func TestVoiceBoxTellsAPickerFromADraft(t *testing.T) {
 		}
 	}
 }
+
+// The box is bracketed: an edge above the prompt row and one below it. Rows
+// a dialog might draw under a rule pass for the box only if they are
+// bracketed too and not a numbered list; each of these is refused. A box
+// with a draft over several rows is still the box.
+func TestVoiceBoxNeedsItsClosingEdge(t *testing.T) {
+	rule := strings.Repeat("─", 60)
+	for _, c := range []struct {
+		name, screen string
+		box          bool
+	}{
+		{"a plain option", rule + "\n❯ Yes\n  No\n", false},
+		{"a lettered option", rule + "\n❯ a) Yes\n  b) No\n", false},
+		{"one numbered option, no help row", rule + "\n❯ 1. Only option\n", false},
+		{"help row cut off in a narrow window", rule + "\n❯ 1. Alpha\n     the first\nEnter to sel\n", false},
+		{"help row above the cursor", "Enter to select\n" + rule + "\n❯ 1. Alpha\n     the first\n", false},
+		{"a draft over three rows", rule + "\n❯ first line of a long\n  draft that runs on\n  for a third row\n" + rule + "\n  ? for shortcuts\n", true},
+		{"an empty box", rule + "\n❯ \n" + rule + "\n  ? for shortcuts\n", true},
+	} {
+		if got := voiceBoxDrawn("claude", c.screen); got != c.box {
+			t.Errorf("%s: voiceBoxDrawn = %v, want %v", c.name, got, c.box)
+		}
+	}
+	// Gemini closes its box with "▀".
+	if !voiceBoxDrawn("gemini", strings.Repeat("▄", 60)+"\n > hello\n"+strings.Repeat("▀", 60)+"\n") {
+		t.Error("gemini box with its closing edge: not found")
+	}
+	if voiceBoxDrawn("gemini", strings.Repeat("▄", 60)+"\n > hello\n") {
+		t.Error("gemini box with no closing edge: found")
+	}
+}
