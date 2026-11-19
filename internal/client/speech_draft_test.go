@@ -109,10 +109,7 @@ func TestSpeechDraftCapturesOfEachAgent(t *testing.T) {
 			name := filepath.Base(f)
 			cols, rows := size(name)
 			got := styledScreen(t, c.prog, filepath.Join(c.dir, name), cols, rows).speechBlocked()
-			// Gemini's "empty-at-rest-after-turns" captures hold "ls -la" in the
-			// box: a draft, whatever their name.
-			held := c.prog == "gemini" && strings.Contains(name, "after-turns")
-			empty := !held && (strings.Contains(name, "empty") || strings.Contains(name, "first-run") ||
+			empty := (strings.Contains(name, "empty") || strings.Contains(name, "first-run") ||
 				strings.Contains(name, "after-turn") || strings.Contains(name, "after-clear-2"))
 			switch {
 			case empty && got != "":
