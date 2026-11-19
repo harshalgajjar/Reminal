@@ -76,6 +76,8 @@ Sessions: list_sessions finds the machines and their live sessions (a laptop rep
 
 Notes: a small badge ON a window, for something about that window — not for conversation. list_windows, then add_note; status attention only when you are blocked on the user. read_replies tells you when they hand it back.
 
+Voice: a message starting with "[voice]" was said out loud to you in reminal: answer it with speak (its description has the rules). "[voice, continues]" means they are still talking and more is coming: do not answer it yet.
+
 Problems with reminal itself — a tool that errors or misleads, keys that did not land, a note that did not show — go to report_issue, not your harness's own feedback tool: that reaches the harness's maker, never the person who can fix reminal.`
 
 // ---------------------------------------------------------------- overlay children
@@ -563,6 +565,7 @@ func mcpToolList() []map[string]any {
 			}, "session"),
 		},
 		mcpIssueTool(obj, str),
+		speakTool(obj, str),
 		{
 			"name": "list_windows",
 			"description": "List the windows open on the user's screen with the window_id the other tools need. " +
@@ -663,6 +666,8 @@ func (s *mcpServer) callTool(name string, args map[string]any) (string, error) {
 		return mcpListSessions()
 	case "search_sessions":
 		return mcpSearchSessions(argStr(args, "pattern", argStr(args, "regex", "")))
+	case "speak":
+		return mcpSpeak(argStr(args, "text", ""))
 	case "report_issue":
 		return mcpReportIssue(argStr(args, "title", ""), argStr(args, "what_happened", argStr(args, "what", "")), argStr(args, "expected", ""))
 	case "read_transcript":

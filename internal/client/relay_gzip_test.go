@@ -130,7 +130,10 @@ func TestTheRelayServesWhatBuildJSONCopies(t *testing.T) {
 			want, _ := webIndex.ReadFile(p)
 			rel := strings.TrimPrefix(p, "web/")
 			resp, body := get("/" + rel)
-			if resp.StatusCode != http.StatusOK || !bytes.Equal(body, want) || strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
+			// HTML only where the file is a page (the voice frame): anywhere
+			// else it is the viewer page served for a path the binary lacks.
+			isHTML := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html")
+			if resp.StatusCode != http.StatusOK || !bytes.Equal(body, want) || isHTML != strings.HasSuffix(rel, ".html") {
 				t.Errorf("/%s: %d %q, %d bytes (want its %d)", rel, resp.StatusCode, resp.Header.Get("Content-Type"), len(body), len(want))
 			}
 			served++

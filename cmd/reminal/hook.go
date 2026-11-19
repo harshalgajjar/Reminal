@@ -42,19 +42,9 @@ func runHook(args []string) error {
 	}
 	arg := strings.ToLower(strings.TrimSpace(args[0]))
 
-	// REMINAL_SESSION is set in every session's environment; a hook fired outside
-	// a reminal session has nothing to report — succeed silently below.
-	//
-	// Not every hook inherits it, though: a harness that starts the processes
-	// it fires with the environment scrubbed (Codex and cursor-agent both do
-	// for their helpers) leaves the hook with no idea which session it is in,
-	// and the state it was fired to report is simply lost. A hook is always a
-	// descendant of the agent that owns the PTY, and the agent's pid is in its
-	// own record, so the process tree still says which session this is.
-	id := strings.ToUpper(strings.TrimSpace(os.Getenv("REMINAL_SESSION")))
-	if id == "" {
-		id = strings.ToUpper(session.Enclosing())
-	}
+	// A hook fired outside a reminal session has nothing to report: succeed
+	// silently below.
+	id := enclosingSessionID()
 
 	var state, failure string
 	var bg *session.Background // what it still has running in the background, if it said
@@ -310,4 +300,20 @@ func convFromPayload(b []byte) string {
 		}
 	}
 	return ""
+}
+
+// enclosingSessionID is the id of the reminal session this process runs in,
+// or "" outside one. REMINAL_SESSION is set in every session's environment.
+//
+// Not every process inherits it, though: a harness that starts the processes
+// it fires with the environment scrubbed (Codex and cursor-agent both do for
+// their helpers) leaves a hook with no idea which session it is in. Such a
+// process is always a descendant of the agent that owns the PTY, and the
+// agent's pid is in its own record, so the process tree still says which
+// session this is.
+func enclosingSessionID() string {
+	if id := strings.TrimSpace(os.Getenv("REMINAL_SESSION")); id != "" {
+		return strings.ToUpper(id)
+	}
+	return strings.ToUpper(session.Enclosing())
 }

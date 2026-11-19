@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>reminal voice</title>
+<style>
+  /* The viewer's own palette and sizes (its docks and keybar), so the panel
+     reads as part of the page: one dark surface, 13-14px text, small
+     bordered buttons, rows split by hairlines. Dark whatever the device
+     prefers, as the viewer is. */
+  :root { color-scheme: dark; --bg:#161b22; --row:#21262d; --line:#30363d; --fg:#e6edf3; --dim:#8b949e; --acc:#58a6ff; --ok:#3fb950; --okfg:#7ee787; --warn:#d29922; --warnfg:#e3b341; --bad:#f85149; --say:#a371f7; --sayfg:#d2a8ff;
+    --mono: Menlo, Monaco, "Courier New", monospace; }
+  * { box-sizing: border-box; } [hidden] { display: none !important; }
+  html, body { background:var(--bg); }
+  body { margin:0; color:var(--fg); font:14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color:transparent; }
+
+  button { font:500 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color:var(--fg); background:var(--row); border:1px solid var(--line); border-radius:6px;
+    min-height:34px; padding:0 12px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px;
+    touch-action:manipulation; user-select:none; -webkit-user-select:none; transition:color .15s ease, border-color .15s ease, background-color .15s ease; }
+  button:active { background:var(--line); }
+  button:disabled { opacity:.5; }
+  button svg { display:block; flex:none; }
+
+  .head { display:flex; align-items:center; gap:8px; padding:8px 6px 4px 12px; }
+  .head h1 { font-size:13px; font-weight:600; margin:0; }
+  #state { flex:1; min-width:0; font-size:12px; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; transition:color .15s ease; }
+  #state::before { content:"·"; margin-right:6px; color:var(--dim); }
+  [data-s="listen"] #state { color:var(--fg); }
+  [data-s="hear"] #state { color:var(--okfg); }
+  [data-s="think"] #state { color:var(--acc); }
+  [data-s="speak"] #state, [data-s="duck"] #state { color:var(--sayfg); }
+  button.x { background:none; border:0; min-height:30px; width:32px; padding:0; color:var(--dim); }
+  button.x:active { background:var(--line); color:var(--fg); }
+
+  #load { color:var(--dim); font-size:11px; padding:4px 12px 0; }
+  #load:empty { display:none; }
+  .ctl { display:flex; gap:6px; padding:6px 12px 8px; }
+  .ctl button { flex:1; }
+  #go { color:var(--okfg); border-color:var(--ok); }
+  #go.stop { color:var(--bad); border-color:color-mix(in srgb, var(--bad) 55%, var(--line)); }
+  #mute.on { color:var(--warnfg); border-color:var(--warn); }
+  #hold.stop { color:var(--okfg); border-color:var(--ok); }
+  .hint { color:var(--dim); font-size:11px; margin:0; padding:0 12px 10px; }
+
+  .sec { border-top:1px solid var(--row); }
+  #log { max-height:320px; overflow-y:auto; padding:4px 6px; }
+  .turn { padding:7px 6px; border-radius:6px; }
+  .turn + .turn { border-top:1px solid var(--row); border-radius:0; }
+  .who { font:11px var(--mono); color:var(--dim); }
+  .txt { font-size:13px; }
+  .you .txt.partial { color:var(--dim); font-style:italic; }
+  .agent .said { color:var(--fg); } .agent .unsaid { color:var(--dim); } .agent .cut { color:var(--bad); font-size:12px; }
+  .t { color:var(--dim); font:11px var(--mono); margin-top:1px; }
+  .note { color:var(--dim); font-size:12px; padding:3px 6px; }
+  .turn.switch { color:var(--dim); font:11px var(--mono); text-align:center; padding:6px; }
+
+  details > summary { list-style:none; cursor:pointer; padding:10px 12px; font-size:14px; display:flex; align-items:center; justify-content:space-between; }
+  details > summary::-webkit-details-marker { display:none; }
+  details > summary::after { content:""; width:7px; height:7px; border-right:1.5px solid var(--dim); border-bottom:1.5px solid var(--dim); transform:rotate(45deg); margin:-3px 4px 0 0; transition:transform .15s ease; }
+  details[open] > summary::after { transform:rotate(-135deg); margin-top:3px; }
+  details > summary:active { background:var(--row); }
+  .body { padding:0 12px 10px; display:flex; flex-direction:column; gap:8px; font-size:13px; }
+  .body label { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .body label.chk { justify-content:flex-start; }
+  select { font:13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:var(--row); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 6px; max-width:62%; }
+  input[type=checkbox] { accent-color:var(--ok); margin:0; }
+  /* Settings: short groups of rows, each a name with a line on what it does
+     and its control on the right; on/off as switches. */
+  .sets { gap:6px; padding-bottom:12px; }
+  .gh { font:11px var(--mono); color:var(--dim); margin:6px 2px 0; }
+  .grp { border:1px solid var(--row); border-radius:8px; background:rgba(255,255,255,.015); }
+  .body label.set { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:9px 10px; }
+  .body label.set[hidden] { display:none; }
+  .set + .set { border-top:1px solid var(--row); }
+  .set > span { display:flex; flex-direction:column; min-width:0; }
+  .set b { font-weight:500; font-size:13px; }
+  .set small { color:var(--dim); font-size:11px; line-height:1.3; margin-top:1px; }
+  .set select { flex:none; max-width:48%; }
+  input.sw { -webkit-appearance:none; appearance:none; flex:none; width:36px; height:20px; margin:0; border-radius:10px; background:var(--line); position:relative; cursor:pointer; transition:background-color .15s ease; }
+  input.sw::before { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#c9d1d9; transition:transform .15s ease; }
+  input.sw:checked { background:var(--ok); }
+  input.sw:checked::before { transform:translateX(16px); background:#fff; }
+  input.sw:disabled, .set select:disabled { opacity:.45; cursor:default; }
+  .sethint { color:var(--dim); font-size:11px; margin:2px 2px 0; }
+  /* Timings: the same rows as the settings; a value may wrap, never squeeze its label. */
+  .trow { display:flex; justify-content:space-between; align-items:baseline; gap:12px; padding:8px 10px; font-size:12px; color:var(--dim); }
+  .trow + .trow { border-top:1px solid var(--row); }
+  .trow.sub { padding-left:22px; }
+  .trow .v { color:var(--fg); font:11px var(--mono); text-align:right; max-width:60%; overflow-wrap:anywhere; }
+
+  @media (prefers-reduced-motion: reduce) { button, #state, details > summary::after, input.sw, input.sw::before { transition:none; } }
+</style>
+</head>
+<body>
+<main id="hero">
+  <div class="head">
+    <h1>Voice</h1>
+    <span id="state" role="status">Not started</span>
+    <button id="close" class="x" title="Close (voice stays on until Stop)" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </div>
+
+  <div id="load"></div>
+  <div class="ctl">
+    <button id="go">Start</button>
+    <button id="mute" hidden title="Mute (M): it hears nothing while you talk to someone else"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg><span>Mute</span></button>
+    <button id="hold" hidden title="Hold (or Space) while you think: it waits until you let go"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><rect x="7" y="5" width="3.5" height="14" rx="1.2"/><rect x="13.5" y="5" width="3.5" height="14" rx="1.2"/></svg><span>Hold</span></button>
+  </div>
+  <p class="hint" id="hint">Hearing and the voice run on this device; only text is sent.</p>
+
+  <div class="sec"><div id="log"><div class="note">The conversation shows here.</div></div></div>
+
+  <details class="sec" id="settings"><summary>Settings</summary>
+    <div class="body sets">
+      <div class="gh">Voice</div>
+      <div class="grp">
+        <label class="set"><span><b>Engine</b><small>Natural sounds best; this device's starts at once</small></span>
+          <select id="voice">
+            <option value="auto">Auto</option>
+            <option value="kokoro">Natural (90 MB once)</option>
+            <option value="builtin">This device</option>
+          </select></label>
+        <label class="set"><span><b>Voice</b><small>For the natural engine</small></span>
+          <select id="who"><option value="af_heart" selected>Heart, warm</option><option value="af_bella">Bella, bright</option><option value="af_nicole">Nicole, soft</option><option value="am_michael">Michael</option><option value="am_fenrir">Fenrir, deep</option><option value="bf_emma">Emma, British</option><option value="bm_george">George, British</option></select></label>
+        <label class="set"><span><b>Pace</b></span>
+          <select id="pace"><option value="0.9">Relaxed</option><option value="1" selected>Normal</option><option value="1.15">Brisk</option><option value="1.3">Fast</option></select></label>
+      </div>
+      <div class="gh">Hearing</div>
+      <div class="grp">
+        <label class="set"><span><b>Accuracy</b><small>How it turns your speech into text</small></span>
+          <select id="stt">
+            <option value="onnx-community/moonshine-tiny-ONNX">Faster</option>
+            <option value="onnx-community/moonshine-base-ONNX" selected>More accurate</option>
+          </select></label>
+        <label class="set"><span><b>Echo guard</b><small>Use the speaker without it hearing itself</small></span><input type="checkbox" class="sw" id="guard" checked></label>
+      </div>
+      <div class="gh">Behaviour</div>
+      <div class="grp">
+        <label class="set"><span><b>Nods</b><small>A quiet "mm-hm" while you talk at length</small></span><input type="checkbox" class="sw" id="nod" checked></label>
+        <label class="set"><span><b>Use the GPU</b><small>Faster hearing; a larger download once</small></span><input type="checkbox" class="sw" id="gpu"></label>
+        <label class="set"><span><b>Show timings</b><small>Response times, for tuning</small></span><input type="checkbox" class="sw" id="showtimes"></label>
+      </div>
+      <div class="sethint" id="sethint" hidden>Engine, accuracy, echo guard and the GPU change on the next Start.</div>
+    </div>
+  </details>
+
+
+  <details class="sec" id="timings" hidden><summary>Timings</summary>
+    <div class="body sets">
+      <div class="grp tm">
+        <div class="trow"><span>Reply starts</span><span class="v" id="m-reply">-</span></div>
+        <div class="trow sub"><span>Knowing you had finished</span><span class="v" id="m-turn">-</span></div>
+        <div class="trow sub"><span>First words spoken</span><span class="v" id="m-tts">-</span></div>
+        <div class="trow"><span>Live text update</span><span class="v" id="m-live">-</span></div>
+        <div class="trow"><span>Goes quiet when talked over</span><span class="v" id="m-barge">-</span></div>
+        <div class="trow"><span>Models</span><span class="v" id="m-dev">-</span></div>
+      </div>
+      <div class="sethint" id="avg"></div>
+    </div>
+  </details>
+</main>
+<script src="size.js"></script>
+<script type="module" src="voice.js"></script>
+</body>
+</html>
