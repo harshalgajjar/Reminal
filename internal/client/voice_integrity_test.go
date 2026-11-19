@@ -64,3 +64,29 @@ func TestVoiceLoadsAssetsOnlyThroughIntegrity(t *testing.T) {
 		}
 	}
 }
+
+// The checked-files Cache is read without hashing again, so it must have
+// exactly one writer: integrity.js storing the clone of a checked body. A
+// second cache.put anywhere in the frame would be a way around the check.
+func TestVoiceCacheHasOneWriterTheCheckedCopy(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join("web", "voice", "*.js"))
+	puts := 0
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			if !strings.Contains(line, ".put(") {
+				continue
+			}
+			puts++
+			if filepath.Base(f) != "integrity.js" || !strings.Contains(line, "cache.put(key, checked.clone())") {
+				t.Errorf("%s: a cache write that is not the checked copy: %s", filepath.Base(f), strings.TrimSpace(line))
+			}
+		}
+	}
+	if puts != 1 {
+		t.Errorf("%d cache writes in the frame, want exactly 1 (integrity.js, the checked copy)", puts)
+	}
+}

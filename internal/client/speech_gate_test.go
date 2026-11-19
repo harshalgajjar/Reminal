@@ -162,3 +162,18 @@ func TestSpeechTypesIntoOpenCodeOnlyAtItsBox(t *testing.T) {
 		}
 	}
 }
+
+// No screen to read: an agent whose box has a mark is not typed into (its
+// box cannot be seen); one without a mark rests on its state, as before.
+func TestSpeechWithNoScreenFailsClosedForMarkedAgents(t *testing.T) {
+	a, _, _ := speechAgent(t)
+	a.speech.blocked = nil
+	a.attnFG, a.attnState = "opencode", "done"
+	if got := a.speechBlocked(); got != speechAsking {
+		t.Errorf("opencode, no screen: %q, want %q", got, speechAsking)
+	}
+	a.attnFG = "claude"
+	if got := a.speechBlocked(); got != "" {
+		t.Errorf("claude, no screen, done: %q, want it allowed", got)
+	}
+}

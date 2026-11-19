@@ -87,7 +87,7 @@ func (a *Agent) promptOnScreenNow(prog string) bool {
 	}
 	a.screenMu.Unlock()
 	if scr == nil {
-		return false
+		return attnPromptMarks[prog] != nil // its box cannot be seen: not typed into
 	}
 	if attnPromptMarks[prog] != nil && !attnPromptDrawn(prog, attentionProbeTail(render, attnTailRows)) {
 		return true
