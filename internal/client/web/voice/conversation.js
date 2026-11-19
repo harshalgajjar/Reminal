@@ -70,6 +70,20 @@ export function start(deps) {
   show('listening');
 }
 
+// Another voice from here on (the device's own could not speak): a reply
+// under way carries on in it.
+export function useSpeaker(s) {
+  speaker = s;
+  speaker.current = reply;
+}
+
+// A line of the agent's its voice could not say: it stays on screen, marked
+// not heard, and the session is told, so speak says so to the agent.
+export function lineUnheard(r, text) {
+  if (r && r.row) panel.setRowNote(r.row, 'not heard: this device could not say it');
+  send('unheard', { text });
+}
+
 export function stop() {
   held = []; heldRow = null; cutIn = null; cutNote = '';
   running = false;
