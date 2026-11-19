@@ -1,20 +1,40 @@
- ▐▛███▛█   Claude Code v2.1.326
-▝▜██████▀  Opus 5.5 · Claude Team
- ▝▝   ▝▝   /work
 
-❯ [voice] Please create a file named "hello not txt" that contains the word "hi"
+ ▐▛███▛█   Claude Code v2.1.328
+▝▜██████▀  Opus 5.5 · API Usage Billing
+ ▝▝   ▝▝   /w
 
-● Write(hello.txt)
 
-────────────────────────────────────────────────────────────────────────────────────────────────────
- Create file
- hello.txt
-╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
-  1 hi
-╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
- Do you want to create hello.txt?
+❯ please list sessions
+
+  Calling reminal…
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tool use
+ reminal — List Sessions Tool: (MCP)
+
+ About the reminal — List Sessions Tool:
+ │ List every reminal this device owns: this machine and any enrolled box, each with live sessions (id, name,
+ │ path/cwd, title, viewers, idle). Does not include PINs. Call this to find which session to search or talk about…
+ (ctrl+o to expand description)
+
+ Do you want to proceed?
  ❯ 1. Yes
-   2. Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)
+   2. Yes, and don't ask again for reminal — List Sessions commands in /w
    3. No
 
  Esc to cancel · Tab to amend
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

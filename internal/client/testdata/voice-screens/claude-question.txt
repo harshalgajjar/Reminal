@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.328
+▝▜██████▀  Opus 5.5 · API Usage Billing
+ ▝▝   ▝▝   /w
+
+
+❯ please ask me
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Pick
+
+Which one should I use?
+
+❯ 1. Alpha
+     the first
+  2. Beta
+     the second
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

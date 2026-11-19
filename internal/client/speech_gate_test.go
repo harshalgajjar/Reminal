@@ -240,7 +240,9 @@ func TestSpeechHookReportMustBeFromThisRun(t *testing.T) {
 	if got := a.speechBlocked(); got != speechNoHook {
 		t.Fatalf("report from before it started: speechBlocked = %q, want %q", got, speechNoHook)
 	}
-	// Its own "input" still blocks once it has reported.
+	// Its own "input" still blocks once it has reported, for an agent whose
+	// box reminal does not know (the hook's word stands).
+	a.attnFG = "copilot"
 	a.attnFGAt = time.Now().Add(-time.Minute)
 	if err := session.WriteHookState(a.sessionID, "input"); err != nil {
 		t.Fatal(err)
@@ -303,9 +305,15 @@ func TestSpeechAgentWhoseHookCannotSayWaitingIsTypedIntoOnlyAtRest(t *testing.T)
 // hooks never report (Qwen's question picker).
 func TestSpeechTypesOnlyWhileTheAgentsBoxIsOnScreen(t *testing.T) {
 	for _, c := range []struct{ prog, file, want string }{
+		{"claude", "claude-fresh.txt", ""},
 		{"claude", "claude-rest.txt", ""},
+		{"claude", "claude-after-escape.txt", ""},
+		{"claude", "claude-question.txt", speechAsking},
+		{"claude", "claude-plan.txt", speechAsking},
+		{"claude", "claude-model.txt", speechAsking},
+		{"claude", "claude-resume.txt", speechAsking},
+		{"claude", "claude-resume-sessions.txt", speechAsking},
 		{"claude", "claude-permission.txt", speechAsking},
-		{"claude", "claude-speak-permission.txt", speechAsking},
 		{"qwen", "qwen-start.txt", ""},
 		{"qwen", "qwen-idle.txt", ""},
 		{"qwen", "qwen-after-voice.txt", ""},
@@ -336,5 +344,32 @@ func TestSpeechBoxNeedsAHookToo(t *testing.T) {
 	a.speech.hooked = func() string { return "" }
 	if got := a.speechBlocked(); got != speechNoHook {
 		t.Fatalf("opencode at its box, no hook: speechBlocked = %q, want %q", got, speechNoHook)
+	}
+}
+
+// Claude Code reports nothing when a prompt is dismissed with Esc: its last
+// report stays "input" while it is back at its box (captured: the question
+// picker, a tool permission and the plan approval, each Esc'd). For an
+// agent whose box reminal knows, the box on screen with no prompt wording
+// means the prompt is gone: typed. Where the box is not on screen, the
+// "input" stands.
+func TestSpeechStaleInputAtTheBoxIsTypedInto(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "voice-screens", "claude-after-escape.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := gateAgentSized(t, "claude", "input", strings.ReplaceAll(string(raw), "\n", "\r\n"), 120, 40)
+	a.speech.hooked = func() string { return "input" }
+	if got := a.speechBlocked(); got != "" {
+		t.Fatalf("Esc'd prompt, hook still input, box on screen: speechBlocked = %q, want it allowed", got)
+	}
+	raw, err = os.ReadFile(filepath.Join("testdata", "voice-screens", "claude-question.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := gateAgentSized(t, "claude", "input", strings.ReplaceAll(string(raw), "\n", "\r\n"), 120, 40)
+	b.speech.hooked = func() string { return "input" }
+	if got := b.speechBlocked(); got != speechAsking {
+		t.Fatalf("question picker up, hook input: speechBlocked = %q, want %q", got, speechAsking)
 	}
 }

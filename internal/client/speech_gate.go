@@ -54,7 +54,13 @@ func (a *Agent) speechBlocked() string {
 	if why := a.hookBlocks(fg, since); why != "" {
 		return why
 	}
-	if state == "input" || a.promptOnScreenNow(fg) {
+	// A hook's "input" can outlive its prompt: Claude Code reports nothing
+	// when the person dismisses one with Esc, and its last report stays
+	// "input" at its box until the next prompt. For an agent whose box
+	// reminal knows, the screen read now decides: the box on screen with no
+	// prompt wording means the prompt is gone. Without a known box, the
+	// hook's word stands.
+	if a.promptOnScreenNow(fg) || (state == "input" && !hasBox(fg)) {
 		return speechAsking
 	}
 	return ""
@@ -147,9 +153,9 @@ func (a *Agent) hookReportSince(since time.Time) string {
 // Each is the box's top edge with the prompt row right under it; the row
 // must not be a numbered choice ("❯ 1. Yes").
 var voiceBoxMarks = map[string]*regexp.Regexp{
-	"claude": regexp.MustCompile(`(?m)^[ \t]*─{20,}[ \t]*\n[ \t]*❯(?:[ \t]*$|[ \t]+(?:[^0-9 \t]|[0-9]+[^.0-9]))`),
-	"qwen":   regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n>(?:[ \t]|$)`),
-	"gemini": regexp.MustCompile(`(?m)^[ \t]*▄{20,}[ \t]*\n[ \t]*>(?:[ \t]|$)`),
+	"claude": regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n[ \t]*❯(?:[ \t\x{00a0}]*$|[ \t\x{00a0}]+(?:[^0-9 \t\x{00a0}]|[0-9]+[^.0-9]))`),
+	"qwen":   regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n>(?:[ \t\x{00a0}]|$)`),
+	"gemini": regexp.MustCompile(`(?m)^[ \t]*▄{20,}\S?[ \t]*\n[ \t]*>(?:[ \t\x{00a0}]|$)`),
 }
 
 // voiceBoxRows is how many non-empty rows from the bottom the box is looked
@@ -202,3 +208,7 @@ func (a *Agent) promptOnScreenNow(prog string) bool {
 	}
 	return attnLooksLikePrompt(attentionProbeTail(render, attnPromptRows))
 }
+
+// hasBox reports whether reminal knows the shape of prog's input box, so
+// that whether the box is on screen can be read.
+func hasBox(prog string) bool { return attnPromptMarks[prog] != nil || voiceBoxMarks[prog] != nil }
