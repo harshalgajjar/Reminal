@@ -437,6 +437,9 @@ func TestRenameLocalSession(t *testing.T) {
 
 func TestKillLocalSession(t *testing.T) {
 	isolateHome(t)
+	// The kill's own forgetWhenGone still clears the record (taking its lock
+	// in this home) after the child has died: waited for before the home goes.
+	t.Cleanup(forgetting.Wait)
 	if err := killLocalSession("NOSUCHID"); err == nil {
 		t.Error("expected error killing a non-existent session")
 	}
