@@ -1,0 +1,40 @@
+
+We never collect your conversations, code, tool arguments, error messages,
+or any personal data. You can change this anytime with 'goose configure'.
+
+o  Share anonymous usage data to help improve goose?
+|  No
+|
+•  Telemetry disabled. You can enable it anytime in settings.
+|
+
+    __( O)>  ● new session · openai gpt-4o
+   \____)    20261119_1 · /tmp
+     L L     goose is ready
+  ⏳ loading extensions in background...
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 0% 0/128k
+>  /tmp
+  ⏳ waiting for extensions to finish loading...
+  ✓ extensions ready
+
+
+  ────────────────────────────────────────
+  ▸ shell
+    command: ls /tmp
+
+
+  Tool approval request
+    {
+      "tool_name": "shell",
+      "arguments": {
+        "command": "ls /tmp"
+      }
+    }
+
+*  Goose would like to call the above tool, do you allow?
+|  > Allow (Allow the tool call once)
+|    Always Allow
+|    Deny
+|    Cancel
+—
+
