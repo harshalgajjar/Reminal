@@ -761,8 +761,14 @@ func runIntegrate(args []string) error {
 			hookErr = applyPlugin(p.target.plugin, home, exe, remove)
 		}
 		var speakErr error
+		speakNote := ""
 		if p.target.speak != nil {
 			speakErr = p.target.speak.apply(home, remove)
+			// Left as the person set it: said, not a failure.
+			var skipped *speakSkipped
+			if errors.As(speakErr, &skipped) {
+				speakNote, speakErr = skipped.why, nil
+			}
 		}
 		if err := errors.Join(mcpErr, hookErr, speakErr); err != nil {
 			failures++
@@ -771,6 +777,9 @@ func runIntegrate(args []string) error {
 		}
 		noteSetUp(home, p.target.Bin, !remove)
 		fmt.Printf("  ✓ %-18s %s\n", p.target.Name, cDim(p.how))
+		if speakNote != "" {
+			fmt.Printf("    %-18s %s\n", "", speakNote)
+		}
 	}
 
 	if failures > 0 {

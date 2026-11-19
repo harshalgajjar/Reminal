@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -221,7 +222,7 @@ func TestGeminiAllowsOnlySpeakInAPolicyOfItsOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := strings.Count(string(b), "[[rule]]")
-	for _, want := range []string{`mcpName = "reminal"`, `toolName = "speak"`, `decision = "allow"`, "priority = 950"} {
+	for _, want := range []string{`mcpName = "reminal"`, `toolName = "speak"`, `decision = "allow"`, "priority = 0"} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("policy has no %s:\n%s", want, b)
 		}
@@ -262,5 +263,79 @@ func TestSpeakAllowedOnlyWhereItAsks(t *testing.T) {
 	}
 	if !strings.HasPrefix(speakPermission, "mcp__reminal__") || speakPermission != "mcp__reminal__speak" {
 		t.Errorf("speakPermission %q", speakPermission)
+	}
+}
+
+// Gemini CLI: where the person has said speak (or reminal's server) must
+// ask or not run, integrate writes no rule, takes out one an earlier run
+// wrote, and says where; a rule of theirs about something else changes
+// nothing. Their user policies are read (or the policyPaths their settings
+// name instead), and their settings.
+func TestGeminiLeavesSpeakAloneWhereThePersonRefusedIt(t *testing.T) {
+	g := targetNamed(t, "gemini")
+	policy := func(body string) map[string]string { return map[string]string{".gemini/policies/mine.toml": body} }
+	settings := func(body string) map[string]string { return map[string]string{".gemini/settings.json": body} }
+	refused := map[string]map[string]string{
+		"deny of speak, at priority 0": policy("[[rule]]\nmcpName = \"reminal\"\ntoolName = \"speak\"\ndecision = \"deny\"\npriority = 0\n"),
+		"deny of speak, at 100":        policy("[[rule]]\ntoolName = \"mcp_reminal_speak\"\ndecision = \"deny\"\npriority = 100\n"),
+		"ask before speak":             policy("[[rule]]\nmcpName = 'reminal'\ntoolName = 'speak'\ndecision = 'ask_user'\npriority = 5\n"),
+		"deny of the server":           policy("[[rule]]\nmcpName = \"reminal\"\ntoolName = \"*\"\ndecision = \"deny\"\npriority = 1\n"),
+		"deny of the server, by name":  policy("# mine\n[[rule]]\ntoolName = \"mcp_reminal_*\"\ndecision = \"deny\"\npriority = 1\n"),
+		"deny of every MCP tool":       policy("[[rule]]\ntoolName = \"mcp_*\"\ndecision = \"deny\"\npriority = 1\n"),
+		"a list, over lines": policy("[[rule]]\ntoolName = \"run_shell_command\"\ndecision = \"allow\"\npriority = 3\n\n" +
+			"[[rule]]\ntoolName = [\n  \"mcp_reminal_send_keys\",\n  \"mcp_reminal_speak\",\n]\ndecision = \"deny\"\npriority = 2\n"),
+		"excludeTools":               settings(`{"mcpServers":{"reminal":{"command":"x","excludeTools":["speak"]}}}`),
+		"includeTools without speak": settings(`{"mcpServers":{"reminal":{"command":"x","includeTools":["list_sessions"]}}}`),
+		"tools.exclude":              settings(`{"tools":{"exclude":["mcp_reminal_speak"]}}`),
+		"tools.confirmationRequired": settings(`{"tools":{"confirmationRequired":["mcp_reminal_*"]}}`),
+		"mcp.excluded":               settings(`{"mcp":{"excluded":["reminal"]}}`),
+		"policyPaths, their own dir": {
+			".gemini/settings.json":   `{"policyPaths":["~/my-policies"]}`,
+			"my-policies/strict.toml": "[[rule]]\nmcpName = \"reminal\"\ntoolName = \"speak\"\ndecision = \"deny\"\npriority = 10\n",
+		},
+	}
+	for name, files := range refused {
+		home := t.TempDir()
+		ours := filepath.Join(home, ".gemini", "policies", "reminal.toml")
+		writeFile(t, ours, geminiSpeakPolicy) // written by an earlier run
+		for f, body := range files {
+			writeFile(t, filepath.Join(home, f), body)
+		}
+		err := g.speak.apply(home, false)
+		var skipped *speakSkipped
+		if !errors.As(err, &skipped) {
+			t.Errorf("%s: not left alone: %v", name, err)
+			continue
+		}
+		if !strings.Contains(skipped.why, "you have denied reminal's speak tool in ~/") {
+			t.Errorf("%s: says %q", name, skipped.why)
+		}
+		if _, err := os.Stat(ours); !os.IsNotExist(err) {
+			t.Errorf("%s: the rule an earlier run wrote is still there", name)
+		}
+		if !g.speak.allowed(home) {
+			t.Errorf("%s: --check says speak is still to be set up", name)
+		}
+	}
+	notRefused := map[string]map[string]string{
+		"nothing of theirs":       {},
+		"deny of another server":  policy("[[rule]]\nmcpName = \"other\"\ntoolName = \"speak\"\ndecision = \"deny\"\npriority = 1\n"),
+		"deny of another tool":    policy("[[rule]]\nmcpName = \"reminal\"\ntoolName = \"send_keys\"\ndecision = \"deny\"\npriority = 1\n"),
+		"allow of the server":     policy("[[rule]]\nmcpName = \"reminal\"\ntoolName = \"*\"\ndecision = \"allow\"\npriority = 1\n"),
+		"a deny in another table": policy("[safety_checker]\ntoolName = \"mcp_reminal_speak\"\ndecision = \"deny\"\n"),
+		"includeTools with speak": settings(`{"mcpServers":{"reminal":{"command":"x","includeTools":["speak","list_sessions"]}}}`),
+		"tools.exclude of others": settings(`{"tools":{"exclude":["run_shell_command"]}}`),
+	}
+	for name, files := range notRefused {
+		home := t.TempDir()
+		for f, body := range files {
+			writeFile(t, filepath.Join(home, f), body)
+		}
+		if err := g.speak.apply(home, false); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if b, _ := os.ReadFile(filepath.Join(home, ".gemini", "policies", "reminal.toml")); string(b) != geminiSpeakPolicy {
+			t.Errorf("%s: no rule written", name)
+		}
 	}
 }
