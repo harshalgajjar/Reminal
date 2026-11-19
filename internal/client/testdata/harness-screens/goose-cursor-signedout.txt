@@ -1,0 +1,40 @@
+
+    __( O)>  ● new session · cursor-agent auto
+   \____)    20261119_2 · /tmp
+     L L     goose is ready
+  ⏳ loading extensions in background...
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 0% 0/128k
+> hello
+  ✓ extensions ready
+
+
+error: Ran into this error: Authentication error: You are not logged in to cursor-agent. Please run 'cursor-agent login'
+ to authenticate first..
+
+Please retry if you think this is a transient or recoverable error.
+
+  ⏱ 0.12s
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 0% 0/128k
+> Enter to send · Ctrl+J newline
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

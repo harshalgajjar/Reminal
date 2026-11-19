@@ -114,6 +114,10 @@ var loginRowCases = []loginRowCase{
 	{prog: "goose", row: "Authentication failed — check your API key. Run `goose configure` to update it."},
 	{prog: "goose", row: "Muse Code API key is missing. Sign in again."},
 	{prog: "goose", row: "Meta session expired. Sign in to Muse Code again."},
+	// goose 1.60.1: its cursor-agent provider not signed in, and a provider
+	// with nothing set up, each after the message it was given.
+	{prog: "goose", row: "error: Ran into this error: Authentication error: You are not logged in to cursor-agent. Please run 'cursor-agent login' to authenticate first.."},
+	{prog: "goose", row: "error: Ran into this error: Provider is not configured."},
 
 	{prog: "crush", row: `Please sign in to Hyper again. You can also run "crush login hyper --force".`},
 	{prog: "crush", row: "You are not logged in to any platform.", bottom: true},

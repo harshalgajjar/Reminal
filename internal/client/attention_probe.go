@@ -1029,6 +1029,13 @@ var attnPromptCues = []string{
 	// hint: shown by the theme picker alone (its /theme command's too, which
 	// asks the same of the person), whether the highlighting is on or off.
 	"(ctrl+t to disable)", "(ctrl+t to enable)",
+	// goose's tool approval ("Goose would like to call the above tool, do
+	// you allow?"), its question above the bottom rows, under it its
+	// choices "|" led, the one the cursor is on marked "> ": by the marked
+	// choice with its neighbour, wherever a key has moved the cursor. A
+	// table or list of the same words has no "> " in it.
+	"|  > allow (allow the tool call once)", "|    allow\n|  > always allow",
+	"|    always allow\n|  > deny", "|    deny\n|  > cancel",
 }
 
 // The screen is read as text: the render carries its styling, and Claude

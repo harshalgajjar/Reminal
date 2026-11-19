@@ -1,0 +1,40 @@
+
+    __( O)>  ● new session · muse_code claude-sonnet-4-5
+   \____)    20261119_1 · /tmp
+     L L     goose is ready
+  ⏳ loading extensions in background...
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 0% 0/200k
+> hello
+  ✓ extensions ready
+
+
+error: Ran into this error: Provider is not configured.
+
+Please retry if you think this is a transient or recoverable error.
+
+  ⏱ 0.15s
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌ 0% 0/200k
+> Enter to send · Ctrl+J newline
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
