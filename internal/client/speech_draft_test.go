@@ -188,3 +188,22 @@ func TestVoicePlaceholderIsReadByItsWords(t *testing.T) {
 		}
 	}
 }
+
+// Colour in its colon form reads as in its semicolon form.
+func TestStyledCellsReadColonColours(t *testing.T) {
+	for _, c := range []struct{ seq, fg string }{
+		{"\x1b[38:5:103mx", "38;5;103"},
+		{"\x1b[38;5;103mx", "38;5;103"},
+		{"\x1b[38:2::168:168:168mx", "38;2;168;168;168"},
+		{"\x1b[38:2:168:168:168mx", "38;2;168;168;168"},
+		{"\x1b[38;2;168;168;168mx", "38;2;168;168;168"},
+	} {
+		if cells := styledCells(c.seq); len(cells) != 1 || cells[0].fg != c.fg {
+			t.Errorf("%q: fg %q, want %q", c.seq, cells[0].fg, c.fg)
+		}
+	}
+	rule := strings.Repeat("─", 40)
+	if voiceBoxDraft("qwen", rule+"\n\x1b[38;5;153m> \x1b[0m\x1b[4m \x1b[0m\x1b[38:5:103m Type your\n"+rule+"\n") {
+		t.Error("qwen placeholder start in the colon colour form read as a draft")
+	}
+}

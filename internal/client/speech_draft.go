@@ -231,6 +231,17 @@ func applySGR(c *styledCell, params string) {
 			c.underlne = false
 		case p == "39":
 			c.fg = ""
+		case strings.HasPrefix(p, "38:"):
+			// The colon form: 38:5:N, or 38:2:R:G:B (with an empty colour
+			// space, 38:2::R:G:B).
+			sub := strings.Split(p, ":")
+			switch {
+			case len(sub) == 3 && sub[1] == "5":
+				c.fg = "38;5;" + sub[2]
+			case len(sub) >= 5 && sub[1] == "2":
+				rgb := sub[len(sub)-3:]
+				c.fg = "38;2;" + rgb[0] + ";" + rgb[1] + ";" + rgb[2]
+			}
 		case p == "38" && i+2 < len(ps) && ps[i+1] == "5":
 			c.fg = "38;5;" + ps[i+2]
 			i += 2
