@@ -194,12 +194,18 @@ var (
 )
 
 // voiceShellModes are, by program, the box in a mode where Return runs the
-// line as a shell command (Claude Code, Qwen and Gemini all have one, "!"):
-// never typed into, and said plainly.
+// line as a shell command (Claude Code, Qwen and Gemini draw "!" for it;
+// OpenCode and Kilo label their box "Shell"): never typed into, and said
+// plainly.
 var voiceShellModes = map[string]*regexp.Regexp{
 	"claude": regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n[ \t]*!([ \t\x{00a0}][^\n]*)?$`),
 	"qwen":   regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n!([ \t\x{00a0}][^\n]*)?$`),
 	"gemini": regexp.MustCompile(`(?m)^[ \t]*▄{20,}\S?[ \t]*\n[ \t]*!([ \t\x{00a0}][^\n]*)?$`),
+	// OpenCode keeps its box in shell mode: the label row above its edge reads
+	// "Shell" (and its footer "esc exit shell mode", cut in a narrow window).
+	// Kilo draws OpenCode's box.
+	"opencode": regexp.MustCompile(`(?m)^[ \t]*┃[ \t]+Shell[ \t]*\n[ \t]*╹▀{8,}|esc exit shell mode`),
+	"kilo":     regexp.MustCompile(`(?m)^[ \t]*┃[ \t]+Shell[ \t]*\n[ \t]*╹▀{8,}|esc exit shell mode`),
 }
 
 // voiceBottomRows is the bottom voiceBoxRows non-empty rows of a screen,
