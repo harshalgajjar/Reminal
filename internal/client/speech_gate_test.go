@@ -475,3 +475,29 @@ func TestVoiceBoxNeedsItsClosingEdge(t *testing.T) {
 		t.Error("gemini box with no closing edge: found")
 	}
 }
+
+// OpenCode's shell mode keeps its box (its edge row stays), so the box test
+// alone would type into it; Return there runs the line as a command (proven
+// live: a said line created files). Its label row reads "Shell": refused.
+// Captured live, OpenCode integrated, at 120 and 80 columns.
+func TestSpeechRefusesOpenCodeShellMode(t *testing.T) {
+	for _, w := range []struct {
+		name       string
+		cols, rows int
+	}{{"w120", 120, 40}, {"w80", 80, 24}} {
+		for _, c := range []struct{ file, want string }{
+			{"o02-after-turn", ""},
+			{"o06-shell-mode-empty", speechShell},
+			{"o06b-shell-mode-cmd", speechShell},
+		} {
+			raw, err := os.ReadFile(filepath.Join("testdata", "voice-screens", "opencode-"+w.name+"-"+c.file+".txt"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := gateAgentSized(t, "opencode", "done", strings.ReplaceAll(string(raw), "\n", "\r\n"), w.cols, w.rows)
+			if got := a.speechBlocked(); got != c.want {
+				t.Errorf("opencode %s %s: speechBlocked = %q, want %q", w.name, c.file, got, c.want)
+			}
+		}
+	}
+}

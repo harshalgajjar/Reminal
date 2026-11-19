@@ -1,0 +1,24 @@
+
+     ▣  Build · M · 20.2s
+
+  ┃
+  ┃  please ask me
+  ┃
+
+     → Asked 1 question
+
+  ┃
+  ┃  please run the command
+  ┃
+
+     $ touch /tmp/APPROVED
+
+     ▣  Build · M
+
+  ┃
+  ┃  ls -la
+  ┃
+  ┃  Shell
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /w                                                      esc exit shell mode
+
