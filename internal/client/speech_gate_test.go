@@ -2,6 +2,8 @@ package client
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,14 +15,25 @@ import (
 // Agent at its prompt, a screen showing it: words go in.
 func gateAgent(t *testing.T, fg, state, screen string) *Agent {
 	t.Helper()
+	return gateAgentSized(t, fg, state, screen, 80, 24)
+}
+
+// gateAgentSized is gateAgent on a screen of the given size (captured
+// screens are as wide as the terminal they came from).
+func gateAgentSized(t *testing.T, fg, state, screen string, cols, rows int) *Agent {
+	t.Helper()
 	a, _, _ := speechAgent(t)
 	a.speech.blocked = nil                            // the real check
 	a.speech.hooked = func() string { return "done" } // an integrated agent whose hook has reported
 	a.attnFG, a.attnState = fg, state
-	a.screen = testScreen(t, 80, 24)
+	a.screen = testScreen(t, cols, rows)
 	_, _ = a.screen.Write([]byte(screen))
 	return a
 }
+
+// claudeAtBox is Claude Code at its input box: the box's top edge, its prompt
+// row, its bottom edge (what voiceBoxMarks looks for).
+const claudeAtBox = "\r\n────────────────────────────────────────────────────────────\r\n❯ \r\n────────────────────────────────────────────────────────────\r\n  ? for shortcuts\r\n"
 
 const claudeApprovalScreen = "\r\n Bash command\r\n   rm -rf build\r\n\r\n Do you want to proceed?\r\n ❯ 1. Yes\r\n   2. No, and tell Claude what to do differently (esc)\r\n"
 
@@ -28,8 +41,8 @@ func TestSpeechBlockedReadsWhatIsInFront(t *testing.T) {
 	for _, c := range []struct {
 		name, fg, state, screen, want string
 	}{
-		{"agent at its prompt", "claude", "done", "> \r\n", ""},
-		{"agent working", "claude", "working", "✻ Thinking… (esc to interrupt)\r\n", ""},
+		{"agent at its prompt", "claude", "done", claudeAtBox, ""},
+		{"agent working", "claude", "working", "✻ Thinking… (esc to interrupt)\r\n" + claudeAtBox, ""},
 		{"permission prompt", "claude", "input", claudeApprovalScreen, speechAsking},
 		// Drawn a moment ago: the state has not settled yet, the screen says it.
 		{"permission prompt not settled", "claude", "working", claudeApprovalScreen, speechAsking},
@@ -134,7 +147,7 @@ func TestSpeechLoneOptionKeyAtAPromptTypesNothing(t *testing.T) {
 // over: the probe has not said what is in front yet. It is not refused as
 // "no agent" when the probe, asked to look, finds one.
 func TestSpeechWaitsForTheProbesFirstLook(t *testing.T) {
-	a := gateAgent(t, "", "", "> \r\n")
+	a := gateAgent(t, "", "", claudeAtBox)
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		a.metaMu.Lock()
@@ -173,13 +186,13 @@ func TestSpeechWithNoScreenFailsClosedForMarkedAgents(t *testing.T) {
 	a, _, _ := speechAgent(t)
 	a.speech.blocked = nil
 	a.speech.hooked = func() string { return "done" }
-	a.attnFG, a.attnState = "opencode", "done"
+	a.attnFG, a.attnState = "claude", "done" // has a box mark: its box cannot be seen
 	if got := a.speechBlocked(); got != speechAsking {
-		t.Errorf("opencode, no screen: %q, want %q", got, speechAsking)
+		t.Errorf("claude, no screen: %q, want %q", got, speechAsking)
 	}
-	a.attnFG = "claude"
+	a.attnFG = "copilot" // no box mark: rests on its hook
 	if got := a.speechBlocked(); got != "" {
-		t.Errorf("claude, no screen, done: %q, want it allowed", got)
+		t.Errorf("copilot, no screen, done: %q, want it allowed", got)
 	}
 }
 
@@ -213,7 +226,7 @@ func TestSpeechNeedsAHookForAgentsWithoutABoxMark(t *testing.T) {
 // before it was restarted) is not this agent saying anything.
 func TestSpeechHookReportMustBeFromThisRun(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	a := gateAgent(t, "claude", "done", "> \r\n")
+	a := gateAgent(t, "claude", "done", claudeAtBox)
 	a.speech.hooked = nil
 	a.sessionID = "GATEHOOK"
 	if err := session.WriteHookState(a.sessionID, "done"); err != nil {
@@ -238,21 +251,11 @@ func TestSpeechHookReportMustBeFromThisRun(t *testing.T) {
 	}
 }
 
-// OpenCode and Kilo have a box mark: no hook is needed while it is on screen.
-func TestSpeechBoxMarkStandsInForAHook(t *testing.T) {
-	const box = "\r\n  ┃  Ask anything\r\n  ┃\r\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\r\n   enter send\r\n"
-	a := gateAgent(t, "opencode", "done", box)
-	a.speech.hooked = func() string { return "" }
-	if got := a.speechBlocked(); got != "" {
-		t.Fatalf("opencode at its box, no hook: speechBlocked = %q, want it allowed", got)
-	}
-}
-
 // A freshly started Claude Code reports "ready" (its SessionStart hook)
 // before any turn: words go in from its first moment, not after one typed turn.
 func TestSpeechReadyReportCountsForAFreshAgent(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	a := gateAgent(t, "claude", "done", "> \r\n")
+	a := gateAgent(t, "claude", "done", claudeAtBox)
 	a.speech.hooked = nil
 	a.sessionID = "GATEREADY"
 	a.attnFGAt = time.Now().Add(-time.Second)
@@ -285,9 +288,53 @@ func TestSpeechAgentWhoseHookCannotSayWaitingIsTypedIntoOnlyAtRest(t *testing.T)
 	}
 	// An agent whose hook does report waiting is typed into mid-turn (its
 	// "input" guards each prompt), as Claude Code is while it works.
-	c := gateAgent(t, "claude", "working", "✻ Thinking… (esc to interrupt)\r\n")
+	c := gateAgent(t, "claude", "working", "✻ Thinking… (esc to interrupt)\r\n"+claudeAtBox)
 	c.speech.hooked = func() string { return "working" }
 	if got := c.speechBlocked(); got != "" {
 		t.Errorf("claude mid-turn: speechBlocked = %q, want it allowed", got)
+	}
+}
+
+// The screens of real agents (testdata/voice-screens: Qwen Code 0.28.0 and
+// Gemini CLI 0.69.0 captured in Docker; Claude Code 2.1.326 as its screens
+// read at rest, at a tool approval and at the speak tool's approval). With
+// the hook reported, words go in only while the agent's box is on screen:
+// every dialog replaces it, whatever its words, including the kinds their
+// hooks never report (Qwen's question picker).
+func TestSpeechTypesOnlyWhileTheAgentsBoxIsOnScreen(t *testing.T) {
+	for _, c := range []struct{ prog, file, want string }{
+		{"claude", "claude-rest.txt", ""},
+		{"claude", "claude-permission.txt", speechAsking},
+		{"claude", "claude-speak-permission.txt", speechAsking},
+		{"qwen", "qwen-start.txt", ""},
+		{"qwen", "qwen-idle.txt", ""},
+		{"qwen", "qwen-after-voice.txt", ""},
+		{"qwen", "qwen-approval.txt", speechAsking},
+		{"qwen", "qwen-question.txt", speechAsking},
+		{"gemini", "gemini-start.txt", ""},
+		{"gemini", "gemini-after-voice.txt", ""},
+		{"gemini", "gemini-shell-approval.txt", speechAsking},
+		{"gemini", "gemini-question.txt", speechAsking},
+	} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "voice-screens", c.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		screen := strings.ReplaceAll(string(raw), "\n", "\r\n")
+		a := gateAgentSized(t, c.prog, "working", screen, 120, 40)
+		if got := a.speechBlocked(); got != c.want {
+			t.Errorf("%s on %s: speechBlocked = %q, want %q", c.prog, c.file, got, c.want)
+		}
+	}
+}
+
+// A box mark is not a reason on its own: the agent's hook must have
+// reported too (OpenCode without its plugin is not typed into).
+func TestSpeechBoxNeedsAHookToo(t *testing.T) {
+	const box = "\r\n  ┃  Ask anything\r\n  ┃\r\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\r\n   enter send\r\n"
+	a := gateAgent(t, "opencode", "done", box)
+	a.speech.hooked = func() string { return "" }
+	if got := a.speechBlocked(); got != speechNoHook {
+		t.Fatalf("opencode at its box, no hook: speechBlocked = %q, want %q", got, speechNoHook)
 	}
 }

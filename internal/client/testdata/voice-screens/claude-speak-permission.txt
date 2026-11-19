@@ -1,0 +1,18 @@
+ ▐▛███▛█   Claude Code v2.1.326
+▝▜██████▀  Opus 5.5 · Claude Team
+ ▝▝   ▝▝   /work
+
+❯ [voice] What is two plus two? Answer me out loud
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ Tool use
+
+   reminal - speak(text: "Two plus two is four.") (MCP)
+   Say something out loud to the person talking to you by voice in reminal.
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for reminal - Speak commands in /work
+   3. No
+
+ Esc to cancel · Tab to amend

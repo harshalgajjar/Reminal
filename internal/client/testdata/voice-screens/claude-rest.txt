@@ -1,0 +1,13 @@
+ ▐▛███▛█   Claude Code v2.1.326
+▝▜██████▀  Opus 5.5 · Claude Team
+ ▝▝   ▝▝   /work
+
+❯ [voice] What day comes after Monday?
+
+● reminal - speak (MCP)(text: "Tuesday comes after Monday.")
+  ⎿  Spoken.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

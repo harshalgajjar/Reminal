@@ -1,6 +1,7 @@
 package client
 
 import (
+	"regexp"
 	"strings"
 	"time"
 
@@ -50,10 +51,8 @@ func (a *Agent) speechBlocked() string {
 	case !isAgentProgram(fg):
 		return speechNoAgent
 	}
-	if attnPromptMarks[fg] == nil {
-		if why := a.hookBlocks(fg, since); why != "" {
-			return why
-		}
+	if why := a.hookBlocks(fg, since); why != "" {
+		return why
 	}
 	if state == "input" || a.promptOnScreenNow(fg) {
 		return speechAsking
@@ -137,13 +136,53 @@ func (a *Agent) hookReportSince(since time.Time) string {
 	return last
 }
 
+// voiceBoxMarks are, by program, the shape of the agent's input box at rest,
+// for voice alone: words go in only while it is on screen. A dialog the
+// agent draws (a tool approval, a question's picker, a trust or consent
+// screen) replaces the box or is drawn over it, whatever its words, so the
+// box being there is the positive test the hook cannot give for every kind
+// of prompt (Gemini's and Qwen's hooks report tool approvals only). Kept
+// apart from attnPromptMarks, which also decides the attention state: a mark
+// that misses a layout here costs a refused line, not a wrong badge.
+// Each is the box's top edge with the prompt row right under it; the row
+// must not be a numbered choice ("❯ 1. Yes").
+var voiceBoxMarks = map[string]*regexp.Regexp{
+	"claude": regexp.MustCompile(`(?m)^[ \t]*─{20,}[ \t]*\n[ \t]*❯(?:[ \t]*$|[ \t]+(?:[^0-9 \t]|[0-9]+[^.0-9]))`),
+	"qwen":   regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n>(?:[ \t]|$)`),
+	"gemini": regexp.MustCompile(`(?m)^[ \t]*▄{20,}[ \t]*\n[ \t]*>(?:[ \t]|$)`),
+}
+
+// voiceBoxRows is how many non-empty rows from the bottom the box is looked
+// for in: at rest an agent's box sits right above its footer. Close to the
+// bottom, because Gemini draws the messages already sent in the same box
+// shape, and a dialog drawn under one of them must not pass for the box.
+// Blank rows are skipped (some agents paint every row, some leave a gap).
+const voiceBoxRows = 7
+
+func voiceBoxDrawn(prog, render string) bool {
+	re := voiceBoxMarks[prog]
+	if re == nil {
+		return true
+	}
+	var rows []string
+	for _, row := range strings.Split(stripANSI(render), "\n") {
+		if strings.TrimSpace(row) != "" {
+			rows = append(rows, strings.TrimRight(row, " "))
+		}
+	}
+	if len(rows) > voiceBoxRows {
+		rows = rows[len(rows)-voiceBoxRows:]
+	}
+	return re.MatchString(strings.Join(rows, "\n"))
+}
+
 // promptOnScreenNow reads the screen itself: the attention state settles a
 // moment after a prompt is drawn, and words arriving in that moment must not
-// answer it. Two tests: a prompt's wording at the bottom of the screen, and,
-// for an agent whose input box has a mark of its own (attnPromptMarks:
-// OpenCode, Kilo), that mark not drawn now, as it is not when a dialog
-// (a permission prompt, a picker, a menu) is drawn over the box. For those
-// agents the test is positive: words go in only while their box is there.
+// answer it. Three tests: a prompt's wording at the bottom of the screen; for
+// OpenCode and Kilo (attnPromptMarks) their box's own mark not drawn now; and
+// for Claude Code, Qwen and Gemini (voiceBoxMarks) their input box not on
+// screen now. For agents with a box, the test is positive: words go in only
+// while it is there.
 func (a *Agent) promptOnScreenNow(prog string) bool {
 	a.screenMu.Lock()
 	scr := a.screen
@@ -153,9 +192,12 @@ func (a *Agent) promptOnScreenNow(prog string) bool {
 	}
 	a.screenMu.Unlock()
 	if scr == nil {
-		return attnPromptMarks[prog] != nil // its box cannot be seen: not typed into
+		return attnPromptMarks[prog] != nil || voiceBoxMarks[prog] != nil // its box cannot be seen: not typed into
 	}
 	if attnPromptMarks[prog] != nil && !attnPromptDrawn(prog, attentionProbeTail(render, attnTailRows)) {
+		return true
+	}
+	if !voiceBoxDrawn(prog, render) {
 		return true
 	}
 	return attnLooksLikePrompt(attentionProbeTail(render, attnPromptRows))

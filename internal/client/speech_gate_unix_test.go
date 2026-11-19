@@ -57,7 +57,7 @@ func TestSpeechGateAsksTheTerminalNotTheLastLook(t *testing.T) {
 		}
 	})
 
-	a := gateAgent(t, "claude", "done", "> \r\n") // what the probe last saw
+	a := gateAgent(t, "claude", "done", claudeAtBox) // what the probe last saw
 	a.term = term
 	end := time.Now().Add(5 * time.Second)
 	for a.speechBlocked() != speechNoAgent {
