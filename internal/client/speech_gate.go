@@ -107,8 +107,9 @@ func (a *Agent) inFront() (state, fg string, since time.Time) {
 var HookReportsWaiting = map[string]bool{
 	"claude": true, "copilot": true, "gemini": true, "qwen": true, // hooks with an "input" (or split "notify") event
 	"opencode": true, "kilo": true, // the plugin's permission.* events
-	"pi":  true,  // its extension
-	"agy": false, // PreInvocation and Stop only
+	"pi":           true,  // its extension
+	"agy":          false, // PreInvocation and Stop only
+	"cursor-agent": false, // beforeSubmitPrompt, stop and sessionStart: no waiting event
 }
 
 // hookBlocks says why the hook gives no positive reason to type into prog
