@@ -288,6 +288,11 @@ var harnessLoginScreens = map[string][]loginRow{
 		`(?:(?:error|ranintothiserror):)?authenticationfailed—checkyourapikey\.run.?gooseconfigure.?toupdateit`,
 		`(?:(?:error|ranintothiserror):)?musecodeapikeyismissing\.signinagain`,
 		`(?:(?:error|ranintothiserror):)?metasessionexpired\.signintomusecodeagain`,
+		// 1.60: its cursor-agent provider not signed in to cursor-agent, and
+		// a provider with nothing set up, each after the message it was given
+		// ("error: Ran into this error: …").
+		`(?:error:)?(?:ranintothiserror:)?authenticationerror:youarenotloggedintocursor-agent\.pleaserun.?cursor-agentlogin.?toauthenticatefirst`,
+		`(?:error:)?ranintothiserror:providerisnotconfigured`,
 	),
 	// Crush 0.98 with no provider: its first screen ("To start, let's choose
 	// a provider and model."), signing in to Hyper, and `crush run`'s error;
