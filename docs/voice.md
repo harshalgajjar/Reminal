@@ -76,6 +76,16 @@ report written in the second before the agent started can count.
 | `size.js` | Tells the viewer the panel's height before the libraries load. |
 | `NOTICE` | Licences of what the frame loads. |
 
+### The speak tool and reminal integrate
+
+`reminal integrate` allows reminal's `speak` tool, and only it, where the agent
+would ask before each call: Claude Code (`permissions.allow`), Gemini CLI (a
+policy rule at priority 0, below every rule the person wrote, and not written
+at all where they denied or asked for it) and Qwen Code (which also loads
+reminal's tools at start). Claude Code's plan mode still asks. When integrate
+rewrites a settings file, a very large integer in it loses precision (a
+standing issue of its settings writer, to be fixed on its own).
+
 ## Libraries and models
 
 Everything the frame loads comes from `/voice-assets/` on its own origin, at
