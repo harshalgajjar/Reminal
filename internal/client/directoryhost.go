@@ -386,16 +386,16 @@ func killLocalSession(id string) error {
 	return fmt.Errorf("session not found")
 }
 
-// forgetWhenGone waits for a session's agent, sent SIGTERM, to be gone, kills
-// it if it is still there after grace, and then forgets its restore record
-// again. The agent goes on saving it until it is gone (a save tick in the
-// moments it takes to die), and a record written back then brought a session
-// killed on purpose back at the next login.
 // forgetting counts the forgetWhenGone calls still running: they outlive the
 // kill that started them (up to a few seconds), and a test waits for them
 // before its home is removed, as they still write there (the record's lock).
 var forgetting sync.WaitGroup
 
+// forgetWhenGone waits for a session's agent, sent SIGTERM, to be gone, kills
+// it if it is still there after grace, and then forgets its restore record
+// again. The agent goes on saving it until it is gone (a save tick in the
+// moments it takes to die), and a record written back then brought a session
+// killed on purpose back at the next login.
 func forgetWhenGone(id string, pid int, alive func(int) bool, kill func(int) error, grace time.Duration) {
 	defer func() { _ = session.ClearRestore(id) }()
 	deadline := time.Now().Add(grace)
