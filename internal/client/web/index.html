@@ -347,6 +347,12 @@
     /* Share button only makes sense after a successful connect. */
     #share-btn { display: none; }
     body.connected #share-btn { display: inline-flex; }
+    /* Voice for a desktop viewer, beside Share: where the key bar and its mic
+       are not shown (a fine pointer, wider than a phone). voiceui.js drives it
+       as it does the key bar's mic. */
+    #voice-btn-desk { display: none; }
+    body.connected #voice-btn-desk { display: inline-flex; }
+    @media (pointer: coarse), (any-pointer: coarse), (max-width: 720px) { body.connected #voice-btn-desk { display: none; } }
 
     #share-modal {
       position: fixed; inset: 0; z-index: 100;
@@ -410,7 +416,7 @@
        share one footprint; colour is used only as an accent (green Connect, red
        Disconnect). Connect/Disconnect + Share carry their icon via ::before so
        the button's stateful textContent never wipes it. */
-    #recents > summary, #windows > summary, #connect-btn, #share-btn {
+    #recents > summary, #windows > summary, #connect-btn, #share-btn, #voice-btn-desk {
       display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
       gap: 3px; min-width: 46px; padding: 4px 7px; line-height: 1; white-space: nowrap;
       font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em;
@@ -418,7 +424,7 @@
     }
     #recents > summary:hover, #windows > summary:hover,
     #recents[open] > summary, #windows[open] > summary,
-    #connect-btn:hover, #share-btn:hover { background: #21262d; }
+    #connect-btn:hover, #share-btn:hover, #voice-btn-desk:hover { background: #21262d; }
     #recents > summary svg, #windows > summary svg, #apps > summary svg { width: 16px; height: 16px; opacity: 0.95; }
     #recents > summary .caret, #windows > summary .caret, #apps > summary .caret { display: none; }
     #connect-btn::before, #share-btn::before {
@@ -702,6 +708,75 @@
       /* Vertical drag is the snippet-dock gesture — never the bar's scroll. */
       touch-action: none;
     }
+    /* Voice (voiceui.js): the mic button (a drawn icon: no emoji in the UI), pinned left of ✂ as ✂ is left of the toggle,
+       and the panel it opens: the voice frame (web/voice), which hears and
+       speaks on this device and passes only text to this page. */
+    #voice-btn {
+      position: sticky;
+      right: 100px;
+      background: #161b22;
+      box-shadow: -8px 0 8px -4px #161b22;
+      /* The icon in the middle of the button: a block svg in a button sits
+         at its left edge otherwise. */
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: color .15s ease, border-color .15s ease, background-color .15s ease;
+    }
+    :is(#voice-btn, #voice-btn-desk) svg { display: block; }
+    /* The same colours as the panel's wave: green while it hears you,
+       purple while it speaks. */
+    :is(#voice-btn, #voice-btn-desk).on { color: #7ee787; border-color: #3fb950; }
+    :is(#voice-btn, #voice-btn-desk).hear { color: #7ee787; border-color: #3fb950; background: #12301b; }
+    :is(#voice-btn, #voice-btn-desk).speak { color: #d2a8ff; border-color: #a371f7; background: #2a1f3d; }
+    /* The session's reminal predates voice: the button looks off, and says why. */
+    :is(#voice-btn, #voice-btn-desk).novoice { opacity: .45; }
+    #voice-panel {
+      position: fixed;
+      right: 8px;
+      bottom: 64px;
+      width: min(440px, calc(100vw - 16px));
+      height: min(560px, calc(100vh - 140px));
+      z-index: 55;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #161b22; /* the docks' surface, as the frame's own is */
+      box-shadow: 0 8px 28px rgba(0, 0, 0, .5);
+    }
+    #voice-panel[hidden] { display: none; }
+    #voice-panel.sizing { visibility: hidden; }
+    #voice-panel:not([hidden]):not(.sizing) { animation: voice-panel-in .18s ease-out; transform-origin: 85% 100%; }
+    @keyframes voice-panel-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { #voice-panel:not([hidden]):not(.sizing) { animation: none; } }
+    #voice-panel iframe { width: 100%; height: 100%; border: 0; display: block; }
+    /* While voice is on, the mic button shows the sound in place of the mic:
+       five thin bars, green while it hears you, purple while it speaks,
+       dots when quiet. Same size as the button always is. */
+    :is(#voice-btn, #voice-btn-desk) .vbars { display: none; align-items: center; justify-content: center; gap: 2px; height: 18px; }
+    :is(#voice-btn, #voice-btn-desk).live svg { display: none; }
+    :is(#voice-btn, #voice-btn-desk).live .vbars { display: flex; }
+    :is(#voice-btn, #voice-btn-desk) .vbars i { display: block; flex: none; width: 2.5px; height: 3px; border-radius: 2px; background: #6e7681; transition: height .07s linear, background-color .15s ease; }
+    :is(#voice-btn, #voice-btn-desk) .vbars i.you { background: #3fb950; }
+    :is(#voice-btn, #voice-btn-desk) .vbars i.it { background: #a371f7; }
+    @media (prefers-reduced-motion: reduce) { :is(#voice-btn, #voice-btn-desk) .vbars i { transition: none; } }
+    /* Starting: a small spinner in place of the mic until it listens. */
+    :is(#voice-btn, #voice-btn-desk) .vspin { display: none; width: 14px; height: 14px; border-radius: 50%; border: 2px solid #30363d; border-top-color: #7ee787; animation: voice-spin .8s linear infinite; }
+    :is(#voice-btn, #voice-btn-desk).starting svg, :is(#voice-btn, #voice-btn-desk).starting .vbars { display: none; }
+    :is(#voice-btn, #voice-btn-desk).starting .vspin { display: block; }
+    @keyframes voice-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { :is(#voice-btn, #voice-btn-desk) .vspin { animation-duration: 2.4s; } }
+    /* The mic button's swipe-up dock: the snippet dock's twin. */
+    #voicedock {
+      display: none; position: fixed; flex-direction: column; gap: 2px;
+      min-width: 180px; max-width: 75vw; padding: 6px;
+      background: #161b22; border: 1px solid #30363d; border-radius: 12px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5); z-index: 56;
+      user-select: none; -webkit-user-select: none;
+    }
+    #voicedock.open { display: flex; }
+    /* The swipe dock's lines are plain words, not commands. */
+    #voicedock .meta { font-family: inherit; font-size: 12px; white-space: normal; max-width: 240px; }
     #settings-btn.on { color: #7ee787; border-color: #3fb950; }
     #settdock {
       display: none;
@@ -2217,6 +2292,7 @@
       <input id="pin-input" placeholder="PIN" maxlength="8" inputmode="numeric" autocomplete="off" spellcheck="false">
       <button id="connect-btn">Connect</button>
       <button id="share-btn" title="Show join URL + QR for this session">Share</button>
+      <button id="voice-btn-desk" title="Voice: talk to the agent in this session" aria-label="Voice"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg>Voice</button>
     </div>
     <div id="status" class="">Session + PIN required</div>
   </header>
@@ -2333,6 +2409,7 @@
     <button id="upload-btn" title="Upload file to host's ~/Downloads/reminal/">⇪ Upload</button>
     <input type="file" id="upload-input" multiple style="display:none">
     <button id="settings-btn" title="Settings">⚙</button>
+    <button id="voice-btn" title="Voice: talk to the agent in this session" aria-label="Voice"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/></svg></button>
     <button id="snip-btn" title="Snippets — drag up to paste, tap to manage">✂</button>
     <button id="keybar-toggle" title="Hide / show the key bar">≡</button>
   </div>
@@ -2348,5 +2425,6 @@
   <script data-build="pick"></script>
   <script data-build="app"></script>
   <script data-build="moments"></script>
+  <script data-build="voiceui"></script>
 </body>
 </html>

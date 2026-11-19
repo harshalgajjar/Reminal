@@ -96,3 +96,11 @@ TUNNEL_SUFFIX = "reminal.app"
 # relay forwards no alert ("not set up"). Changing it asks every phone to
 # renew its alerts.
 VAPID_PUBLIC = "BLCthPsa5_VDrbVEMtDk6NUXowUbqY8n2hetWbpzjg-hR6-FC-nWC85emykddL6mqTx3P1jfaewicVW5237_YC4"
+
+# The voice panel's libraries and models at fixed versions, served at
+# /voice-assets/<path> (src/voiceassets.ts). Laid out by the voice mirror
+# script; the Worker only reads it. Create the bucket before deploying:
+# `wrangler r2 bucket create reminal-voice-assets`.
+[[r2_buckets]]
+binding = "VOICE_ASSETS"
+bucket_name = "reminal-voice-assets"

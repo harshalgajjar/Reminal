@@ -187,6 +187,8 @@ var forwardableTypes = map[protocol.MessageType]bool{
 	// relay while working through the hosted one, which inspects nothing and
 	// so cannot leave a type behind.
 	protocol.TypeNotify: true, protocol.TypeDownload: true,
+	// Voice: what the agent says, and what a viewer said back (speech.go).
+	protocol.TypeSpeech: true, protocol.TypeSpeechIn: true,
 	protocol.TypeWindowNotes: true, protocol.TypeWindowNoteAct: true,
 	protocol.TypeUpload: true, protocol.TypeUploadAck: true,
 	protocol.TypeChangelog: true, protocol.TypeUpgrade: true, protocol.TypeSwitchChannel: true,

@@ -308,6 +308,9 @@ func (s *Session) Pid() int { return s.pid }
 // detection falls back to the alt-screen signal there. Returns 0.
 func (s *Session) ForegroundPgrp() int { return 0 }
 
+// HidesInput: a console cannot be asked whether it echoes, so never.
+func (s *Session) HidesInput() bool { return false }
+
 func (s *Session) CopyFrom(r io.Reader, done chan<- struct{}) {
 	defer close(done)
 	_, _ = io.Copy(s, r)

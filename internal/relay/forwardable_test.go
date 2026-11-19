@@ -31,6 +31,8 @@ func TestForwardableTypesCoverAgentViewerFeatures(t *testing.T) {
 		// WebRTC signalling
 		protocol.TypeWebRTCHello, protocol.TypeWebRTCOffer,
 		protocol.TypeWebRTCAnswer, protocol.TypeWebRTCICE,
+		// voice: what the agent says, and what a viewer said back
+		protocol.TypeSpeech, protocol.TypeSpeechIn,
 	}
 	for _, mt := range required {
 		if !forwardableTypes[mt] {

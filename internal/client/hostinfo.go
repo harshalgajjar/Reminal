@@ -70,6 +70,8 @@ func (a *Agent) hostInfoMsg(withPIN bool) (protocol.Message, bool) {
 	info.Sessions = countRestartableSessions()
 	a.metaMu.Lock()
 	info.Attn = a.attnState
+	info.Name = a.name
+	info.Voice = true
 	a.metaMu.Unlock()
 	// Owners connect PIN-free, so the browser never typed the PIN. The share
 	// menu still needs it to mint a Join link / `reminal connect` line, and
@@ -181,6 +183,16 @@ type HostInfo struct {
 	// goes back to idle, or its pill sticks on the last non-idle state forever.
 	// (That was a real bug: `omitempty` swallowed the idle transition.)
 	Attn string `json:"attn"`
+	// Name is the session's own name, as `reminal list` shows it ("" when it
+	// has none): what the viewer calls the agent here, in voice's
+	// conversation, rather than a generic "Agent".
+	Name string `json:"name,omitempty"`
+	// Voice says this reminal takes voice (speech.go: speech_in typed in, the
+	// speak tool heard): the viewer offers its mic only where it is set. An
+	// older reminal leaves it out, and the viewer says voice needs a newer
+	// one there. (The other way round needs nothing: an older viewer has no
+	// mic, so it never sends speech_in.)
+	Voice bool `json:"voice,omitempty"`
 	// Battery* are the machine's power state, as the directory reply carries
 	// them (same names, same meaning), so the Host panel shows the battery the
 	// machines list does. A machine with no battery, and an older host, send

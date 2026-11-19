@@ -291,3 +291,19 @@ func (s *Session) EndedBySignal() bool {
 func (s *Session) WriteCancel(p []byte, stop <-chan struct{}) (int, error) {
 	return writeCancel(s.ptmx, p, stop)
 }
+
+// HidesInput says whether what is typed now would not be shown: the terminal
+// reads whole lines with echo off, as a password prompt does (sudo, ssh, a
+// passphrase). A program reading keys one at a time (an agent's screen, a
+// shell's line editor) turns echo off too and draws the keys itself, so only
+// the two together mean "hidden". False when it cannot be read.
+func (s *Session) HidesInput() bool {
+	var t *unix.Termios
+	if s.withFd(func(fd int) (err error) {
+		t, err = unix.IoctlGetTermios(fd, getTermios)
+		return err
+	}) != nil {
+		return false
+	}
+	return t.Lflag&unix.ICANON != 0 && t.Lflag&unix.ECHO == 0
+}

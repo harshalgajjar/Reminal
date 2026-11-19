@@ -135,3 +135,13 @@ func TestWranglerTomlKeepsItsKeysAboveItsTables(t *testing.T) {
 		}
 	}
 }
+
+// The voice frame's integrity check holds against a server that lies about
+// lengths, chunks or encoding (voice/assets/integrity.test.mjs).
+func TestVoiceIntegrityAgainstALyingServer(t *testing.T) {
+	node := nodeOrSkip(t)
+	cmd := exec.Command(node, "--test", filepath.Join("..", "voice", "assets", "integrity.test.mjs"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}

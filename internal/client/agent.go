@@ -74,7 +74,9 @@ const (
 
 type Agent struct {
 	sessionID string
-	pin       string
+	// speech is voice: who listens, and whether they talked over it (speech.go).
+	speech speechState
+	pin    string
 	// pinHash is the legacy bcrypt(PIN) credential. Still generated (and carried
 	// across hot-restart) so we can prove control of a pre-existing session while
 	// migrating it, but it is only sent to the relay when sendPinHash is set.
@@ -3501,6 +3503,10 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 			a.enqueueWinOp(func() { a.handleWindowList(conn) })
 		case protocol.TypeWindowNoteAct:
 			a.handleNoteAct(msg)
+		case protocol.TypeSpeechIn:
+			// Voice: what a viewer said (typed in for it, as its keystrokes
+			// would be), that it talked over the agent, or that it listens.
+			a.handleSpeechIn(msg.Data)
 		case protocol.TypeWindowCtl:
 			d := msg.Data
 			a.enqueueWinOp(func() { a.handleWindowCtl(d) })

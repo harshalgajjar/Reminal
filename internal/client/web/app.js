@@ -435,6 +435,8 @@
         wakeAgentBack(sessionId, info.attn || '');
         if (window.reminalMoments) try { reminalMoments.attn(sessionId, info.attn || ''); } catch (_) {}
       }
+      // Voice: whether this session's reminal takes it, and the agent's state.
+      if (sessionId && window.reminalVoice) try { reminalVoice.hostInfo(info); } catch (_) {}
       renderHost();
     }
 
@@ -8040,6 +8042,17 @@
           } catch (_) {}
           break;
         }
+        case 'speech': {
+          // A line the agent said with reminal's speak tool: to the voice
+          // frame, which says it (nothing happens if voice was never opened).
+          if (!cryptoKey) break;
+          try {
+            const bytes = await decrypt(cryptoKey, msg.data);
+            const payload = JSON.parse(new TextDecoder().decode(bytes));
+            if (window.reminalVoice) reminalVoice.speech(payload.text || '', payload.notice || '');
+          } catch (_) {}
+          break;
+        }
         case 'window_notes': {
           if (!cryptoKey) break;
           try {
@@ -11128,6 +11141,8 @@
     // are that machine's, so they go too, and the panels say they are loading.
     function forgetHostState(sameMachine) {
       if (typeof closeAllPanes === 'function') { try { closeAllPanes(); } catch (_) {} }
+      // Voice goes with the session shown (voiceui.js).
+      if (window.reminalVoice) try { reminalVoice.sessionChanged(); } catch (_) {}
       if (sameMachine) return;
       winList = []; winHint = ''; winCaptureBlocked = false;
       appList = []; pendingLaunch = null;
@@ -13701,6 +13716,7 @@
         search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
         check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>'),
         moon: svg('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
+        mic: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/>'),
         spark: svg('<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/>'),
       };
       // Small inline glyphs for naming controls inside a sentence, drawn as
@@ -13730,6 +13746,8 @@
         const cs = getComputedStyle(el);
         return cs.visibility !== 'hidden' && cs.display !== 'none';
       }
+      // The voice mic on screen: the header's (desktop) or the key bar's.
+      const voiceMic = () => [$('voice-btn-desk'), $('voice-btn')].find(shown) || null;
       const closeMenus = () => ['recents', 'windows', 'apps', 'host'].forEach((m) => { const d = $(m); if (d && d.open) d.open = false; });
       const summary = (id) => { const d = $(id); return d && d.querySelector('summary'); };
       // The key bar scrolls sideways under the pinned ✂ and ≡, so a group
@@ -13885,6 +13903,14 @@
           title: 'Moments worth sharing',
           body: () => 'Share also turns this session into cards: a <b>receipt</b> of what the agent did, a sped-up <b>timelapse</b>, a <b>meme</b> of its best line, a phone shot, and your week as stories.',
           tips: () => ['When the agent says something meme-worthy, a ✦ note offers to make the meme', (touchUI() ? 'Select text and tap Meme' : 'Select text, then Share, then Meme') + ' to make one from any line', 'Made on this device, with secrets, user names and this machine’s name hidden. Look before you post.'],
+        },
+        {
+          // The mic shown here: the header's on a desktop, the key bar's on a
+          // phone (voiceui.js).
+          id: 'voice', icon: I.mic, when: () => connected() && !!voiceMic(),
+          target: () => voiceMic(),
+          title: 'Talk to the agent',
+          body: () => 'Tap the mic and say what you want: it is typed in for the agent, marked as said out loud, and the agent answers by voice. Hearing and speaking happen on this device; only text goes to the session.',
         },
         {
           id: 'leave', icon: I.exit, when: connected, target: () => $('connect-btn'),
@@ -14310,6 +14336,8 @@
         const busy = document.querySelector('details[open]') ||
           ($('share-modal') && getComputedStyle($('share-modal')).display !== 'none') ||
           (window.reminalMoments && reminalMoments.isOpen()) ||
+          // Nor over voice in use: its mic and panel stay reachable.
+          (window.reminalVoice && reminalVoice.busy()) ||
           Date.now() - lastTermKeyAt < TOUR_TYPING_PAUSE_MS ||
           (!connected() && isField(el) && !isTermKeys(el) && el.value !== '');
         const ready = !waitForSession || connected() || Date.now() - t0 > 6000;

@@ -132,7 +132,7 @@ func TestViewerPolicyAllowsOnlyWhatThePageUses(t *testing.T) {
 		"style-src":    "'unsafe-inline' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css",
 		"font-src":     "https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2 https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/GeistMono-Variable.woff2",
 		"worker-src":   "'self'",
-		"frame-src":    "blob:",
+		"frame-src":    "'self' blob:", // blob: a previewed PDF; 'self': the voice frame (web/voice)
 		"manifest-src": "'self'",
 		"object-src":   "'none'",
 		"base-uri":     "'none'",

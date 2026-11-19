@@ -32,12 +32,12 @@ import (
 // fetch and sockets (ws/wss included), data: and blob: images, the xterm
 // stylesheet and inline styles, the tour's two fonts, its service workers,
 // and blob: frames for a previewed PDF.
-const viewerCSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js; style-src 'unsafe-inline' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css; font-src https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2 https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/GeistMono-Variable.woff2; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; frame-src blob:; manifest-src 'self'"
+const viewerCSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js; style-src 'unsafe-inline' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css; font-src https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2 https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/GeistMono-Variable.woff2; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; frame-src 'self' blob:; manifest-src 'self'"
 
 // The page's sources and what build.json copies (a test holds every copy
 // entry embedded).
 //
-//go:embed web/index.html web/build.json web/app.js web/moments.js web/header.js web/pick.js web/reload.js web/sw.js web/manifest.webmanifest web/icons web/vendor
+//go:embed web/index.html web/build.json web/app.js web/moments.js web/header.js web/pick.js web/voiceui.js web/reload.js web/sw.js web/manifest.webmanifest web/icons web/vendor web/voice
 var webIndex embed.FS
 
 // viewer is the page this binary serves, rendered once from the sources it
@@ -64,9 +64,54 @@ func viewerPage() (viewerbuild.Page, error) {
 	return p, err
 }
 
+// voiceCSP is the voice frame's policy (web/voice), and must stay the same as
+// the one for /voice/* in cloudflare/public/_headers; a test compares them.
+// The frame recognises speech and makes the voice on the person's device, so
+// it loads its libraries and models and runs WebAssembly; the page that
+// holds the session's keys does neither. Every library and model comes from
+// this origin's /voice-assets/ (served by us at fixed versions, see
+// voice_assets.go), so the policy names no other host.
+//
+// The frame is on the viewer's own origin (its models, downloaded once, stay
+// in that origin's storage), so code running in it could reach the viewer
+// that framed it. That is why nothing from /voice-assets/ runs or is used
+// until its bytes match the SHA-256 that reminal itself ships (web/voice/
+// integrity.js and hashes.js): checked files are loaded from blob: URLs,
+// which is what blob: is for in script-src, worker-src and connect-src.
+const voiceCSP = "default-src 'none'; frame-ancestors 'self'; base-uri 'none'; object-src 'none'; form-action 'none'; script-src 'self' 'wasm-unsafe-eval' blob:; style-src 'unsafe-inline'; connect-src 'self' blob:; worker-src 'self' blob:; img-src 'self' data:"
+
+// voiceHeaders are the voice frame's: its own policy, framable by the viewer
+// only, and never cached across a rebuild.
+var voiceHeaders = map[string]string{
+	"Content-Security-Policy": voiceCSP,
+	"X-Frame-Options":         "SAMEORIGIN",
+	"Referrer-Policy":         "no-referrer",
+	"Cache-Control":           "no-cache",
+}
+
 // copiedHeaders are the headers of a file build.json copies, beyond its type,
 // as the Worker serves it (cloudflare/public/_headers adds its own).
 var copiedHeaders = map[string]map[string]string{
+	"voice/voice.html":      voiceHeaders,
+	"voice/voice.js":        voiceHeaders,
+	"voice/size.js":         voiceHeaders,
+	"voice/stt-worker.js":   voiceHeaders,
+	"voice/tts-worker.js":   voiceHeaders,
+	"voice/kokoro.js":       voiceHeaders,
+	"voice/g2p.js":          voiceHeaders,
+	"voice/cmudict.txt":     voiceHeaders,
+	"voice/NOTICE":          voiceHeaders,
+	"voice/assets.js":       voiceHeaders,
+	"voice/integrity.js":    voiceHeaders,
+	"voice/hashes.js":       voiceHeaders,
+	"voice/tuning.js":       voiceHeaders,
+	"voice/speakable.js":    voiceHeaders,
+	"voice/turn-model.js":   voiceHeaders,
+	"voice/bridge.js":       voiceHeaders,
+	"voice/panel.js":        voiceHeaders,
+	"voice/level.js":        voiceHeaders,
+	"voice/speaker.js":      voiceHeaders,
+	"voice/conversation.js": voiceHeaders,
 	// The page's guard for its own scripts: at a fixed path, unhashed, so it
 	// loads even when the build the page names is gone.
 	"reload.js": {"Cache-Control": "no-cache"},
@@ -165,6 +210,8 @@ func relayMux() *http.ServeMux {
 	if s, _, err := viewer(); err == nil {
 		serveCopied(mux, s)
 	}
+	// The voice panel's libraries and models, from the hosted viewer.
+	serveVoiceAssets(mux)
 	// The page's own scripts (internal/viewerbuild): named by their content,
 	// so kept for good — a page names exactly the build it was made with,
 	// and a new build is a new name. As the Worker serves them (_headers).

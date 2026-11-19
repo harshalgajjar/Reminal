@@ -3,10 +3,11 @@ import { RendezvousRoom } from "./rendezvous";
 import { handlePush, handlePushKey, handlePushToken, type PushEnv } from "./push";
 import { RateLimiter, allow, inIsolate, type LimiterEnv } from "./limiter";
 import { addressGroup } from "./session";
+import { handleVoiceAsset, voiceAssetsTooMany, VOICE_ASSETS_PREFIX, type VoiceAssetsEnv } from "./voiceassets";
 
 export { SessionRoom, RendezvousRoom, RateLimiter };
 
-export interface Env extends PushEnv, LimiterEnv {
+export interface Env extends PushEnv, LimiterEnv, VoiceAssetsEnv {
   SESSION: DurableObjectNamespace;
   RENDEZVOUS: DurableObjectNamespace;
   ASSETS: Fetcher;
@@ -60,7 +61,6 @@ const AGENT_SOCKETS_PER_MIN = 1200;
 const TUNNEL_PER_MIN = 1200;
 const socketAsks = new Map<string, number[]>();
 const agentSocketAsks = new Map<string, number[]>();
-const tunnelAsks = new Map<string, number[]>();
 
 function caller(request: Request): string {
   return addressGroup(request.headers.get("cf-connecting-ip") ?? "");
@@ -73,30 +73,38 @@ async function socketsWithin(env: Env, request: Request, machine: boolean): Prom
   return c === true || (c === null && inIsolate(counts, who, perMin, 60));
 }
 
-// A forwarded app's requests are many (a page is its assets), so the limiter
-// is not asked for each: this isolate counts every one, and the limiter is
-// asked once for each TUNNEL_BATCH of a caller's requests here — counting
-// batches, TUNNEL_PER_MIN / TUNNEL_BATCH of them a minute — its answer
-// standing for the whole batch, those that come while it is asked included.
-// A batch lasts no longer than the minute it was counted in.
-const TUNNEL_BATCH = 20;
-const tunnelBatches = new Map<string, { left: number; at: number; ok: Promise<boolean> }>();
-
-async function tunnelWithin(env: Env, request: Request): Promise<boolean> {
-  const who = caller(request);
-  if (!inIsolate(tunnelAsks, who, TUNNEL_PER_MIN, 60)) return false;
-  const now = Date.now();
-  let b = tunnelBatches.get(who);
-  tunnelBatches.delete(who);
-  if (!b || b.left <= 0 || now - b.at >= 60_000) {
-    b = { left: TUNNEL_BATCH, at: now, ok: allow(env, "tunnel", who, TUNNEL_PER_MIN / TUNNEL_BATCH, 60).then((c) => c !== false) };
-  }
-  b.left--;
-  // Most recently asked last: past 5000 callers, the oldest half goes.
-  tunnelBatches.set(who, b);
-  if (tunnelBatches.size > 5000) for (const k of [...tunnelBatches.keys()].slice(0, 2500)) tunnelBatches.delete(k);
-  return b.ok;
+// A forwarded app's requests are many (a page is its assets), and so are the
+// voice panel's (its libraries and models, some read in ranges), so the
+// limiter is not asked for each: this isolate counts every one, and the
+// limiter is asked once for each batch of a caller's requests here (counting
+// batches, perMin / batch of them a minute), its answer standing for the
+// whole batch, those that come while it is asked included. A batch lasts no
+// longer than the minute it was counted in.
+function batchedWithin(scope: string, perMin: number, batch: number) {
+  const asks = new Map<string, number[]>();
+  const batches = new Map<string, { left: number; at: number; ok: Promise<boolean> }>();
+  return async (env: Env, request: Request): Promise<boolean> => {
+    const who = caller(request);
+    if (!inIsolate(asks, who, perMin, 60)) return false;
+    const now = Date.now();
+    let b = batches.get(who);
+    batches.delete(who);
+    if (!b || b.left <= 0 || now - b.at >= 60_000) {
+      b = { left: batch, at: now, ok: allow(env, scope, who, perMin / batch, 60).then((c) => c !== false) };
+    }
+    b.left--;
+    // Most recently asked last: past 5000 callers, the oldest half goes.
+    batches.set(who, b);
+    if (batches.size > 5000) for (const k of [...batches.keys()].slice(0, 2500)) batches.delete(k);
+    return b.ok;
+  };
 }
+const TUNNEL_BATCH = 20;
+const tunnelWithin = batchedWithin("tunnel", TUNNEL_PER_MIN, TUNNEL_BATCH);
+// The voice panel's first load is a few dozen files; a page reloaded often,
+// or many people behind one address, stay well inside this.
+const VOICE_ASSETS_PER_MIN = 600;
+const voiceAssetsWithin = batchedWithin("voice-assets", VOICE_ASSETS_PER_MIN, 20);
 
 function tooMany(): Response {
   return new Response("too many requests — try again in a minute", { status: 429 });
@@ -245,6 +253,13 @@ export default {
     if (url.pathname === "/push/key") return handlePushKey(env);
     if (url.pathname === "/push") return handlePush(request, env);
     if (url.pathname === "/push/token") return handlePushToken(request, env);
+
+    // The voice panel's libraries and models, from our R2 bucket (see
+    // voiceassets.ts). Relay host only, as above.
+    if (url.pathname.startsWith(VOICE_ASSETS_PREFIX)) {
+      if (!(await voiceAssetsWithin(env, request))) return voiceAssetsTooMany();
+      return handleVoiceAsset(request, env);
+    }
 
     // Version beacon: the online, maintainer-controlled critical-upgrade switch.
     // Clients fetch this during their ≤24h version check; if their version is

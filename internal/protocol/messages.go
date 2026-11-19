@@ -182,6 +182,18 @@ const (
 	// every viewer ("build done", "tests passed"). Payload after decrypt
 	// is JSON: {"message": "..."}.
 	TypeNotify MessageType = "notify"
+	// TypeSpeech is agent→viewer: a line the agent says out loud with the
+	// MCP speak tool, for a viewer that has voice on (internal/client/
+	// speech.go). Payload after decrypt is JSON: {"text": "..."}.
+	TypeSpeech MessageType = "speech"
+	// TypeSpeechIn is viewer→agent, from a viewer with voice on. Data =
+	// encrypted JSON {"kind":"listening","on":bool} (voice on, sent every
+	// few seconds), {"kind":"said","text":"..."} (typed into the session
+	// as "[voice] ..." and Return), {"kind":"part","text":"..."} (long talk
+	// still going on, typed in as "[voice, continues] ..."), or
+	// {"kind":"cut","text":"..."} (the person talked over it; text =
+	// what they had heard).
+	TypeSpeechIn MessageType = "speech_in"
 	// TypeUploadAck is sent by the agent after a viewer-initiated upload
 	// is written to disk. Broadcast to all viewers (so the originator
 	// gets it back), but only the viewer whose upload_id matches will

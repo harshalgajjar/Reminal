@@ -219,6 +219,14 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			return
 		}
 		_, _ = fmt.Fprintln(conn, "ok", body)
+	case strings.HasPrefix(line, "speak "):
+		// The MCP speak tool: say this to the viewers listening by voice.
+		status, err := a.handleSpeakControl(strings.TrimPrefix(line, "speak "))
+		if err != nil {
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		_, _ = fmt.Fprintln(conn, "ok", status)
 	case strings.HasPrefix(line, "notify "):
 		msg := strings.TrimSpace(strings.TrimPrefix(line, "notify "))
 		if err := a.broadcastNotify(msg); err != nil {
