@@ -590,6 +590,11 @@ type IntegrationStatus struct {
 	// whether this agent supports them at all.
 	Hooks       bool `json:"hooks"`
 	HooksWanted bool `json:"hooks_wanted"`
+	// Speak is whether the agent's own permissions allow reminal's speak
+	// tool without asking (and, for Qwen Code, load reminal's tools up
+	// front); SpeakWanted whether integrate sets that for this agent.
+	Speak       bool `json:"speak,omitempty"`
+	SpeakWanted bool `json:"speak_wanted,omitempty"`
 	// Known is false when reminal cannot read this agent's registration back
 	// (no config format it understands) — Integrated is then meaningless.
 	Known bool `json:"known"`

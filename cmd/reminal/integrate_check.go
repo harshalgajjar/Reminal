@@ -113,6 +113,13 @@ func checkIntegration(t agentTarget, home, exe string) protocol.IntegrationStatu
 	if t.plugin != nil && st.Current && !pluginCurrent(t.plugin, home, exe) {
 		st.Current = false
 	}
+	// Set up by a reminal from before speak was allowed (or, for Qwen,
+	// before its tools were loaded up front): said, so re-running integrate
+	// is known to be what a spoken answer that waits on the screen needs.
+	if t.speak != nil {
+		st.SpeakWanted = true
+		st.Speak = t.speak.allowed(home)
+	}
 	return st
 }
 
