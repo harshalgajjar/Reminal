@@ -18,13 +18,16 @@ import (
 //   - The cursor: a space cell drawn in reverse video (Claude Code) or
 //     underlined (Qwen).
 //   - A placeholder, by agent, as captured (raw styled screens of each):
-//     Qwen Code 0.28.0 draws "Type your message or @path/to/file" in
-//     256-colour 103; Gemini CLI 0.69.0 the same words in 256-colour 248
-//     (its typed text is 231). Claude Code 2.1.328 and 2.1.326 drew none in
-//     any captured state (fresh, after a turn, after /clear, after a cleared
-//     draft); a suggestion shown only to a signed-in user could not be
-//     captured, so for Claude text drawn only faint is read as a
-//     placeholder (typed text is never faint), and anything else as typed.
+//     Qwen Code 0.28.0 and Gemini CLI 0.69.0 draw "Type your message or
+//     @path/to/file": read as empty by its words, whatever its colour (a
+//     prefix of them when a narrow window cuts it); as a second way in, by
+//     the colour each was captured in: Qwen 256-colour 103, Gemini
+//     256-colour 248 (its typed text is 231). Claude Code 2.1.328 and
+//     2.1.326 drew none in any captured state (fresh, after a turn, after
+//     /clear, after a cleared draft); a suggestion shown only to a
+//     signed-in user could not be captured, so for Claude text drawn only
+//     faint is read as a placeholder (typed text is never faint), and
+//     anything else as typed.
 //   - Qwen ends a draft's rows with a zero-width space: not typed text.
 //   - Anything else after the sign, or on the draft's own rows before the
 //     box's closing edge, is typed text.
@@ -118,15 +121,42 @@ func typedAfterSign(prog, row string) bool {
 func typedIn(prog, row string) bool { return typedCells(prog, styledCells(row)) }
 
 func typedCells(prog string, cells []styledCell) bool {
+	var rest strings.Builder
 	for _, c := range cells {
 		switch {
 		case c.cursor(), voicePlaceholder(prog, c):
-		case c.r == ' ' || c.r == '\u00a0' || c.r == '\u200b':
+		case c.r == ' ' || c.r == '​':
+			rest.WriteRune(' ')
 		default:
-			return true
+			rest.WriteRune(c.r)
 		}
 	}
-	return false
+	text := strings.Join(strings.Fields(rest.String()), " ")
+	return text != "" && !isPlaceholderText(prog, text)
+}
+
+// voicePlaceholderText is, by agent, its placeholder's words, read as empty
+// whatever colour they are drawn in: a true-colour terminal, another theme
+// or none at all draws them otherwise than the captures (TERM in a reminal
+// session is xterm-256color, but COLORTERM is passed on from wherever
+// reminal was started). Nobody types those exact words as a draft, and
+// sending them would be harmless.
+var voicePlaceholderText = map[string]string{
+	"qwen":   "Type your message or @path/to/file",
+	"gemini": "Type your message or @path/to/file",
+}
+
+// voicePlaceholderCut is how much of a placeholder a narrow window must show
+// for what is left of it to be read as the placeholder, cut at the box's
+// edge.
+const voicePlaceholderCut = 12
+
+func isPlaceholderText(prog, text string) bool {
+	ph := voicePlaceholderText[prog]
+	if ph == "" {
+		return false
+	}
+	return text == ph || (len(text) >= voicePlaceholderCut && strings.HasPrefix(ph, text))
 }
 
 type styledCell struct {

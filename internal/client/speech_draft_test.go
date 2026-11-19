@@ -3,6 +3,7 @@ package client
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -62,7 +63,7 @@ func TestVoiceBoxDraftCells(t *testing.T) {
 		{"qwen empty with its placeholder", "qwen", rule + "\n\x1b[38;5;183m> \x1b[0m\x1b[4m \x1b[0m\x1b[38;5;103m Type your message or @path/to/file\n" + rule + "\n", false},
 		{"qwen draft", "qwen", rule + "\n\x1b[38;5;183m> \x1b[0mhello\x1b[4m \x1b[0m\n" + rule + "\n", true},
 		{"gemini empty with its placeholder", "gemini", strings.Repeat("▄", 60) + "\n\x1b[38;5;183m> \x1b[0m\x1b[7m \x1b[0m\x1b[38;5;248m Type your message or @path/to/file\n" + strings.Repeat("▀", 60) + "\n", false},
-		{"gemini placeholder words without its colour: a draft", "gemini", strings.Repeat("▄", 60) + "\n >   Type your message or @path/to/file\n" + strings.Repeat("▀", 60) + "\n", true},
+		{"gemini placeholder words without its colour", "gemini", strings.Repeat("▄", 60) + "\n >   Type your message or @path/to/file\n" + strings.Repeat("▀", 60) + "\n", false},
 		{"qwen empty, zero-width space", "qwen", rule + "\n\x1b[38;5;183m> \x1b[0m\u200b\n" + rule + "\n", false},
 		{"gemini draft", "gemini", strings.Repeat("▄", 60) + "\n > hello\n" + strings.Repeat("▀", 60) + "\n", true},
 		{"claude draft on a second row", "claude", rule + "\n❯ first\n  second\n" + rule + "\n", true},
@@ -138,5 +139,52 @@ func TestVoiceClaudeFaintSuggestionIsNotADraft(t *testing.T) {
 	}
 	if !voiceBoxDraft("claude", box("❯ Try \"fix the tests\"")) {
 		t.Error("the same words not faint (typed) not read as a draft")
+	}
+}
+
+// The placeholder is read by its words, whatever its colour: rewritten from
+// the real captures with the same grey in true colour (a terminal with
+// COLORTERM=truecolor), in another grey (another theme), and with no colour
+// at all (NO_COLOR, a dumb terminal): each empty box typed into. A narrow
+// window that cuts the placeholder still reads as empty; text that is not
+// the placeholder's start is a draft.
+func TestVoicePlaceholderIsReadByItsWords(t *testing.T) {
+	sgr := regexp.MustCompile(`\x1b\[[0-9;:]*m`)
+	for _, c := range []struct{ prog, file, grey string }{
+		{"qwen", "qwen-drafts/fresh-empty-w120.ans", "\x1b[38;5;103m"},
+		{"gemini", "gemini-drafts/fresh-empty-w120.ans", "\x1b[38;5;248m"},
+	} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "voice-screens", "styled", c.file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, screen := range map[string]string{
+			"as captured":  string(raw),
+			"true colour":  strings.ReplaceAll(string(raw), c.grey, "\x1b[38;2;168;168;168m"),
+			"another grey": strings.ReplaceAll(string(raw), c.grey, "\x1b[38;5;242m"),
+			"no colour":    sgr.ReplaceAllString(string(raw), ""),
+		} {
+			if !strings.Contains(string(raw), c.grey) {
+				t.Fatalf("%s: the capture no longer holds %q", c.file, c.grey)
+			}
+			a := gateAgentSized(t, c.prog, "done", strings.ReplaceAll(screen, "\n", "\r\n"), 120, 40)
+			if got := a.speechBlocked(); got != "" {
+				t.Errorf("%s %s: speechBlocked = %q, want it allowed", c.prog, name, got)
+			}
+		}
+	}
+	rule := strings.Repeat("─", 40)
+	for _, c := range []struct {
+		row   string
+		draft bool
+	}{
+		{"> Type your message or @pa", false}, // cut at a narrow box's edge
+		{"> Type your message or @path/to/file", false},
+		{"> Type your", true}, // too little of it to tell from a draft
+		{"> Type your message please", true},
+	} {
+		if got := voiceBoxDraft("qwen", rule+"\n"+c.row+"\n"+rule+"\n"); got != c.draft {
+			t.Errorf("qwen %q: voiceBoxDraft = %v, want %v", c.row, got, c.draft)
+		}
 	}
 }
