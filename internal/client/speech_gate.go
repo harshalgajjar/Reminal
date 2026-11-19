@@ -3,6 +3,8 @@ package client
 import (
 	"strings"
 	"time"
+
+	"reminal/internal/session"
 )
 
 // Words said out loud are typed in only where they can do nothing but reach
@@ -19,6 +21,7 @@ const (
 	speechAsking  = "asking"   // a prompt on screen waits for an answer there
 	speechHidden  = "hidden"   // the terminal hides what is typed (a password)
 	speechUnsent  = "unsent"   // typed, but a prompt came up before the Return: left unsent in the box
+	speechNoHook  = "no-hook"  // an agent reminal has no positive reason to think is at its box
 )
 
 // speechBlocked says why words may not be typed now, or "" if they may.
@@ -35,8 +38,8 @@ func (a *Agent) speechBlocked() string {
 	if a.speech.blocked != nil {
 		return a.speech.blocked()
 	}
-	state, fg := a.inFront()
-	for end := time.Now().Add(speechLookFor); fg == "" && time.Now().Before(end); state, fg = a.inFront() {
+	state, fg, since := a.inFront()
+	for end := time.Now().Add(speechLookFor); fg == "" && time.Now().Before(end); state, fg, since = a.inFront() {
 		a.kickAttention()
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -45,6 +48,8 @@ func (a *Agent) speechBlocked() string {
 		return speechHidden
 	case !isAgentProgram(fg):
 		return speechNoAgent
+	case attnPromptMarks[fg] == nil && !a.hookReportedSince(since):
+		return speechNoHook
 	case state == "input" || a.promptOnScreenNow(fg):
 		return speechAsking
 	}
@@ -54,21 +59,47 @@ func (a *Agent) speechBlocked() string {
 // speechLookFor is how long words wait for the probe's first look.
 const speechLookFor = time.Second
 
-// inFront is the attention state and the program in front. On Unix the
-// program is asked of the terminal now (its foreground process group),
-// never taken from the probe's last look: an agent that has just exited
-// leaves a shell there, and a said line must not run in it. Where the
-// terminal cannot be asked (Windows), it is the probe's.
-func (a *Agent) inFront() (state, fg string) {
+// inFront is the attention state, the program in front, and when that
+// program started. On Unix the program is asked of the terminal now (its
+// foreground process group), never taken from the probe's last look: an
+// agent that has just exited leaves a shell there, and a said line must not
+// run in it. Where the terminal cannot be asked (Windows), it is the
+// probe's, and its start is when the probe first saw it in front.
+func (a *Agent) inFront() (state, fg string, since time.Time) {
 	a.metaMu.Lock()
-	state, fg = a.attnState, a.attnFG
+	state, fg, since = a.attnState, a.attnFG, a.attnFGAt
 	a.metaMu.Unlock()
 	if a.term != nil {
 		if pgrp := a.term.ForegroundPgrp(); pgrp > 0 {
 			fg = foregroundProgram(pgrp, attentionForegroundName(pgrp))
+			if t, ok := session.ProcStartTime(pgrp); ok {
+				since = t
+			}
 		}
 	}
-	return state, strings.TrimPrefix(fg, "-")
+	return state, strings.TrimPrefix(fg, "-"), since
+}
+
+// hookReportedSince is the positive reason to type into an agent with no box
+// mark of its own: its hook (reminal integrate) has reported a state for this
+// session since the program in front started. Without it, a dialog drawn in
+// words reminal does not know (a tool approval, a trust or consent screen)
+// would take the words and the Return; with it, the hook's "input" and the
+// screen read still guard each moment.
+func (a *Agent) hookReportedSince(since time.Time) bool {
+	if a.speech.hooked != nil {
+		return a.speech.hooked()
+	}
+	if since.IsZero() {
+		return false
+	}
+	// A turn's state, or that it is up and reading its input (Claude Code's
+	// SessionStart, written apart from turn states): either counts.
+	if hs := session.ReadHookStateAnyAge(a.sessionID); hs != nil && !hs.TS.Before(since) {
+		return true
+	}
+	ready := session.HookReadyAt(a.sessionID)
+	return !ready.IsZero() && !ready.Before(since)
 }
 
 // promptOnScreenNow reads the screen itself: the attention state settles a

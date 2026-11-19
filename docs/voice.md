@@ -30,6 +30,13 @@ would run), or at a password prompt. It checks before the words and again
 before the Return. When it refuses, the viewer gets a notice and the frame
 says why.
 
+It needs a positive reason to believe the agent is at its input box: the
+agent's own hook (`reminal integrate`) has reported since that program
+started (a turn's state, or Claude Code's start-up "ready"), or the agent's
+input box has a mark of its own that is on screen now (OpenCode, Kilo).
+Without either, nothing is typed: an agent's dialogs (tool approvals, trust
+and consent screens) come in wordings no list of prompts can keep up with.
+
 ## The frame's files (`internal/client/web/voice/`)
 
 | File | What it does |

@@ -2,16 +2,20 @@ package client
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"reminal/internal/session"
 )
 
 // Agent at its prompt, a screen showing it: words go in.
 func gateAgent(t *testing.T, fg, state, screen string) *Agent {
 	t.Helper()
 	a, _, _ := speechAgent(t)
-	a.speech.blocked = nil // the real check
+	a.speech.blocked = nil                        // the real check
+	a.speech.hooked = func() bool { return true } // an integrated agent whose hook has reported
 	a.attnFG, a.attnState = fg, state
 	a.screen = testScreen(t, 80, 24)
 	_, _ = a.screen.Write([]byte(screen))
@@ -168,6 +172,7 @@ func TestSpeechTypesIntoOpenCodeOnlyAtItsBox(t *testing.T) {
 func TestSpeechWithNoScreenFailsClosedForMarkedAgents(t *testing.T) {
 	a, _, _ := speechAgent(t)
 	a.speech.blocked = nil
+	a.speech.hooked = func() bool { return true }
 	a.attnFG, a.attnState = "opencode", "done"
 	if got := a.speechBlocked(); got != speechAsking {
 		t.Errorf("opencode, no screen: %q, want %q", got, speechAsking)
@@ -175,5 +180,89 @@ func TestSpeechWithNoScreenFailsClosedForMarkedAgents(t *testing.T) {
 	a.attnFG = "claude"
 	if got := a.speechBlocked(); got != "" {
 		t.Errorf("claude, no screen, done: %q, want it allowed", got)
+	}
+}
+
+// The positive rule: an agent with no box mark is typed into only once its
+// hook (reminal integrate) has reported for this session since the program
+// in front started. Agents reminal knows but cannot hear from (not
+// integrated, or not an integrate target) get nothing typed, whatever their
+// screen says: their own dialogs are in words no list can keep up with.
+func TestSpeechNeedsAHookForAgentsWithoutABoxMark(t *testing.T) {
+	// Screens captured from real CLIs in Docker: each took words and a Return
+	// as its answer before this rule.
+	screens := map[string]string{
+		"qwen":   "\r\n ? Shell touch /tmp/APPROVED (make a file)\r\n    touch /tmp/APPROVED\r\n  Allow execution of: 'touch'?\r\n  › 1. Yes, allow once\r\n    2. Always allow run 'touch *' commands in this project\r\n    3. Always allow run 'touch *' commands for this user\r\n    4. No, suggest changes (esc)\r\n\r\n\r\n ⠏ Waiting for user confirmation...\r\n",
+		"gemini": "\r\n╭──────────────────────────────╮\r\n│ ? Shell touch /tmp/APPROVED   │\r\n│ Allow execution of [Shell]?   │\r\n│ ● 1. Allow once               │\r\n│   2. Allow for this session   │\r\n│   3. No, suggest changes (esc)│\r\n╰──────────────────────────────╯\r\n",
+		"agy":    "\r\n Do you trust the contents of this project?\r\n > Yes, I trust this folder\r\n   No, exit\r\n enter Confirm\r\n",
+		"goose":  "\r\n Tool approval request { \"tool_name\": \"shell\" }\r\n *  Goose would like to call the above tool, do you allow?\r\n |  > Allow (Allow the tool call once)\r\n |    Always Allow\r\n |    Deny\r\n |    Cancel\r\n",
+	}
+	for prog, screen := range screens {
+		a := gateAgent(t, prog, "done", screen)
+		a.speech.hooked = nil // the real hook state: none written
+		t.Setenv("HOME", t.TempDir())
+		a.sessionID = "GATE" + strings.ToUpper(prog)
+		if got := a.speechBlocked(); got != speechNoHook {
+			t.Errorf("%s with no hook report: speechBlocked = %q, want %q", prog, got, speechNoHook)
+		}
+	}
+}
+
+// A hook report counts only if it came after the program in front started:
+// one left by an agent that ran here before (another agent, or the same one
+// before it was restarted) is not this agent saying anything.
+func TestSpeechHookReportMustBeFromThisRun(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	a := gateAgent(t, "claude", "done", "> \r\n")
+	a.speech.hooked = nil
+	a.sessionID = "GATEHOOK"
+	if err := session.WriteHookState(a.sessionID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	a.attnFGAt = time.Now().Add(-time.Minute) // in front since before the report
+	if got := a.speechBlocked(); got != "" {
+		t.Fatalf("hook reported since it started: speechBlocked = %q, want it allowed", got)
+	}
+	a.attnFGAt = time.Now().Add(time.Minute) // started after the report
+	if got := a.speechBlocked(); got != speechNoHook {
+		t.Fatalf("report from before it started: speechBlocked = %q, want %q", got, speechNoHook)
+	}
+	// Its own "input" still blocks once it has reported.
+	a.attnFGAt = time.Now().Add(-time.Minute)
+	if err := session.WriteHookState(a.sessionID, "input"); err != nil {
+		t.Fatal(err)
+	}
+	a.attnState = "input"
+	if got := a.speechBlocked(); got != speechAsking {
+		t.Fatalf("hook says input: speechBlocked = %q, want %q", got, speechAsking)
+	}
+}
+
+// OpenCode and Kilo have a box mark: no hook is needed while it is on screen.
+func TestSpeechBoxMarkStandsInForAHook(t *testing.T) {
+	const box = "\r\n  ┃  Ask anything\r\n  ┃\r\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\r\n   enter send\r\n"
+	a := gateAgent(t, "opencode", "done", box)
+	a.speech.hooked = func() bool { return false }
+	if got := a.speechBlocked(); got != "" {
+		t.Fatalf("opencode at its box, no hook: speechBlocked = %q, want it allowed", got)
+	}
+}
+
+// A freshly started Claude Code reports "ready" (its SessionStart hook)
+// before any turn: words go in from its first moment, not after one typed turn.
+func TestSpeechReadyReportCountsForAFreshAgent(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	a := gateAgent(t, "claude", "done", "> \r\n")
+	a.speech.hooked = nil
+	a.sessionID = "GATEREADY"
+	a.attnFGAt = time.Now().Add(-time.Second)
+	if got := a.speechBlocked(); got != speechNoHook {
+		t.Fatalf("before its ready: speechBlocked = %q, want %q", got, speechNoHook)
+	}
+	if err := session.MarkHookReady(a.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.speechBlocked(); got != "" {
+		t.Fatalf("after its ready: speechBlocked = %q, want it allowed", got)
 	}
 }

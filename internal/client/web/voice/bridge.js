@@ -11,7 +11,7 @@
 //   name {name}         what to call the agent (its session's name)
 //   session {id, name}  the viewer switched to another session
 //   cmd {c, on}         start | stop | mute | hold, from the mic button's dock
-//   notice {why}        what they said was not sent: asking | no-agent | hidden | unsent
+//   notice {why}        what they said was not sent: asking | no-agent | no-hook | hidden | unsent
 //   stop
 
 const host = window.parent !== window ? window.parent : null;
