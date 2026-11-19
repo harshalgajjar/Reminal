@@ -483,6 +483,10 @@ func agentTargets() []agentTarget {
 				events: []hookEvent{
 					{Event: "PreInvocation", State: "working"}, // a turn begins
 					{Event: "Stop", State: "done"},             // turn finished
+					// No event for being up at its prompt: its SessionStart
+					// (1.5.12) fires with the first message, a moment before
+					// PreInvocation, so "ready" would say nothing "working"
+					// does not.
 				},
 			},
 		},
@@ -506,6 +510,16 @@ func agentTargets() []agentTarget {
 		{
 			Name: "Cursor CLI", Bin: "cursor-agent",
 			file: ".cursor/mcp.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
+			// Its hooks (~/.cursor/hooks.json, {version: 1, hooks: {event:
+			// [{command}]}}): only its start, for now, so voice knows it is
+			// up before its first message.
+			hooks: &hookSpec{
+				file: ".cursor/hooks.json", key: []string{"hooks"}, shape: shapeFlat,
+				extra: map[string]any{"version": 1},
+				events: []hookEvent{
+					{Event: "sessionStart", State: "ready"},
+				},
+			},
 		},
 		{
 			// Its `mcp add` writes ~/.copilot/mcp-config.json, for the user:
@@ -537,6 +551,9 @@ func agentTargets() []agentTarget {
 					{Event: "BeforeAgent", State: "working"},
 					{Event: "Notification", State: "input"}, // observability-only; fires on tool-permission
 					{Event: "AfterAgent", State: "done"},
+					// Up and reading its input: started, resumed or cleared
+					// (its payload's "source", as Claude Code's).
+					{Event: "SessionStart", State: "ready"},
 				},
 			},
 		},
