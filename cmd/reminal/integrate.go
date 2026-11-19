@@ -85,6 +85,11 @@ type agentTarget struct {
 	// when it writes the entry over. Run on every add, so an entry an older
 	// reminal registered is brought up to date too.
 	aroundAdd func(home string, add func() error) error
+
+	// speak, for an agent that asks before every call of a tool: speak
+	// allowed in its own permissions, so a spoken answer does not wait on
+	// the screen (integrate_speak.go).
+	speak *speakAllow
 }
 
 func stdioEntry(exe string) map[string]any {
@@ -442,6 +447,7 @@ func agentTargets() []agentTarget {
 			cliAdd:    []string{"mcp", "add", "--scope", "user", mcpServerName, "--", "%CMD%", "mcp"},
 			cliRemove: []string{"mcp", "remove", "--scope", "user", mcpServerName},
 			checkFile: ".claude.json", checkKey: []string{"mcpServers"},
+			speak: allowListSpeak(".claude/settings.json"),
 			hooks: &hookSpec{
 				file: ".claude/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
@@ -531,6 +537,7 @@ func agentTargets() []agentTarget {
 		{
 			Name: "Gemini CLI", Bin: "gemini",
 			file: ".gemini/settings.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
+			speak: geminiSpeak(),
 			hooks: &hookSpec{
 				file: ".gemini/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
@@ -542,7 +549,8 @@ func agentTargets() []agentTarget {
 		},
 		{
 			Name: "Qwen Code", Bin: "qwen",
-			file: ".qwen/settings.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
+			file: ".qwen/settings.json", keyPath: []string{"mcpServers"}, entry: qwenEntry,
+			speak: qwenSpeak(),
 			hooks: &hookSpec{
 				file: ".qwen/settings.json", key: []string{"hooks"}, shape: shapeMatcher,
 				events: []hookEvent{
@@ -678,6 +686,9 @@ func runIntegrate(args []string) error {
 		} else if t.plugin != nil {
 			how += " + attention plugin"
 		}
+		if t.speak != nil {
+			how += " + " + t.speak.how
+		}
 		plan = append(plan, planStep{target: t, binPath: path, how: how})
 	}
 
@@ -749,13 +760,26 @@ func runIntegrate(args []string) error {
 		if p.target.plugin != nil {
 			hookErr = applyPlugin(p.target.plugin, home, exe, remove)
 		}
-		if err := errors.Join(mcpErr, hookErr); err != nil {
+		var speakErr error
+		speakNote := ""
+		if p.target.speak != nil {
+			speakErr = p.target.speak.apply(home, remove)
+			// Left as the person set it: said, not a failure.
+			var skipped *speakSkipped
+			if errors.As(speakErr, &skipped) {
+				speakNote, speakErr = skipped.why, nil
+			}
+		}
+		if err := errors.Join(mcpErr, hookErr, speakErr); err != nil {
 			failures++
 			fmt.Printf("  ✗ %-18s %v\n", p.target.Name, err)
 			continue
 		}
 		noteSetUp(home, p.target.Bin, !remove)
 		fmt.Printf("  ✓ %-18s %s\n", p.target.Name, cDim(p.how))
+		if speakNote != "" {
+			fmt.Printf("    %-18s %s\n", "", speakNote)
+		}
 	}
 
 	if failures > 0 {
@@ -905,6 +929,10 @@ otherwise a merge into its JSON config, backed up first):
   • attention hooks — so the agent reports its live state (working / needs you /
     done) to ` + "`reminal list`" + ` and the Machines view. Agents without hook support
     fall back to reminal's screen-based detection automatically.
+
+Where an agent asks before each tool call (Claude Code, Gemini CLI, Qwen Code),
+its settings also allow reminal's speak tool, and only that one, so an answer
+to you talking by voice is said without waiting on the screen.
 `)
 }
 
@@ -927,6 +955,9 @@ func printIntegrationReport(report []protocol.IntegrationStatus, asJSON bool) er
 			mark, what = "✓", "set up"
 			if st.HooksWanted && !st.Hooks {
 				what += ", attention hooks missing"
+			}
+			if st.SpeakWanted && !st.Speak {
+				what += ", speak not allowed (re-run integrate)"
 			}
 		case st.Integrated:
 			mark, what = "!", "set up for a different reminal (re-run integrate)"
