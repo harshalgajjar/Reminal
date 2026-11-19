@@ -49,10 +49,13 @@ globalThis.self = globalThis;
 // stored only once its body has been read to the end without error.
 const stored = new Map();
 globalThis.caches = { open: async () => ({
-  match: async (key) => (stored.has(String(key)) ? new Response(stored.get(String(key))) : undefined),
-  put: async (key, res) => { stored.set(String(key), new Uint8Array(await res.arrayBuffer())); },
+  match: async (key) => { const s = stored.get(String(key)); return s && new Response(s.body, { headers: s.headers }); },
+  put: async (key, res) => { const headers = [...res.headers]; stored.set(String(key), { body: new Uint8Array(await res.arrayBuffer()), headers }); },
 }) };
 const settle = () => new Promise((r) => setTimeout(r, 50)); // a store finishes after the read
+// The last store done: where a node has Web Locks (as browsers do), the
+// file's lock is held until its copy is stored.
+const quiet = async () => { await settle(); if (globalThis.navigator && navigator.locks) await navigator.locks.request('reminal-voice:' + FILE, () => {}); };
 self.location = new URL(base + '/voice/voice.html');
 const { PINNED } = await import(pathToFileURL(path.join(tmp, 'hashes.mjs')));
 PINNED[FILE] = [crypto.createHash('sha256').update(good).digest('hex'), good.length];
@@ -61,7 +64,7 @@ integrity.guardFetch();
 
 // What a reader like transformers.js ends up holding: it stops at Content-Length.
 async function readAsTransformersDoes() {
-  stored.clear(); // each case starts from nothing kept
+  await quiet(); stored.clear(); // each case starts from nothing kept
   const res = await fetch(`${base}/voice-assets/${FILE}`);
   const want = +res.headers.get('content-length'), reader = res.body.getReader(), parts = [];
   let n = 0;
