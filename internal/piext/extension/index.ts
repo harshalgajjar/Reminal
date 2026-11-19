@@ -27,7 +27,7 @@ import { startInbox } from "./inbox.ts";
  * Attention states reminal understands. "input" is the loud one — it is what
  * turns a session amber on the list and asks the user to come back.
  */
-type Attn = "working" | "input" | "done";
+type Attn = "working" | "input" | "done" | "ready";
 
 /**
  * Rewrite an unchanged state after this long. reminal expires an agent's
@@ -152,6 +152,11 @@ export default function reminalExtension(pi: ExtensionAPI): void {
 		}
 		write(state);
 	};
+
+	// Up and reading its input: pi started (or a new, resumed or forked
+	// session in it), before its first message. Not a turn's state: reminal
+	// keeps it apart ("ready"), and voice then knows pi is at its prompt.
+	pi.on("session_start", (_e, ctx) => report("ready", ctx));
 
 	// A run is under way. agent_start covers the whole loop; turn_start and
 	// turn_end keep a long one from aging out mid-work.

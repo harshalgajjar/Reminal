@@ -141,6 +141,25 @@ async function reported(): Promise<string | undefined> {
 	return undefined;
 }
 
+// pi starting says it is up, before any turn: reminal marks the session's
+// harness ready (a file of its own, apart from the turn's state).
+{
+	const readyPath = path.join(os.homedir(), ".reminal", `hook-${id}.ready`);
+	fs.rmSync(readyPath, { force: true });
+	const before = Date.now();
+	await b.emit("session_start", { type: "session_start", reason: "startup" });
+	let at = "";
+	for (let i = 0; i < 100 && !at; i++) {
+		try {
+			at = fs.readFileSync(readyPath, "utf8");
+		} catch {
+			await new Promise((r) => setTimeout(r, 50));
+		}
+	}
+	assert.ok(at && Date.parse(at) >= before - 1000, `session_start did not mark pi ready (${readyPath}: ${JSON.stringify(at)})`);
+	fs.rmSync(readyPath, { force: true });
+}
+
 for (const [event, want] of [
 	["agent_start", "working"],
 	["agent_settled", "done"],

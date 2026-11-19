@@ -153,6 +153,12 @@ type hookSpec struct {
 	// file, where an earlier reminal put them (Antigravity's hooks live under
 	// a name; left at the top, they make agy reject the whole file).
 	cleanTop bool
+	// dropEmpty: on --remove, delete the file once only extra is left in it,
+	// if reminal made it (no .bak: backupOnce keeps one of a file that was
+	// there before reminal first wrote it).
+	dropEmpty bool
+	// planNote: said after "attention hooks" in the plan line.
+	planNote string
 	// version is the agent's own, as it says (agentVersion), for the events
 	// that need one (hookEvent.MinVersion); "" when not read.
 	version string
@@ -309,6 +315,12 @@ func applyHooks(spec *hookSpec, home, exe string, remove bool) error {
 				root[k] = v
 			}
 		}
+	}
+
+	// Nothing of the person's left, in a file reminal made: gone with ours.
+	if remove && spec.dropEmpty && nothingButOurs(spec, root) && madeByReminal(spec, path) {
+		_ = os.Remove(path + ".bak")
+		return os.Remove(path)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -489,6 +501,10 @@ func agentTargets() []agentTarget {
 				events: []hookEvent{
 					{Event: "PreInvocation", State: "working"}, // a turn begins
 					{Event: "Stop", State: "done"},             // turn finished
+					// No event for being up at its prompt: its SessionStart
+					// (1.5.12) fires with the first message, a moment before
+					// PreInvocation, so "ready" would say nothing "working"
+					// does not.
 				},
 			},
 		},
@@ -512,6 +528,24 @@ func agentTargets() []agentTarget {
 		{
 			Name: "Cursor CLI", Bin: "cursor-agent",
 			file: ".cursor/mcp.json", keyPath: []string{"mcpServers"}, entry: stdioEntry,
+			// Its hooks (~/.cursor/hooks.json, {version: 1, hooks: {event:
+			// [{command}]}}), merged into the person's own file: a turn's
+			// start and end, and its start, so voice knows it is up before
+			// its first message. It has no event for waiting on the person
+			// (a command approval is inside the turn: "working"). The file is
+			// deleted on --remove only if reminal made it and nothing else is
+			// left in it.
+			hooks: &hookSpec{
+				file: ".cursor/hooks.json", key: []string{"hooks"}, shape: shapeFlat,
+				extra:     map[string]any{"version": 1},
+				dropEmpty: true,
+				planNote:  "in ~/.cursor/hooks.json, merged with yours",
+				events: []hookEvent{
+					{Event: "beforeSubmitPrompt", State: "working"}, // a turn begins
+					{Event: "stop", State: "done"},                  // turn finished (completed, aborted or failed)
+					{Event: "sessionStart", State: "ready"},         // a new chat, at its start
+				},
+			},
 		},
 		{
 			// Its `mcp add` writes ~/.copilot/mcp-config.json, for the user:
@@ -544,6 +578,9 @@ func agentTargets() []agentTarget {
 					{Event: "BeforeAgent", State: "working"},
 					{Event: "Notification", State: "input"}, // observability-only; fires on tool-permission
 					{Event: "AfterAgent", State: "done"},
+					// Up and reading its input: started, resumed or cleared
+					// (its payload's "source", as Claude Code's).
+					{Event: "SessionStart", State: "ready"},
 				},
 			},
 		},
@@ -683,6 +720,9 @@ func runIntegrate(args []string) error {
 		}
 		if t.hooks != nil {
 			how += " + attention hooks"
+			if t.hooks.planNote != "" {
+				how += " " + t.hooks.planNote
+			}
 		} else if t.plugin != nil {
 			how += " + attention plugin"
 		}
@@ -974,3 +1014,48 @@ func printIntegrationReport(report []protocol.IntegrationStatus, asJSON bool) er
 // conversation, as a restore would (client.ResumeLatest): the restart hint
 // shown after a setup.
 func (t agentTarget) resumeHint() string { return client.ResumeLatest(t.Bin) }
+
+// nothingButOurs says a hooks file holds nothing of the person's: its top
+// keys only spec's extra ones and the hooks object, and every entry in that
+// object reminal's (ourHookEntry).
+func nothingButOurs(spec *hookSpec, root map[string]any) bool {
+	if len(spec.key) != 1 { // a hooks object at the top, as dropEmpty's files have
+		return false
+	}
+	for k := range root {
+		if _, extra := spec.extra[k]; !extra && k != spec.key[0] {
+			return false
+		}
+	}
+	node, ok := root[spec.key[0]].(map[string]any)
+	if _, there := root[spec.key[0]]; there && !ok {
+		return false
+	}
+	for _, v := range node {
+		list, ok := v.([]any)
+		if !ok {
+			return false
+		}
+		for _, item := range list {
+			if m, ok := item.(map[string]any); !ok || !ourHookEntry(m) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// madeByReminal says reminal made the hooks file at path: no backup of it
+// (backupOnce keeps one of a file that was there before reminal first wrote
+// it), or one that is reminal's own (taken on a later run).
+func madeByReminal(spec *hookSpec, path string) bool {
+	raw, err := os.ReadFile(path + ".bak")
+	if os.IsNotExist(err) {
+		return true
+	}
+	bak := map[string]any{}
+	if err != nil || json.Unmarshal(raw, &bak) != nil {
+		return false
+	}
+	return nothingButOurs(spec, bak) && strings.Contains(string(raw), hookMarker)
+}
