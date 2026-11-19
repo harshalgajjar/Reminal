@@ -106,7 +106,7 @@ type speechState struct {
 	now      func() time.Time      // tests: the clock (nil: time.Now)
 	typeKeys func([]byte) error    // tests: what would be typed (nil: into the PTY)
 	blocked  func() string         // tests: what is in front (nil: speechBlocked reads it)
-	hooked   func() bool           // tests: whether its hook has reported (nil: read the hook state)
+	hooked   func() string         // tests: its hook's last report this run (nil: read the hook state)
 	out      func(speechOut) error // tests: what is sent to the viewers (nil: toListeners)
 }
 

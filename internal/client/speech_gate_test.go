@@ -14,8 +14,8 @@ import (
 func gateAgent(t *testing.T, fg, state, screen string) *Agent {
 	t.Helper()
 	a, _, _ := speechAgent(t)
-	a.speech.blocked = nil                        // the real check
-	a.speech.hooked = func() bool { return true } // an integrated agent whose hook has reported
+	a.speech.blocked = nil                            // the real check
+	a.speech.hooked = func() string { return "done" } // an integrated agent whose hook has reported
 	a.attnFG, a.attnState = fg, state
 	a.screen = testScreen(t, 80, 24)
 	_, _ = a.screen.Write([]byte(screen))
@@ -172,7 +172,7 @@ func TestSpeechTypesIntoOpenCodeOnlyAtItsBox(t *testing.T) {
 func TestSpeechWithNoScreenFailsClosedForMarkedAgents(t *testing.T) {
 	a, _, _ := speechAgent(t)
 	a.speech.blocked = nil
-	a.speech.hooked = func() bool { return true }
+	a.speech.hooked = func() string { return "done" }
 	a.attnFG, a.attnState = "opencode", "done"
 	if got := a.speechBlocked(); got != speechAsking {
 		t.Errorf("opencode, no screen: %q, want %q", got, speechAsking)
@@ -242,7 +242,7 @@ func TestSpeechHookReportMustBeFromThisRun(t *testing.T) {
 func TestSpeechBoxMarkStandsInForAHook(t *testing.T) {
 	const box = "\r\n  ┃  Ask anything\r\n  ┃\r\n  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\r\n   enter send\r\n"
 	a := gateAgent(t, "opencode", "done", box)
-	a.speech.hooked = func() bool { return false }
+	a.speech.hooked = func() string { return "" }
 	if got := a.speechBlocked(); got != "" {
 		t.Fatalf("opencode at its box, no hook: speechBlocked = %q, want it allowed", got)
 	}
@@ -264,5 +264,30 @@ func TestSpeechReadyReportCountsForAFreshAgent(t *testing.T) {
 	}
 	if got := a.speechBlocked(); got != "" {
 		t.Fatalf("after its ready: speechBlocked = %q, want it allowed", got)
+	}
+}
+
+// Antigravity's hook reports only a turn's start and end, never that it
+// waits on the person: after its first turn it is typed into only while its
+// last report says the turn is over. A tool approval drawn mid-turn (the
+// state still "working") gets nothing.
+func TestSpeechAgentWhoseHookCannotSayWaitingIsTypedIntoOnlyAtRest(t *testing.T) {
+	const approval = "\r\n Run command: touch /tmp/APPROVED\r\n > Allow once\r\n   Allow always\r\n   Deny\r\n enter Confirm\r\n"
+	a := gateAgent(t, "agy", "working", approval)
+	a.speech.hooked = func() string { return "working" }
+	if got := a.speechBlocked(); got != speechBusy {
+		t.Errorf("agy mid-turn at a tool approval: speechBlocked = %q, want %q", got, speechBusy)
+	}
+	b := gateAgent(t, "agy", "done", "> \r\n")
+	b.speech.hooked = func() string { return "done" }
+	if got := b.speechBlocked(); got != "" {
+		t.Errorf("agy at rest after a turn: speechBlocked = %q, want it allowed", got)
+	}
+	// An agent whose hook does report waiting is typed into mid-turn (its
+	// "input" guards each prompt), as Claude Code is while it works.
+	c := gateAgent(t, "claude", "working", "✻ Thinking… (esc to interrupt)\r\n")
+	c.speech.hooked = func() string { return "working" }
+	if got := c.speechBlocked(); got != "" {
+		t.Errorf("claude mid-turn: speechBlocked = %q, want it allowed", got)
 	}
 }

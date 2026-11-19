@@ -37,6 +37,12 @@ input box has a mark of its own that is on screen now (OpenCode, Kilo).
 Without either, nothing is typed: an agent's dialogs (tool approvals, trust
 and consent screens) come in wordings no list of prompts can keep up with.
 
+An agent whose hook cannot report that it waits on the person (Antigravity:
+only a turn's start and end) is typed into only while its last report says
+its turn is over. Which agents can is one table (`HookReportsWaiting`), kept
+equal to the integrations' hooks by a test. Codex, Cursor and Amp have no
+hook reminal can hear, so voice does not type into them.
+
 ## The frame's files (`internal/client/web/voice/`)
 
 | File | What it does |

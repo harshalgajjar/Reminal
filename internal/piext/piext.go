@@ -210,3 +210,10 @@ func removeIfOurs(dir string) error {
 	}
 	return os.RemoveAll(dir)
 }
+
+// ExtensionSource is the extension's main file as it is installed: what it
+// reports to reminal can be read from it (cmd/reminal's voice gate table test).
+func ExtensionSource() string {
+	b, _ := files.ReadFile("extension/index.ts")
+	return string(b)
+}

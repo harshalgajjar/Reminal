@@ -22,6 +22,7 @@ const (
 	speechHidden  = "hidden"   // the terminal hides what is typed (a password)
 	speechUnsent  = "unsent"   // typed, but a prompt came up before the Return: left unsent in the box
 	speechNoHook  = "no-hook"  // an agent reminal has no positive reason to think is at its box
+	speechBusy    = "busy"     // mid-turn, in an agent whose hook cannot say when it waits on the person
 )
 
 // speechBlocked says why words may not be typed now, or "" if they may.
@@ -48,9 +49,13 @@ func (a *Agent) speechBlocked() string {
 		return speechHidden
 	case !isAgentProgram(fg):
 		return speechNoAgent
-	case attnPromptMarks[fg] == nil && !a.hookReportedSince(since):
-		return speechNoHook
-	case state == "input" || a.promptOnScreenNow(fg):
+	}
+	if attnPromptMarks[fg] == nil {
+		if why := a.hookBlocks(fg, since); why != "" {
+			return why
+		}
+	}
+	if state == "input" || a.promptOnScreenNow(fg) {
 		return speechAsking
 	}
 	return ""
@@ -80,26 +85,56 @@ func (a *Agent) inFront() (state, fg string, since time.Time) {
 	return state, strings.TrimPrefix(fg, "-"), since
 }
 
-// hookReportedSince is the positive reason to type into an agent with no box
-// mark of its own: its hook (reminal integrate) has reported a state for this
-// session since the program in front started. Without it, a dialog drawn in
-// words reminal does not know (a tool approval, a trust or consent screen)
-// would take the words and the Return; with it, the hook's "input" and the
-// screen read still guard each moment.
-func (a *Agent) hookReportedSince(since time.Time) bool {
+// HookReportsWaiting is, by program, whether the agent's `reminal integrate`
+// hook reports when it waits on the person ("input": a tool approval, a
+// question). For one that does, its hook guards each such moment once it has
+// reported at all. For one that cannot (Antigravity reports only a turn's
+// start and end), a dialog it draws mid-turn would go unseen, so it is typed
+// into only while its last report says its turn is over. An agent with no
+// hook is not here: it never reports, and is not typed into (unless its
+// input box has a mark of its own). cmd/reminal's tests keep this table equal
+// to what each integration's hooks map.
+var HookReportsWaiting = map[string]bool{
+	"claude": true, "copilot": true, "gemini": true, "qwen": true, // hooks with an "input" (or split "notify") event
+	"opencode": true, "kilo": true, // the plugin's permission.* events
+	"pi":  true,  // its extension
+	"agy": false, // PreInvocation and Stop only
+}
+
+// hookBlocks says why the hook gives no positive reason to type into prog
+// now, or "" if it does: it must have reported for this session since the
+// program started (a turn's state, or Claude Code's start-up "ready"), and,
+// for an agent whose hook cannot report waiting, its last report must be
+// that its turn is over.
+func (a *Agent) hookBlocks(prog string, since time.Time) string {
+	last := a.hookReportSince(since)
+	switch {
+	case last == "":
+		return speechNoHook
+	case !HookReportsWaiting[prog] && last != "done" && last != "ready":
+		return speechBusy
+	}
+	return ""
+}
+
+// hookReportSince is the agent's last report for this session since the
+// program in front started: a turn's state, or "ready" (written apart from
+// turn states), whichever came last; "" if it has said nothing since.
+func (a *Agent) hookReportSince(since time.Time) string {
 	if a.speech.hooked != nil {
 		return a.speech.hooked()
 	}
 	if since.IsZero() {
-		return false
+		return ""
 	}
-	// A turn's state, or that it is up and reading its input (Claude Code's
-	// SessionStart, written apart from turn states): either counts.
+	last, at := "", time.Time{}
 	if hs := session.ReadHookStateAnyAge(a.sessionID); hs != nil && !hs.TS.Before(since) {
-		return true
+		last, at = hs.State, hs.TS
 	}
-	ready := session.HookReadyAt(a.sessionID)
-	return !ready.IsZero() && !ready.Before(since)
+	if ready := session.HookReadyAt(a.sessionID); !ready.IsZero() && !ready.Before(since) && ready.After(at) {
+		last = "ready"
+	}
+	return last
 }
 
 // promptOnScreenNow reads the screen itself: the attention state settles a
