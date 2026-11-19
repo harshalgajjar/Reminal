@@ -2,6 +2,7 @@ package client
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ const (
 	speechUnsent  = "unsent"   // typed, but a prompt came up before the Return: left unsent in the box
 	speechNoHook  = "no-hook"  // an agent reminal has no positive reason to think is at its box
 	speechBusy    = "busy"     // mid-turn, in an agent whose hook cannot say when it waits on the person
+	speechShell   = "shell"    // the box is in shell mode: Return would run the line as a command
 )
 
 // speechBlocked says why words may not be typed now, or "" if they may.
@@ -53,6 +55,9 @@ func (a *Agent) speechBlocked() string {
 	}
 	if why := a.hookBlocks(fg, since); why != "" {
 		return why
+	}
+	if a.shellModeNow(fg) {
+		return speechShell
 	}
 	// A hook's "input" can outlive its prompt: Claude Code reports nothing
 	// when the person dismisses one with Esc, and its last report stays
@@ -151,11 +156,12 @@ func (a *Agent) hookReportSince(since time.Time) string {
 // apart from attnPromptMarks, which also decides the attention state: a mark
 // that misses a layout here costs a refused line, not a wrong badge.
 // Each is the box's top edge with the prompt row right under it (its text
-// after the prompt sign captured): Claude Code's "❯" (or "!" in its shell
-// mode), Qwen's and Gemini's ">". The sign is followed by a space, a no-break
-// space (Claude Code draws one) or nothing.
+// after the prompt sign captured): Claude Code's "❯", Qwen's and Gemini's ">".
+// A shell mode ("!", where Return runs the line as a command) or Claude's
+// memory mode ("#") draws another sign and is never the box. The sign is
+// followed by a space, a no-break space (Claude Code draws one) or nothing.
 var voiceBoxMarks = map[string]*regexp.Regexp{
-	"claude": regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n[ \t]*[❯!]([ \t\x{00a0}][^\n]*)?$`),
+	"claude": regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n[ \t]*❯([ \t\x{00a0}][^\n]*)?$`),
 	"qwen":   regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n>([ \t\x{00a0}][^\n]*)?$`),
 	"gemini": regexp.MustCompile(`(?m)^[ \t]*▄{20,}\S?[ \t]*\n[ \t]*>([ \t\x{00a0}][^\n]*)?$`),
 }
@@ -170,14 +176,24 @@ var voiceBoxMarks = map[string]*regexp.Regexp{
 const voiceBoxRows = 7
 
 var (
-	numberedRow = regexp.MustCompile(`^[ \t\x{00a0}]*[0-9]+\.[ \t\x{00a0}]`)
+	numberedRow = regexp.MustCompile(`^[ \t\x{00a0}]*([0-9]+)\.[ \t\x{00a0}]`)
+	// choiceFooter is a picker's own help row: whatever the cursor row reads,
+	// a list of choices is on screen.
+	choiceFooter = regexp.MustCompile(`(?i)enter to (select|confirm)|enter: select|↑/↓|to navigate`)
 )
 
-func voiceBoxDrawn(prog, render string) bool {
-	re := voiceBoxMarks[prog]
-	if re == nil {
-		return true
-	}
+// voiceShellModes are, by program, the box in a mode where Return runs the
+// line as a shell command (Claude Code, Qwen and Gemini all have one, "!"):
+// never typed into, and said plainly.
+var voiceShellModes = map[string]*regexp.Regexp{
+	"claude": regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n[ \t]*!([ \t\x{00a0}][^\n]*)?$`),
+	"qwen":   regexp.MustCompile(`(?m)^[ \t]*─{20,}\S?[ \t]*\n!([ \t\x{00a0}][^\n]*)?$`),
+	"gemini": regexp.MustCompile(`(?m)^[ \t]*▄{20,}\S?[ \t]*\n[ \t]*!([ \t\x{00a0}][^\n]*)?$`),
+}
+
+// voiceBottomRows is the bottom voiceBoxRows non-empty rows of a screen,
+// joined: where an agent's box at rest is looked for.
+func voiceBottomRows(render string) string {
 	var rows []string
 	for _, row := range strings.Split(stripANSI(render), "\n") {
 		if strings.TrimSpace(row) != "" {
@@ -187,22 +203,50 @@ func voiceBoxDrawn(prog, render string) bool {
 	if len(rows) > voiceBoxRows {
 		rows = rows[len(rows)-voiceBoxRows:]
 	}
-	text := strings.Join(rows, "\n")
+	return strings.Join(rows, "\n")
+}
+
+func voiceShellMode(prog, render string) bool {
+	re := voiceShellModes[prog]
+	return re != nil && re.MatchString(voiceBottomRows(render))
+}
+
+func voiceBoxDrawn(prog, render string) bool {
+	re := voiceBoxMarks[prog]
+	if re == nil {
+		return true
+	}
+	text := voiceBottomRows(render)
 	for _, m := range re.FindAllStringSubmatchIndex(text, -1) {
-		// A prompt row that reads as a numbered choice ("❯ 1. Yes") is one
-		// only when another numbered row follows it, as in a list of choices;
-		// a draft that starts with a number ("❯ 1. buy milk", "❯ 42") is not.
-		after := ""
-		if m[2] >= 0 {
-			after = text[m[2]:m[3]]
-		}
-		if numberedRow.MatchString(after) {
-			next := strings.SplitN(text[m[1]:], "\n", 3)
-			if len(next) > 1 && numberedRow.MatchString(next[1]) {
-				continue
-			}
+		if m[2] >= 0 && isChoiceRow(text[m[2]:m[3]], text[m[1]:]) {
+			continue
 		}
 		return true
+	}
+	return false
+}
+
+// isChoiceRow says whether a prompt row's text is the cursor row of a list
+// of choices ("❯ 1. Yes") rather than a draft in the box ("❯ 42", "❯ 1. buy
+// milk"): it reads as an item numbered n, and a later row reads as item n+1
+// (a picker may put a description row under each item), or a picker's help
+// row is on screen.
+func isChoiceRow(row, below string) bool {
+	m := numberedRow.FindStringSubmatch(row)
+	if m == nil {
+		return false
+	}
+	if choiceFooter.MatchString(below) {
+		return true
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return true
+	}
+	for _, r := range strings.Split(below, "\n") {
+		if next := numberedRow.FindStringSubmatch(r); next != nil && next[1] == strconv.Itoa(n+1) {
+			return true
+		}
 	}
 	return false
 }
@@ -237,3 +281,15 @@ func (a *Agent) promptOnScreenNow(prog string) bool {
 // hasBox reports whether reminal knows the shape of prog's input box, so
 // that whether the box is on screen can be read.
 func hasBox(prog string) bool { return attnPromptMarks[prog] != nil || voiceBoxMarks[prog] != nil }
+
+// shellModeNow reports whether prog's box is in its shell mode on screen now.
+func (a *Agent) shellModeNow(prog string) bool {
+	a.screenMu.Lock()
+	scr := a.screen
+	var render string
+	if scr != nil {
+		render = scr.Render()
+	}
+	a.screenMu.Unlock()
+	return scr != nil && voiceShellMode(prog, render)
+}

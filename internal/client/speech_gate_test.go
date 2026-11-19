@@ -385,7 +385,6 @@ func TestSpeechClaudeBoxDraftsAndShellMode(t *testing.T) {
 	}
 	for _, c := range []struct{ name, screen, want string }{
 		{"draft that is a number", box("❯ 42"), ""},
-		{"shell mode", box("! ls -la"), ""},
 		{"empty, no-break space", box("❯ "), ""},
 		{"a list of choices under a rule", "\r\n" + rule + "\r\n❯ 1. Yes\r\n  2. No\r\n" + rule + "\r\n", speechAsking},
 	} {
@@ -406,6 +405,42 @@ func TestVoiceFixturesKeepClaudesNoBreakSpace(t *testing.T) {
 		}
 		if !strings.Contains(string(raw), "❯ ") {
 			t.Errorf("%s has no \"❯\" followed by a no-break space: not a raw capture", f)
+		}
+	}
+}
+
+// Shell mode: Return runs the line as a command, no model in between. Claude
+// Code, Qwen and Gemini draw "!" for it: never typed into, and said so.
+func TestSpeechRefusesShellMode(t *testing.T) {
+	for _, c := range []struct{ prog, screen string }{
+		{"claude", "\r\n" + strings.Repeat("─", 60) + "\r\n! ls -la\r\n" + strings.Repeat("─", 60) + "\r\n  ! for bash mode\r\n"},
+		{"qwen", "\r\n" + strings.Repeat("─", 60) + "\r\n!   Type your command\r\n" + strings.Repeat("─", 60) + "\r\n"},
+		{"gemini", "\r\n" + strings.Repeat("▄", 60) + "\r\n ! Type your shell command\r\n" + strings.Repeat("▀", 60) + "\r\n"},
+	} {
+		if got := gateAgent(t, c.prog, "done", c.screen).speechBlocked(); got != speechShell {
+			t.Errorf("%s in shell mode: speechBlocked = %q, want %q", c.prog, got, speechShell)
+		}
+	}
+}
+
+// A question picker cut so its cursor row sits right under a rule, inside
+// the rows the box is looked for in: still a list of choices (the next
+// number is further down, under a description row; its help row is there).
+// Drafts with a number in them are the box.
+func TestVoiceBoxTellsAPickerFromADraft(t *testing.T) {
+	rule := strings.Repeat("─", 60)
+	for _, c := range []struct {
+		name, screen string
+		box          bool
+	}{
+		{"picker, next number under a description row", rule + "\n❯ 1. Alpha\n     the first\n  2. Beta\n     the second\n", false},
+		{"picker, help row only", rule + "\n❯ 1. Alpha\n     the first\nEnter to select · ↑/↓ to navigate · Esc to cancel\n", false},
+		{"draft that is a number", rule + "\n❯ 42\n" + rule + "\n  ? for shortcuts\n", true},
+		{"draft 1. with nothing numbered below", rule + "\n❯ 1. buy milk\n" + rule + "\n  ? for shortcuts\n", true},
+		{"draft 1. with a 3. below (not the next number)", rule + "\n❯ 1. buy milk\n" + rule + "\n3. Some note\n", true},
+	} {
+		if got := voiceBoxDrawn("claude", c.screen); got != c.box {
+			t.Errorf("%s: voiceBoxDrawn = %v, want %v", c.name, got, c.box)
 		}
 	}
 }
