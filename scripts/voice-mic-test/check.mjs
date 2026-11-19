@@ -104,6 +104,59 @@ for (const [size, opts, mic, other] of SIZES) {
   if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/notice.png` });
   await ctx.close();
 }
+// The device's voice failing (a browser with no speech engine: every line
+// ends in "synthesis-failed", silently). The frame's speaker says which line
+// failed, and not a line stopped on purpose; the viewer passes on to the
+// session that it was not heard, and that the frame has no voice, so speak
+// tells the agent "Not spoken" instead of "Spoken.".
+{
+  const ctx = await b.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e).slice(0, 200)));
+  await page.goto('http://127.0.0.1:8099/');
+  await page.evaluate(() => {
+    window.__sent = [];
+    sendWin = (type, data) => window.__sent.push([type, data]);
+    sessionId = 'TESTSESS';
+    document.body.classList.add('connected');
+    reminalVoice.hostInfo({ attn: '', voice: true });
+  });
+  await page.click('#voice-btn-desk');
+  const fr = await (await page.waitForSelector('#voice-panel iframe')).contentFrame();
+  await fr.waitForSelector('#log');
+  const got = await fr.evaluate(async () => {
+    const { Speaker, newReply } = await import('/voice/speaker.js');
+    // No speech engine: each line fails a moment after it is handed over,
+    // and one cancelled on purpose ends "interrupted".
+    speechSynthesis.speak = (u) => setTimeout(() => u.onerror({ error: /stopped/.test(u.text) ? 'interrupted' : 'synthesis-failed' }), 20);
+    const seen = [];
+    const sp = new Speaker({ started: () => seen.push('started'), heard: () => seen.push('heard'), finished: () => {}, failed: (r, text, why) => seen.push(why + ': ' + text.trim()) });
+    Object.assign(sp, { natural: false, pace: 1 });
+    const r = newReply({});
+    sp.current = r;
+    sp.say(r, 'Here is the plan.');
+    sp.say(r, 'This one is stopped.');
+    await new Promise((res) => setTimeout(res, 300));
+    return { seen, heard: r.heard };
+  });
+  check(got.seen.length === 1 && got.seen[0] === 'synthesis-failed: Here is the plan.', `the device's voice failing is reported, once, with the line (${JSON.stringify(got.seen)})`);
+  check(got.heard === '', `and the line is not counted as heard (${JSON.stringify(got.heard)})`);
+  // The frame tells the viewer (bridge.js's messages), as voice.js does.
+  await fr.evaluate(() => {
+    const post = (m) => window.parent.postMessage({ src: 'reminal-voice', ...m }, location.origin);
+    post({ t: 'unheard', text: 'Here is the plan.' });
+    post({ t: 'listening', on: true, voice: false });
+    post({ t: 'listening', on: true, voice: true });
+  });
+  await page.waitForTimeout(300);
+  const sent = await page.evaluate(() => window.__sent.filter(([t]) => t === 'speech_in').map(([, d]) => d));
+  check(sent.some((d) => d.kind === 'unheard' && d.text === 'Here is the plan.'), `the session is told the line was not heard (${JSON.stringify(sent)})`);
+  check(sent.some((d) => d.kind === 'listening' && d.on === true && d.voice === false), 'and that the frame has no voice now');
+  check(sent.some((d) => d.kind === 'listening' && d.on === true && !('voice' in d)), 'and nothing extra once it has one again');
+  check(errors.length === 0, `no page errors (${JSON.stringify(errors)})`);
+  await ctx.close();
+}
 // The first-visit tour (a fresh browser: nothing stored) never covers voice
 // in use: it waits while the panel is open, and starts once it is closed. It
 // shows the mic as a step of its own, its spotlight on the mic shown: the

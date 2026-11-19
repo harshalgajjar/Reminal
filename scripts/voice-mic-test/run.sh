@@ -2,7 +2,8 @@
 # The voice mic is there to tap on a desktop (the header's, 1280x800) and on a
 # phone (the key bar's), opens the voice panel, and on a session whose
 # reminal predates voice says so instead; and a notice that what was said was
-# not typed in reaches the voice frame's conversation. check.mjs drives the
+# not typed in reaches the voice frame's conversation; and a device voice
+# that fails is reported, and passed on to the session. check.mjs drives the
 # page as served, with the real voice frame (web/voice). Needs docker; the
 # browser runs in a Playwright container. Nothing here touches the host's
 # reminal. SHOTS=dir keeps a screenshot per case.
