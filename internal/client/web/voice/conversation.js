@@ -629,6 +629,7 @@ const NOT_TYPED = {
   'no-agent': 'No agent is running there, so I did not type that in.',
   hidden: 'The terminal is asking for a password, so I did not type that in.',
   unsent: 'It started asking on screen before I could send that. Your words are in its box, not sent.',
+  draft: 'There is something typed in its box, so I did not type over it. Send or clear it, then speak.',
   shell: 'It is in shell mode, where Return runs the line as a command, so I did not type that in.',
   busy: 'It is working, and it cannot tell me when it is waiting for you, so I did not type that in. Say it again when it has finished.',
   'no-hook': 'I cannot tell yet that this agent is waiting for you, so I did not type that in. Set it up with reminal integrate; some agents also need one typed message first.',

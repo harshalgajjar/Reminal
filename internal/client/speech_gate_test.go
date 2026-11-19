@@ -314,9 +314,9 @@ func TestSpeechTypesOnlyWhileTheAgentsBoxIsOnScreen(t *testing.T) {
 		{"claude", "claude-resume.txt", speechAsking},
 		{"claude", "claude-resume-sessions.txt", speechAsking},
 		{"claude", "claude-permission.txt", speechAsking},
-		{"qwen", "qwen-start.txt", ""},
-		{"qwen", "qwen-idle.txt", ""},
-		{"qwen", "qwen-after-voice.txt", ""},
+		{"qwen", "styled/qwen/start.ans", ""}, // its placeholder is told from a draft by its colour
+		{"qwen", "styled/qwen/idle.ans", ""},
+		{"qwen", "styled/qwen/after-voice.ans", ""},
 		{"qwen", "qwen-approval.txt", speechAsking},
 		{"qwen", "qwen-question.txt", speechAsking},
 		{"gemini", "gemini-start.txt", ""},
@@ -384,7 +384,7 @@ func TestSpeechClaudeBoxDraftsAndShellMode(t *testing.T) {
 		return "\r\n" + rule + "\r\n" + row + "\r\n" + rule + "\r\n  ? for shortcuts\r\n"
 	}
 	for _, c := range []struct{ name, screen, want string }{
-		{"draft that is a number", box("❯ 42"), ""},
+		{"draft that is a number", box("❯ 42"), speechDraft}, // the box, with a draft in it
 		{"empty, no-break space", box("❯ "), ""},
 		{"a list of choices under a rule", "\r\n" + rule + "\r\n❯ 1. Yes\r\n  2. No\r\n" + rule + "\r\n", speechAsking},
 	} {

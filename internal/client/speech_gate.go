@@ -38,7 +38,14 @@ const (
 // On Windows the program is the agent among the shell's children (a console
 // has no foreground process group), and whether input is hidden cannot be
 // asked, so there the gate rests on the prompt check.
-func (a *Agent) speechBlocked() string {
+func (a *Agent) speechBlocked() string { return a.speechCheck(true) }
+
+// speechBlockedAfterWords is speechBlocked asked again before the Return,
+// once the said words are in the box: what is in the box now is ours, not a
+// draft of the person's.
+func (a *Agent) speechBlockedAfterWords() string { return a.speechCheck(false) }
+
+func (a *Agent) speechCheck(refuseDraft bool) string {
 	if a.speech.blocked != nil {
 		return a.speech.blocked()
 	}
@@ -58,6 +65,9 @@ func (a *Agent) speechBlocked() string {
 	}
 	if a.shellModeNow(fg) {
 		return speechShell
+	}
+	if refuseDraft && a.draftNow(fg) {
+		return speechDraft
 	}
 	// A hook's "input" can outlive its prompt: Claude Code reports nothing
 	// when the person dismisses one with Esc, and its last report stays
