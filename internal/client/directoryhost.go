@@ -375,7 +375,8 @@ func killLocalSession(id string) error {
 		// to SIGKILL if the shell ignores SIGTERM.
 		_ = session.ClearActive(a.ID)
 		_ = session.ClearRestore(a.ID) // killed on purpose: never to be restored
-		go forgetWhenGone(a.ID, pid, proc.Alive, proc.Kill, 3*time.Second)
+		forgetting.Add(1)
+		go func() { defer forgetting.Done(); forgetWhenGone(a.ID, pid, proc.Alive, proc.Kill, 3*time.Second) }()
 		return nil
 	}
 	// Asleep: nothing is running to stop; ending it is forgetting it.
@@ -384,6 +385,11 @@ func killLocalSession(id string) error {
 	}
 	return fmt.Errorf("session not found")
 }
+
+// forgetting counts the forgetWhenGone calls still running: they outlive the
+// kill that started them (up to a few seconds), and a test waits for them
+// before its home is removed, as they still write there (the record's lock).
+var forgetting sync.WaitGroup
 
 // forgetWhenGone waits for a session's agent, sent SIGTERM, to be gone, kills
 // it if it is still there after grace, and then forgets its restore record
