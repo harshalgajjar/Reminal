@@ -317,7 +317,11 @@
     // A part of long talk still going on: typed in as "[voice, continues] ...".
     part(m) { if (text(m)) app.send({ kind: 'part', text: m.text.slice(0, 2000) }); },
     cut(m) { app.send({ kind: 'cut', text: String(m.text || '').slice(-400) }); },
-    listening(m) { app.send({ kind: 'listening', on: !!m.on }); },
+    // voice: false while the frame has nothing to say lines with (the
+    // device's voice failed): speak then answers "Not spoken" at once.
+    listening(m) { app.send(m.voice === false ? { kind: 'listening', on: !!m.on, voice: false } : { kind: 'listening', on: !!m.on }); },
+    // A line of the agent's the device could not say: speak tells the agent.
+    unheard(m) { if (text(m)) app.send({ kind: 'unheard', text: m.text.slice(0, 1000) }); },
     state(m) {
       setActivity(m.running, m.cls);
       muted = !!m.muted;

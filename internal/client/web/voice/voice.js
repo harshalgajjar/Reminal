@@ -29,6 +29,10 @@ const { $ } = panel;
 const log = (...a) => console.log('[voice]', ...a);
 
 let ctx, mic, stt, tts, speaker, wakeLock, starting = false;
+// The device's voice failed this run: switching (Auto: the natural voice is
+// being got ready) or voiceless (nothing can say the agent's lines). run
+// counts starts and stops, so a switch that ends after a Stop is dropped.
+let switching = false, voiceless = false, run = 0;
 
 // Before anything is loaded: every file from /voice-assets/ is checked
 // against reminal's own list of hashes (integrity.js).
@@ -71,7 +75,7 @@ panel.onStatusChange((text, cls) => send('state', { text, cls, running: talk.run
 // ---------- loading ----------
 const downloads = {};
 function progress(who, p) {
-  if (!starting) return; // late news from a start that has failed
+  if (!starting && !switching) return; // late news from a start that has failed
   downloads[who + p.file] = [p.loaded, p.total];
   let got = 0, all = 0;
   for (const k in downloads) { got += downloads[k][0]; all += downloads[k][1]; }
@@ -133,7 +137,7 @@ async function start() {
     const t0 = performance.now();
     await loadPageScripts();
     const { natural, speed, turnModel } = await loadModels(s);
-    speaker = new Speaker({ started: talk.replyStarted, heard: talk.replyHeard, finished: talk.replyFinished });
+    speaker = new Speaker(speakerEvents());
     await speaker.open({ ctx, natural, tts, speed, guard: s.guard, pace: s.pace });
     const runtime = await pageRuntime();
     mic = await vad.MicVAD.new({
@@ -191,6 +195,7 @@ function shutDown() {
   [stt, tts].forEach((w) => w && w.terminate());
   try { ctx && ctx.close(); } catch (_) {}
   mic = stt = tts = speaker = wakeLock = null;
+  switching = voiceless = false; run++;
   stopLevels();
   panel.startButton({ label: 'Start' });
   panel.showRunning(false);
@@ -207,7 +212,57 @@ document.addEventListener('visibilitychange', async () => {
 
 // Voice is on while this runs: the session is told every few seconds, so the
 // agent's speak works only while someone listens.
-setInterval(() => { if (talk.running) send('listening', { on: true }); }, 3000);
+// voice: false while nothing here can say its lines, so speak tells the agent
+// they were not heard rather than "Spoken.".
+const listening = () => send('listening', { on: true, voice: !voiceless });
+setInterval(() => { if (talk.running) listening(); }, 3000);
+
+// ---------- the device's voice failing ----------
+const speakerEvents = () => ({ started: talk.replyStarted, heard: talk.replyHeard, finished: talk.replyFinished, failed: deviceVoiceFailed });
+
+// A line the device's voice could not say (a browser with no speech engine
+// reports "synthesis-failed" for every line, and makes no sound): not heard,
+// and the session is told. The first time, Auto switches to the natural
+// voice for the rest of the run; a person who picked the device's voice is
+// told it has none.
+function deviceVoiceFailed(r, text, why) {
+  if (!talk.running) return;
+  talk.lineUnheard(r, text);
+  if (switching || voiceless) return;
+  log('device voice failed:', why);
+  voiceless = true;
+  listening();
+  if (panel.settings().voice === 'auto') switchToNatural();
+  else panel.loadingNote('This device has no voice of its own, so the agent answers on screen, not out loud. Pick Natural or Auto in the settings, then Start again.');
+}
+
+async function switchToNatural() {
+  const mine = run, s = panel.settings();
+  switching = true;
+  panel.loadingNote('This device has no voice of its own, so the natural voice is used. Getting it ready (it downloads once).');
+  let w;
+  try {
+    const got = await loadWorker('tts-worker.js', { v: s.who }, (m) => speaker && speaker.onWorker(m));
+    w = got.w;
+    if (mine !== run) { w.terminate(); return; } // stopped meanwhile
+    const next = new Speaker(speakerEvents());
+    await next.open({ ctx, natural: true, tts: w, speed: got.m.speed, guard: s.guard, pace: s.pace });
+    if (mine !== run) { next.close(); w.terminate(); return; }
+    speaker.close();
+    tts = w; speaker = next;
+    talk.useSpeaker(next);
+    switching = voiceless = false;
+    listening();
+    panel.loadingNote('This device has no voice of its own, so the natural voice is used.');
+    log('switched to the natural voice', got.m.speed.toFixed(1) + 'x');
+  } catch (e) {
+    if (mine !== run) return;
+    if (w) w.terminate();
+    switching = false; // still voiceless
+    log('natural voice failed too:', String((e && e.message) || e));
+    panel.loadingNote('This device has no voice of its own, and the natural voice could not load either, so the agent answers on screen, not out loud. ' + plainError(e));
+  }
+}
 
 // ---------- the panel's controls ----------
 const typing = (e) => e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT';

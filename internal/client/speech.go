@@ -8,6 +8,8 @@ package client
 //	viewer → agent  TypeSpeechIn {"kind":"said","text":"..."}    typed in as "[voice] ...", then Return
 //	viewer → agent  TypeSpeechIn {"kind":"part","text":"..."}    part of long talk still going on: "[voice, continues] ..."
 //	viewer → agent  TypeSpeechIn {"kind":"cut","text":"..."}     talked over it; text = what was heard
+//	viewer → agent  TypeSpeechIn {"kind":"listening","on":true,"voice":false}  on, with nothing to say lines with
+//	viewer → agent  TypeSpeechIn {"kind":"unheard","text":"..."} a line its voice could not say
 //	agent → viewer  TypeSpeech   {"text":"..."}                  say this
 //	agent → viewer  TypeSpeech   {"notice":"asking"}             what they said was not typed in, and why
 //
@@ -38,6 +40,7 @@ const (
 	speechSaid      = "said"
 	speechPart      = "part"
 	speechCut       = "cut"
+	speechUnheard   = "unheard"
 )
 
 // What the control verb "speak" answers, for `reminal mcp` to put into words
@@ -49,7 +52,17 @@ const (
 	SpeakCut          = "cut"
 	SpeakTooMuch      = "too-much"
 	SpeakEmpty        = "empty"
+	// SpeakNoVoice: someone listens, but the device has nothing to say it
+	// with (its own voice failed, and no other is ready). Followed by a
+	// space and earlier lines not heard, when there are any.
+	SpeakNoVoice = "no-voice"
+	// SpeakSpokenUnheard: this line was sent, but an earlier one, already
+	// reported spoken, was not heard; a space, then that line.
+	SpeakSpokenUnheard = "spoken-unheard"
 )
+
+// speechMaxUnheard caps what is kept of lines not heard, in characters.
+const speechMaxUnheard = 300
 
 // speechMaxPerMinute bounds what an agent can say: one stuck in a loop
 // calling speak is told, not read out without end.
@@ -84,10 +97,16 @@ type speechState struct {
 	cut         bool
 	heard       string
 	spokenAt    []time.Time // when recent lines were said, for speechMaxPerMinute
+	// voiceless: the listening viewer has nothing to say lines with.
+	// unheard: lines it could not say, after speak had reported them
+	// spoken; told to the agent on its next speak.
+	voiceless bool
+	unheard   string
 
-	now      func() time.Time   // tests: the clock (nil: time.Now)
-	typeKeys func([]byte) error // tests: what would be typed (nil: into the PTY)
-	blocked  func() string      // tests: what is in front (nil: speechBlocked reads it)
+	now      func() time.Time      // tests: the clock (nil: time.Now)
+	typeKeys func([]byte) error    // tests: what would be typed (nil: into the PTY)
+	blocked  func() string         // tests: what is in front (nil: speechBlocked reads it)
+	out      func(speechOut) error // tests: what is sent to the viewers (nil: toListeners)
 }
 
 func (s *speechState) clock() time.Time {
@@ -98,14 +117,42 @@ func (s *speechState) clock() time.Time {
 }
 
 // listen keeps voice on for speechListenFor from now, or turns it off.
-func (s *speechState) listen(on bool) {
+// voice is whether the viewer has something to say lines with.
+func (s *speechState) listen(on, voice bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if on {
 		s.listenUntil = s.clock().Add(speechListenFor)
+		s.voiceless = !voice
 	} else {
 		s.listenUntil = time.Time{}
+		s.voiceless, s.unheard = false, ""
 	}
+}
+
+// notHeard notes a line the viewer's voice could not say, after speak had
+// reported it spoken: the agent is told on its next speak. Its end is kept.
+func (s *speechState) notHeard(text string) {
+	text = speechText(text, speechMaxSpoken)
+	if text == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unheard != "" {
+		text = s.unheard + " " + text
+	}
+	s.unheard = lastRunes(text, speechMaxUnheard)
+}
+
+// takeUnheard returns the lines not heard that the agent has not been told
+// of, and forgets them.
+func (s *speechState) takeUnheard() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u := s.unheard
+	s.unheard = ""
+	return u
 }
 
 // talkedOver notes that the person cut the agent off, having heard heard.
@@ -134,6 +181,10 @@ func (s *speechState) maySpeak() string {
 		return SpeakNotListening
 	case s.cut:
 		return SpeakCut + " " + s.heard
+	case s.voiceless:
+		u := s.unheard
+		s.unheard = ""
+		return strings.TrimSpace(SpeakNoVoice + " " + u)
 	}
 	return SpeakSpoken
 }
@@ -194,16 +245,19 @@ func (a *Agent) handleSpeechIn(data string) {
 		return
 	}
 	var in struct {
-		Kind string `json:"kind"`
-		Text string `json:"text"`
-		On   bool   `json:"on"`
+		Kind  string `json:"kind"`
+		Text  string `json:"text"`
+		On    bool   `json:"on"`
+		Voice *bool  `json:"voice"` // listening: absent from a viewer from before it was sent
 	}
 	if json.Unmarshal(raw, &in) != nil {
 		return
 	}
 	switch in.Kind {
 	case speechListening:
-		a.speech.listen(in.On)
+		a.speech.listen(in.On, in.Voice == nil || *in.Voice)
+	case speechUnheard:
+		a.speech.notHeard(in.Text)
 	case speechCut:
 		a.speech.talkedOver(in.Text)
 	case speechSaid, speechPart:
@@ -270,8 +324,15 @@ func (a *Agent) speak(text string) (string, error) {
 	if !a.speech.allowLine() {
 		return SpeakTooMuch, nil
 	}
-	if err := a.toListeners(speechOut{Text: text}); err != nil {
+	send := a.toListeners
+	if a.speech.out != nil {
+		send = a.speech.out
+	}
+	if err := send(speechOut{Text: text}); err != nil {
 		return "", err
+	}
+	if u := a.speech.takeUnheard(); u != "" {
+		return SpeakSpokenUnheard + " " + u, nil
 	}
 	return SpeakSpoken, nil
 }

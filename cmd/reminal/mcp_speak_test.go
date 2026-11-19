@@ -34,6 +34,10 @@ func TestSpeakReportSaysWhatCameOfIt(t *testing.T) {
 		{"cut", "talked over you. Wait"},
 		{"too-much", "said a lot in the last minute"},
 		{"empty", "empty"},
+		// The person's device could not say it (its voice failed).
+		{"no-voice", "Not spoken: the person's device has no voice"},
+		{"no-voice Here is the plan.", `not heard either: "Here is the plan."`},
+		{"spoken-unheard Here is the plan.", `Spoken. But what you said before this was not heard (the person's device could not say it): "Here is the plan."`},
 	} {
 		if got := speakReport(c.reply); !strings.Contains(got, c.want) {
 			t.Errorf("speakReport(%q) = %q, want it to say %q", c.reply, got, c.want)
