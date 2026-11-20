@@ -11,8 +11,9 @@ import { Speakable } from './speakable.js';
 import { levelOf, rmsOf } from './level.js';
 
 // Short clips made once in the natural voice: a quick "Okay." before a slow
-// answer, and an "mm-hm" while you talk at length.
-export const CLIPS = { ack: ['Okay.', 'Sure.', 'Got it.', 'Right.', 'Mm, okay.'], nod: ['Mm-hm.', 'Mhm.'] };
+// answer, an "mm-hm" while you talk at length, and the "Sorry," a cut-in
+// starts with (it must be heard at once, while you are still talking).
+export const CLIPS = { ack: ['Okay.', 'Sure.', 'Got it.', 'Right.', 'Mm, okay.'], nod: ['Mm-hm.', 'Mhm.'], cue: [T.cutInCue] };
 
 let nextGen = 0;
 export function newReply(fields) {
@@ -23,7 +24,7 @@ export class Speaker {
   // on: { started(r, what), heard(r), finished(r), failed(r, text, why) }
   // failed: the device's voice could not say text (a browser with no speech
   // engine says "synthesis-failed" and makes no sound).
-  constructor(on) { this.on = on; this.clips = { ack: [], nod: [] }; this.lastAck = ''; this.lastNodT = 0; this.nodUntil = 0; this.buf = ''; }
+  constructor(on) { this.on = on; this.clips = { ack: [], nod: [], cue: [] }; this.lastAck = ''; this.lastNodT = 0; this.nodUntil = 0; this.buf = ''; }
 
   // natural: Kokoro through `tts` (its worker), at `speed` x real time; else
   // the device's voice. guard: play through the echo canceller's loopback.
@@ -42,9 +43,9 @@ export class Speaker {
     if (natural) this.makeClips();
   }
 
-  close() { clearInterval(this.watch); this.current = null; this.clips = { ack: [], nod: [] }; }
+  close() { clearInterval(this.watch); this.current = null; this.clips = { ack: [], nod: [], cue: [] }; }
 
-  makeClips() { this.clips = { ack: [], nod: [] }; [...CLIPS.ack, ...CLIPS.nod].forEach((text) => this.tts.postMessage({ type: 'clip', text })); }
+  makeClips() { this.clips = { ack: [], nod: [], cue: [] }; [...CLIPS.cue, ...CLIPS.ack, ...CLIPS.nod].forEach((text) => this.tts.postMessage({ type: 'clip', text })); }
   setVoice(id) { if (this.tts) { this.tts.postMessage({ type: 'voice', v: id }); this.makeClips(); } }
   setPace(p) { this.pace = p; if (this.tts) this.tts.postMessage({ type: 'speed', v: p }); }
 
@@ -56,7 +57,7 @@ export class Speaker {
     for (const w of text.match(/\s*\S+\s*/g) || []) this.words(r, r.fmt.push(w));
     this.words(r, r.fmt.end());
     r.fmt = new Speakable();
-    if (this.natural) this.tts.postMessage({ type: 'flush', gen: r.gen });
+    if (this.natural) { r.synthDone = false; this.tts.postMessage({ type: 'flush', gen: r.gen }); }
     else if (this.buf.trim()) this.utter(r, this.flushBuf());
   }
 
@@ -108,7 +109,7 @@ export class Speaker {
 
   // ---------- Kokoro's audio ----------
   onWorker(m) {
-    if (m.type === 'clip') { (CLIPS.nod.includes(m.text) ? this.clips.nod : this.clips.ack).push({ text: m.text, buf: this.buffer(m.pcm, m.rate) }); return; }
+    if (m.type === 'clip') { (CLIPS.cue.includes(m.text) ? this.clips.cue : CLIPS.nod.includes(m.text) ? this.clips.nod : this.clips.ack).push({ text: m.text, buf: this.buffer(m.pcm, m.rate) }); return; }
     const r = this.current;
     if (!r || m.gen !== r.gen) return;
     if (m.type === 'audio') { clearTimeout(r.ackTimer); this.play(r, this.buffer(m.pcm, m.rate), m.text, false); }
@@ -163,6 +164,17 @@ export class Speaker {
     const a = pick[Math.floor(Math.random() * pick.length)] || this.clips.ack[0];
     this.lastAck = a.text;
     this.play(r, a.buf, a.text, true);
+    return true;
+  }
+  // A made clip said as a reply's line (a cut-in's "Sorry,"), at once; false
+  // if there is none (the device's voice, or not made yet): say it instead.
+  cue(r, text) {
+    const a = this.natural && this.clips.cue.find((c) => c.text === text);
+    if (!a) return false;
+    this.current = r;
+    r.spoken = (r.spoken || '') + text + ' ';
+    this.play(r, a.buf, a.text, false);
+    r.synthDone = true; // nothing for the voice to make: it is all here
     return true;
   }
   // A quiet "mm-hm" at a pause in long talk; true if one played. Its own sound

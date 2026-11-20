@@ -62,6 +62,8 @@ let agentState = '';
 const afterReply = [];                    // lines it said while a finished reply was still being heard
 let held = [], heldRow = null;            // lines it said while you were talking
 let cutIn = null, cutNote = '';           // a cut-in waiting for you to stop, or one you talked over
+let cutLate = null;                       // one judged talked over, still taken if you stop soon after
+let beforeCut = [];                       // what you said up to stopping for a cut-in: sent with your next turn
 
 export function start(deps) {
   ({ stt, speaker, turnModel, nods } = deps);
@@ -85,7 +87,7 @@ export function lineUnheard(r, text) {
 }
 
 export function stop() {
-  held = []; heldRow = null; cutIn = null; cutNote = '';
+  held = []; heldRow = null; cutIn = null; cutNote = ''; cutLate = null; beforeCut = [];
   running = false;
   if (reply) cutOff(now(), { quietly: true });
   muted = holding = false;
@@ -137,7 +139,7 @@ function maybeStart(t, p, rms, frame) {
 function voiced(t) {
   voicedMs += FRAME_MS; silenceMs = 0; lastVoiceT = t;
   checked = rechecked = finalStarted = thinking = false;
-  if (cutIn && t - cutIn.at > T.cutInCueMs + T.cutInWaitMs) cutInDecided(false);
+  if (cutIn && cueHeardFor(t) > T.cutInWaitMs) cutInDecided(false);
   if (you !== 'talking') { you = 'talking'; show(ducked ? 'ducked' : 'hearing'); }
   // Words decide first (overheard); this is for speech the text model cannot
   // make out. A backchannel it did make out may run longer.
@@ -146,7 +148,9 @@ function voiced(t) {
 
 function quiet(t) {
   silenceMs += FRAME_MS;
-  if (cutIn && t - cutIn.at > T.cutInCueMs && silenceMs >= T.cutInStopMs) cutInDecided(true);
+  if (cutIn && cueStarted(t) && silenceMs >= T.cutInStopMs) cutInDecided(true);
+  else if (cutLate && silenceMs >= T.cutInStopMs) { if (t - cutLate.at <= T.cutInLateMs) cutInTakenLate(); else cutLate = null; }
+  if (you === 'quiet') return;
   if (ducked) { if (silenceMs >= T.backchannelQuietMs) liftDuck(); return; }
   // The final words, started a moment before the turn model is asked, so they
   // are ready when it says the turn is over.
@@ -261,7 +265,9 @@ function live(m) {
 function endTurn(t, why) {
   learnYourLevel();
   if (you === 'quiet') return;
-  if (cutIn) cutInDecided(true); // you stopped: the cut-in is said
+  // You stopped: the cut-in is said (also one judged talked over a moment ago).
+  if (cutIn) { cutInDecided(true); return; }
+  if (cutLate && now() - cutLate.at <= T.cutInLateMs) { cutInTakenLate(); return; }
   const endT = lastVoiceT, decidedT = now(), parts = partsSent;
   you = 'quiet'; preRoll = []; partsSent = 0;
   show('thinking');
@@ -342,7 +348,8 @@ function nod() {
 
 // Your words to the agent; after a cut-in you talked over, with a note first.
 function toAgent(t, text) {
-  if (cutNote) { text = `(they talked on over your cut-in: "${cutNote}"; they did not hear it) ` + text; cutNote = ''; }
+  if (cutNote) { text = `(they talked on over your cut-in: "${cutNote}"; they did not hear it) ` + text; cutNote = ''; cutLate = null; }
+  if (beforeCut.length) { text = `(before they stopped for your cut-in they had also said: "${beforeCut.join(' ')}") ` + text; beforeCut = []; }
   send(t, { text });
 }
 
@@ -371,9 +378,8 @@ function ownReply() {
   return reply;
 }
 
-// A line the agent said with speak. force: say it even while you talk (the
-// cue and the rest of a cut-in you stopped for).
-export function agentSaid(text, force = false) {
+// A line the agent said with speak.
+export function agentSaid(text) {
   if (!running) return;
   let r = reply;
   log('speak', r ? r.gen : '-', text.slice(0, 40));
@@ -381,7 +387,7 @@ export function agentSaid(text, force = false) {
   // an answer you have moved on from is held back.
   if (you !== 'quiet' && !(r && r.playing) && !partsSent) { holdBack(text); return; }
   // Cutting in on long talk sent in parts: a cue first.
-  if (you !== 'quiet' && partsSent && !force) { offerCutIn(text); return; }
+  if (you !== 'quiet' && partsSent) { offerCutIn(text); return; }
   // Its turn is over but that reply is still being heard: after it, not over it.
   if (r && r.agentDone) { afterReply.push(text); return; }
   if (!r) r = ownReply();
@@ -444,6 +450,7 @@ function paint(r) {
 
 // Its first sound: when it started, for the row and the timings.
 export function replyStarted(r, what) {
+  cueHeard(r);
   if (r.startedAt) return;
   r.startedAt = now();
   const turn = r.turn;
@@ -571,21 +578,85 @@ function releaseHeld(sayIt) {
 // A cut-in, as people make one: a short "Sorry," first, and the rest only if
 // you stop for it (mostly you are mid-word, and a whole sentence would be lost
 // under yours). Talked over, it is dropped and its next message says so.
+//
+// Whether you stopped for it is timed from when you heard "Sorry," (a made
+// clip, so at once), not from when the agent's line arrived: a person needs a
+// moment to hear it and finish the word they are on. Judged talked over and
+// then you stop soon after all, it is still taken.
+//
+// Stopping for it ends your turn there: what you said up to then was said
+// before you heard it, not an answer to it, so it is not sent as a turn of
+// its own (the agent would answer that, and its answer would cut off the
+// cut-in you stopped to hear). It goes with your next turn instead.
 function offerCutIn(text) {
   if (cutIn) { cutIn.lines.push(text); return; }
-  cutIn = { lines: [text], at: now() };
+  if (cutLate) { cutLate.lines.push(text); return; }
+  cutIn = { lines: [text], at: now(), heardAt: 0, endAt: 0, cue: null };
   log('cut-in offered', text.slice(0, 40));
-  agentSaid(T.cutInCue, true);
+  const r = ownReply();
+  cutIn.cue = r;
+  r.text = T.cutInCue; r.spoke = true; r.lastLineT = now();
+  if (!speaker.cue(r, T.cutInCue)) speaker.say(r, T.cutInCue);
+  paint(r);
+  r.endTimer = setTimeout(() => endReply(r), T.ownReplyEndMs);
 }
+// The cue is heard from its first sound (replyStarted); one that never makes
+// a sound counts as heard a while after it was offered.
+function cueHeard(r) {
+  const c = cutIn;
+  if (!c || c.cue !== r || c.heardAt) return;
+  c.heardAt = now();
+  const left = speaker.natural ? Math.max(0, (r.playHead - speaker.ctx.currentTime) * 1000) : 0;
+  c.endAt = c.heardAt + (left || T.cutInCueMs);
+}
+function cueTimes(t) {
+  const c = cutIn;
+  if (c && !c.heardAt && t - c.at > T.cutInNoSoundMs) { c.heardAt = c.at + T.cutInNoSoundMs; c.endAt = c.heardAt + T.cutInCueMs; }
+  return c && c.heardAt ? c : null;
+}
+const cueStarted = (t) => { const c = cueTimes(t); return !!c && t - c.heardAt >= T.cutInMinHeardMs; };
+const cueHeardFor = (t) => { const c = cueTimes(t); return c ? t - c.endAt : -Infinity; };
+
 function cutInDecided(stopped) {
   const c = cutIn;
   cutIn = null;
-  if (stopped) { log('cut-in taken'); c.lines.forEach((t) => agentSaid(t, true)); return; }
+  if (stopped) { log('cut-in taken'); takeCutIn(c.lines); return; }
   log('cut-in not taken');
   cutNote = c.lines.join(' ').slice(0, 300);
   const row = panel.addRow('agent');
   panel.setRowText(row, cutNote, 'unsaid');
   panel.setRowNote(row, 'cut-in not taken: you kept talking');
+  cutLate = { lines: c.lines, at: now(), row };
+}
+function cutInTakenLate() {
+  const c = cutLate;
+  cutLate = null; cutNote = '';
+  log('cut-in taken late');
+  c.row.remove();
+  takeCutIn(c.lines);
+}
+function takeCutIn(lines) {
+  stopForCutIn();
+  lines.forEach((t) => agentSaid(t));
+}
+// Your turn ends where you stopped for it, without being sent.
+function stopForCutIn() {
+  partsSent = 0;
+  if (you === 'quiet') return;
+  learnYourLevel();
+  const row = liveRow || panel.pendingRow();
+  liveRow = null;
+  const f = latestFinal() || requestFinal();
+  const keep = () => {
+    const text = (f.text || '').trim();
+    if (!hasWords(text)) { row.remove(); return; }
+    panel.setRowText(row, text);
+    panel.setRowNote(row, 'said before you stopped for its cut-in; sent with your next turn');
+    beforeCut.push(text);
+  };
+  if (f.text != null) keep(); else f.waiting.push(keep);
+  you = 'quiet'; frames = []; preRoll = []; uttId++; voicedMs = 0; silenceMs = 0;
+  settled = null; latest = null; liveBefore = ''; checked = rechecked = finalStarted = thinking = false;
 }
 
 // ---------- the agent ----------
@@ -607,7 +678,7 @@ export function agentStateIs(state) {
 // (not a talk-over: nothing reported, nothing to pick up), and the
 // conversation shows where the new one begins.
 export function sessionSwitched(id, name) {
-  held = []; heldRow = null; cutIn = null; cutNote = '';
+  held = []; heldRow = null; cutIn = null; cutNote = ''; cutLate = null; beforeCut = [];
   afterReply.length = 0; agentState = '';
   panel.setAgentName(name);
   if (reply) {

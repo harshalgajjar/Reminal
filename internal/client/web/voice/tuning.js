@@ -40,7 +40,14 @@ export const T = {
   duckGain: 0.12,             // its voice while you talk over it
 
   // The agent cutting in on long talk: a cue, then you have a moment to stop for it.
-  cutInCue: 'Sorry,', cutInCueMs: 700, cutInWaitMs: 2000, cutInStopMs: 450,
+  // Timed from when "Sorry," is heard, not from when the agent's line arrived.
+  cutInCue: 'Sorry,',
+  cutInCueMs: 700,            // how long "Sorry," lasts, where it cannot be measured (the device's voice)
+  cutInMinHeardMs: 150,       // stopping counts once this much of it has been heard
+  cutInStopMs: 450,           // quiet this long: you stopped for it
+  cutInWaitMs: 2500,          // still talking this long after it ended: you talked on over it
+  cutInLateMs: 3000,          // ...but stopping within this after that still takes it
+  cutInNoSoundMs: 2500,       // a cue that never makes a sound counts as heard after this
 
   // Replies.
   ackAfterMs: 350,            // no answer by then: a quick "Okay." first
