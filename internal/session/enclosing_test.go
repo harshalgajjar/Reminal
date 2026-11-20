@@ -60,16 +60,25 @@ func TestEnclosingFindsAnAncestorAgent(t *testing.T) {
 	}
 }
 
-// DescendsFrom: this process runs under its parent and is itself; it does
-// not run under one of its own children, nor under an unrelated pid.
-func TestDescendsFrom(t *testing.T) {
-	if !DescendsFrom(os.Getpid(), os.Getpid()) || !DescendsFrom(os.Getpid(), os.Getppid()) {
-		t.Fatal("not under itself or its parent")
+// The nearest session above a process is the one it runs in: with a session
+// started inside another (this process's parent inside its grandparent),
+// this process is in the inner one only; with none above, it is in none.
+func TestNearestSessionIsTheInnerOne(t *testing.T) {
+	self, parent := os.Getpid(), os.Getppid()
+	grand := parentPID(parent)
+	if grand <= 1 {
+		t.Skip("no grandparent to stand in for an outer session")
 	}
-	if DescendsFrom(os.Getppid(), os.Getpid()) {
-		t.Fatal("the parent read as under its child")
+	if got := nearestOf(self, map[int]bool{parent: true, grand: true}); got != parent {
+		t.Fatalf("nested: %d, want the inner session %d (outer %d)", got, parent, grand)
 	}
-	if DescendsFrom(os.Getpid(), 999999) {
-		t.Fatal("under a pid that is not its ancestor")
+	if got := nearestOf(self, map[int]bool{grand: true}); got != grand {
+		t.Fatalf("one session above: %d, want %d", got, grand)
+	}
+	if got := nearestOf(self, map[int]bool{}); got != 0 {
+		t.Fatalf("no session above: %d", got)
+	}
+	if got := nearestOf(self, map[int]bool{self: true, parent: true}); got != self {
+		t.Fatalf("itself a session: %d", got)
 	}
 }

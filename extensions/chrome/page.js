@@ -22,16 +22,29 @@ export function locate(ref, x, y) {
   } else {
     return { error: 'Give a ref, or x and y.' };
   }
-  return { x, y, what: R.what(el), paused: R.paused(el) };
+  return { x, y, what: R.what(el), paused: R.paused(el), secret: R.secret(el) ? R.NEVER : "", frame: !!el && /^(IFRAME|FRAME|OBJECT|EMBED)$/.test(el.tagName) };
 }
 
-// focused: what typing would go into. Refused for a password or payment
-// field; paused in a sign-in form or with a CAPTCHA showing.
+// focused: what typing would go into, in this frame (each frame answers):
+// whether this frame has the focus, and whether its focused element is a
+// frame (the focus is further in). Refused for a password or payment field;
+// paused in a sign-in form or with a CAPTCHA showing.
 export function focused() {
   const R = globalThis.__reminal;
   let el = document.activeElement;
   while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
-  return { what: R.what(el), refused: R.secret(el) ? R.NEVER : '', paused: R.paused(el) };
+  return {
+    hasFocus: document.hasFocus(), frame: !!el && /^(IFRAME|FRAME|OBJECT|EMBED)$/.test(el.tagName),
+    what: R.what(el), refused: R.secret(el) ? R.NEVER : '', paused: R.paused(el), captcha: R.captcha(),
+  };
+}
+
+// frameCheck: whether this frame holds something only the person does (a
+// sign-in, a payment field, a CAPTCHA): asked of every frame when an action
+// lands on a frame, whose inside cannot be told apart from here.
+export function frameCheck() {
+  const R = globalThis.__reminal;
+  return { personOnly: R.personOnly(), captcha: R.captcha() };
 }
 
 export function middle() { return { x: innerWidth / 2, y: innerHeight / 2 }; }
@@ -54,7 +67,7 @@ export function readTree(interactiveOnly) {
   };
   const lines = [];
   if (R.captcha()) lines.push('(A CAPTCHA is showing: actions are paused until the person solves it.)');
-  if (document.querySelector('form input[type=password]')) lines.push('(This page has a sign-in form: actions inside it are paused for the person.)');
+  if (R.deepAll(document, 'input, textarea').some(R.passwordish)) lines.push('(This page has a sign-in: actions inside it are paused for the person.)');
   const walk = (el, depth) => {
     if (lines.length > 3000 || el.nodeType !== 1) return;
     if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(el.tagName) || el.getAttribute('aria-hidden') === 'true') return;
@@ -70,7 +83,8 @@ export function readTree(interactiveOnly) {
       if (name) line += ` "${name}"`;
       if (act) line += ` [${ref}]`;
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) {
-        if ((el.type || '').toLowerCase() === 'password') line += ' (password: the person types it)';
+        if (R.passwordish(el)) line += ' (password: the person types it)';
+        else if (R.payment(el)) line += ' (payment: the person types it)';
         else if (el.type === 'checkbox' || el.type === 'radio') line += el.checked ? ' checked' : ' unchecked';
         else if (el.value) line += ` value="${String(el.value).slice(0, 80)}"`;
       }

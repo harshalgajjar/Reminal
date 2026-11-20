@@ -25,6 +25,10 @@ import (
 // consent window, then the action) and the hops around it.
 const browserControlWait = client.BrowserWait + 5*time.Second
 
+// browserMaxType bounds what browser_type types in one go (and keeps the
+// request well under the 1 MB a message to the extension may be).
+const browserMaxType = 100_000
+
 func browserTools(obj func(map[string]any, ...string) map[string]any, str func(string) map[string]any) []map[string]any {
 	num := func(desc string) map[string]any { return map[string]any{"type": "number", "description": desc} }
 	tab := num("Optional: the tab, from browser_tabs_context. Default: the session's last used tab.")
@@ -94,6 +98,12 @@ func browserTools(obj func(map[string]any, ...string) map[string]any, str func(s
 // mcpBrowser runs one browser tool through this session and turns the
 // extension's answer into content blocks.
 func mcpBrowser(tool string, args map[string]any) ([]any, error) {
+	if args == nil {
+		args = map[string]any{}
+	}
+	if text, _ := args["text"].(string); tool == "browser_type" && len(text) > browserMaxType {
+		return nil, fmt.Errorf("text is %d characters: type at most %d at a time", len(text), browserMaxType)
+	}
 	id := enclosingSessionID()
 	if id == "" {
 		return nil, errors.New("the browser tools work only inside a reminal session on this computer")
@@ -101,9 +111,6 @@ func mcpBrowser(tool string, args map[string]any) ([]any, error) {
 	rec, err := session.ReadActiveByID(id)
 	if err != nil || rec.PID <= 0 {
 		return nil, fmt.Errorf("this reminal session (%s) is not running", id)
-	}
-	if args == nil {
-		args = map[string]any{}
 	}
 	req, err := json.Marshal(map[string]any{"tool": strings.TrimPrefix(tool, "browser_"), "args": args})
 	if err != nil {

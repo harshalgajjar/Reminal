@@ -11,21 +11,26 @@ package client
 //	      → `reminal browser-host` (Chrome's native messaging host)
 //	      → the extension (extensions/chrome), which asks the person first.
 //
-// On browser.sock every message is one line of JSON. The host says
-// {"t":"host"} first and then carries messages both ways; a session sends one
-// request {"t":"req","session":…,"tool":…,"args":…} and reads one answer.
-// A request is taken only from the process that is that session: its peer
-// pid (SO_PEERCRED, LOCAL_PEERPID) must be the session's own, so another
-// program of the same user cannot use a consent the person gave a session.
+// On browser.sock every message is one line of JSON. The bridge (the host)
+// says {"t":"host"} first and then carries messages both ways; a session
+// sends one request {"t":"req","session":…,"run":…,"tool":…,"args":…} and
+// reads one answer. A request is taken only from the process that is that
+// session: its peer pid (SO_PEERCRED, LOCAL_PEERPID) must be the session's
+// own, so another program of the same user cannot use a consent the person
+// gave a session. A bridge is taken only from reminal's own browser-host,
+// started by a browser of Chrome's family.
 
 import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,12 +57,14 @@ func BrowserSockPath() (string, error) {
 	return filepath.Join(home, ".reminal", "browser.sock"), nil
 }
 
-// BrowserReq is a session's request, and what the hub hands the host (with
-// its own id).
+// BrowserReq is a session's request, and what the hub hands the bridge (with
+// its own id). Run names the session's run (when its process started), so the
+// extension's consent belongs to that run alone.
 type BrowserReq struct {
 	T       string          `json:"t"`
 	ID      uint64          `json:"id,omitempty"`
 	Session string          `json:"session"`
+	Run     string          `json:"run,omitempty"`
 	Name    string          `json:"name,omitempty"`
 	Machine string          `json:"machine,omitempty"`
 	Tool    string          `json:"tool"`
@@ -74,23 +81,32 @@ type BrowserResp struct {
 }
 
 // errNoBrowser is what a request gets while no extension is connected.
-var errNoBrowser = errors.New("the reminal Chrome extension is not connected: run `reminal integrate chrome`, load the extension, and open Chrome")
+var errNoBrowser = errors.New("reminal's browser extension is not connected: run `reminal integrate`, load the extension in your browser, and open it")
 
 type browserHub struct {
 	mu      sync.Mutex
 	host    *browserConn
 	nextID  uint64
-	waiting map[uint64]chan BrowserResp
+	waiting map[uint64]waiter
 	seen    map[string]bool // sessions that have asked, told when they end
 
 	// tests: whether peer pid may make a request for session (nil: the
-	// session's own process, by its active record).
-	allow func(peer int, session string) bool
+	// session's own process, by its active record); whether peer may be the
+	// bridge (nil: reminal's browser-host under a browser).
+	allow       func(peer int, session string) bool
+	allowBridge func(peer int) bool
+}
+
+// waiter is a request waiting for its answer, and the bridge it went to.
+type waiter struct {
+	ch  chan BrowserResp
+	via *browserConn
 }
 
 type browserConn struct {
-	c  net.Conn
-	mu sync.Mutex // one writer at a time
+	c   net.Conn
+	pid int
+	mu  sync.Mutex // one writer at a time
 }
 
 func (b *browserConn) send(v any) error {
@@ -106,7 +122,7 @@ func (b *browserConn) send(v any) error {
 }
 
 func newBrowserHub() *browserHub {
-	return &browserHub{waiting: map[uint64]chan BrowserResp{}, seen: map[string]bool{}}
+	return &browserHub{waiting: map[uint64]waiter{}, seen: map[string]bool{}}
 }
 
 // ServeBrowser serves browser.sock until stop closes. Not on Windows in
@@ -202,15 +218,29 @@ func readBrowserLine(r *bufio.Reader) ([]byte, error) {
 	}
 }
 
-// serveHost makes conn the host (one at a time: a newer one replaces the
-// older) and hands its answers to the requests waiting for them.
+// serveHost makes conn the bridge, if it is reminal's browser-host started by
+// a browser. A newer one takes over from an older (the extension reconnected:
+// the older one's browser port is gone), and says so in the daemon's log; the
+// requests the older one held are failed, the newer one's are not.
 func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
-	bc := &browserConn{c: conn}
+	peer, err := peerPID(conn)
+	ok := h.allowBridge
+	if ok == nil {
+		ok = browserBridgeOK
+	}
+	if err != nil || !ok(peer) {
+		log.Printf("browser: refused a bridge from pid %d: not reminal's browser-host under a browser", peer)
+		_ = (&browserConn{c: conn}).send(map[string]string{"t": "refused", "error": "not reminal's browser host"})
+		_ = conn.Close()
+		return
+	}
+	bc := &browserConn{c: conn, pid: peer}
 	h.mu.Lock()
 	old := h.host
 	h.host = bc
 	h.mu.Unlock()
 	if old != nil {
+		log.Printf("browser: the bridge from pid %d replaces the one from pid %d", peer, old.pid)
 		_ = old.c.Close()
 	}
 	_ = conn.SetReadDeadline(time.Time{})
@@ -224,28 +254,83 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 			continue
 		}
 		h.mu.Lock()
-		ch := h.waiting[resp.ID]
-		delete(h.waiting, resp.ID)
+		w, ok := h.waiting[resp.ID]
+		mine := ok && w.via == bc // an answer only from the bridge it went to
+		if mine {
+			delete(h.waiting, resp.ID)
+		}
 		h.mu.Unlock()
-		if ch != nil {
-			ch <- resp
+		if mine {
+			w.ch <- resp
 		}
 	}
 	h.mu.Lock()
 	if h.host == bc {
 		h.host = nil
 	}
-	// Requests the gone host held: answered now, not at their deadline.
-	for id, ch := range h.waiting {
-		delete(h.waiting, id)
-		ch <- BrowserResp{ID: id, Error: "the Chrome extension disconnected"}
+	// The requests this bridge held: answered now, not at their deadline.
+	for id, w := range h.waiting {
+		if w.via == bc {
+			delete(h.waiting, id)
+			w.ch <- BrowserResp{ID: id, Error: "the browser extension disconnected"}
+		}
 	}
 	h.mu.Unlock()
 	_ = conn.Close()
 }
 
-// request checks who is asking, passes the request to the host and waits for
-// its answer.
+// browserBridgeOK: pid is reminal (this daemon's own binary, or one named
+// reminal) run as the browser host, with a browser of Chrome's family above
+// it (the one that started it for its extension).
+func browserBridgeOK(pid int) bool {
+	args := processArgs(pid)
+	exe := processExecPath(pid)
+	if exe == "" && len(args) > 0 {
+		exe = args[0]
+	}
+	self, _ := os.Executable()
+	if r, err := filepath.EvalSymlinks(self); err == nil {
+		self = r
+	}
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = r
+	}
+	if exe == "" || (exe != self && !strings.HasPrefix(strings.ToLower(filepath.Base(exe)), "reminal")) {
+		return false
+	}
+	asHost := false
+	for _, a := range args {
+		if a == "browser-host" || strings.HasPrefix(a, "chrome-extension://") {
+			asHost = true
+		}
+	}
+	if !asHost {
+		return false
+	}
+	p := pid
+	for i := 0; i < 8; i++ {
+		p = session.ParentPID(p)
+		if p <= 1 {
+			return false
+		}
+		name := filepath.Base(processExecPath(p))
+		if name == "." || name == "" || name == "/" {
+			if a := processArgs(p); len(a) > 0 {
+				name = filepath.Base(a[0])
+			}
+		}
+		if browserProcessName.MatchString(name) {
+			return true
+		}
+	}
+	return false
+}
+
+// browserProcessName matches the program names of Chrome's family.
+var browserProcessName = regexp.MustCompile(`(?i)^(google chrome|chrome|chromium|chromium-browser|msedge|microsoft edge|brave|brave browser|brave-browser|arc|headless_shell)( (helper|beta|dev|canary).*)?$`)
+
+// request checks who is asking, passes the request to the bridge and waits
+// for its answer.
 func (h *browserHub) request(conn net.Conn, m BrowserReq) BrowserResp {
 	if m.Session == "" || m.Tool == "" {
 		return BrowserResp{Error: "bad request"}
@@ -270,7 +355,7 @@ func (h *browserHub) request(conn net.Conn, m BrowserReq) BrowserResp {
 	h.nextID++
 	id := h.nextID
 	ch := make(chan BrowserResp, 1)
-	h.waiting[id] = ch
+	h.waiting[id] = waiter{ch: ch, via: host}
 	h.seen[m.Session] = true
 	h.mu.Unlock()
 
@@ -279,7 +364,7 @@ func (h *browserHub) request(conn net.Conn, m BrowserReq) BrowserResp {
 		h.mu.Lock()
 		delete(h.waiting, id)
 		h.mu.Unlock()
-		return BrowserResp{Error: "the Chrome extension did not take the request: " + err.Error()}
+		return BrowserResp{Error: "the browser extension did not take the request: " + err.Error()}
 	}
 	select {
 	case resp := <-ch:
@@ -289,7 +374,7 @@ func (h *browserHub) request(conn net.Conn, m BrowserReq) BrowserResp {
 		h.mu.Lock()
 		delete(h.waiting, id)
 		h.mu.Unlock()
-		return BrowserResp{Error: "Chrome did not answer in time"}
+		return BrowserResp{Error: "the browser did not answer in time"}
 	}
 }
 
@@ -310,21 +395,31 @@ func (h *browserHub) watchEnded(stop <-chan struct{}) {
 			return
 		case <-t.C:
 		}
-		h.mu.Lock()
-		var ended []string
-		for id := range h.seen {
-			if rec, err := session.ReadActiveByID(id); err != nil || rec.PID <= 0 {
-				ended = append(ended, id)
-			}
+		h.tellEnded()
+	}
+}
+
+// tellEnded tells the extension of the sessions that have ended. Told only
+// when it can be: while no extension is connected they are kept, to be told
+// once one is.
+func (h *browserHub) tellEnded() {
+	h.mu.Lock()
+	var ended []string
+	for id := range h.seen {
+		if rec, err := session.ReadActiveByID(id); err != nil || rec.PID <= 0 {
+			ended = append(ended, id)
 		}
-		host := h.host
-		h.mu.Unlock()
-		for _, id := range ended {
-			if host == nil || host.send(map[string]string{"t": "ended", "session": id}) == nil {
-				h.mu.Lock()
-				delete(h.seen, id)
-				h.mu.Unlock()
-			}
+	}
+	host := h.host
+	h.mu.Unlock()
+	if host == nil {
+		return
+	}
+	for _, id := range ended {
+		if host.send(map[string]string{"t": "ended", "session": id}) == nil {
+			h.mu.Lock()
+			delete(h.seen, id)
+			h.mu.Unlock()
 		}
 	}
 }

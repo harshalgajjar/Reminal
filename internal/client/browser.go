@@ -9,24 +9,26 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 
 	"reminal/internal/session"
 )
 
 // browserCallerOK says whether the process at the other end of the control
-// socket may use this session's browser: one running inside the session (the
-// session's own process, or one under it, as its agent and the agent's
-// `reminal mcp` are). The person allows a session, so only what runs in it
-// gets the browser: another program of the same user that names the session
-// (REMINAL_SESSION is only an environment variable) does not. A variable for
-// tests.
-var browserCallerOK = func(peer int) bool { return session.DescendsFrom(peer, os.Getpid()) }
+// socket may use this session's browser: one running in this session, its
+// nearest enclosing session being this one (the session's own process, or its
+// agent and the agent's `reminal mcp`). The person allows a session, so only
+// what runs in it gets the browser: not another program of the same user that
+// names the session (REMINAL_SESSION is only an environment variable), and
+// not an agent in a session started inside this one (that one is asked for
+// by its own name). A variable for tests.
+var browserCallerOK = func(peer int) bool { return session.NearestSessionPID(peer) == os.Getpid() }
 
 // handleBrowserControl is the control verb "browser <base64 of {tool, args}>":
-// the session asks the daemon's browser hub as itself (its id, its name and
-// this machine's, for the person's consent window), and answers with the
-// base64 of the extension's answer ({ok, result|error}).
+// the session asks the daemon's browser hub as itself (its id, this run of it,
+// its name and this machine's, for the person's consent window), and answers
+// with the base64 of the extension's answer ({ok, result|error}).
 func (a *Agent) handleBrowserControl(conn net.Conn, b64 string) (string, error) {
 	if conn != nil {
 		peer, err := peerPID(conn)
@@ -52,7 +54,7 @@ func (a *Agent) handleBrowserControl(conn net.Conn, b64 string) (string, error) 
 	name := a.name
 	a.metaMu.Unlock()
 	machine, _ := os.Hostname()
-	resp, err := AskBrowser(BrowserReq{Session: a.sessionID, Name: name, Machine: machine, Tool: in.Tool, Args: in.Args})
+	resp, err := AskBrowser(BrowserReq{Session: a.sessionID, Run: a.browserRun(), Name: name, Machine: machine, Tool: in.Tool, Args: in.Args})
 	if err != nil {
 		return "", err
 	}
@@ -61,4 +63,15 @@ func (a *Agent) handleBrowserControl(conn net.Conn, b64 string) (string, error) 
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(out), nil
+}
+
+// browserRun names this run of the session: when its process started. The
+// extension keeps consent for a session's id with its run, so a session
+// restored, restarted, or given an id an ended one had, is asked again and
+// never inherits an earlier Allow.
+func (a *Agent) browserRun() string {
+	if a.startedAt.IsZero() {
+		return strconv.Itoa(os.Getpid())
+	}
+	return strconv.FormatInt(a.startedAt.UnixNano(), 36)
 }

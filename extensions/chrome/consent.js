@@ -6,7 +6,7 @@
 // click the person meant for it into "Allow" by moving focus here, and only a
 // real click (not a script's) counts.
 const q = new URLSearchParams(location.search);
-const session = q.get('session') || '', name = q.get('name') || '', machine = q.get('machine') || '';
+const key = q.get('key') || '', session = q.get('session') || '', name = q.get('name') || '', machine = q.get('machine') || '';
 const who = document.getElementById('who');
 const strong = document.createElement('strong');
 strong.textContent = name ? `"${name}" (${session})` : session;
@@ -27,7 +27,7 @@ arm(document.hasFocus());
 const answer = (allow) => (e) => {
   if (!e.isTrusted || e.currentTarget.disabled) return;
   buttons.forEach((b) => { b.disabled = true; });
-  chrome.runtime.sendMessage({ t: 'consent', session, allow }).finally(() => window.close());
+  chrome.runtime.sendMessage({ t: 'consent', key, allow }).finally(() => window.close());
 };
 buttons[0].addEventListener('click', answer(true));
 buttons[1].addEventListener('click', answer(false));

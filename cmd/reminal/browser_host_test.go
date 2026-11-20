@@ -268,3 +268,36 @@ func TestBrowserAnswersAsBlocks(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// A message over the 1 MB Chrome takes fails its own request (answered to
+// the hub as an error), and the relay goes on: the next message still
+// reaches the extension.
+func TestAnOversizedMessageFailsOnlyItsRequest(t *testing.T) {
+	hubSide, hostSide := net.Pipe()
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	defer inW.Close()
+	go func() { _ = relayNative(inR, outW, hostSide) }()
+	big := `{"t":"req","id":5,"tool":"type","args":{"text":"` + strings.Repeat("x", nmMaxToExtension) + `"}}`
+	go func() {
+		_, _ = hubSide.Write([]byte(big + "\n"))
+		_, _ = hubSide.Write([]byte(`{"t":"req","id":6,"tool":"navigate"}` + "\n"))
+	}()
+	line, err := bufio.NewReader(hubSide).ReadString('\n')
+	if err != nil || !strings.Contains(line, `"id":5`) || !strings.Contains(line, `"ok":false`) || !strings.Contains(line, "too large") {
+		t.Fatalf("the hub got %q, %v", line, err)
+	}
+	msg, err := readNativeMessage(outR)
+	if err != nil || !strings.Contains(string(msg), `"id":6`) {
+		t.Fatalf("the next message: %s, %v", msg, err)
+	}
+}
+
+// browser_type's text is capped before it leaves.
+func TestBrowserTypeTextIsCapped(t *testing.T) {
+	t.Setenv("REMINAL_SESSION", "S1")
+	_, err := mcpBrowser("browser_type", map[string]any{"text": strings.Repeat("x", browserMaxType+1)})
+	if err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Fatalf("%v", err)
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,7 @@ func startHub(t *testing.T, allow func(peer int, session string) bool) *browserH
 	t.Setenv("REMINAL_BROWSER_SOCK", sock)
 	h := newBrowserHub()
 	h.allow = allow
+	h.allowBridge = func(int) bool { return true } // the test process stands in for the browser host
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	go serveBrowserOn(h, stop)
@@ -136,7 +138,7 @@ func TestBrowserHubWithNoBrowserSaysHowToConnectOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.OK || !strings.Contains(resp.Error, "reminal integrate chrome") {
+	if resp.OK || !strings.Contains(resp.Error, "`reminal integrate`") || strings.Contains(resp.Error, "integrate chrome") {
 		t.Fatalf("answer: %+v", resp)
 	}
 }
@@ -233,15 +235,136 @@ func TestTheBrowserVerbIsOnlyForProcessesInTheSession(t *testing.T) {
 		_, err = (&Agent{sessionID: "S1"}).handleBrowserControl(srv, base64.StdEncoding.EncodeToString(req))
 		return err
 	}
-	// This test process is "in the session" by the real check (it is the
-	// session's own process here).
-	if err := ask(); err != nil || heard != 1 {
-		t.Fatalf("the session's own process: %v (heard %d)", err, heard)
-	}
 	was := browserCallerOK
-	browserCallerOK = func(int) bool { return false }
 	defer func() { browserCallerOK = was }()
-	if err := ask(); err == nil || !strings.Contains(err.Error(), "only a program running in this session") || heard != 1 {
-		t.Fatalf("a process outside the session: %v (heard %d)", err, heard)
+	// The real check: with no session records here, this process is in no
+	// session, so not in this one.
+	t.Setenv("HOME", t.TempDir())
+	if err := ask(); err == nil || !strings.Contains(err.Error(), "only a program running in this session") || heard != 0 {
+		t.Fatalf("a process in no session: %v (heard %d)", err, heard)
+	}
+	browserCallerOK = func(int) bool { return true } // as if run in it
+	if err := ask(); err != nil || heard != 1 {
+		t.Fatalf("a process in the session: %v (heard %d)", err, heard)
+	}
+}
+
+// The session names its run (when its process started): a new run, the
+// same id, is another run to the extension, which asks again.
+func TestTheRunReachesTheBrowser(t *testing.T) {
+	startHub(t, func(int, string) bool { return true })
+	var got []string
+	fakeHost(t, func(r BrowserReq) BrowserResp {
+		got = append(got, r.Run)
+		return BrowserResp{OK: true, Result: json.RawMessage(`"ok"`)}
+	})
+	req, _ := json.Marshal(map[string]any{"tool": "tabs_context"})
+	first := &Agent{sessionID: "S1", startedAt: time.Unix(1000, 0)}
+	again := &Agent{sessionID: "S1", startedAt: time.Unix(2000, 0)}
+	for _, a := range []*Agent{first, first, again} {
+		if _, err := a.handleBrowserControl(nil, base64.StdEncoding.EncodeToString(req)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(got) != 3 || got[0] == "" || got[0] != got[1] || got[0] == got[2] {
+		t.Fatalf("runs the browser saw: %q", got)
+	}
+}
+
+// Only reminal's browser host, started by a browser, may be the bridge: any
+// other program that connects is refused, and requests still say no
+// browser is connected.
+func TestTheBridgeMustBeReminalsHost(t *testing.T) {
+	h := startHub(t, func(int, string) bool { return true })
+	h.allowBridge = func(int) bool { return false }
+	sock, _ := BrowserSockPath()
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = c.Write([]byte(`{"t":"host"}` + "\n"))
+	line, _ := bufio.NewReader(c).ReadString('\n')
+	if !strings.Contains(line, `"refused"`) {
+		t.Fatalf("a bridge from a program that is not the host: %q", line)
+	}
+	resp, _ := AskBrowser(BrowserReq{Session: "S1", Tool: "tabs_context"})
+	if resp.OK || !strings.Contains(resp.Error, "not connected") {
+		t.Fatalf("after it: %+v", resp)
+	}
+	// The real check: this test process is not reminal's browser host.
+	if browserBridgeOK(os.Getpid()) {
+		t.Fatal("the test process passes as the browser host")
+	}
+}
+
+// A newer bridge takes over; a request the older one held fails, one sent to
+// the newer is answered by it, and the older cannot answer for it.
+func TestAHandoverFailsOnlyTheOlderBridgesRequests(t *testing.T) {
+	startHub(t, func(int, string) bool { return true })
+	sock, _ := BrowserSockPath()
+	old, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	_, _ = old.Write([]byte(`{"t":"host"}` + "\n"))
+	took := make(chan uint64, 1)
+	go func() { // takes a request, never answers it
+		line, _ := bufio.NewReader(old).ReadString('\n')
+		var r BrowserReq
+		_ = json.Unmarshal([]byte(line), &r)
+		took <- r.ID
+	}()
+	time.Sleep(50 * time.Millisecond)
+	held := make(chan BrowserResp, 1)
+	go func() { r, _ := AskBrowser(BrowserReq{Session: "S1", Tool: "navigate"}); held <- r }()
+	oldID := <-took
+	fakeHost(t, func(r BrowserReq) BrowserResp {
+		return BrowserResp{OK: true, Result: json.RawMessage(`"from the newer"`)}
+	})
+	select {
+	case r := <-held:
+		if r.OK || !strings.Contains(r.Error, "disconnected") {
+			t.Fatalf("the older bridge's request: %+v", r)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the older bridge's request was not failed at the handover")
+	}
+	_, _ = old.Write([]byte(`{"id":` + strconv.FormatUint(oldID+1, 10) + `,"ok":true,"result":"from the older"}` + "\n"))
+	r, err := AskBrowser(BrowserReq{Session: "S1", Tool: "navigate"})
+	if err != nil || !r.OK || string(r.Result) != `"from the newer"` {
+		t.Fatalf("a request after the handover: %+v, %v", r, err)
+	}
+}
+
+// The extension is told a session ended only when one is there to be told:
+// with none connected, the session is kept, and told once one is.
+func TestAnEndIsToldOnlyToABrowser(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // no session records: every session has ended
+	h := startHub(t, func(int, string) bool { return true })
+	h.mu.Lock()
+	h.seen["GONE1"] = true
+	h.mu.Unlock()
+	h.tellEnded()
+	h.mu.Lock()
+	kept := h.seen["GONE1"]
+	h.mu.Unlock()
+	if !kept {
+		t.Fatal("an end was marked told with no browser to tell")
+	}
+	sock, _ := BrowserSockPath()
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = c.Write([]byte(`{"t":"host"}` + "\n"))
+	time.Sleep(50 * time.Millisecond)
+	h.tellEnded()
+	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	line, _ := bufio.NewReader(c).ReadString('\n')
+	if !strings.Contains(line, `"ended"`) || !strings.Contains(line, "GONE1") {
+		t.Fatalf("the browser was told %q", line)
 	}
 }

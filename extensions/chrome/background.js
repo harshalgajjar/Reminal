@@ -5,23 +5,28 @@
 // browser, once the person allows each session.
 //
 //   reminal (native messaging host, `reminal browser-host`)
-//     -> {t:"req", id, session, name, machine, tool, args}
+//     -> {t:"req", id, session, run, name, machine, tool, args}
 //     <- {id, ok, result | error}
 //     -> {t:"ended", session}      the session is gone: its consent and group go
 //
-// Consent is asked here, in the browser, once per session, and kept in
-// chrome.storage.session (gone when the browser restarts). Each session
-// works only in its own tab group. Typing into password or payment fields is
-// refused; an action inside a sign-in form, or with a CAPTCHA showing, is
-// paused for the person. Input and screenshots go through chrome.debugger
-// (the browser shows its own "is debugging this browser" bar); pages are read
-// by scripts injected into the extension's own isolated world.
+// Consent is asked here, in the browser, for one run of one session (its id
+// and when its process started: a session restored or an id used again is
+// asked again), and kept in chrome.storage.session under that key (gone
+// when the browser restarts). Stop wins: it bumps the key's epoch, and every
+// action checks consent and the epoch again right before each debugger call.
+// Each session works only in its own tab group. Typing into password or
+// payment fields is refused, in any frame; an action inside a sign-in, or
+// with a CAPTCHA showing, is paused for the person. Input and screenshots go
+// through chrome.debugger (the browser shows its own "is debugging this
+// browser" bar); pages are read by scripts in the extension's isolated world.
 
 import * as page from './page.js';
 
 const HOST = 'app.reminal.browser';
 const CONSENT_WAIT_MS = 60_000;
 const COLORS = ['blue', 'green', 'purple', 'cyan', 'orange', 'pink', 'red', 'yellow', 'grey'];
+const STOPPED = 'The person stopped browser use for this session.';
+const NOT_ALLOWED = 'The person did not allow browser use for this session.';
 
 // ---------------------------------------------------------------- the host
 let port = null, backoff = 1000;
@@ -43,7 +48,8 @@ async function setStatus(s) { await chrome.storage.session.set({ host: { ...s, a
 async function onHostMessage(m) {
   if (!m || typeof m !== 'object') return;
   if (m.t === 'status') { if (m.ok) backoff = 1000; setStatus({ connected: !!m.ok, error: m.error || '' }); return; }
-  if (m.t === 'ended') { await forget(String(m.session || ''), 'the session ended'); return; }
+  if (m.t === 'refused') { setStatus({ connected: false, error: m.error || 'refused' }); return; }
+  if (m.t === 'ended') { await endSession(String(m.session || '')); return; }
   if (m.t !== 'req' || !m.id) return;
   let out;
   try {
@@ -59,108 +65,146 @@ chrome.runtime.onInstalled.addListener(connect);
 connect();
 
 // ---------------------------------------------------------------- sessions
-// {id: {name, machine, allowed, denied, groupId, lastTab, color}}
-async function sessions() { return (await chrome.storage.session.get('sessions')).sessions || {}; }
-async function saveSession(id, s) { const all = await sessions(); all[id] = s; await chrome.storage.session.set({ sessions: all }); }
-async function dropSession(id) { const all = await sessions(); delete all[id]; await chrome.storage.session.set({ sessions: all }); }
+// One storage key per run of a session: "s:<id>:<run>" ->
+// {session, run, name, machine, allowed, denied, groupId, lastTab}. Each
+// read is fresh; a write merges into what is stored now, and never brings a
+// stopped one back (only the consent answer creates a record).
+const keyOf = (m) => `s:${m.session}:${m.run || ''}`;
+async function getS(k) { return (await chrome.storage.session.get(k))[k] || null; }
+async function putS(k, patch, create = false) {
+  const cur = await getS(k);
+  if (!cur && !create) return null;
+  const next = { ...(cur || {}), ...patch };
+  await chrome.storage.session.set({ [k]: next });
+  return next;
+}
+async function allS() {
+  const all = await chrome.storage.session.get(null);
+  return Object.entries(all).filter(([k]) => k.startsWith('s:'));
+}
+
+// The epoch of each key: bumped by Stop and by the session's end, checked
+// before every debugger call of an action that began under an older one.
+const epochs = new Map();
+const epochOf = (k) => epochs.get(k) || 0;
+const bump = (k) => epochs.set(k, epochOf(k) + 1);
 
 // forget: consent gone, the debugger let go of its tabs, its group undone
 // (the tabs stay open: the person may want what is in them).
-async function forget(id, why) {
-  const s = (await sessions())[id];
+async function forget(k, why) {
+  bump(k);
+  const s = await getS(k);
+  await chrome.storage.session.remove(k);
   if (!s) return;
-  await dropSession(id);
   for (const tab of await groupTabs(s)) {
     await detach(tab.id);
     try { await chrome.tabs.ungroup(tab.id); } catch (_) {}
   }
-  console.log('[reminal] stopped', id, why);
+  console.log('[reminal] stopped', k, why);
+}
+async function endSession(id) {
+  for (const [k] of await allS()) if (k.startsWith(`s:${id}:`)) await forget(k, 'the session ended');
 }
 
 // ---------------------------------------------------------------- consent
-const pending = new Map(); // session id -> {promise, resolve, win}
+const pending = new Map(); // key -> {promise, resolve, win}
 
 async function consent(m) {
-  const all = await sessions();
-  const s = all[m.session];
-  if (s && s.allowed) return s;
-  if (s && s.denied) throw new Error('The person did not allow browser use for this session.');
-  let p = pending.get(m.session);
+  const k = keyOf(m);
+  const s = await getS(k);
+  if (s && s.allowed) return k;
+  if (s && s.denied) throw new Error(NOT_ALLOWED);
+  let p = pending.get(k);
   if (!p) {
-    await saveSession(m.session, { ...(s || {}), name: m.name || m.session, machine: m.machine || '' });
     let resolve;
     const promise = new Promise((r) => { resolve = r; });
     p = { promise, resolve, win: null };
-    pending.set(m.session, p);
-    const q = new URLSearchParams({ session: m.session, name: m.name || '', machine: m.machine || '' });
+    pending.set(k, p);
+    await putS(k, { session: m.session, run: m.run || '', name: m.name || m.session, machine: m.machine || '' }, true);
+    const q = new URLSearchParams({ key: k, session: m.session, name: m.name || '', machine: m.machine || '' });
     const w = await chrome.windows.create({ url: 'consent.html?' + q, type: 'popup', width: 440, height: 330, focused: true });
     p.win = w.id;
-    chrome.notifications.create('consent-' + m.session, {
+    chrome.notifications.create('consent-' + k, {
       type: 'basic', iconUrl: 'icons/128.png', title: 'reminal',
       message: `${label(m)} wants to use your browser. Answer in the reminal window.`,
     });
-    setTimeout(() => answer(m.session, null), CONSENT_WAIT_MS);
+    // This prompt's own timer: it answers this prompt, never a later one.
+    const mine = p;
+    setTimeout(() => { if (pending.get(k) === mine) answer(k, null); }, CONSENT_WAIT_MS);
   }
   const allowed = await p.promise;
-  if (!allowed) throw new Error('The person did not allow browser use for this session.');
-  return (await sessions())[m.session];
+  if (!allowed) throw new Error(NOT_ALLOWED);
+  return k;
 }
 
 function label(m) { return `${m.name ? `"${m.name}" (${m.session})` : m.session}, a reminal session on this computer${m.machine ? ` (${m.machine})` : ''},`; }
 
 // answer: true (allow), false (deny), null (no answer in time: asked again
 // next time, not remembered).
-async function answer(id, allow) {
-  const p = pending.get(id);
+async function answer(k, allow) {
+  const p = pending.get(k);
   if (!p) return;
-  pending.delete(id);
-  if (allow !== null) {
-    const all = await sessions();
-    const s = all[id] || {};
-    await saveSession(id, { ...s, allowed: !!allow, denied: !allow });
-  }
+  pending.delete(k);
+  if (allow === null) await chrome.storage.session.remove(k);
+  else await putS(k, { allowed: !!allow, denied: !allow }, true);
   if (p.win) chrome.windows.remove(p.win).catch(() => {});
-  chrome.notifications.clear('consent-' + id);
+  chrome.notifications.clear('consent-' + k);
   p.resolve(!!allow);
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   // Only the extension's own pages (consent.html, popup.html) speak here.
   if (sender.id !== chrome.runtime.id || !sender.url || !sender.url.startsWith(chrome.runtime.getURL(''))) return;
-  if (msg.t === 'consent') answer(String(msg.session), !!msg.allow).then(() => reply(true));
-  else if (msg.t === 'stop') forget(String(msg.session), 'stopped by the person').then(() => reply(true));
-  else if (msg.t === 'forget-denial') dropSession(String(msg.session)).then(() => reply(true));
+  const k = String(msg.key || '');
+  if (msg.t === 'consent') answer(k, !!msg.allow).then(() => reply(true));
+  else if (msg.t === 'stop') forget(k, 'stopped by the person').then(() => reply(true));
+  else if (msg.t === 'forget-denial') chrome.storage.session.remove(k).then(() => reply(true));
   else if (msg.t === 'reconnect') { backoff = 1000; connect(); reply(true); }
   else return;
   return true;
 });
-chrome.windows.onRemoved.addListener((w) => { for (const [id, p] of pending) if (p.win === w) answer(id, null); });
+chrome.windows.onRemoved.addListener((w) => { for (const [k, p] of pending) if (p.win === w) answer(k, null); });
 
 // ---------------------------------------------------------------- the tools
+// A request's own view of its session: still allowed, under the epoch it
+// began with. Checked before each step that touches a page.
+function guardFor(k) {
+  const epoch = epochOf(k);
+  return async () => {
+    const s = await getS(k);
+    if (!s || !s.allowed || epochOf(k) !== epoch) throw new Error(STOPPED);
+    return s;
+  };
+}
+
 async function handle(m) {
-  const s = await consent(m);
-  s.name = m.name || s.name || m.session;
+  const k = await consent(m);
+  const alive = guardFor(k);
+  const s = await alive();
+  const name = m.name || s.name || m.session;
+  if (m.name && m.name !== s.name) await putS(k, { name: m.name });
   const a = m.args || {};
   switch (m.tool) {
-    case 'tabs_context': return tabsContext(m.session, s);
-    case 'tabs_create': return tabsCreate(m.session, s, a.url);
+    case 'tabs_context': return tabsContext(s);
+    case 'tabs_create': return tabsCreate(k, alive, name, a.url);
   }
-  const tabId = await sessionTab(m.session, s, a.tabId);
-  await indicate(tabId, s.name, true);
+  const tabId = await sessionTab(k, s, a.tabId);
+  const c = { tabId, alive };
+  await indicate(tabId, name, true);
   try {
     switch (m.tool) {
-      case 'navigate': return await navigate(m.session, s, tabId, String(a.url || ''));
-      case 'screenshot': return await screenshot(tabId);
-      case 'read_page': return await inPage(tabId, page.readTree, a.filter === 'interactive');
-      case 'get_page_text': return await inPage(tabId, page.pageText);
-      case 'click': return await click(tabId, a);
-      case 'type': return await type(tabId, a);
-      case 'key': return await key(tabId, String(a.key || ''));
-      case 'scroll': return await scroll(tabId, a);
+      case 'navigate': return await navigate(c, String(a.url ?? ''));
+      case 'screenshot': return await screenshot(c);
+      case 'read_page': return await inPage(c, page.readTree, a.filter === 'interactive');
+      case 'get_page_text': return await inPage(c, page.pageText);
+      case 'click': return await click(c, a);
+      case 'type': return await type(c, a);
+      case 'key': return await key(c, String(a.key || ''));
+      case 'scroll': return await scroll(c, a);
     }
     throw new Error('unknown tool: ' + m.tool);
   } finally {
-    indicate(tabId, s.name, false);
+    indicate(tabId, name, false);
   }
 }
 
@@ -169,33 +213,39 @@ async function groupTabs(s) {
   try { return await chrome.tabs.query({ groupId: s.groupId }); } catch (_) { return []; }
 }
 
-async function tabsContext(id, s) {
+async function tabsContext(s) {
   const tabs = await groupTabs(s);
   if (!tabs.length) return 'This session has no tabs yet: open one with browser_tabs_create.';
   return JSON.stringify(tabs.map((t) => ({ tabId: t.id, title: t.title, url: t.url, active: t.active, last: t.id === s.lastTab })));
 }
 
-async function tabsCreate(id, s, url) {
-  if (url) refuseURL(url);
-  const tab = await chrome.tabs.create({ url: url || 'about:blank', active: true });
+async function tabsCreate(k, alive, name, url) {
+  const href = url ? allowedURL(url) : 'about:blank';
+  let s = await alive();
+  const tab = await chrome.tabs.create({ url: href, active: true });
   let group = s.groupId;
   try { if (group != null) await chrome.tabGroups.get(group); } catch (_) { group = null; }
+  try {
+    s = await alive();
+  } catch (e) {
+    chrome.tabs.remove(tab.id).catch(() => {});
+    throw e;
+  }
   if (group == null) {
     group = await chrome.tabs.group({ tabIds: [tab.id] });
-    const all = await sessions();
-    const color = COLORS[Object.keys(all).length % COLORS.length];
-    await chrome.tabGroups.update(group, { title: `reminal: ${s.name}`, color });
+    const n = (await allS()).length;
+    await chrome.tabGroups.update(group, { title: `reminal: ${name}`, color: COLORS[n % COLORS.length] });
   } else {
     await chrome.tabs.group({ tabIds: [tab.id], groupId: group });
   }
-  await saveSession(id, { ...s, groupId: group, lastTab: tab.id });
+  await putS(k, { groupId: group, lastTab: tab.id });
   if (url) await loaded(tab.id);
-  return JSON.stringify({ tabId: tab.id, url: url || 'about:blank' });
+  return JSON.stringify({ tabId: tab.id, url: href });
 }
 
 // sessionTab: the tab asked for, which must be in the session's group; or
 // the one it used last; or its first.
-async function sessionTab(id, s, want) {
+async function sessionTab(k, s, want) {
   const tabs = await groupTabs(s);
   if (!tabs.length) throw new Error('This session has no tabs yet: open one with browser_tabs_create.');
   let tab;
@@ -205,30 +255,38 @@ async function sessionTab(id, s, want) {
   } else {
     tab = tabs.find((t) => t.id === s.lastTab) || tabs[0];
   }
-  refuseURL(tab.url || tab.pendingUrl || '');
-  if (s.lastTab !== tab.id) await saveSession(id, { ...s, lastTab: tab.id });
+  const url = tab.url || tab.pendingUrl || '';
+  if (url) allowedURL(url);
+  if (s.lastTab !== tab.id) await putS(k, { lastTab: tab.id });
   return tab.id;
 }
 
-// The browser's own pages, other extensions and the Web Store are not for agents.
-function refuseURL(url) {
-  if (/^(chrome|edge|brave|about:(?!blank)|chrome-extension|devtools|view-source):/i.test(url) ||
-      /^https:\/\/(chrome\.google\.com\/webstore|chromewebstore\.google\.com)/i.test(url)) {
-    throw new Error('Agents may not use the browser\'s own pages, extensions or the Web Store.');
-  }
+// allowedURL: only web pages (http, https) and a blank tab; never the
+// browser's own pages, extensions, files, data or script URLs, the Web
+// Store, or a URL dressed up with a user name to look like another site.
+// Returns the URL as the browser will read it.
+const NO_URL = 'Agents may only open web pages (http and https), not the browser\'s own pages, extensions, files or the Web Store.';
+function allowedURL(raw) {
+  const s = String(raw);
+  if (!s || s !== s.trim() || /[\u0000-\u001f\u007f]/.test(s)) throw new Error(NO_URL);
+  if (s === 'about:blank') return s;
+  let u;
+  try { u = new URL(/^[a-z][a-z0-9+.-]*:/i.test(s) ? s : 'https://' + s); } catch (_) { throw new Error(NO_URL); }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error(NO_URL);
+  if (u.username || u.password) throw new Error(NO_URL);
+  const host = u.hostname.toLowerCase().replace(/\.$/, '');
+  if (host === 'chromewebstore.google.com' || (host === 'chrome.google.com' && /^\/webstore/i.test(u.pathname)) || host === 'microsoftedge.microsoft.com') throw new Error(NO_URL);
+  return u.href;
 }
 
-async function navigate(id, s, tabId, url) {
-  if (url === 'back') await chrome.tabs.goBack(tabId);
-  else if (url === 'forward') await chrome.tabs.goForward(tabId);
-  else {
-    if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = 'https://' + url;
-    refuseURL(url);
-    await chrome.tabs.update(tabId, { url });
-  }
-  await loaded(tabId);
-  const t = await chrome.tabs.get(tabId);
-  return JSON.stringify({ tabId, title: t.title, url: t.url });
+async function navigate(c, url) {
+  await c.alive();
+  if (url === 'back') await chrome.tabs.goBack(c.tabId);
+  else if (url === 'forward') await chrome.tabs.goForward(c.tabId);
+  else await chrome.tabs.update(c.tabId, { url: allowedURL(url) });
+  await loaded(c.tabId);
+  const t = await chrome.tabs.get(c.tabId);
+  return JSON.stringify({ tabId: c.tabId, title: t.title, url: t.url });
 }
 
 function loaded(tabId) {
@@ -244,59 +302,96 @@ function loaded(tabId) {
 
 // ---------------------------------------------------------------- the debugger
 const attached = new Set();
-async function cdp(tabId, method, params = {}) {
-  if (!attached.has(tabId)) {
-    await chrome.debugger.attach({ tabId }, '1.3');
-    attached.add(tabId);
+// cdp: a debugger call, made only while the session is still allowed under
+// the epoch its action began with (Stop wins over an action under way).
+async function cdp(c, method, params = {}) {
+  await c.alive();
+  if (!attached.has(c.tabId)) {
+    await chrome.debugger.attach({ tabId: c.tabId }, '1.3');
+    attached.add(c.tabId);
   }
-  return chrome.debugger.sendCommand({ tabId }, method, params);
+  return chrome.debugger.sendCommand({ tabId: c.tabId }, method, params);
 }
 async function detach(tabId) { if (attached.delete(tabId)) { try { await chrome.debugger.detach({ tabId }); } catch (_) {} } }
 chrome.debugger.onDetach.addListener((src) => attached.delete(src.tabId));
 chrome.tabs.onRemoved.addListener((tabId) => attached.delete(tabId));
 
-async function screenshot(tabId) {
-  const m = await cdp(tabId, 'Page.getLayoutMetrics');
+async function screenshot(c) {
+  const m = await cdp(c, 'Page.getLayoutMetrics');
   const vp = m.cssVisualViewport || m.visualViewport;
   const w = Math.round(vp.clientWidth), h = Math.round(vp.clientHeight);
   // The visible part, at CSS pixels: the coordinates browser_click takes.
-  const shot = await cdp(tabId, 'Page.captureScreenshot', { format: 'png', clip: { x: vp.pageX, y: vp.pageY, width: w, height: h, scale: 1 } });
+  const shot = await cdp(c, 'Page.captureScreenshot', { format: 'png', clip: { x: vp.pageX, y: vp.pageY, width: w, height: h, scale: 1 } });
   return { image: shot.data, mimeType: 'image/png', note: `${w}x${h} pixels; click at x, y in these pixels.` };
 }
 
-async function inPage(tabId, fn, ...args) {
-  await chrome.scripting.executeScript({ target: { tabId }, files: ['rules.js'] });
-  const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: fn, args });
+// inPage: fn in the page's top frame, after the rules. inFrames: in every
+// frame the extension can reach (each frame's own answer, frameId 0 the top).
+async function inPage(c, fn, ...args) {
+  await c.alive();
+  await chrome.scripting.executeScript({ target: { tabId: c.tabId }, files: ['rules.js'] });
+  const [r] = await chrome.scripting.executeScript({ target: { tabId: c.tabId }, func: fn, args });
   if (!r) throw new Error('The page could not be read.');
   return r.result;
 }
+async function inFrames(c, fn) {
+  await c.alive();
+  await chrome.scripting.executeScript({ target: { tabId: c.tabId, allFrames: true }, files: ['rules.js'] }).catch(() => {});
+  const rs = await chrome.scripting.executeScript({ target: { tabId: c.tabId, allFrames: true }, func: fn }).catch(() => []);
+  return rs.filter((r) => r && r.result);
+}
 
-// target: where an action lands, and whether it is paused there.
-async function target(tabId, a) {
-  const t = await inPage(tabId, page.locate, a.ref || null, a.x == null ? null : Number(a.x), a.y == null ? null : Number(a.y));
+// target: where an action lands, and whether it is paused there. A CAPTCHA
+// in any frame pauses it; an action landing on a frame is paused when any
+// frame holds something only the person does.
+async function target(c, a) {
+  const t = await inPage(c, page.locate, a.ref || null, a.x == null ? null : Number(a.x), a.y == null ? null : Number(a.y));
   if (t.error) throw new Error(t.error);
   if (t.paused) throw new Error(t.paused);
+  const frames = await inFrames(c, page.frameCheck);
+  if (frames.some((r) => r.result.captcha)) throw new Error('Paused: a CAPTCHA is showing on this page. Ask the person to solve it, then continue.');
+  if (t.frame && frames.some((r) => r.frameId !== 0 && r.result.personOnly)) {
+    throw new Error('Paused: that part of the page is a frame with a sign-in, payment field or CAPTCHA in it. Ask the person to do it, then continue.');
+  }
   return t;
 }
 
-async function click(tabId, a) {
-  const t = await target(tabId, a);
+// focusedField: what typing goes into, in whichever frame has the focus. A
+// focus in a frame that cannot be read is refused: it could be anything.
+async function focusedField(c) {
+  const rs = await inFrames(c, page.focused);
+  if (rs.some((r) => r.result.captcha)) return { paused: 'Paused: a CAPTCHA is showing on this page. Ask the person to solve it, then continue.' };
+  const leaf = rs.find((r) => r.result.hasFocus && !r.result.frame);
+  if (leaf) return leaf.result;
+  const top = rs.find((r) => r.frameId === 0);
+  if (!top || top.result.frame) return { refused: 'Refused: the focus is in a frame reminal cannot check. Ask the person to type it.' };
+  return top.result;
+}
+
+async function click(c, a) {
+  const t = await target(c, a);
   const button = ['left', 'right', 'middle'].includes(a.button) ? a.button : 'left';
   const count = a.double ? 2 : 1;
-  await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: t.x, y: t.y });
+  await cdp(c, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: t.x, y: t.y });
   for (let i = 1; i <= count; i++) {
-    await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: t.x, y: t.y, button, clickCount: i });
-    await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: t.x, y: t.y, button, clickCount: i });
+    await cdp(c, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: t.x, y: t.y, button, clickCount: i });
+    await cdp(c, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: t.x, y: t.y, button, clickCount: i });
   }
   return `Clicked ${t.what} at ${Math.round(t.x)}, ${Math.round(t.y)}.`;
 }
 
-async function type(tabId, a) {
-  if (a.ref) await click(tabId, { ref: a.ref });
-  const f = await inPage(tabId, page.focused);
+async function type(c, a) {
+  if (a.ref) {
+    // A password or payment field is refused as such, before it is clicked.
+    const t = await inPage(c, page.locate, a.ref, null, null);
+    if (t.error) throw new Error(t.error);
+    if (t.secret) throw new Error(t.secret);
+    await click(c, { ref: a.ref });
+  }
+  const f = await focusedField(c);
   if (f.refused) throw new Error(f.refused);
   if (f.paused) throw new Error(f.paused);
-  await cdp(tabId, 'Input.insertText', { text: String(a.text || '') });
+  await cdp(c, 'Input.insertText', { text: String(a.text || '') });
   return `Typed ${String(a.text || '').length} characters into ${f.what}.`;
 }
 
@@ -309,7 +404,7 @@ const KEYS = {
 };
 const MODS = { alt: 1, ctrl: 2, control: 2, meta: 4, cmd: 4, command: 4, shift: 8 };
 
-async function key(tabId, combo) {
+async function key(c, combo) {
   const parts = combo.split('+').map((p) => p.trim()).filter(Boolean);
   if (!parts.length) throw new Error('key is required');
   let mods = 0;
@@ -323,24 +418,28 @@ async function key(tabId, combo) {
   if (!k && last.length === 1) k = [last, last.match(/[a-z]/i) ? 'Key' + last.toUpperCase() : '', last.toUpperCase().charCodeAt(0), last];
   if (!k && /^f([1-9]|1[0-2])$/i.test(last)) k = [last.toUpperCase(), last.toUpperCase(), 111 + Number(last.slice(1))];
   if (!k) throw new Error('unknown key: ' + last);
-  const f = await inPage(tabId, page.focused);
-  // A key that types (or sends) in a password or payment field is the person's.
-  if (f.refused && (k[3] || mods === 0 && k[0] === 'Enter')) throw new Error(f.refused);
-  if (f.paused && (k[3] || k[0] === 'Enter')) throw new Error(f.paused);
+  // A key that types, or sends, in a password or payment field (or a sign-in)
+  // is the person's; so is any key that could paste into one.
+  const writes = !!k[3] || (mods & (2 | 4)) !== 0;
+  if (writes) {
+    const f = await focusedField(c);
+    if (f.refused) throw new Error(f.refused);
+    if (f.paused) throw new Error(f.paused);
+  }
   const text = mods & ~8 ? undefined : k[3];
   const base = { key: k[0], code: k[1], windowsVirtualKeyCode: k[2], nativeVirtualKeyCode: k[2], modifiers: mods };
-  await cdp(tabId, 'Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', ...base, text, unmodifiedText: text });
-  await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+  await cdp(c, 'Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', ...base, text, unmodifiedText: text });
+  await cdp(c, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
   return `Pressed ${combo}.`;
 }
 
-async function scroll(tabId, a) {
-  const t = a.ref ? await target(tabId, { ref: a.ref }) : await inPage(tabId, page.middle);
+async function scroll(c, a) {
+  const t = a.ref ? await target(c, { ref: a.ref }) : await inPage(c, page.middle);
   if (t.error) throw new Error(t.error);
   const n = Math.max(1, Math.min(50, Number(a.amount) || 3)) * 100;
   const d = { down: [0, n], up: [0, -n], right: [n, 0], left: [-n, 0] }[a.direction || 'down'];
   if (!d) throw new Error('direction is up, down, left or right');
-  await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: t.x, y: t.y, deltaX: d[0], deltaY: d[1] });
+  await cdp(c, 'Input.dispatchMouseEvent', { type: 'mouseWheel', x: t.x, y: t.y, deltaX: d[0], deltaY: d[1] });
   return `Scrolled ${a.direction || 'down'}.`;
 }
 

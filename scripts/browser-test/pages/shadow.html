@@ -1,0 +1,3 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Shadow sign in</title><style>body{font:16px system-ui,sans-serif;padding:40px}input{font:inherit;padding:6px;display:block;margin:8px 0}</style></head>
+<body><h1>Sign in</h1><div id="box"><input id="em3" placeholder="Email"><x-secret></x-secret><button>Go</button></div>
+<script>customElements.define('x-secret', class extends HTMLElement { constructor() { super(); this.attachShadow({ mode: 'open' }).innerHTML = '<input type="password" placeholder="Secret" style="font:inherit;padding:6px">'; } });</script></body></html>

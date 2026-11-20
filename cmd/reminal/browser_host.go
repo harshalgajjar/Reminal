@@ -22,6 +22,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"reminal/internal/client"
@@ -79,6 +80,13 @@ func dialHub(sock string) (net.Conn, error) {
 // the hub (hub: lines of JSON) until either side ends.
 func relayNative(in io.Reader, out io.Writer, hub net.Conn) error {
 	done := make(chan error, 2)
+	var hubMu sync.Mutex // both directions may write to the hub
+	toHub := func(b []byte) error {
+		hubMu.Lock()
+		defer hubMu.Unlock()
+		_, err := hub.Write(append(b, '\n'))
+		return err
+	}
 	go func() { // the extension → the hub
 		for {
 			msg, err := readNativeMessage(in)
@@ -86,7 +94,7 @@ func relayNative(in io.Reader, out io.Writer, hub net.Conn) error {
 				done <- err
 				return
 			}
-			if _, err := hub.Write(append(msg, '\n')); err != nil {
+			if err := toHub(msg); err != nil {
 				done <- err
 				return
 			}
@@ -97,8 +105,21 @@ func relayNative(in io.Reader, out io.Writer, hub net.Conn) error {
 		for {
 			line, err := r.ReadBytes('\n')
 			if len(line) > 1 {
-				var v json.RawMessage = line[:len(line)-1]
-				if werr := writeNativeRaw(out, v); werr != nil {
+				msg := line[:len(line)-1]
+				if len(msg) > nmMaxToExtension {
+					// Over what Chrome takes: that request fails, the
+					// relay goes on.
+					var req struct {
+						ID uint64 `json:"id"`
+					}
+					if json.Unmarshal(msg, &req) == nil && req.ID != 0 {
+						b, _ := json.Marshal(map[string]any{"id": req.ID, "ok": false, "error": "the request is too large for the browser (over 1 MB)"})
+						if werr := toHub(b); werr != nil {
+							done <- werr
+							return
+						}
+					}
+				} else if werr := writeNativeRaw(out, msg); werr != nil {
 					done <- werr
 					return
 				}

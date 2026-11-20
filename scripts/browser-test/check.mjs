@@ -132,7 +132,7 @@ let tabId;
   let r = await call('browser_navigate', { url: `${PAGES}/login.html` });
   check(!r.err && /Sign in/.test(r.text), `navigated (${r.err || r.text})`);
   const tree = (await call('browser_read_page')).text || '';
-  check(/sign-in form: actions inside it are paused/.test(tree), 'reading a sign-in page works, and says actions there are paused');
+  check(/sign-in: actions inside it are paused/.test(tree), 'reading a sign-in page works, and says actions there are paused');
   const user = (tree.match(/textbox "Email" \[(ref_\d+)\]/) || [])[1];
   r = await call('browser_click', { ref: user });
   check(r.err && /Paused: this is part of a sign-in form/.test(r.err), `an action in a sign-in form is paused (${r.err})`);
@@ -157,6 +157,74 @@ let tabId;
   await slow(1200);
 }
 
+// 4b. What a page can do to look harmless: fields in frames, password fields
+// shown as text, fields a site marks as secret, sign-ins with no form.
+const refOf = (tree, re) => (tree.match(re) || [])[1];
+const typed = async (url, sel, ref, text) => {
+  const r = await call('browser_type', { ref, text });
+  const v = await page(new RegExp(url)).inputValue(sel).catch(() => '?');
+  return { r, v };
+};
+{
+  // A card field in a frame of another origin, focused by the person.
+  await call('browser_navigate', { url: `${PAGES}/iframe-card.html` });
+  const pg = page(/iframe-card\.html/);
+  await pg.frameLocator('#pay').locator('#cardnum').click();
+  let r = await call('browser_type', { text: '4111111111111111' });
+  const inFrame = await pg.frameLocator('#pay').locator('#cardnum').inputValue();
+  check(r.err && /Refused/.test(r.err) && inFrame === '', `typing into a card field in a frame of another origin is refused (${r.err || r.text}; field ${JSON.stringify(inFrame)})`);
+  // A click landing on that frame.
+  const box = await pg.locator('#pay').boundingBox();
+  r = await call('browser_click', { x: box.x + 40, y: box.y + 25 });
+  check(r.err && /Paused: that part of the page is a frame/.test(r.err), `a click on a frame with a payment field in it is paused (${r.err || r.text})`);
+  // The page's own field beside it is fine.
+  const tree = (await call('browser_read_page')).text || '';
+  r = await call('browser_type', { ref: refOf(tree, /textbox "Gift note" \[(ref_\d+)\]/), text: 'Happy birthday' });
+  check(!r.err, `the page's own field beside it is not (${r.err || r.text})`);
+
+  // A password field the person showed as text (after reminal had read it).
+  await call('browser_navigate', { url: `${PAGES}/toggle.html` });
+  const tt = (await call('browser_read_page')).text || '';
+  await page(/toggle\.html/).click('#show');
+  const t1 = await typed('toggle\\.html', '#sec', refOf(tt, /textbox "Secret" \[(ref_\d+)\]/), 'hunter2');
+  check(t1.r.err && /Refused/.test(t1.r.err) && t1.v === '', `a password field shown as text is still refused (${t1.r.err || t1.r.text}; field ${JSON.stringify(t1.v)})`);
+
+  // Fields a site marks as secret: autocomplete current-password and
+  // one-time-code, text drawn as dots; a plain field beside them is fine.
+  await call('browser_navigate', { url: `${PAGES}/autocomplete.html` });
+  const at = (await call('browser_read_page')).text || '';
+  for (const [label, sel, what] of [['Code A', '#cur', 'autocomplete current-password'], ['Code B', '#otp', 'autocomplete one-time-code'], ['Code C', '#dots', '-webkit-text-security']]) {
+    const t = await typed('autocomplete\\.html', sel, refOf(at, new RegExp(`textbox "${label}" \\[(ref_\\d+)\\]`)), '123456');
+    check(t.r.err && /Refused/.test(t.r.err) && t.v === '', `a field with ${what} is refused (${t.r.err || t.r.text}; field ${JSON.stringify(t.v)})`);
+  }
+  const plain = await typed('autocomplete\\.html', '#plain', refOf(at, /textbox "Nickname" \[(ref_\d+)\]/), 'Ada');
+  check(!plain.r.err && plain.v === 'Ada', `a plain field beside them is typed into (${plain.r.err || plain.v})`);
+
+  // Sign-ins with no form of their own: loose fields, a field tied by form=,
+  // a password field in a shadow root.
+  for (const [url, label, what] of [['spa-login.html', 'Email', 'loose fields (no form)'], ['formattr.html', 'Email', 'a field tied to the form by form='], ['shadow.html', 'Email', 'the password field in a shadow root']]) {
+    await call('browser_navigate', { url: `${PAGES}/${url}` });
+    const tr = (await call('browser_read_page')).text || '';
+    const r2 = await call('browser_click', { ref: refOf(tr, new RegExp(`textbox "${label}" \\[(ref_\\d+)\\]`)) });
+    check(r2.err && /Paused: this is part of a sign-in/.test(r2.err), `a sign-in with ${what} is paused (${r2.err || r2.text})`);
+  }
+  await call('browser_navigate', { url: `${PAGES}/spa-login.html` });
+  const sp = (await call('browser_read_page')).text || '';
+  r = await call('browser_click', { ref: refOf(sp, /textbox "Search the help pages" \[(ref_\d+)\]/) });
+  check(!r.err, `a field outside that sign-in, on the same page, is not paused (${r.err || r.text})`);
+  await slow(1000);
+}
+
+// 4c. Only web pages: a URL dressed up, or not a web page, is refused.
+for (const url of ['https://x@chromewebstore.google.com/', ' https://example.com', 'javascript:alert(1)', 'file:///etc/passwd', 'data:text/html,hi', 'about:version', `chrome-extension://${EXT_ID}/popup.html`, 'view-source:http://127.0.0.1:8088/form.html']) {
+  const r = await call('browser_navigate', { url });
+  check(r.err && /may only open web pages/.test(r.err), `navigating to ${JSON.stringify(url)} is refused (${r.err || r.text})`);
+}
+{
+  const r = await call('browser_tabs_create', { url: 'javascript:alert(1)' });
+  check(r.err && /may only open web pages/.test(r.err), `opening a tab at javascript: is refused (${r.err || r.text})`);
+}
+
 // 5. Only its own tabs; never the browser's own pages.
 {
   const other = await ctx.newPage();
@@ -167,18 +235,34 @@ let tabId;
   check(other.url().includes('mine'), 'and it was not touched');
   await other.close();
   r = await call('browser_navigate', { url: 'chrome://settings' });
-  check(r.err && /may not use the browser's own pages/.test(r.err), `chrome:// is refused (${r.err})`);
+  check(r.err && /may only open web pages/.test(r.err), `chrome:// is refused (${r.err})`);
 }
 
-// 6. The person stops it in the extension's button: asked again next time.
+// 6. The person stops it in the extension's button, while an action is
+// under way (a page slow to load): Stop wins. Nothing brings the consent
+// back, and the next call asks again.
+const keysOf = () => sw.evaluate((id) => chrome.storage.session.get(null).then((all) => Object.keys(all).filter((k) => k.startsWith(`s:${id}:`) && all[k].allowed)), ID);
 {
   const pop = await ctx.newPage();
   await pop.goto(`chrome-extension://${EXT_ID}/popup.html`);
   check(/web helper/.test(await pop.textContent('#list')), 'the button lists the session');
   await slow(1000);
+  const going = call('browser_navigate', { url: `${PAGES}/slow.html` });
+  await pause(1500); // the page is loading
   await pop.click('text=Stop');
   await pop.close();
+  await going;
+  check((await keysOf()).length === 0, 'Stop during an action: nothing brought the consent back');
   check((await groups()).length === 0, 'Stop: its tab group is undone (the tabs stay)');
+  // The next call asks again; told no, no screenshot comes.
+  const afterP = call('browser_screenshot');
+  await answerConsent(false);
+  const after = await afterP;
+  check(after.err && !after.content.some((c) => c.type === 'image'), `after Stop it asks again, and a no means no screenshot (${after.err})`);
+  const pop2 = await ctx.newPage();
+  await pop2.goto(`chrome-extension://${EXT_ID}/popup.html`);
+  await pop2.click('text=Forget');
+  await pop2.close();
   const r = call('browser_tabs_create', { url: `${PAGES}/form.html` });
   await answerConsent(true);
   check(!(await r).err, 'after Stop it asks again before doing anything');
@@ -187,9 +271,9 @@ let tabId;
 // 7. The session ends: its consent and its group go with it.
 {
   execSync(`reminal kill -y ${ID}`, { stdio: "pipe" });
-  let s = null;
-  for (let i = 0; i < 40; i++) { s = await store('sessions'); if (!s || !s[ID]) break; await pause(500); }
-  check(!s || !s[ID], 'the session ended: its consent is gone');
+  let left = [];
+  for (let i = 0; i < 40; i++) { left = await keysOf(); if (!left.length) break; await pause(500); }
+  check(left.length === 0, 'the session ended: its consent is gone');
   check((await groups()).length === 0, 'and its tab group');
 }
 
