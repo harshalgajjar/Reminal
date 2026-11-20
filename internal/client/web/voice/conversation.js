@@ -140,6 +140,7 @@ function voiced(t) {
   voicedMs += FRAME_MS; silenceMs = 0; lastVoiceT = t;
   checked = rechecked = finalStarted = thinking = false;
   if (cutIn && cueHeardFor(t) > T.cutInWaitMs) cutInDecided(false);
+  if (cutLate && t - cutLate.at > T.cutInLateMs) cutLate = null; // talked on past it: no taking it late
   if (you !== 'talking') { you = 'talking'; show(ducked ? 'ducked' : 'hearing'); }
   // Words decide first (overheard); this is for speech the text model cannot
   // make out. A backchannel it did make out may run longer.
@@ -314,7 +315,9 @@ function turnTaken({ text, voiced, ms, why, parts, endT, decidedT, row }) {
 function maybeSendPart(t) {
   const talked = frames.length * FRAME_MS;
   if (talked > T.maxUttSec * 1000) sendPart('long without a pause');
-  else if (turnModel.slow && talked >= T.partEverySec * 1000 && silenceMs >= T.partPauseMs && silenceMs < T.fastCommitMs) sendPart('a pause in long talk');
+  // Not at a pause while a cut-in waits for you to stop: the pause may be you
+  // stopping for it, and what you said then goes with your next turn.
+  else if (turnModel.slow && !cutIn && !cutLate && talked >= T.partEverySec * 1000 && silenceMs >= T.partPauseMs && silenceMs < T.fastCommitMs) sendPart('a pause in long talk');
 }
 
 function sendPart(why) {
@@ -592,7 +595,15 @@ function releaseHeld(sayIt) {
 // turn. Not taken, everything you said is sent, as ever.
 function offerCutIn(text) {
   if (cutIn) { cutIn.lines.push(text); return; }
-  if (cutLate) { cutLate.lines.push(text); return; }
+  // One judged talked over a moment ago: a line now joins it (and what the
+  // agent is told it said); after that window, a line is a new cut-in.
+  if (cutLate && now() - cutLate.at > T.cutInLateMs) cutLate = null;
+  if (cutLate) {
+    cutLate.lines.push(text);
+    cutNote = cutLate.lines.join(' ').slice(0, 300);
+    panel.setRowText(cutLate.row, cutNote, 'unsaid');
+    return;
+  }
   // Where your talk was when it came in: what you say after it is dropped if
   // you stop for it.
   cutIn = { lines: [text], at: now(), heardAt: 0, endAt: 0, cue: null, utt: uttId, upTo: frames.length };

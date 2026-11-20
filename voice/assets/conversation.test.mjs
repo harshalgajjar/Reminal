@@ -227,3 +227,24 @@ test('control: not taken, everything they said is sent', (t) => {
   mic(3000, false);
   assert.match(said().map((s) => s.text).join(' '), /and the bit just before I stopped and I kept right on talking/);
 });
+
+test('lines the agent says after a cut-in was talked over are never lost', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  voice.clipsMade = true;
+  longTalk();
+  talk.agentSaid(CUT_IN);
+  mic(T.cutInWaitMs + 1000, true, 'talking on over it'); // judged not taken
+  talk.agentSaid('Also, the tests are failing.');          // inside the late window: joins it
+  const row = rows.find((r) => /cut-in not taken/.test(r.note));
+  assert.match(row.text, /deleted yesterday\. Also, the tests are failing\./, 'shown with the cut-in');
+  mic(T.cutInLateMs + 2000, true);                        // talking on, no pause, past the window
+  talk.agentSaid('One more thing.');                       // after it: a new cut-in
+  assert.equal(voice.said.filter((s) => s === 'Sorry,').length, 2, 'a new "Sorry," for it');
+  mic(1500, true);
+  mic(3000, false);                                       // stops for the new one
+  assert.ok(voice.said.includes('One more thing.'), 'the new cut-in is said');
+  mic(1500, true, 'right go on');                         // their next turn carries the note
+  mic(3000, false);
+  const told = sent.map((s) => s.text).join(' | ');
+  assert.match(told, /talked on over your cut-in: "Hold on, that file was deleted yesterday\. Also, the tests are failing\."/, `the agent is told of both: ${told}`);
+});
