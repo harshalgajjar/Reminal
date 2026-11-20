@@ -285,6 +285,10 @@ var harnessLimitNotices = map[string][]limitNotice{
 		`yourmodelpolicyonlyallows`+creditModel+`,whichrequiresusagecredits·/modeltosetitup`,
 		`automodedoesn.?trunon`+creditModel+`,and`+creditModel+`requiresusagecredits·/modeltopickanothermodel`,
 		`apierror:usagecreditsrequiredfor1mcontext·`+credits1M,
+		// Claude Code 2.1.328: usage credits that ran out mid-answer, which
+		// ends the turn ("API Error: Usage credits ran out before the
+		// response was finished.").
+		`(?:apierror:)?usagecreditsranoutbeforetheresponsewasfinished`,
 	)...),
 		// Bare words that could end any sentence: only on the notice's own row.
 		// "Usage limit reached · continuing automatically at 3pm · esc to

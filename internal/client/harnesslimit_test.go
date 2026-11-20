@@ -133,6 +133,10 @@ var limitScreens = []struct {
 	{"claude", "  ⎿  Opus 5.5 now uses usage credits · the prompt to confirm went unanswered — nothing was sent · answer it where this session is running, or /model to change\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Opus 5.5 now uses usage credits · the prompt to confirm was closed from Remote Control without a choice — nothing was sent · it asks again on your next message, or /model to change\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Fable limit reached · continuing on Opus 5.5 uses usage credits · Claude stopped here · send a\n     message to be asked again, or switch models\n\n❯ ", time.Time{}},
+	// Claude Code 2.1.328 (source): usage credits that ran out mid-answer,
+	// which ends the turn.
+	{"claude", "  ⎿  API Error: Usage credits ran out before the response was finished.\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Usage credits ran out before the response was finished.\n\n❯ ", time.Time{}},
 	// Claude Code 2.1.323 (source): the API's credit balance too low, on
 	// one row; narrower than it, the row is clipped before the link.
 	{"claude", "  ⎿  Credit balance too low · Add funds: https://platform.claude.com/settings/billing\n\n❯ ", time.Time{}},
@@ -270,6 +274,7 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		{"claude", "  You've hit your session limit · resets 3pm — the agent now waits.", "a changelog's line"},
 		{"claude", "  you've hit your limit · resets 4pm is all it answers.", "wrapped prose"},
 		{"claude", "  ⎿  \"Usage limit reached · resets 4pm\",", "a test's string, in a tool's output"},
+		{"claude", "● Usage credits ran out before the response was finished, so I summarised what I had and stopped.", "a 2.1.328 notice carried on"},
 		{"claude", "● You've hit your session limit · resets 3pm, and the next window\n  opens then.", "a sentence that wraps on"},
 		// Claude Code 2.1.312: rows that leave the agent working, and its
 		// notices quoted in answers that go on.
@@ -1106,6 +1111,9 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"claude", "⎿  ", "Claude stopped here because Fable 5.1 now requires usage credits. To keep this agent going, switch models or continue with usage credits.", false},
 		{"claude", "⎿  ", "Claude stopped here because Fable 5.1 now requires usage credits. Switch models with /model, or send a message to choose again.", false},
 		{"claude", "⎿  ", "Claude stopped here because Fable 5.1 now requires usage credits. Switch models, or send a message to choose again.", false},
+		// Claude Code 2.1.328: usage credits that ran out mid-answer.
+		{"claude", "⎿  ", "API Error: Usage credits ran out before the response was finished.", false},
+		{"claude", "⎿  ", "Usage credits ran out before the response was finished.", false},
 		// Qwen Code 0.26.9: its credits.
 		{"qwen", "✕ ", "You've used up your credits. Please try again after the reset.", false},
 		{"qwen", "✕ ", "You've used up your weekly credits. Please try again after the reset.", false},
