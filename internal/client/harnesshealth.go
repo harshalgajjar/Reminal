@@ -395,8 +395,6 @@ var harnessLoginScreens = map[string][]loginRow{
 		`claudecodecan.?tusetheanthropicconsolesign-insavedonthiscomputer,usuallybecauseitisn.?tforaconsoleaccount·run/loginandsigninwithaconsoleaccount`,
 		// Teleport, which needs a claude.ai login.
 		`teleportrequiresaclaudeaccount\.run/loginandselect"claudeaccountwithsubscription"`,
-		// A sign-in the service turned away.
-		`yoursign-inwasn.?taccepted\.run/login,thentryagain`,
 		// A login it could not refresh while another Claude Code was.
 		`couldnotrefreshyourloginbecauseanotherclaudecodeprocessisrefreshingit(?:\(orexitedmid-refresh\))?·(?:tryagaininaminute;ifitkeepshappening,closeotherclaudecodewindowsor)?signinagainwith/login`,
 		// Remote Control's sign-in on this machine, expired or no longer

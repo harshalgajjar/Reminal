@@ -108,7 +108,6 @@ var loginRowCases = []loginRowCase{
 	{prog: "claude", row: "  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account."},
 	{prog: "claude", row: "● Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and sign in with a Console account"},
 	{prog: "claude", row: "  ⎿  Teleport requires a Claude account. Run /login and select \"Claude account with subscription\"."},
-	{prog: "claude", row: "  ⎿  Your sign-in wasn't accepted. Run /login, then try again."},
 	{prog: "claude", row: "  ⎿  Could not refresh your login because another Claude Code process is refreshing it · sign in again with /login"},
 	{prog: "claude", row: "● Could not refresh your login because another Claude Code process is refreshing it (or exited mid-refresh) · Try again in a minute; if it keeps happening, close other Claude Code windows or sign in again with /login"},
 	{prog: "claude", row: "  ⎿  session_stale_relogin: the sign-in on this machine has expired. Sign in again on this machine, then open the session again."},
@@ -678,8 +677,10 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"the same quoted", "claude", "● It reported \"require a Console sign-in (forceLoginMethod)\" so I asked you to sign in, then kept going." + box, false},
 		{"Claude Code's Teleport sign-in", "claude", "answer\n  ⎿  Teleport requires a Claude account. Run /login and select \"Claude account with subscription\"." + box, true},
 		{"the same carried on", "claude", "● Teleport requires a Claude account. Run /login and select \"Claude account with subscription\", done, resuming." + box, false},
-		{"Claude Code's sign-in not accepted", "claude", "answer\n  ⎿  Your sign-in wasn't accepted. Run /login, then try again." + box, true},
-		{"the same carried on", "claude", "● Your sign-in wasn't accepted. Run /login, then try again, which I did and we're back." + box, false},
+		// Not a sign-in: a file sent to a connector, refused (the tool call.s
+		// result); Claude Code.s own login is fine and it goes on.
+		{"a connector upload refused", "claude", "● Sending the report.\n  ⎿  Your sign-in wasn't accepted. Run /login, then try again." + box, false},
+		{"the same as the last row", "claude", "answer\n  ⎿  Your sign-in wasn't accepted. Run /login, then try again." + box, false},
 		{"Claude Code's login refresh held by another process", "claude", "answer\n  ⎿  Could not refresh your login because another Claude Code process is refreshing it · sign in again with /login" + box, true},
 		{"the same carried on", "claude", "● Could not refresh your login because another Claude Code process is refreshing it, so I waited a minute and it recovered." + box, false},
 		{"Remote Control's expired sign-in", "claude", "answer\n  ⎿  session_stale_relogin: the sign-in on this machine has expired. Sign in again on this machine, then open the session again." + box, true},
