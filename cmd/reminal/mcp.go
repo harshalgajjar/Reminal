@@ -626,7 +626,10 @@ func mcpToolList() []map[string]any {
 			}),
 		},
 	}
-	return append(tools, browserTools(obj, str)...)
+	if browserToolsHere() {
+		tools = append(tools, browserTools(obj, str)...)
+	}
+	return tools
 }
 
 func argInt(args map[string]any, key string) (uint32, error) {

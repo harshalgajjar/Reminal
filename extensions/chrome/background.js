@@ -350,10 +350,26 @@ async function target(c, a) {
   if (t.paused) throw new Error(t.paused);
   const frames = await inFrames(c, page.frameCheck);
   if (frames.some((r) => r.result.captcha)) throw new Error('Paused: a CAPTCHA is showing on this page. Ask the person to solve it, then continue.');
-  if (t.frame && frames.some((r) => r.frameId !== 0 && r.result.personOnly)) {
-    throw new Error('Paused: that part of the page is a frame with a sign-in, payment field or CAPTCHA in it. Ask the person to do it, then continue.');
+  if (t.frame) {
+    // A frame whose inside cannot be checked (not a web page, or no frame
+    // answered for it: another extension's menu, say) is the person's too.
+    const src = t.frameSrc || '';
+    const web = /^(https?:|about:blank$|about:srcdoc$)/i.test(src);
+    if (!web || !frames.some((r) => r.frameId !== 0 && sameDoc(r.result.url, src))) {
+      throw new Error('Paused: that part of the page is a frame reminal cannot check. Ask the person to do it, then continue.');
+    }
+    if (frames.some((r) => r.frameId !== 0 && r.result.personOnly)) {
+      throw new Error('Paused: that part of the page is a frame with a sign-in, payment field or CAPTCHA in it. Ask the person to do it, then continue.');
+    }
   }
   return t;
+}
+
+// sameDoc: a frame's URL now is the one its element named (its origin and
+// path: a redirect within the site, a hash, still count).
+function sameDoc(a, b) {
+  if (a === b) return true;
+  try { const x = new URL(a), y = new URL(b); return x.origin === y.origin && x.pathname === y.pathname; } catch (_) { return false; }
 }
 
 // focusedField: what typing goes into, in whichever frame has the focus. A
@@ -418,14 +434,12 @@ async function key(c, combo) {
   if (!k && last.length === 1) k = [last, last.match(/[a-z]/i) ? 'Key' + last.toUpperCase() : '', last.toUpperCase().charCodeAt(0), last];
   if (!k && /^f([1-9]|1[0-2])$/i.test(last)) k = [last.toUpperCase(), last.toUpperCase(), 111 + Number(last.slice(1))];
   if (!k) throw new Error('unknown key: ' + last);
-  // A key that types, or sends, in a password or payment field (or a sign-in)
-  // is the person's; so is any key that could paste into one.
-  const writes = !!k[3] || (mods & (2 | 4)) !== 0;
-  if (writes) {
-    const f = await focusedField(c);
-    if (f.refused) throw new Error(f.refused);
-    if (f.paused) throw new Error(f.paused);
-  }
+  // Every key in a password or payment field, or in a sign-in, is the
+  // person's: Backspace edits a password, Tab or ArrowDown can take the
+  // browser's saved sign-in, Enter sends it.
+  const f = await focusedField(c);
+  if (f.refused) throw new Error(f.refused);
+  if (f.paused) throw new Error(f.paused);
   const text = mods & ~8 ? undefined : k[3];
   const base = { key: k[0], code: k[1], windowsVirtualKeyCode: k[2], nativeVirtualKeyCode: k[2], modifiers: mods };
   await cdp(c, 'Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', ...base, text, unmodifiedText: text });

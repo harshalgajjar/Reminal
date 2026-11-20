@@ -22,7 +22,9 @@ export function locate(ref, x, y) {
   } else {
     return { error: 'Give a ref, or x and y.' };
   }
-  return { x, y, what: R.what(el), paused: R.paused(el), secret: R.secret(el) ? R.NEVER : "", frame: !!el && /^(IFRAME|FRAME|OBJECT|EMBED)$/.test(el.tagName) };
+  const frame = !!el && /^(IFRAME|FRAME|OBJECT|EMBED)$/.test(el.tagName);
+  const frameSrc = !frame ? "" : el.tagName === "IFRAME" && el.hasAttribute("srcdoc") ? "about:srcdoc" : (el.src || el.data || "about:blank");
+  return { x, y, what: R.what(el), paused: R.paused(el), secret: R.secret(el) ? R.NEVER : "", frame, frameSrc };
 }
 
 // focused: what typing would go into, in this frame (each frame answers):
@@ -44,7 +46,7 @@ export function focused() {
 // lands on a frame, whose inside cannot be told apart from here.
 export function frameCheck() {
   const R = globalThis.__reminal;
-  return { personOnly: R.personOnly(), captcha: R.captcha() };
+  return { personOnly: R.personOnly(), captcha: R.captcha(), url: location.href };
 }
 
 export function middle() { return { x: innerWidth / 2, y: innerHeight / 2 }; }
