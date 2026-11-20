@@ -73,11 +73,13 @@ func (a *Agent) inFront() (state, fg string) {
 
 // promptOnScreenNow reads the screen itself: the attention state settles a
 // moment after a prompt is drawn, and words arriving in that moment must not
-// answer it. Two tests: a prompt's wording at the bottom of the screen, and,
+// answer it. Three tests: a prompt's wording at the bottom of the screen;
 // for an agent whose input box has a mark of its own (attnPromptMarks:
 // OpenCode, Kilo), that mark not drawn now, as it is not when a dialog
-// (a permission prompt, a picker, a menu) is drawn over the box. For those
-// agents the test is positive: words go in only while their box is there.
+// (a permission prompt, a picker, a menu) is drawn over the box (for those
+// agents the test is positive: words go in only while their box is there);
+// and a question an agent draws above its box, which stays drawn
+// (attnDialogMarks: Codex's choosers).
 func (a *Agent) promptOnScreenNow(prog string) bool {
 	a.screenMu.Lock()
 	scr := a.screen
@@ -90,6 +92,9 @@ func (a *Agent) promptOnScreenNow(prog string) bool {
 		return attnPromptMarks[prog] != nil // its box cannot be seen: not typed into
 	}
 	if attnPromptMarks[prog] != nil && !attnPromptDrawn(prog, attentionProbeTail(render, attnTailRows)) {
+		return true
+	}
+	if attnDialogOnScreen(prog, render) { // a question drawn above its box (Codex's choosers)
 		return true
 	}
 	return attnLooksLikePrompt(attentionProbeTail(render, attnPromptRows))
