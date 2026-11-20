@@ -145,3 +145,14 @@ func TestVoiceIntegrityAgainstALyingServer(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 }
+
+// The voice frame's cut-in on long talk: stopping a moment after hearing
+// "Sorry," takes it, and what was said before stopping is not a turn that
+// the agent answers over it (voice/assets/conversation.test.mjs).
+func TestVoiceCutInIsTakenWhenThePersonStops(t *testing.T) {
+	node := nodeOrSkip(t)
+	cmd := exec.Command(node, "--test", "--test-timeout=60000", filepath.Join("..", "voice", "assets", "conversation.test.mjs"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
