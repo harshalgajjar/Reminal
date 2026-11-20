@@ -572,7 +572,7 @@ function releaseHeld(sayIt) {
   heldRow = null;
   if (!lines.length || !sayIt) return;
   row.remove();
-  lines.forEach((t) => agentSaid(t));
+  c.lines.forEach((t) => agentSaid(t));
 }
 
 // A cut-in, as people make one: a short "Sorry," first, and the rest only if
@@ -584,14 +584,18 @@ function releaseHeld(sayIt) {
 // moment to hear it and finish the word they are on. Judged talked over and
 // then you stop soon after all, it is still taken.
 //
-// Stopping for it ends your turn there: what you said up to then was said
-// before you heard it, not an answer to it, so it is not sent as a turn of
-// its own (the agent would answer that, and its answer would cut off the
-// cut-in you stopped to hear). It goes with your next turn instead.
+// Stopping for it ends your turn there, and nothing of it is sent as a turn
+// of its own: the agent would answer that, and its answer would cut off the
+// cut-in you stopped to hear. What you said after it came in is dropped (you
+// were finishing a word, or reacting to it, and stopped to listen); what you
+// said before it came in, which the agent has not had, goes with your next
+// turn. Not taken, everything you said is sent, as ever.
 function offerCutIn(text) {
   if (cutIn) { cutIn.lines.push(text); return; }
   if (cutLate) { cutLate.lines.push(text); return; }
-  cutIn = { lines: [text], at: now(), heardAt: 0, endAt: 0, cue: null };
+  // Where your talk was when it came in: what you say after it is dropped if
+  // you stop for it.
+  cutIn = { lines: [text], at: now(), heardAt: 0, endAt: 0, cue: null, utt: uttId, upTo: frames.length };
   log('cut-in offered', text.slice(0, 40));
   const r = ownReply();
   cutIn.cue = r;
@@ -620,41 +624,53 @@ const cueHeardFor = (t) => { const c = cueTimes(t); return c ? t - c.endAt : -In
 function cutInDecided(stopped) {
   const c = cutIn;
   cutIn = null;
-  if (stopped) { log('cut-in taken'); takeCutIn(c.lines); return; }
+  if (stopped) { log('cut-in taken'); takeCutIn(c); return; }
   log('cut-in not taken');
   cutNote = c.lines.join(' ').slice(0, 300);
   const row = panel.addRow('agent');
   panel.setRowText(row, cutNote, 'unsaid');
   panel.setRowNote(row, 'cut-in not taken: you kept talking');
-  cutLate = { lines: c.lines, at: now(), row };
+  cutLate = { ...c, at: now(), row };
 }
 function cutInTakenLate() {
   const c = cutLate;
   cutLate = null; cutNote = '';
   log('cut-in taken late');
   c.row.remove();
-  takeCutIn(c.lines);
+  takeCutIn(c);
 }
-function takeCutIn(lines) {
-  stopForCutIn();
-  lines.forEach((t) => agentSaid(t));
+function takeCutIn(c) {
+  stopForCutIn(c);
+  c.lines.forEach((t) => agentSaid(t));
 }
-// Your turn ends where you stopped for it, without being sent.
-function stopForCutIn() {
+// Your turn ends where you stopped for it, without being sent: of its talk,
+// only what came before the cut-in is kept, for your next turn.
+function stopForCutIn(c) {
   partsSent = 0;
   if (you === 'quiet') return;
   learnYourLevel();
   const row = liveRow || panel.pendingRow();
   liveRow = null;
-  const f = latestFinal() || requestFinal();
-  const keep = () => {
-    const text = (f.text || '').trim();
-    if (!hasWords(text)) { row.remove(); return; }
+  // A part sent since it came in left nothing of this utterance before it.
+  const upTo = c.utt === uttId ? Math.min(c.upTo, frames.length) : 0;
+  const before = frames.slice(0, upTo);
+  const voicedBefore = Math.round(upTo * FRAME_MS);
+  const keep = (text) => {
+    text = (text || '').trim();
+    if (!hasWords(text) || voicedBefore < T.tailMinVoicedMs) { panel.setRowText(row, '(not sent: you stopped for its cut-in)', 'note'); return; }
     panel.setRowText(row, text);
-    panel.setRowNote(row, 'said before you stopped for its cut-in; sent with your next turn');
+    panel.setRowNote(row, 'said before it cut in; sent with your next turn. What you said after it was dropped.');
     beforeCut.push(text);
   };
-  if (f.text != null) keep(); else f.waiting.push(keep);
+  if (!before.length) keep('');
+  else {
+    // A final of its own, by the length of audio it covers.
+    const id = uttId, key = id + ':' + -upTo;
+    const f = { id, voiced: -upTo, text: null, ms: 0, waiting: [], before: '', len: 0 };
+    finals.set(key, f);
+    f.waiting.push(() => keep(f.text));
+    stt.postMessage({ type: 'transcribe', id: 'f' + key, final: true, audio: joinFrames(before) });
+  }
   you = 'quiet'; frames = []; preRoll = []; uttId++; voicedMs = 0; silenceMs = 0;
   settled = null; latest = null; liveBefore = ''; checked = rechecked = finalStarted = thinking = false;
 }

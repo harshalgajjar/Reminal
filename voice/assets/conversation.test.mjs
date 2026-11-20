@@ -93,19 +93,31 @@ const voice = {
   nodding: () => false, nod: () => false, ack: () => false, pulse() {}, duck() {}, level: () => 0,
 };
 
-// The text model: a final is the words of the last thing the person said.
-let words = '';
+// The text model: the words of each stretch of speech in the audio it is
+// given, in order. Each stretch is marked in the audio itself (its loudness),
+// so a final of part of the talk has only that part's words.
+const phrases = [''];
 const stt = {
   postMessage(m) {
-    const text = m.final && m.audio.length >= 512 * 3 ? words : ''; // no speech in it, no words
+    let text = '';
+    if (m.final) {
+      const seen = [];
+      for (let i = 0; i < m.audio.length; i += 512) {
+        const k = Math.round((m.audio[i] - 0.2) * 1000);
+        if (k > 0 && seen[seen.length - 1] !== k) seen.push(k);
+      }
+      text = seen.map((k) => phrases[k]).join(' ');
+    }
     setTimeout(() => talk.onWords({ type: 'text', id: m.id, final: m.final, text, ms: 1, voiced: m.voiced }), 40);
   },
 };
 
-// The person: speech or quiet at the mic for ms.
-const loud = new Float32Array(512).fill(0.2), hush = new Float32Array(512);
+// The person: saying w (or keeping on with what they were saying), or quiet,
+// at the mic for ms.
+const hush = new Float32Array(512);
+let loud = hush;
 function mic(ms, speaking, w) {
-  if (w) words = w;
+  if (w) { phrases.push(w); loud = new Float32Array(512).fill(0.2 + (phrases.length - 1) / 1000); }
   const end = clock + ms;
   while (clock + FRAME_MS <= end) {
     advanceTo(clock + FRAME_MS);
@@ -133,7 +145,7 @@ test('stopping a moment after hearing "Sorry," takes the cut-in, even when the v
   longTalk();
   talk.agentSaid(CUT_IN);
   assert.deepEqual(voice.said, ['Sorry,'], 'only "Sorry," while they talk');
-  mic(1200 + 700 + 1800, true); // made, heard, and they finish what they were saying
+  mic(1200 + 700 + 1800, true, 'which I said after it came in'); // made, heard, and they finish what they were saying
   mic(3000, false);             // they stop and listen
   assert.ok(voice.said.includes(CUT_IN), `the cut-in was said (said: ${JSON.stringify(voice.said)})`);
   assert.equal(said().length, 0, `what they said before stopping is not a turn the agent answers: ${JSON.stringify(said())}`);
@@ -145,6 +157,8 @@ test('stopping a moment after hearing "Sorry," takes the cut-in, even when the v
   assert.match(said()[0].text, /before they stopped for your cut-in they had also said: "and the bit just before I stopped"/);
   assert.match(said()[0].text, /so what did you want to say$/);
   assert.ok(!/talked on over your cut-in/.test(said()[0].text));
+  assert.ok(!/after it came in/.test(said()[0].text), 'what they said after it came in is dropped');
+  assert.ok(!sent.some((s) => /after it came in/.test(s.text)), 'and never sent');
 });
 
 test('a made "Sorry," plays at once, and stopping after it is taking it', (t) => {
@@ -156,6 +170,7 @@ test('a made "Sorry," plays at once, and stopping after it is taking it', (t) =>
   mic(3000, false);
   assert.ok(voice.said.includes(CUT_IN));
   assert.equal(said().length, 0);
+  assert.ok(!sent.some((s) => /talking on over it|after it came in/.test(s.text)), 'what they said after it came in is never sent');
 });
 
 test('talking on over "Sorry," drops the cut-in; stopping soon after still takes it', (t) => {
@@ -163,13 +178,14 @@ test('talking on over "Sorry," drops the cut-in; stopping soon after still takes
   voice.clipsMade = true;
   longTalk();
   talk.agentSaid(CUT_IN);
-  mic(T.cutInWaitMs + 1500, true); // talked over: judged not taken
+  mic(T.cutInWaitMs + 1500, true, 'talking on over it'); // talked over: judged not taken
   assert.ok(rows.some((r) => /cut-in not taken/.test(r.note) && !r.removed), 'shown as not taken');
   assert.ok(!voice.said.includes(CUT_IN));
   mic(3000, false);                // ...and they stop a moment later
   assert.ok(voice.said.includes(CUT_IN), 'taken late');
   assert.ok(!rows.some((r) => /cut-in not taken/.test(r.note) && !r.removed), 'the "not taken" row is gone');
   assert.equal(said().length, 0);
+  assert.ok(!sent.some((s) => /talking on over it|after it came in/.test(s.text)), 'what they said after it came in is never sent');
 });
 
 test('control: talking right through it, the cut-in stays dropped and the agent is told', (t) => {
@@ -182,4 +198,32 @@ test('control: talking right through it, the cut-in stays dropped and the agent 
   assert.ok(!voice.said.includes(CUT_IN), 'not said');
   const out = sent.filter((s) => s.t !== 'part' || /talked on/.test(s.text)).map((s) => s.text).join(' | ');
   assert.match(out, /talked on over your cut-in: "Hold on, that file was deleted yesterday\."/);
+});
+
+test('a cut-in right after a part: stopping for it sends nothing of what came after', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  voice.clipsMade = true;
+  sent.length = 0; rows.length = 0; voice.said.length = 0;
+  talk.start({ stt, speaker: voice, turnModel: { slow: true, finished: async () => 0.9 }, nods: () => false });
+  mic(13000, true, 'first part of my long story');
+  mic(200, false);
+  talk.agentSaid(CUT_IN); // in answer to the part, before another word
+  mic(1500, true, 'um what was I');
+  mic(3000, false);
+  assert.ok(voice.said.includes(CUT_IN));
+  assert.deepEqual(sent.map((s) => s.t), ['part']);
+  mic(1500, true, 'okay tell me');
+  mic(3000, false);
+  assert.equal(said().length, 1);
+  assert.equal(said()[0].text, 'okay tell me', 'no note: nothing before it came in, and the rest dropped');
+});
+
+test('control: not taken, everything they said is sent', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  voice.clipsMade = true;
+  longTalk();
+  talk.agentSaid(CUT_IN);
+  mic(9000, true, 'and I kept right on talking');
+  mic(3000, false);
+  assert.match(said().map((s) => s.text).join(' '), /and the bit just before I stopped and I kept right on talking/);
 });
