@@ -109,16 +109,43 @@ func TestTheExtensionIDIsItsKeys(t *testing.T) {
 	}
 }
 
-// `reminal integrate chrome`: the host manifest for each browser of Chrome's
-// family that is here (and none for one that is not), naming this reminal and
-// only reminal's extension; the extension's files to load; --remove takes
-// away only reminal's own manifests, and the files.
-func TestIntegrateChromeWritesAndRemovesItsOwn(t *testing.T) {
+// runIntegrateIn runs `reminal integrate args...` with home as $HOME and
+// no agent on PATH, and returns what it printed.
+func runIntegrateIn(t *testing.T, home string, args ...string) string {
+	t.Helper()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", filepath.Join(home, "no-bin"))
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	was := os.Stdout
+	os.Stdout = w
+	runErr := runIntegrate(args)
+	w.Close()
+	os.Stdout = was
+	out, _ := io.ReadAll(r)
+	if runErr != nil {
+		t.Fatalf("integrate %v: %v\n%s", args, runErr, out)
+	}
+	return string(out)
+}
+
+// Plain `reminal integrate` sets the browser up too: the host manifest for
+// each browser of Chrome's family that is here (and none for one that is
+// not), naming this reminal and only reminal's extension, and the
+// extension's files to load, ending on the one line saying how. --check
+// reads it back; --remove takes away only reminal's own manifests, and the
+// files.
+func TestIntegrateSetsUpTheBrowserToo(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("not on Windows yet")
 	}
 	home := t.TempDir()
-	exe := "/usr/local/bin/reminal"
+	exe, _ := os.Executable()
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
 	table := chromeBrowserTable()
 	chrome, chromium := table[0], table[2]
 	for _, b := range []chromeBrowser{chrome, chromium} {
@@ -131,9 +158,7 @@ func TestIntegrateChromeWritesAndRemovesItsOwn(t *testing.T) {
 	_ = os.MkdirAll(filepath.Dir(theirs), 0o755)
 	_ = os.WriteFile(theirs, []byte(`{"name":"com.example.other"}`), 0o644)
 
-	if err := integrateChrome(home, exe, false, false, true, false); err != nil {
-		t.Fatal(err)
-	}
+	out := runIntegrateIn(t, home, "-y")
 	for _, b := range table {
 		raw, err := os.ReadFile(chromeHostManifestPath(home, b))
 		here := b == chrome || b == chromium
@@ -161,10 +186,22 @@ func TestIntegrateChromeWritesAndRemovesItsOwn(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(chromeExtensionDir(home), "icons", "128.png")); err != nil {
 		t.Errorf("its icons were not written: %v", err)
 	}
-
-	if err := integrateChrome(home, exe, true, false, true, false); err != nil {
-		t.Fatal(err)
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if last := lines[len(lines)-1]; !strings.HasPrefix(last, "Your browser: load reminal's extension once") || !strings.Contains(last, "~/.reminal/chrome-extension") {
+		t.Errorf("it does not end on how to load the extension: %q", last)
 	}
+	if strings.Contains(out, "integrate chrome") {
+		t.Errorf("it sends the person to a second command:\n%s", out)
+	}
+
+	check := runIntegrateIn(t, home, "--check")
+	for _, b := range []chromeBrowser{chrome, chromium} {
+		if !strings.Contains(check, b.Name) || !strings.Contains(check, "set up (browser)") {
+			t.Errorf("--check does not read %s back:\n%s", b.Name, check)
+		}
+	}
+
+	runIntegrateIn(t, home, "--remove", "-y")
 	for _, b := range []chromeBrowser{chrome, chromium} {
 		if _, err := os.Stat(chromeHostManifestPath(home, b)); !os.IsNotExist(err) {
 			t.Errorf("%s: still there after --remove", b.Name)
@@ -178,17 +215,15 @@ func TestIntegrateChromeWritesAndRemovesItsOwn(t *testing.T) {
 	}
 }
 
-// With no browser of Chrome's family here, it says so and writes nothing.
-func TestIntegrateChromeWithNoBrowser(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("not on Windows yet")
-	}
+// With no browser of Chrome's family here, integrate writes nothing of it.
+func TestIntegrateWithNoBrowserWritesNoneOfIt(t *testing.T) {
 	home := t.TempDir()
-	if err := integrateChrome(home, "/x/reminal", false, false, true, false); err == nil || !strings.Contains(err.Error(), "no Chrome") {
-		t.Fatalf("%v", err)
-	}
+	out := runIntegrateIn(t, home, "-y")
 	if _, err := os.Stat(chromeExtensionDir(home)); !os.IsNotExist(err) {
 		t.Error("wrote the extension anyway")
+	}
+	if strings.Contains(out, "Your browser") {
+		t.Errorf("it talks of a browser that is not here:\n%s", out)
 	}
 }
 

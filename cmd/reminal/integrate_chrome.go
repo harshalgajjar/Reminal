@@ -3,28 +3,27 @@
 
 package main
 
-// `reminal integrate chrome`: lets agents in this machine's reminal sessions
-// use the person's own browser, through reminal's extension, asked in the
-// browser for each session. Its own opt-in, never part of a plain
-// `reminal integrate`. It:
-//   - writes the extension's files to ~/.reminal/chrome-extension, to load
-//     there with "Load unpacked" (it is not in the Chrome Web Store yet);
+// The browser, as part of `reminal integrate`: agents in this machine's
+// reminal sessions may use the person's own browser through reminal's
+// extension, each session only once the person allows it there (the gate,
+// in the browser, that makes this safe to set up by default). Integrate:
 //   - registers `reminal` as the extension's native messaging host
-//     (NativeMessagingHosts/app.reminal.browser.json), for each browser of
+//     (NativeMessagingHosts/app.reminal.browser.json) for each browser of
 //     Chrome's family whose user data folder is here: Chrome, Chromium,
-//     Edge, Brave (and Arc on macOS).
-// --remove takes both away; --check says what is there.
+//     Edge, Brave (and Arc on macOS);
+//   - writes the extension's files to ~/.reminal/chrome-extension, to load
+//     with "Load unpacked" (it is not in the Chrome Web Store yet).
+// The browser_* tools are in reminal's MCP server, which integrate registers
+// with each agent anyway. --remove takes these away with the rest; --check
+// reads them back. Not on Windows yet.
 
 import (
-	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	chromeext "reminal/extensions/chrome"
 )
@@ -66,10 +65,32 @@ func chromeBrowserTable() []chromeBrowser {
 }
 
 // chromeBrowsers are the ones installed here: their user data folder is.
+// None on Windows, where the browser is not offered yet.
 func chromeBrowsers(home string) []chromeBrowser {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	var out []chromeBrowser
 	for _, b := range chromeBrowserTable() {
 		if st, err := os.Stat(filepath.Join(home, b.Dir)); err == nil && st.IsDir() {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// chromeOurs are the browsers with reminal's host manifest in them.
+func chromeOurs(home string) []chromeBrowser {
+	var out []chromeBrowser
+	for _, b := range chromeBrowserTable() {
+		raw, err := os.ReadFile(chromeHostManifestPath(home, b))
+		if err != nil {
+			continue
+		}
+		var m struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(raw, &m) == nil && m.Name == browserHostName {
 			out = append(out, b)
 		}
 	}
@@ -100,106 +121,61 @@ func chromeExtensionDir(home string) string {
 	return filepath.Join(home, ".reminal", "chrome-extension")
 }
 
-func integrateChrome(home, exe string, remove, check, assumeYes, dryRun bool) error {
-	if runtime.GOOS == "windows" {
-		return errors.New("using your browser is not available on Windows yet")
-	}
-	browsers := chromeBrowsers(home)
-	extDir := chromeExtensionDir(home)
-	if check {
-		if len(browsers) == 0 {
-			fmt.Println("  · no Chrome, Chromium, Edge, Brave or Arc found")
-		}
-		for _, b := range browsers {
-			what := "not set up"
-			if raw, err := os.ReadFile(chromeHostManifestPath(home, b)); err == nil {
-				what = "set up for a different reminal (re-run `reminal integrate chrome`)"
-				if string(raw) == string(chromeHostManifest(exe)) {
-					what = "set up"
-				}
-			}
-			fmt.Printf("  %-18s %s\n", b.Name, what)
-		}
-		return nil
-	}
-	if len(browsers) == 0 && !remove {
-		return errors.New("no Chrome, Chromium, Edge, Brave or Arc found on this computer")
-	}
-	action := "Let agents in your reminal sessions use"
-	if remove {
-		action = "Stop letting agents use"
-	}
-	fmt.Printf("%s your browser (reminal's extension; asked in the browser for each session):\n\n", action)
-	for _, b := range browsers {
-		fmt.Printf("  %-18s %s\n", b.Name, cDim(tildePath(home, chromeHostManifestPath(home, b))))
-	}
-	fmt.Printf("  %-18s %s\n", "the extension", cDim(tildePath(home, extDir)))
-	if dryRun {
-		fmt.Println("\nDry run: nothing changed.")
-		return nil
-	}
-	if !assumeYes {
-		fmt.Print("\nProceed? [y/N] ")
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		if a := strings.ToLower(strings.TrimSpace(line)); a != "y" && a != "yes" {
-			fmt.Println("Cancelled.")
-			return nil
+// chromeLoadLine is said at the end of a setup, until the extension is in
+// the Chrome Web Store.
+func chromeLoadLine(home string) string {
+	return fmt.Sprintf("Your browser: load reminal's extension once (chrome://extensions, Developer mode, Load unpacked: %s). It asks you before an agent uses it.", tildePath(home, chromeExtensionDir(home)))
+}
+
+// applyChrome sets the browser up (or, on remove, takes it away): the host
+// manifest for each browser in browsers, and the extension's files. One line
+// a browser, as the agents get.
+func applyChrome(home, exe string, browsers []chromeBrowser, remove bool) (failures int) {
+	if !remove {
+		if err := writeChromeExtension(chromeExtensionDir(home)); err != nil {
+			fmt.Printf("  ✗ %-18s %v\n", "the extension", err)
+			return 1
 		}
 	}
-	fmt.Println()
-	if remove {
-		return removeChrome(home, browsers, extDir)
-	}
-	if err := writeChromeExtension(extDir); err != nil {
-		return fmt.Errorf("writing the extension: %w", err)
-	}
-	var failed int
 	for _, b := range browsers {
 		path := chromeHostManifestPath(home, b)
-		err := os.MkdirAll(filepath.Dir(path), 0o755)
-		if err == nil {
+		var err error
+		if remove {
+			err = os.Remove(path)
+			if os.IsNotExist(err) {
+				err = nil
+			}
+		} else if err = os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
 			err = writeAgentConfig(path, chromeHostManifest(exe))
 		}
 		if err != nil {
-			failed++
+			failures++
 			fmt.Printf("  ✗ %-18s %v\n", b.Name, err)
 			continue
 		}
-		fmt.Printf("  ✓ %-18s\n", b.Name)
+		fmt.Printf("  ✓ %-18s %s\n", b.Name, cDim("browser"))
 	}
-	if failed > 0 {
-		return fmt.Errorf("%d of %d failed", failed, len(browsers))
+	if remove {
+		if err := os.RemoveAll(chromeExtensionDir(home)); err != nil {
+			failures++
+			fmt.Printf("  ✗ %-18s %v\n", "the extension", err)
+		}
 	}
-	fmt.Printf("\nNow load the extension, once: open chrome://extensions, turn on Developer mode,\n"+
-		"choose Load unpacked, and pick %s\n"+
-		"An agent asks in the browser before it uses it, once per session; you can stop it\n"+
-		"from the extension's button.\n", tildePath(home, extDir))
-	return nil
+	return failures
 }
 
-func removeChrome(home string, browsers []chromeBrowser, extDir string) error {
-	for _, b := range chromeBrowserTable() {
-		path := chromeHostManifestPath(home, b)
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			continue
+// printChromeCheck is --check's lines for the browsers here.
+func printChromeCheck(home, exe string) {
+	for _, b := range chromeBrowsers(home) {
+		mark, what := "·", "not set up"
+		if raw, err := os.ReadFile(chromeHostManifestPath(home, b)); err == nil {
+			mark, what = "!", "set up for a different reminal (re-run integrate)"
+			if string(raw) == string(chromeHostManifest(exe)) {
+				mark, what = "✓", "set up (browser)"
+			}
 		}
-		var m struct {
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(raw, &m) != nil || m.Name != browserHostName {
-			continue // not ours
-		}
-		if err := os.Remove(path); err != nil {
-			return err
-		}
-		fmt.Printf("  ✓ %-18s removed\n", b.Name)
+		fmt.Printf("  %s %-18s %s\n", mark, b.Name, what)
 	}
-	if err := os.RemoveAll(extDir); err != nil {
-		return err
-	}
-	fmt.Println("\nRemoved. Remove the extension itself from chrome://extensions.")
-	return nil
 }
 
 // writeChromeExtension writes the extension's files (embedded in this

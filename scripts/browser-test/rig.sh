@@ -10,7 +10,7 @@ openbox >/dev/null 2>&1 &
 node -e '
 const http=require("http"),fs=require("fs"),path=require("path");const root="/r/scripts/browser-test/pages";
 http.createServer((q,r)=>{const p=path.join(root,path.normalize(q.url.split("?")[0]));fs.readFile(p,(e,b)=>{if(e){r.writeHead(404);return r.end()}r.writeHead(200,{"content-type":"text/html"});r.end(b)})}).listen(8088,"127.0.0.1")' &
-echo "== reminal integrate chrome"; reminal integrate chrome -y 2>&1 | sed 's/^/  /'
+echo "== reminal integrate"; reminal integrate -y 2>&1 | sed 's/^/  /'
 reminal relay 8080 > /tmp/relay.log 2>&1 &
 sleep 1; reminal daemon > /tmp/daemon.log 2>&1 &
 for i in $(seq 1 30); do reminal list >/dev/null 2>&1 && [ -S $HOME/.reminal/browser.sock ] && break; sleep 0.5; done
