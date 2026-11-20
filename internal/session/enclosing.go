@@ -75,3 +75,19 @@ func selfAncestry(start int) []int {
 	}
 	return out
 }
+
+// DescendsFrom says whether pid is ancestor or runs under it: ancestor is
+// met walking up pid's parents (as Enclosing walks, as far).
+func DescendsFrom(pid, ancestor int) bool {
+	for i := 0; i < enclosingMaxDepth && pid > 1; i++ {
+		if pid == ancestor {
+			return true
+		}
+		next := parentPID(pid)
+		if next == pid || next <= 0 {
+			return false
+		}
+		pid = next
+	}
+	return false
+}

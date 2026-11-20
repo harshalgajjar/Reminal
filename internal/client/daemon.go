@@ -74,6 +74,9 @@ func RunDaemon(version string) error {
 	// overwrite each other. Served on every platform: the badge is macOS-only
 	// today, but mirroring notes to a phone is not.
 	go ServeNotes(stop)
+	// And the browser hub: a session's agent reaching the person's Chrome
+	// through reminal's extension, on this machine only (browserd.go).
+	go ServeBrowser(stop)
 	// Uploads carry an "auto-delete in …" promise made to whoever sent the
 	// file. The session that took it is usually gone long before the deadline,
 	// so the always-on process is what actually keeps the promise.

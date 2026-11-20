@@ -227,6 +227,15 @@ func (a *Agent) handleControlConn(conn net.Conn) {
 			return
 		}
 		_, _ = fmt.Fprintln(conn, "ok", status)
+	case strings.HasPrefix(line, "browser "):
+		// The MCP browser_* tools: this session asks the person's Chrome,
+		// through the daemon's browser hub (browserd.go), as itself.
+		out, err := a.handleBrowserControl(conn, strings.TrimPrefix(line, "browser "))
+		if err != nil {
+			_, _ = fmt.Fprintln(conn, "error:", err)
+			return
+		}
+		_, _ = fmt.Fprintln(conn, "ok", out)
 	case strings.HasPrefix(line, "notify "):
 		msg := strings.TrimSpace(strings.TrimPrefix(line, "notify "))
 		if err := a.broadcastNotify(msg); err != nil {

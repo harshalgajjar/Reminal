@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -681,6 +682,14 @@ func runIntegrate(args []string) error {
 	}
 	widenPATH(home)
 
+	// The browser is its own opt-in: never part of setting up every agent.
+	if slices.Contains(only, "chrome") {
+		if len(only) > 1 {
+			return errors.New("run `reminal integrate chrome` on its own")
+		}
+		return integrateChrome(home, exe, remove, check, assumeYes, dryRun)
+	}
+
 	if check {
 		return printIntegrationReport(integrationReport(home, exe, only), asJSON)
 	}
@@ -836,6 +845,9 @@ func runIntegrate(args []string) error {
 			if p.target.resumeHint() != "" {
 				fmt.Printf("  %-18s %s\n", p.target.Name, cDim(p.target.resumeHint()))
 			}
+		}
+		if len(chromeBrowsers(home)) > 0 && runtime.GOOS != "windows" {
+			fmt.Printf("\nTo let agents use your browser too (asked in it, per session): %s\n", cDim("reminal integrate chrome"))
 		}
 	} else {
 		fmt.Printf("\nRemoved.\n")

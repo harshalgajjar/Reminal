@@ -504,7 +504,7 @@ func mcpToolList() []map[string]any {
 		return m
 	}
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
-	return []map[string]any{
+	tools := []map[string]any{
 		{
 			"name": "list_sessions",
 			"description": "List every reminal this device owns: this machine and any enrolled box, " +
@@ -626,6 +626,7 @@ func mcpToolList() []map[string]any {
 			}),
 		},
 	}
+	return append(tools, browserTools(obj, str)...)
 }
 
 func argInt(args map[string]any, key string) (uint32, error) {
@@ -955,7 +956,16 @@ func runMCP(_ []string) error {
 				Arguments map[string]any `json:"arguments"`
 			}
 			_ = json.Unmarshal(msg.Params, &p)
-			text, err := srv.callTool(p.Name, p.Arguments)
+			// The browser tools answer in content blocks of their own (a
+			// screenshot is an image).
+			var blocks []any
+			var text string
+			var err error
+			if strings.HasPrefix(p.Name, "browser_") {
+				blocks, err = mcpBrowser(p.Name, p.Arguments)
+			} else {
+				text, err = srv.callTool(p.Name, p.Arguments)
+			}
 			// A version-skew warning, when present, rides as its OWN content
 			// block — never inlined into the result text, which for some tools is
 			// JSON the agent parses.
@@ -974,6 +984,9 @@ func runMCP(_ []string) error {
 				// should see them and be able to correct course.
 				content = append(content, map[string]any{"type": "text", "text": "Error: " + err.Error()})
 				reply(msg.ID, map[string]any{"content": content, "isError": true})
+			} else if blocks != nil {
+				content = append(content, blocks...)
+				reply(msg.ID, map[string]any{"content": content})
 			} else {
 				content = append(content, map[string]any{"type": "text", "text": text})
 				reply(msg.ID, map[string]any{"content": content})

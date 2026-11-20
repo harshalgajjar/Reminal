@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Pizza order</title>
+<style>body{font:16px system-ui,sans-serif;margin:0}header{display:flex;gap:8px;justify-content:flex-end;padding:10px 20px;background:#f4f4f6;border-bottom:1px solid #ddd}main{padding:24px 40px}label{display:block;margin:12px 0 4px}input,select{font:inherit;padding:6px}button{font:inherit;padding:8px 16px;margin-top:16px}#out{margin-top:20px;font-weight:600}</style></head>
+<body>
+<header><form id="signin"><input name="user" placeholder="Email"> <input name="pass" type="password" placeholder="Password"> <button type="button">Sign in</button></form></header>
+<main>
+<h1>Order a pizza</h1>
+<form id="order" onsubmit="event.preventDefault()">
+  <label for="name">Name on the order</label><input id="name" name="name">
+  <label for="size">Size</label><select id="size"><option>Small</option><option selected>Medium</option><option>Large</option></select>
+  <label><input type="checkbox" id="extra"> Extra cheese</label>
+  <button id="go" onclick="document.getElementById('out').textContent='Ordered: '+document.getElementById('size').value+' for '+document.getElementById('name').value">Place order</button>
+</form>
+<p id="out"></p>
+</main></body></html>

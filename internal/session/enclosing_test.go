@@ -59,3 +59,17 @@ func TestEnclosingFindsAnAncestorAgent(t *testing.T) {
 		t.Fatalf("Enclosing matched an unrelated agent: %q", got)
 	}
 }
+
+// DescendsFrom: this process runs under its parent and is itself; it does
+// not run under one of its own children, nor under an unrelated pid.
+func TestDescendsFrom(t *testing.T) {
+	if !DescendsFrom(os.Getpid(), os.Getpid()) || !DescendsFrom(os.Getpid(), os.Getppid()) {
+		t.Fatal("not under itself or its parent")
+	}
+	if DescendsFrom(os.Getppid(), os.Getpid()) {
+		t.Fatal("the parent read as under its child")
+	}
+	if DescendsFrom(os.Getpid(), 999999) {
+		t.Fatal("under a pid that is not its ancestor")
+	}
+}
