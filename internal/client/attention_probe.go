@@ -305,7 +305,7 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 		} else {
 			sinceFG = attnStartCap
 		}
-		screenState := classifyAttnFor(prog, agentActive, tail, settledMs, sinceFG, !fgAt.IsZero() && promptFGAt.Equal(fgAt))
+		screenState, asking := attnReadScreen(prog, agentActive, render, settledMs, sinceFG, !fgAt.IsZero() && promptFGAt.Equal(fgAt))
 		// The hook is precise; the screen is universal. resolveAttn puts the
 		// two together — including the cases where the hook is not to be
 		// believed: written by a harness that has since exited, left at
@@ -363,7 +363,7 @@ func (a *Agent) runAttention(logPath string, stop <-chan struct{}) {
 			hookSpoke[prog] = true
 		}
 		state, source := resolveAttn(screenState, hs, last, fgAt, idleMs,
-			attnLooksLikePrompt(bottom), attnLooksBusy(bottom), hookTurns[prog], hookSpoke[prog])
+			asking, attnLooksBusy(bottom), hookTurns[prog], hookSpoke[prog])
 		if a.harnessDown() {
 			// It cannot work at all: that is what to report, not what it
 			// looked like it was doing when it took the message.
@@ -989,6 +989,44 @@ var attnPromptMarks = map[string]*regexp.Regexp{
 func attnPromptDrawn(prog, tail string) bool {
 	re := attnPromptMarks[prog]
 	return re == nil || re.MatchString(stripANSI(tail))
+}
+
+// attnDialogMarks are, by program, the shape of a question of its own, read
+// on the whole screen: one may be drawn over its conversation, mid-screen,
+// with its input box still drawn at the bottom, above the rows read for a
+// prompt (attnPromptRows) and with the box below it read as at rest.
+//
+// Codex's choosers: options, the one under the cursor marked "› 1." or
+// "› 2.", and under them a hint "enter <what> · esc <what>". "Resume paused
+// goal?" (a thread whose goal was paused, resumed) is drawn over the rows of
+// its conversation, so other text may be left of each row, and its hint is
+// "enter select · esc back". It read as done, and a line said by voice was
+// typed into it: the Return picked "1. Resume goal", and the goal ran turns
+// on its own. "Update available" at its start ("enter continue · esc skip")
+// is at the bottom, but no cue knew "›" or its hint: the Return would pick
+// "1. Update now". A row of Codex's own conversation starts with "›" only
+// for a message the person sent, never with such a hint under it.
+var attnDialogMarks = map[string]*regexp.Regexp{
+	"codex": regexp.MustCompile(`(?m)(?:^|\s\s)› [0-9]+\. .*\n(?:.*\n){0,12}?(?:.*\S\s\s)?\s*enter [a-z]+ · esc [a-z]+\s*$`),
+}
+
+// attnDialogOnScreen reports whether prog's screen shows a question of its
+// own drawn over its conversation (attnDialogMarks).
+func attnDialogOnScreen(prog, render string) bool {
+	re := attnDialogMarks[prog]
+	return re != nil && re.MatchString(stripANSI(render))
+}
+
+// attnReadScreen is what the screen says: the state (classifyAttnFor, on its
+// last rows) and whether a question is on it (the bottom rows, and a dialog
+// drawn above them, which also makes a settled screen "input").
+func attnReadScreen(prog string, agentActive bool, render string, settledMs int64, sinceFG time.Duration, drawn bool) (state string, asking bool) {
+	state = classifyAttnFor(prog, agentActive, attentionProbeTail(render, attnTailRows), settledMs, sinceFG, drawn)
+	dialog := agentActive && attnDialogOnScreen(prog, render)
+	if state == "done" && dialog {
+		state = "input"
+	}
+	return state, dialog || attnLooksLikePrompt(attentionProbeTail(render, attnPromptRows))
 }
 
 // attnPromptCues are lowercase substrings that mark a screen asking the user to
