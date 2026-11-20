@@ -315,12 +315,16 @@ function turnTaken({ text, voiced, ms, why, parts, endT, decidedT, row }) {
 function maybeSendPart(t) {
   const talked = frames.length * FRAME_MS;
   if (talked > T.maxUttSec * 1000) sendPart('long without a pause');
-  // Not at a pause while a cut-in waits for you to stop: the pause may be you
-  // stopping for it, and what you said then goes with your next turn.
-  else if (turnModel.slow && !cutIn && !cutLate && talked >= T.partEverySec * 1000 && silenceMs >= T.partPauseMs && silenceMs < T.fastCommitMs) sendPart('a pause in long talk');
+  else if (turnModel.slow && talked >= T.partEverySec * 1000 && silenceMs >= T.partPauseMs && silenceMs < T.fastCommitMs) sendPart('a pause in long talk');
 }
 
+// No part while a cut-in waits for you to stop (or was judged talked over a
+// moment ago): the pause may be you stopping for it, and if you do, what you
+// said after it came in is dropped, not sent. A part held now goes once the
+// cut-in is decided either way.
+function cutInWaiting() { return !!cutIn || (!!cutLate && now() - cutLate.at <= T.cutInLateMs); }
 function sendPart(why) {
+  if (cutInWaiting()) return;
   const row = liveRow || panel.pendingRow();
   liveRow = null;
   const f = requestFinal();
@@ -654,6 +658,28 @@ function takeCutIn(c) {
   stopForCutIn(c);
   c.lines.forEach((t) => agentSaid(t));
 }
+// The talk up to where the cut-in came in, ending at a gap between words: the
+// last quiet frame in the moment before it (the text model, given a word cut
+// in half, can loop on the words before it: "the tenth thing is the round
+// desk in Chicago and the tenth thing is...").
+function cleanCut(frs) {
+  const back = Math.min(frs.length, Math.round(T.cutBackMs / FRAME_MS));
+  const e = [];
+  for (let i = frs.length - back; i < frs.length; i++) { let s = 0; const f = frs[i]; for (let j = 0; j < f.length; j++) s += f[j] * f[j]; e.push(s); }
+  if (!e.length) return frs;
+  const quiet = Math.max(Math.min(...e) * 2, Math.max(...e) * 0.1);
+  let i = e.length - 1;
+  while (i > 0 && e[i] > quiet) i--;
+  return frs.slice(0, frs.length - back + i);
+}
+// Faded out and followed by a little silence, as speech that ended.
+function endInSilence(a) {
+  const pad = Math.round(16000 * T.cutPadMs / 1000), fade = Math.min(480, a.length);
+  const o = new Float32Array(a.length + pad);
+  o.set(a);
+  for (let i = 0; i < fade; i++) o[a.length - 1 - i] *= i / fade;
+  return o;
+}
 // Your turn ends where you stopped for it, without being sent: of its talk,
 // only what came before the cut-in is kept, for your next turn.
 function stopForCutIn(c) {
@@ -664,8 +690,8 @@ function stopForCutIn(c) {
   liveRow = null;
   // A part sent since it came in left nothing of this utterance before it.
   const upTo = c.utt === uttId ? Math.min(c.upTo, frames.length) : 0;
-  const before = frames.slice(0, upTo);
-  const voicedBefore = Math.round(upTo * FRAME_MS);
+  const before = cleanCut(frames.slice(0, upTo));
+  const voicedBefore = Math.round(before.length * FRAME_MS);
   const keep = (text) => {
     text = (text || '').trim();
     if (!hasWords(text) || voicedBefore < T.tailMinVoicedMs) { panel.setRowText(row, '(not sent: you stopped for its cut-in)', 'note'); return; }
@@ -680,7 +706,7 @@ function stopForCutIn(c) {
     const f = { id, voiced: -upTo, text: null, ms: 0, waiting: [], before: '', len: 0 };
     finals.set(key, f);
     f.waiting.push(() => keep(f.text));
-    stt.postMessage({ type: 'transcribe', id: 'f' + key, final: true, audio: joinFrames(before) });
+    stt.postMessage({ type: 'transcribe', id: 'f' + key, final: true, audio: endInSilence(joinFrames(before)) });
   }
   you = 'quiet'; frames = []; preRoll = []; uttId++; voicedMs = 0; silenceMs = 0;
   settled = null; latest = null; liveBefore = ''; checked = rechecked = finalStarted = thinking = false;

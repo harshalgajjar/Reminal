@@ -48,6 +48,8 @@ export const T = {
   cutInWaitMs: 2500,          // still talking this long after it ended: you talked on over it
   cutInLateMs: 3000,          // ...but stopping within this after that still takes it
   cutInNoSoundMs: 2500,       // a cue that never makes a sound counts as heard after this
+  cutBackMs: 800,             // what you said before it is cut at the quietest moment this long before it
+  cutPadMs: 400,              // and given this much silence after, as speech that ended
 
   // Replies.
   ackAfterMs: 350,            // no answer by then: a quick "Okay." first

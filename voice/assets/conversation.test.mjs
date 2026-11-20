@@ -97,9 +97,11 @@ const voice = {
 // given, in order. Each stretch is marked in the audio itself (its loudness),
 // so a final of part of the talk has only that part's words.
 const phrases = [''];
+const requests = []; // every final asked for: {id, audio}
 const stt = {
   postMessage(m) {
     let text = '';
+    if (m.final) requests.push(m);
     if (m.final) {
       const seen = [];
       for (let i = 0; i < m.audio.length; i += 512) {
@@ -115,13 +117,16 @@ const stt = {
 // The person: saying w (or keeping on with what they were saying), or quiet,
 // at the mic for ms.
 const hush = new Float32Array(512);
-let loud = hush;
+// Speech: a short gap between words every sixth frame (its mark kept in
+// its first sample), as speech has.
+let loud = hush, gap = hush, nth = 0;
+const speech = () => (++nth % 6 === 0 ? gap : loud);
 function mic(ms, speaking, w) {
-  if (w) { phrases.push(w); loud = new Float32Array(512).fill(0.2 + (phrases.length - 1) / 1000); }
+  if (w) { phrases.push(w); loud = new Float32Array(512).fill(0.2 + (phrases.length - 1) / 1000); gap = new Float32Array(512); gap[0] = loud[0]; }
   const end = clock + ms;
   while (clock + FRAME_MS <= end) {
     advanceTo(clock + FRAME_MS);
-    talk.onFrame({ isSpeech: speaking ? 0.95 : 0.02 }, speaking ? loud : hush);
+    talk.onFrame({ isSpeech: speaking ? 0.95 : 0.02 }, speaking ? speech() : hush);
   }
   advanceTo(end);
 }
@@ -133,7 +138,7 @@ function longTalk() {
   talk.start({ stt, speaker: voice, turnModel: { slow: true, finished: async () => 0.9 }, nods: () => false });
   mic(13000, true, 'first part of my long story');
   mic(200, false); // a breath: the part goes
-  mic(300, true, 'and the bit just before I stopped');
+  mic(1000, true, 'and the bit just before I stopped');
   assert.deepEqual(sent.map((s) => s.t), ['part'], 'a part of the long talk went to the agent');
 }
 const CUT_IN = 'Hold on, that file was deleted yesterday.';
@@ -159,6 +164,13 @@ test('stopping a moment after hearing "Sorry," takes the cut-in, even when the v
   assert.ok(!/talked on over your cut-in/.test(said()[0].text));
   assert.ok(!/after it came in/.test(said()[0].text), 'what they said after it came in is dropped');
   assert.ok(!sent.some((s) => /after it came in/.test(s.text)), 'and never sent');
+  // What they said before it was transcribed cut at a gap between words, ending in silence.
+  const cut = requests.find((m) => /:-/.test(m.id));
+  assert.ok(cut, 'a final of its own for what came before it');
+  const tail = cut.audio.subarray(cut.audio.length - 6400);
+  assert.ok(tail.every((x) => x === 0), 'it ends in 400 ms of silence');
+  const last = cut.audio.subarray(cut.audio.length - 6400 - 512, cut.audio.length - 6400);
+  assert.ok(last.slice(1).every((x) => Math.abs(x) < 0.21) && last.slice(-480).every((x, i) => Math.abs(x) <= 0.21 * (480 - i) / 480 + 1e-6), 'faded out');
 });
 
 test('a made "Sorry," plays at once, and stopping after it is taking it', (t) => {
@@ -247,4 +259,38 @@ test('lines the agent says after a cut-in was talked over are never lost', (t) =
   mic(3000, false);
   const told = sent.map((s) => s.text).join(' | ');
   assert.match(told, /talked on over your cut-in: "Hold on, that file was deleted yesterday\. Also, the tests are failing\."/, `the agent is told of both: ${told}`);
+});
+
+// With a turn model fast enough to wait for, which answers "not finished"
+// (its promise is let run between frames).
+async function micA(ms, speaking, w) {
+  if (w) { phrases.push(w); loud = new Float32Array(512).fill(0.2 + (phrases.length - 1) / 1000); gap = new Float32Array(512); gap[0] = loud[0]; }
+  const end = clock + ms;
+  while (clock + FRAME_MS <= end) {
+    advanceTo(clock + FRAME_MS);
+    talk.onFrame({ isSpeech: speaking ? 0.95 : 0.02 }, speaking ? speech() : hush);
+    await new Promise((r) => setImmediate(r));
+  }
+  advanceTo(end);
+}
+
+test('a fast turn model saying "not finished" as they stop for it sends nothing said after it came in', async (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  voice.clipsMade = true;
+  sent.length = 0; rows.length = 0; voice.said.length = 0;
+  talk.start({ stt, speaker: voice, turnModel: { slow: false, finished: async () => 0.2 }, nods: () => false });
+  await micA(13000, true, 'first part of my long story');
+  await micA(400, false);                                   // "not finished": the part goes
+  assert.deepEqual(sent.map((s) => s.t), ['part']);
+  await micA(13000, true, 'the second stretch of it');      // 12 s and more since that part
+  talk.agentSaid(CUT_IN);
+  await micA(1500, true, 'which I said after it came in');
+  await micA(3000, false);                                  // they stop: "not finished" again
+  assert.ok(voice.said.includes(CUT_IN), 'the cut-in is said');
+  assert.ok(!sent.some((s) => /after it came in/.test(s.text)), `nothing said after it came in is sent: ${JSON.stringify(sent)}`);
+  await micA(1500, true, 'okay tell me');
+  await micA(3000, false);
+  const all = sent.map((s) => s.text).join(' | ');
+  assert.ok(!/after it came in/.test(all), all);
+  assert.match(all, /before they stopped for your cut-in they had also said: "the second stretch of it"/);
 });
