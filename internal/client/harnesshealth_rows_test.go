@@ -97,6 +97,23 @@ var loginRowCases = []loginRowCase{
 	// credential it fell back to without the credit to run on.
 	{prog: "claude", row: "● Login expired · Please run /login · Claude Code tried your saved Claude Console API key instead, but it doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing"},
 	{prog: "claude", row: "  ⎿  Login expired · Please run /login · Claude Code tried Acme Corp instead, but it doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing"},
+	// Claude Code 2.1.328 (source): notices led by other words than
+	// harnessLoginNotice's, some asking to sign in again.
+	{prog: "claude", row: "  ⎿  Your organization has disabled API key authentication · Run /login to sign in with your claude.ai account"},
+	{prog: "claude", row: "● Your organization has disabled API key authentication · Sign in again with your claude.ai account"},
+	{prog: "claude", row: "● Your organization has disabled API key authentication · Unset ANTHROPIC_API_KEY and run /login to sign in with your claude.ai account"},
+	{prog: "claude", row: "● Your organization has disabled API key authentication · Unset ANTHROPIC_API_KEY to use your claude.ai account instead"},
+	{prog: "claude", row: "● Your organization has disabled API key authentication · Unset the apiKeyHelper setting and run /login to sign in with your claude.ai account"},
+	{prog: "claude", row: "  ⎿  Anthropic profile login expired · Re-authenticate your Anthropic profile"},
+	{prog: "claude", row: "  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account."},
+	{prog: "claude", row: "● Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and sign in with a Console account"},
+	{prog: "claude", row: "  ⎿  Teleport requires a Claude account. Run /login and select \"Claude account with subscription\"."},
+	{prog: "claude", row: "  ⎿  Your sign-in wasn't accepted. Run /login, then try again."},
+	{prog: "claude", row: "  ⎿  Could not refresh your login because another Claude Code process is refreshing it · sign in again with /login"},
+	{prog: "claude", row: "● Could not refresh your login because another Claude Code process is refreshing it (or exited mid-refresh) · Try again in a minute; if it keeps happening, close other Claude Code windows or sign in again with /login"},
+	{prog: "claude", row: "  ⎿  session_stale_relogin: the sign-in on this machine has expired. Sign in again on this machine, then open the session again."},
+	{prog: "claude", row: "● my laptop (session_stale_relogin): the sign-in on this machine has expired. Sign in again on this machine, then open the session again."},
+	{prog: "claude", row: "● my laptop (untrusted_device): the server no longer accepts this machine's device proof. Sign in again on this machine, then open the session again."},
 
 	{prog: "gemini", row: "✕ Gemini API key is missing or not configured."},
 
@@ -651,6 +668,22 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"Claude Code's expired login, its fallback without credit, wrapped", "claude", "● Login expired · Please run /login · Claude Code tried your saved Claude Console API key instead, but it\n  doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing" + box, true},
 		{"the same quoted mid-sentence", "claude", "● Its screen said \"Login expired · Please run /login · Claude Code tried your saved Claude Console API key instead, but it doesn't have enough credit\", so I waited" + box, false},
 		{"the same carried on", "claude", "● Login expired · Please run /login · Claude Code tried the key instead, but it doesn't have enough credit · Or add funds: https://platform.claude.com/settings/billing, which I did, and the build is green" + box, false},
+		// Claude Code 2.1.328: its new sign-in notices on their own row, and
+		// each carried on or quoted in an agent's answer.
+		{"Claude Code's disabled API key notice", "claude", "answer\n  ⎿  Your organization has disabled API key authentication · Run /login to sign in with your claude.ai account" + box, true},
+		{"the same carried on", "claude", "● Your organization has disabled API key authentication · Run /login to sign in with your claude.ai account, so I switched to your subscription and continued." + box, false},
+		{"Claude Code's expired profile login", "claude", "answer\n  ⎿  Anthropic profile login expired · Re-authenticate your Anthropic profile" + box, true},
+		{"the same carried on", "claude", "● The banner said Anthropic profile login expired · Re-authenticate your Anthropic profile, so I re-authenticated and the run continued." + box, false},
+		{"Claude Code's Console sign-in wanted", "claude", "answer\n  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account." + box, true},
+		{"the same quoted", "claude", "● It reported \"require a Console sign-in (forceLoginMethod)\" so I asked you to sign in, then kept going." + box, false},
+		{"Claude Code's Teleport sign-in", "claude", "answer\n  ⎿  Teleport requires a Claude account. Run /login and select \"Claude account with subscription\"." + box, true},
+		{"the same carried on", "claude", "● Teleport requires a Claude account. Run /login and select \"Claude account with subscription\", done, resuming." + box, false},
+		{"Claude Code's sign-in not accepted", "claude", "answer\n  ⎿  Your sign-in wasn't accepted. Run /login, then try again." + box, true},
+		{"the same carried on", "claude", "● Your sign-in wasn't accepted. Run /login, then try again, which I did and we're back." + box, false},
+		{"Claude Code's login refresh held by another process", "claude", "answer\n  ⎿  Could not refresh your login because another Claude Code process is refreshing it · sign in again with /login" + box, true},
+		{"the same carried on", "claude", "● Could not refresh your login because another Claude Code process is refreshing it, so I waited a minute and it recovered." + box, false},
+		{"Remote Control's expired sign-in", "claude", "answer\n  ⎿  session_stale_relogin: the sign-in on this machine has expired. Sign in again on this machine, then open the session again." + box, true},
+		{"the same carried on", "claude", "● It hit session_stale_relogin: the sign-in on this machine has expired, and after you signed in again it reopened fine." + box, false},
 		// Qwen Code 0.26.9: rows that say the session is fine, and its
 		// notices quoted or carried on in an agent's own words.
 		{"Qwen's models that would not load, signed in", "qwen", "answer" + box + "  Could not load models. Your account is still signed in. Please try again.", false},

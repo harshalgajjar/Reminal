@@ -383,6 +383,25 @@ var harnessLoginScreens = map[string][]loginRow{
 		// fell back to (a saved Console key, an organization by its name)
 		// without the credit to run on.
 		`loginexpired·pleaserun/login·claudecodetried[^·"]{1,64}instead,butitdoesn.?thaveenoughcredit·oraddfunds:https://platform\.claude\.com/settings/billing`,
+		// 2.1.328: notices led by what went wrong in other words, some
+		// asking to sign in again rather than to run /login. An API key its
+		// organization turned off, with what to do instead.
+		`yourorganizationhasdisabledapikeyauthentication·(?:run/logintosigninwithyourclaude\.aiaccount|signinagainwithyourclaude\.aiaccount|unset(?:anthropic_api_key|theapikeyhelpersetting)andrun/logintosigninwithyourclaude\.aiaccount|unsetanthropic_api_keytouseyourclaude\.aiaccountinstead)`,
+		// An Anthropic profile's login that expired.
+		`anthropicprofileloginexpired·re-authenticateyouranthropicprofile`,
+		// A Console sign-in wanted, and one saved that is not a Console
+		// account's.
+		`thiscomputer.?ssettingsrequireaconsolesign-in\(forceloginmethod\)\.signinagainwithaconsoleaccount`,
+		`claudecodecan.?tusetheanthropicconsolesign-insavedonthiscomputer,usuallybecauseitisn.?tforaconsoleaccount·run/loginandsigninwithaconsoleaccount`,
+		// Teleport, which needs a claude.ai login.
+		`teleportrequiresaclaudeaccount\.run/loginandselect"claudeaccountwithsubscription"`,
+		// A sign-in the service turned away.
+		`yoursign-inwasn.?taccepted\.run/login,thentryagain`,
+		// A login it could not refresh while another Claude Code was.
+		`couldnotrefreshyourloginbecauseanotherclaudecodeprocessisrefreshingit(?:\(orexitedmid-refresh\))?·(?:tryagaininaminute;ifitkeepshappening,closeotherclaudecodewindowsor)?signinagainwith/login`,
+		// Remote Control's sign-in on this machine, expired or no longer
+		// trusted, by its code (after the session's name when it has one).
+		`(?:[^·:()"]{1,64}\()?(?:session_stale_relogin\)?:thesign-inonthismachinehasexpired|untrusted_device\)?:theservernolongeracceptsthismachine.?sdeviceproof)\.signinagainonthismachine,thenopenthesessionagain`,
 	)),
 }
 

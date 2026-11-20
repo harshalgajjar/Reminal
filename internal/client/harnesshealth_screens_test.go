@@ -70,6 +70,9 @@ func TestAgentsLoginScreensAsTheyDrawThem(t *testing.T) {
 		{"kiro-login", "kiro", true},
 		{"kiro-method", "kiro", true},
 		{"kiro-device", "kiro", true},
+		// Claude Code 2.1.329 with an API key its organization turned off
+		// (recorded against a stand-in API answering 403), its notice wrapped.
+		{"claude-apikey-disabled-120", "claude", true},
 	} {
 		raw, err := os.ReadFile(filepath.Join("testdata", "harness-screens", c.file+".txt"))
 		if err != nil {
