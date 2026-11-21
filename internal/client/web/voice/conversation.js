@@ -579,7 +579,7 @@ function releaseHeld(sayIt) {
   heldRow = null;
   if (!lines.length || !sayIt) return;
   row.remove();
-  c.lines.forEach((t) => agentSaid(t));
+  lines.forEach((t) => agentSaid(t));
 }
 
 // A cut-in, as people make one: a short "Sorry," first, and the rest only if
