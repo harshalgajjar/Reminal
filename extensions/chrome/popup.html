@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>reminal</title><link rel="stylesheet" href="style.css"><style>body{width:340px}.switch{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 12px}</style></head>
+<body>
+<main>
+  <h1>reminal</h1>
+  <p id="status" class="dim"></p>
+  <label class="switch"><span>Agents may use this browser: <strong id="state"></strong></span><input type="checkbox" id="agents"></label>
+  <p class="dim">Off unless you switch them on:</p>
+  <label class="switch"><span>Run scripts in pages (a script can act as you on sites you are signed in to)</span><input type="checkbox" class="more" id="scripts"></label>
+  <label class="switch"><span>Give files from this computer to pages</span><input type="checkbox" class="more" id="uploads"></label>
+  <label class="switch"><span>Read and change cookies and site storage</span><input type="checkbox" class="more" id="cookies"></label>
+  <ul id="list"></ul>
+  <p id="none" class="dim" hidden>No reminal session is using this browser now.</p>
+  <ul id="notes" class="dim"></ul>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>

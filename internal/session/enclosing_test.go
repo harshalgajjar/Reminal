@@ -59,3 +59,26 @@ func TestEnclosingFindsAnAncestorAgent(t *testing.T) {
 		t.Fatalf("Enclosing matched an unrelated agent: %q", got)
 	}
 }
+
+// The nearest session above a process is the one it runs in: with a session
+// started inside another (this process's parent inside its grandparent),
+// this process is in the inner one only; with none above, it is in none.
+func TestNearestSessionIsTheInnerOne(t *testing.T) {
+	self, parent := os.Getpid(), os.Getppid()
+	grand := parentPID(parent)
+	if grand <= 1 {
+		t.Skip("no grandparent to stand in for an outer session")
+	}
+	if got := nearestOf(self, map[int]bool{parent: true, grand: true}); got != parent {
+		t.Fatalf("nested: %d, want the inner session %d (outer %d)", got, parent, grand)
+	}
+	if got := nearestOf(self, map[int]bool{grand: true}); got != grand {
+		t.Fatalf("one session above: %d, want %d", got, grand)
+	}
+	if got := nearestOf(self, map[int]bool{}); got != 0 {
+		t.Fatalf("no session above: %d", got)
+	}
+	if got := nearestOf(self, map[int]bool{self: true, parent: true}); got != self {
+		t.Fatalf("itself a session: %d", got)
+	}
+}

@@ -75,3 +75,37 @@ func selfAncestry(start int) []int {
 	}
 	return out
 }
+
+// NearestSessionPID is the pid of the reminal session nearest above pid (pid
+// itself, if it is one): the session it runs in, and not one further out
+// that a session it runs in was itself started in. 0 when none.
+func NearestSessionPID(pid int) int {
+	all, err := ReadAllActive()
+	if err != nil {
+		return 0
+	}
+	agents := map[int]bool{}
+	for _, a := range all {
+		if a.PID > 0 {
+			agents[a.PID] = true
+		}
+	}
+	return nearestOf(pid, agents)
+}
+
+func nearestOf(pid int, agents map[int]bool) int {
+	for i := 0; i < enclosingMaxDepth && pid > 1; i++ {
+		if agents[pid] {
+			return pid
+		}
+		next := parentPID(pid)
+		if next == pid || next <= 0 {
+			return 0
+		}
+		pid = next
+	}
+	return 0
+}
+
+// ParentPID is pid's parent's pid; 0 when not read.
+func ParentPID(pid int) int { return parentPID(pid) }

@@ -13,3 +13,5 @@ internal/piext/extension/** -text
 # libghostty-vt built for wasm32, embedded by internal/vtwasm and checked
 # against its recorded sha256.
 internal/vtwasm/ghostty-vt.wasm -text
+# The browser extension reminal writes out for Load unpacked (extensions/chrome).
+extensions/chrome/** -text
