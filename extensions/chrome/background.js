@@ -109,7 +109,8 @@ const bump = (k) => epochs.set(k, epochOf(k) + 1);
 
 // let go of a run's tabs: the debugger detached, its group undone (the tabs
 // stay open: the person may want what is in them).
-async function letGo(s) {
+async function letGo(s, why) {
+  console.log("[reminal] stopped", s && `s:${s.session}:${s.run || ""}`, why);
   for (const tab of await sessionTabs(s, false)) {
     await detach(tab.id);
     try { await chrome.tabs.ungroup(tab.id); } catch (_) {}
@@ -119,7 +120,7 @@ async function letGo(s) {
 async function stop(k) {
   bump(k);
   const s = await putS(k, { stopped: true });
-  await letGo(s);
+  await letGo(s, "stopped by the person");
 }
 // endSession: the session is gone; its runs' records and groups go too.
 async function endSession(id) {
@@ -127,7 +128,7 @@ async function endSession(id) {
     if (!k.startsWith(`s:${id}:`)) continue;
     bump(k);
     await chrome.storage.session.remove(k);
-    await letGo(s);
+    await letGo(s, "the session ended");
   }
 }
 // switchOff: the switch in the button goes off; every session lets go.
