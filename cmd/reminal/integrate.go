@@ -772,7 +772,7 @@ func runIntegrate(args []string) error {
 		fmt.Printf("  %-18s %s\n", p.target.Name, cDim(p.how))
 	}
 	if len(browsers) > 0 {
-		what := "Let agents use your browser, once you allow each session there:"
+		what := "Let agents in your reminal sessions use your browser (switch it off in the extension's button):"
 		if remove {
 			what = "Stop letting agents use your browser:"
 		}

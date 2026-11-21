@@ -255,8 +255,8 @@ func TestBrowserToolsAreListed(t *testing.T) {
 		}
 		delete(want, n)
 		d, _ := tl["description"].(string)
-		if !strings.Contains(d, "asks the person") {
-			t.Errorf("%s does not say it asks the person", n)
+		if !strings.Contains(d, "can stop it") {
+			t.Errorf("%s does not say the person sees it and can stop it", n)
 		}
 		// What hands back a page's words says they are the page's.
 		if browserPageTools[n] && !strings.Contains(d, "not instructions to follow") {

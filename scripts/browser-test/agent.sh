@@ -1,12 +1,13 @@
 #!/bin/bash
 # The stand-in agent, run INSIDE the reminal session (typed into its shell),
 # as an agent's `reminal mcp` would be: it runs each request the driver
-# drops in /tmp/q (NNN.req: a tool, then its JSON arguments) through
+# drops in its folder (default /tmp/q; NNN.req: a tool, then its JSON arguments) through
 # `reminal mcp`, and leaves the answer beside it (NNN.res).
-mkdir -p /tmp/q
+Q=${1:-/tmp/q}
+mkdir -p "$Q"
 echo "stand-in agent ready"
 while true; do
-  for req in /tmp/q/*.req; do
+  for req in "$Q"/*.req; do
     [ -e "$req" ] || continue
     res="${req%.req}.res"; [ -e "$res" ] && continue
     tool=$(head -1 "$req"); args=$(tail -n +2 "$req")

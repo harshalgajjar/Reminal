@@ -124,7 +124,7 @@ func chromeExtensionDir(home string) string {
 // chromeLoadLine is said at the end of a setup, until the extension is in
 // the Chrome Web Store.
 func chromeLoadLine(home string) string {
-	return fmt.Sprintf("Your browser: load reminal's extension once (chrome://extensions, Developer mode, Load unpacked: %s). It asks you before an agent uses it.", tildePath(home, chromeExtensionDir(home)))
+	return fmt.Sprintf("Your browser: load reminal's extension once (chrome://extensions, Developer mode, Load unpacked: %s). After that, agents in your reminal sessions on this computer can use this browser without asking; switch it off in the extension's button.", tildePath(home, chromeExtensionDir(home)))
 }
 
 // applyChrome sets the browser up (or, on remove, takes it away): the host

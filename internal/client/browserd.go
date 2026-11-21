@@ -34,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"reminal/internal/proc"
 	"reminal/internal/session"
 )
 
@@ -88,13 +89,19 @@ type browserHub struct {
 	host    *browserConn
 	nextID  uint64
 	waiting map[uint64]waiter
-	seen    map[string]bool // sessions that have asked, told when they end
+	// seen: the sessions that have asked, by the pid of their process (the
+	// peer of their request), told when that process is gone. Not by their
+	// record: a live session's record can be missing for a while (judged
+	// stale after a clock jump, say), and an end told then took its tabs
+	// away mid-work.
+	seen map[string]int
 
 	// tests: whether peer pid may make a request for session (nil: the
 	// session's own process, by its active record); whether peer may be the
 	// bridge (nil: reminal's browser-host under a browser).
 	allow       func(peer int, session string) bool
 	allowBridge func(peer int) bool
+	noWait      bool // tests: no wait for a bridge
 }
 
 // waiter is a request waiting for its answer, and the bridge it went to.
@@ -122,7 +129,7 @@ func (b *browserConn) send(v any) error {
 }
 
 func newBrowserHub() *browserHub {
-	return &browserHub{waiting: map[uint64]waiter{}, seen: map[string]bool{}}
+	return &browserHub{waiting: map[uint64]waiter{}, seen: map[string]int{}}
 }
 
 // ServeBrowser serves browser.sock until stop closes. Not on Windows in
@@ -346,8 +353,13 @@ func (h *browserHub) request(conn net.Conn, m BrowserReq) BrowserResp {
 	if !allow(peer, m.Session) {
 		return BrowserResp{Error: "only session " + m.Session + " itself may ask for its browser use"}
 	}
+	// With no bridge just now, wait a while for one: the extension's worker
+	// may be asleep, and wakes on its alarm (every 30 s) to connect again.
+	host := h.waitForHost(h.hostWait())
 	h.mu.Lock()
-	host := h.host
+	if host == nil || h.host != host {
+		host = h.host
+	}
 	if host == nil {
 		h.mu.Unlock()
 		return BrowserResp{Error: errNoBrowser.Error()}
@@ -356,7 +368,7 @@ func (h *browserHub) request(conn net.Conn, m BrowserReq) BrowserResp {
 	id := h.nextID
 	ch := make(chan BrowserResp, 1)
 	h.waiting[id] = waiter{ch: ch, via: host}
-	h.seen[m.Session] = true
+	h.seen[m.Session] = peer
 	h.mu.Unlock()
 
 	m.T, m.ID = "req", id
@@ -405,8 +417,8 @@ func (h *browserHub) watchEnded(stop <-chan struct{}) {
 func (h *browserHub) tellEnded() {
 	h.mu.Lock()
 	var ended []string
-	for id := range h.seen {
-		if rec, err := session.ReadActiveByID(id); err != nil || rec.PID <= 0 {
+	for id, pid := range h.seen {
+		if !proc.Alive(pid) {
 			ended = append(ended, id)
 		}
 	}
@@ -436,7 +448,7 @@ func AskBrowser(req BrowserReq) (BrowserResp, error) {
 		return BrowserResp{}, errors.New("reminal's daemon is not serving the browser (is `reminal daemon` running?)")
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(BrowserWait + 5*time.Second))
+	_ = conn.SetDeadline(time.Now().Add(BrowserTotalWait + 5*time.Second))
 	req.T = "req"
 	if err := (&browserConn{c: conn}).send(req); err != nil {
 		return BrowserResp{}, err
@@ -450,4 +462,33 @@ func AskBrowser(req BrowserReq) (BrowserResp, error) {
 		return BrowserResp{}, err
 	}
 	return resp, nil
+}
+
+// browserHostWait is how long a request waits for a bridge when there is
+// none: past the extension's alarm, which wakes a sleeping worker to connect.
+const browserHostWait = 40 * time.Second
+
+// BrowserTotalWait is the longest a request can take at the hub: waiting for
+// a bridge, then for the answer.
+const BrowserTotalWait = browserHostWait + BrowserWait
+
+func (h *browserHub) hostWait() time.Duration {
+	if h.noWait {
+		return 0
+	}
+	return browserHostWait
+}
+
+// waitForHost returns the bridge, waiting up to d for one to connect.
+func (h *browserHub) waitForHost(d time.Duration) *browserConn {
+	deadline := time.Now().Add(d)
+	for {
+		h.mu.Lock()
+		host := h.host
+		h.mu.Unlock()
+		if host != nil || !time.Now().Before(deadline) {
+			return host
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

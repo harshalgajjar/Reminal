@@ -2,36 +2,46 @@
 // Copyright (C) 2026 Harshal Gajjar
 //
 // reminal's extension: agents in reminal sessions on this computer use this
-// browser, once the person allows each session.
+// browser, once the person allows it.
 //
 //   reminal (native messaging host, `reminal browser-host`)
 //     -> {t:"req", id, session, run, name, machine, tool, args}
 //     <- {id, ok, result | error}
-//     -> {t:"ended", session}      the session is gone: its consent and group go
+//     -> {t:"ended", session}      the session is gone: its tab group goes
 //
-// Consent is asked here, in the browser, for one run of one session (its id
-// and when its process started: a session restored or an id used again is
-// asked again), and kept in chrome.storage.session under that key (gone
-// when the browser restarts). Stop wins: it bumps the key's epoch, and every
-// action checks consent and the epoch again right before each debugger call.
-// Each session works only in its own tab group. Typing into password or
-// payment fields is refused, in any frame; an action inside a sign-in, or
-// with a CAPTCHA showing, is paused for the person. Input and screenshots go
-// through chrome.debugger (the browser shows its own "is debugging this
-// browser" bar); pages are read by scripts in the extension's isolated world.
+// Installing the extension (`reminal integrate`, then loading it) is the
+// person's consent: no prompt. A session's first use is shown (its tab group,
+// the page's border and label, a notification with Stop), and the switch in
+// the extension's button turns all of it off. Each session (one run of it:
+// its id and when its process started) works only in its own tab group, and
+// can be stopped from the button or the notification (Stop holds for that
+// run). Stop and the switch win over an action under way: an epoch, checked
+// right before each debugger call.
+//
+// Everything a session needs survives the service worker going to sleep: its
+// group and tabs are kept in chrome.storage.session (a group the browser
+// dropped is made again from its tabs), the debugger is attached again when
+// needed, and an alarm reconnects to reminal.
+//
+// Typing into password or payment fields is refused, in any frame; an action
+// inside a sign-in, or with a CAPTCHA showing, is paused for the person. Input
+// and screenshots go through chrome.debugger (the browser shows its own "is
+// debugging this browser" bar); pages are read by scripts in the extension's
+// isolated world.
 
 import * as page from './page.js';
 
 const HOST = 'app.reminal.browser';
-const CONSENT_WAIT_MS = 60_000;
+
 const COLORS = ['blue', 'green', 'purple', 'cyan', 'orange', 'pink', 'red', 'yellow', 'grey'];
 const STOPPED = 'The person stopped browser use for this session.';
-const NOT_ALLOWED = 'The person did not allow browser use for this session.';
+const OFF = 'The person switched off agents\' use of this browser (the reminal button in the browser\'s toolbar). Ask them to switch it on if they want you to use it.';
 
 // ---------------------------------------------------------------- the host
-let port = null, backoff = 1000;
+let port = null, backoff = 1000, retrying = 0;
 function connect() {
   if (port) return;
+  clearTimeout(retrying);
   try { port = chrome.runtime.connectNative(HOST); } catch (e) { port = null; retry(); return; }
   port.onMessage.addListener(onHostMessage);
   port.onDisconnect.addListener(() => {
@@ -41,7 +51,7 @@ function connect() {
     retry();
   });
 }
-function retry() { setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 30_000); }
+function retry() { clearTimeout(retrying); retrying = setTimeout(connect, backoff); backoff = Math.min(backoff * 2, 30_000); }
 function send(m) { try { port && port.postMessage(m); } catch (_) {} }
 async function setStatus(s) { await chrome.storage.session.set({ host: { ...s, at: Date.now() } }); }
 
@@ -60,21 +70,24 @@ async function onHostMessage(m) {
   send(out);
 }
 
+// Connected on every wake: the browser starting, the extension installed,
+// the worker started again, and an alarm every 30 s (a worker that went to
+// sleep while reminal was away comes back to it).
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
+chrome.alarms.create('reminal-connect', { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'reminal-connect') connect(); });
 connect();
 
 // ---------------------------------------------------------------- sessions
 // One storage key per run of a session: "s:<id>:<run>" ->
-// {session, run, name, machine, allowed, denied, groupId, lastTab}. Each
-// read is fresh; a write merges into what is stored now, and never brings a
-// stopped one back (only the consent answer creates a record).
+// {session, run, name, machine, groupId, tabs, lastTab, stopped}. Each read
+// is fresh; a write merges into what is stored now.
 const keyOf = (m) => `s:${m.session}:${m.run || ''}`;
 async function getS(k) { return (await chrome.storage.session.get(k))[k] || null; }
-async function putS(k, patch, create = false) {
-  const cur = await getS(k);
-  if (!cur && !create) return null;
-  const next = { ...(cur || {}), ...patch };
+async function putS(k, patch) {
+  const cur = (await getS(k)) || {};
+  const next = { ...cur, ...patch };
   await chrome.storage.session.set({ [k]: next });
   return next;
 }
@@ -83,112 +96,113 @@ async function allS() {
   return Object.entries(all).filter(([k]) => k.startsWith('s:'));
 }
 
-// The epoch of each key: bumped by Stop and by the session's end, checked
-// before every debugger call of an action that began under an older one.
+// The person's answer for this browser profile.
+async function allowedHere() { return (await chrome.storage.local.get('agents')).agents !== 'off'; }
+
+// Epochs: one for every session (bumped by the switch going off), and one a
+// run (bumped by its Stop and its end); an action checks both before each
+// debugger call.
+let allEpoch = 0;
 const epochs = new Map();
 const epochOf = (k) => epochs.get(k) || 0;
 const bump = (k) => epochs.set(k, epochOf(k) + 1);
 
-// forget: consent gone, the debugger let go of its tabs, its group undone
-// (the tabs stay open: the person may want what is in them).
-async function forget(k, why) {
-  bump(k);
-  const s = await getS(k);
-  await chrome.storage.session.remove(k);
-  if (!s) return;
-  for (const tab of await groupTabs(s)) {
+// let go of a run's tabs: the debugger detached, its group undone (the tabs
+// stay open: the person may want what is in them).
+async function letGo(s) {
+  for (const tab of await sessionTabs(s, false)) {
     await detach(tab.id);
     try { await chrome.tabs.ungroup(tab.id); } catch (_) {}
   }
-  console.log('[reminal] stopped', k, why);
 }
+// stop: the person's Stop, for this run of the session.
+async function stop(k) {
+  bump(k);
+  const s = await putS(k, { stopped: true });
+  await letGo(s);
+}
+// endSession: the session is gone; its runs' records and groups go too.
 async function endSession(id) {
-  for (const [k] of await allS()) if (k.startsWith(`s:${id}:`)) await forget(k, 'the session ended');
+  for (const [k, s] of await allS()) {
+    if (!k.startsWith(`s:${id}:`)) continue;
+    bump(k);
+    await chrome.storage.session.remove(k);
+    await letGo(s);
+  }
+}
+// switchOff: the switch in the button goes off; every session lets go.
+async function switchOff() {
+  allEpoch++;
+  await chrome.storage.local.set({ agents: 'off' });
+  for (const [, s] of await allS()) for (const tab of await sessionTabs(s, false)) await detach(tab.id);
 }
 
 // ---------------------------------------------------------------- consent
-const pending = new Map(); // key -> {promise, resolve, win}
-
-async function consent(m) {
-  const k = keyOf(m);
-  const s = await getS(k);
-  if (s && s.allowed) return k;
-  if (s && s.denied) throw new Error(NOT_ALLOWED);
-  let p = pending.get(k);
-  if (!p) {
-    let resolve;
-    const promise = new Promise((r) => { resolve = r; });
-    p = { promise, resolve, win: null };
-    pending.set(k, p);
-    await putS(k, { session: m.session, run: m.run || '', name: m.name || m.session, machine: m.machine || '' }, true);
-    const q = new URLSearchParams({ key: k, session: m.session, name: m.name || '', machine: m.machine || '' });
-    const w = await chrome.windows.create({ url: 'consent.html?' + q, type: 'popup', width: 440, height: 330, focused: true });
-    p.win = w.id;
-    chrome.notifications.create('consent-' + k, {
-      type: 'basic', iconUrl: 'icons/128.png', title: 'reminal',
-      message: `${label(m)} wants to use your browser. Answer in the reminal window.`,
-    });
-    // This prompt's own timer: it answers this prompt, never a later one.
-    const mine = p;
-    setTimeout(() => { if (pending.get(k) === mine) answer(k, null); }, CONSENT_WAIT_MS);
-  }
-  const allowed = await p.promise;
-  if (!allowed) throw new Error(NOT_ALLOWED);
-  return k;
+// Installing reminal's extension (`reminal integrate`, then loading it) is
+// the person's consent: agents in reminal sessions on this computer may use
+// this browser, with no prompt. The switch in the extension's button turns it
+// off (every request refused, saying so). A session's first use is shown, not
+// asked: its tab group, the page's border and label, and a notification with
+// a Stop button (Stop holds for that run of the session).
+async function consent() {
+  if (!(await allowedHere())) throw new Error(OFF);
 }
 
-function label(m) { return `${m.name ? `"${m.name}" (${m.session})` : m.session}, a reminal session on this computer${m.machine ? ` (${m.machine})` : ''},`; }
-
-// answer: true (allow), false (deny), null (no answer in time: asked again
-// next time, not remembered).
-async function answer(k, allow) {
-  const p = pending.get(k);
-  if (!p) return;
-  pending.delete(k);
-  if (allow === null) await chrome.storage.session.remove(k);
-  else await putS(k, { allowed: !!allow, denied: !allow }, true);
-  if (p.win) chrome.windows.remove(p.win).catch(() => {});
-  chrome.notifications.clear('consent-' + k);
-  p.resolve(!!allow);
+// announce: one notification the first time a run of a session uses the
+// browser, with Stop.
+async function announce(k, s, name) {
+  if (s && s.noticed) return;
+  await putS(k, { noticed: true });
+  chrome.notifications.create('use:' + k, {
+    type: 'basic', iconUrl: 'icons/128.png', title: 'reminal',
+    message: `"${name}", a reminal session on this computer, is using this browser.`,
+    buttons: [{ title: 'Stop' }],
+  });
 }
+chrome.notifications.onButtonClicked.addListener((id) => {
+  if (id.startsWith('use:')) stop(id.slice(4)).then(() => chrome.notifications.clear(id));
+});
 
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-  // Only the extension's own pages (consent.html, popup.html) speak here.
+  // Only the extension's own pages (popup.html) speak here.
   if (sender.id !== chrome.runtime.id || !sender.url || !sender.url.startsWith(chrome.runtime.getURL(''))) return;
-  const k = String(msg.key || '');
-  if (msg.t === 'consent') answer(k, !!msg.allow).then(() => reply(true));
-  else if (msg.t === 'stop') forget(k, 'stopped by the person').then(() => reply(true));
-  else if (msg.t === 'forget-denial') chrome.storage.session.remove(k).then(() => reply(true));
+  if (msg.t === 'stop') stop(String(msg.key || '')).then(() => reply(true));
+  else if (msg.t === 'switch') (msg.on ? chrome.storage.local.set({ agents: 'on' }) : switchOff()).then(() => reply(true));
   else if (msg.t === 'reconnect') { backoff = 1000; connect(); reply(true); }
   else return;
   return true;
 });
-chrome.windows.onRemoved.addListener((w) => { for (const [k, p] of pending) if (p.win === w) answer(k, null); });
 
 // ---------------------------------------------------------------- the tools
-// A request's own view of its session: still allowed, under the epoch it
-// began with. Checked before each step that touches a page.
+// A request's own view of its session: still allowed, not stopped, under the
+// epochs it began with. Checked before each step that touches a page.
 function guardFor(k) {
-  const epoch = epochOf(k);
+  const epoch = epochOf(k), all = allEpoch;
   return async () => {
     const s = await getS(k);
-    if (!s || !s.allowed || epochOf(k) !== epoch) throw new Error(STOPPED);
+    if (!(await allowedHere()) || allEpoch !== all) throw new Error(OFF);
+    if (!s || s.stopped || epochOf(k) !== epoch) throw new Error(STOPPED);
     return s;
   };
 }
 
 async function handle(m) {
-  const k = await consent(m);
+  await consent(m);
+  const k = keyOf(m);
+  const name = m.name || m.session;
+  let s = await getS(k);
+  if (s && s.stopped) throw new Error(STOPPED);
+  const before = s;
+  s = await putS(k, { session: m.session, run: m.run || "", name, machine: m.machine || "" });
+  await announce(k, before, name);
   const alive = guardFor(k);
-  const s = await alive();
-  const name = m.name || s.name || m.session;
-  if (m.name && m.name !== s.name) await putS(k, { name: m.name });
+  await alive();
   const a = m.args || {};
   switch (m.tool) {
-    case 'tabs_context': return tabsContext(s);
+    case 'tabs_context': return tabsContext(k);
     case 'tabs_create': return tabsCreate(k, alive, name, a.url);
   }
-  const tabId = await sessionTab(k, s, a.tabId);
+  const tabId = await sessionTab(k, a.tabId);
   const c = { tabId, alive };
   await indicate(tabId, name, true);
   try {
@@ -208,13 +222,33 @@ async function handle(m) {
   }
 }
 
-async function groupTabs(s) {
-  if (s.groupId == null) return [];
-  try { return await chrome.tabs.query({ groupId: s.groupId }); } catch (_) { return []; }
+// sessionTabs: the tabs of a run, by the ids it keeps (still open), in its
+// group. regroup: a tab the browser took out of the group (or a group it
+// dropped) is put back, in a group made again if need be.
+async function sessionTabs(s, regroup = true) {
+  if (!s) return [];
+  const ids = new Set(s.tabs || []);
+  let group = s.groupId;
+  try { if (group != null) await chrome.tabGroups.get(group); } catch (_) { group = null; }
+  const inGroup = group == null ? [] : await chrome.tabs.query({ groupId: group }).catch(() => []);
+  for (const t of inGroup) ids.add(t.id);
+  const tabs = [];
+  for (const id of ids) { try { tabs.push(await chrome.tabs.get(id)); } catch (_) {} }
+  if (regroup && tabs.length) {
+    const loose = tabs.filter((t) => group == null || t.groupId !== group).map((t) => t.id);
+    if (loose.length) {
+      group = await chrome.tabs.group(group == null ? { tabIds: loose } : { tabIds: loose, groupId: group });
+      await chrome.tabGroups.update(group, { title: `reminal: ${s.name || s.session}`, color: s.color || 'blue' }).catch(() => {});
+    }
+    const key = `s:${s.session}:${s.run || ''}`;
+    await putS(key, { groupId: group, tabs: tabs.map((t) => t.id) });
+  }
+  return tabs;
 }
 
-async function tabsContext(s) {
-  const tabs = await groupTabs(s);
+async function tabsContext(k) {
+  const s = await getS(k);
+  const tabs = await sessionTabs(s);
   if (!tabs.length) return 'This session has no tabs yet: open one with browser_tabs_create.';
   return JSON.stringify(tabs.map((t) => ({ tabId: t.id, title: t.title, url: t.url, active: t.active, last: t.id === s.lastTab })));
 }
@@ -222,31 +256,34 @@ async function tabsContext(s) {
 async function tabsCreate(k, alive, name, url) {
   const href = url ? allowedURL(url) : 'about:blank';
   let s = await alive();
+  await sessionTabs(s); // its group as it should be, first
+  s = await getS(k);
   const tab = await chrome.tabs.create({ url: href, active: true });
-  let group = s.groupId;
-  try { if (group != null) await chrome.tabGroups.get(group); } catch (_) { group = null; }
   try {
     s = await alive();
   } catch (e) {
     chrome.tabs.remove(tab.id).catch(() => {});
     throw e;
   }
+  let group = s.groupId;
+  try { if (group != null) await chrome.tabGroups.get(group); } catch (_) { group = null; }
+  const color = s.color || COLORS[(await allS()).length % COLORS.length];
   if (group == null) {
     group = await chrome.tabs.group({ tabIds: [tab.id] });
-    const n = (await allS()).length;
-    await chrome.tabGroups.update(group, { title: `reminal: ${name}`, color: COLORS[n % COLORS.length] });
+    await chrome.tabGroups.update(group, { title: `reminal: ${name}`, color });
   } else {
     await chrome.tabs.group({ tabIds: [tab.id], groupId: group });
   }
-  await putS(k, { groupId: group, lastTab: tab.id });
+  await putS(k, { groupId: group, color, lastTab: tab.id, tabs: [...new Set([...(s.tabs || []), tab.id])] });
   if (url) await loaded(tab.id);
   return JSON.stringify({ tabId: tab.id, url: href });
 }
 
-// sessionTab: the tab asked for, which must be in the session's group; or
-// the one it used last; or its first.
-async function sessionTab(k, s, want) {
-  const tabs = await groupTabs(s);
+// sessionTab: the tab asked for, which must be one of the session's; or the
+// one it used last; or its first.
+async function sessionTab(k, want) {
+  const s = await getS(k);
+  const tabs = await sessionTabs(s);
   if (!tabs.length) throw new Error('This session has no tabs yet: open one with browser_tabs_create.');
   let tab;
   if (want != null) {
@@ -301,18 +338,32 @@ function loaded(tabId) {
 }
 
 // ---------------------------------------------------------------- the debugger
+// Attached when needed, and again after the worker slept (its memory of what
+// it attached is gone, the attachment may not be): "already attached" is
+// attached.
 const attached = new Set();
-// cdp: a debugger call, made only while the session is still allowed under
-// the epoch its action began with (Stop wins over an action under way).
 async function cdp(c, method, params = {}) {
   await c.alive();
   if (!attached.has(c.tabId)) {
-    await chrome.debugger.attach({ tabId: c.tabId }, '1.3');
+    try {
+      await chrome.debugger.attach({ tabId: c.tabId }, '1.3');
+    } catch (e) {
+      if (!/already attached/i.test(String(e && e.message))) throw e;
+    }
     attached.add(c.tabId);
   }
-  return chrome.debugger.sendCommand({ tabId: c.tabId }, method, params);
+  try {
+    return await chrome.debugger.sendCommand({ tabId: c.tabId }, method, params);
+  } catch (e) {
+    // Detached under us (the bar's Cancel, the worker's sleep): once more.
+    if (!/not attached|detached/i.test(String(e && e.message))) throw e;
+    attached.delete(c.tabId);
+    await chrome.debugger.attach({ tabId: c.tabId }, '1.3');
+    attached.add(c.tabId);
+    return chrome.debugger.sendCommand({ tabId: c.tabId }, method, params);
+  }
 }
-async function detach(tabId) { if (attached.delete(tabId)) { try { await chrome.debugger.detach({ tabId }); } catch (_) {} } }
+async function detach(tabId) { attached.delete(tabId); try { await chrome.debugger.detach({ tabId }); } catch (_) {} }
 chrome.debugger.onDetach.addListener((src) => attached.delete(src.tabId));
 chrome.tabs.onRemoved.addListener((tabId) => attached.delete(tabId));
 

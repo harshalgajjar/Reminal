@@ -19,13 +19,14 @@ const slow = (ms) => (GIF ? pause(ms) : Promise.resolve());
 
 // A tool call, made by the stand-in agent inside the session.
 let n = 0;
-async function call(tool, args = {}) {
+async function call(tool, args = {}, q = "/tmp/q") {
   const k = String(++n).padStart(3, '0');
-  fs.writeFileSync(`/tmp/q/${k}.tmp`, tool + '\n' + JSON.stringify(args));
-  fs.renameSync(`/tmp/q/${k}.tmp`, `/tmp/q/${k}.req`);
+  fs.mkdirSync(q, { recursive: true });
+  fs.writeFileSync(`${q}/${k}.tmp`, tool + "\n" + JSON.stringify(args));
+  fs.renameSync(`${q}/${k}.tmp`, `${q}/${k}.req`);
   for (let i = 0; i < 1300; i++) {
-    if (fs.existsSync(`/tmp/q/${k}.res`)) {
-      const raw = fs.readFileSync(`/tmp/q/${k}.res`, 'utf8');
+    if (fs.existsSync(`${q}/${k}.res`)) {
+      const raw = fs.readFileSync(`${q}/${k}.res`, "utf8");
       let j; try { j = JSON.parse(raw); } catch (_) { return { err: 'no answer: ' + raw.slice(0, 200), content: [] }; }
       const content = (j.result && j.result.content || []).filter((c) => !(c.type === 'text' && /^⚠ reminal/.test(c.text)));
       const text = content.filter((c) => c.type === 'text').map((c) => c.text).join('\n');
@@ -48,55 +49,108 @@ const ctx = await chromium.launchPersistentContext(`${HOME}/.config/chromium`, {
   const { windowId } = await cdp.send('Browser.getWindowForTarget');
   await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: 0, top: 0, width: 1280, height: 800 } });
 }
-let sw = ctx.serviceWorkers().find((w) => w.url().includes(EXT_ID));
-if (!sw) sw = await ctx.waitForEvent('serviceworker', { predicate: (w) => w.url().includes(EXT_ID), timeout: 20000 });
-check(sw.url().startsWith(`chrome-extension://${EXT_ID}/`), `the extension loaded with its fixed id (${sw.url()})`);
-const store = (k) => sw.evaluate((k) => chrome.storage.session.get(k).then((o) => o[k]), k);
+// The extension's worker, as it is now: the newest Playwright has seen (one
+// stopped and woken again is a new worker; the old handle answers nothing).
+const workers = [];
+ctx.on('serviceworker', (w) => { if (w.url().includes(EXT_ID)) workers.push(w); });
+for (const w of ctx.serviceWorkers()) if (w.url().includes(EXT_ID)) workers.push(w);
+async function getSW() {
+  if (workers.length) return workers[workers.length - 1];
+  return ctx.waitForEvent('serviceworker', { predicate: (x) => x.url().includes(EXT_ID), timeout: 45000 });
+}
+const inSW = async (fn, arg) => {
+  for (let i = 0; ; i++) {
+    const w = await getSW();
+    try { return await w.evaluate(fn, arg); } catch (e) {
+      if (i >= 3) throw e;
+      // A worker gone: wait for the next one.
+      const n = workers.length;
+      for (let j = 0; j < 450 && workers.length === n; j++) await pause(100);
+    }
+  }
+};
+const sw0 = await getSW();
+check(sw0.url().startsWith(`chrome-extension://${EXT_ID}/`), `the extension loaded with its fixed id (${sw0.url()})`);
+const store = (k) => inSW((k) => chrome.storage.session.get(k).then((o) => o[k]), k);
 let host = null;
 for (let i = 0; i < 60 && !(host && host.connected); i++) { host = await store('host'); await pause(250); }
 check(host && host.connected, `it reached reminal through the native host (${JSON.stringify(host)})`);
-const groups = () => sw.evaluate(() => chrome.tabGroups.query({}).then((g) => g.map((x) => x.title)));
+const groups = () => inSW(() => chrome.tabGroups.query({}).then((g) => g.map((x) => x.title).sort()));
+const ID2 = process.env.ID2;
 
-// The consent window, answered as the person would: after looking at it.
-async function answerConsent(allow) {
-  const p = await ctx.waitForEvent('page', { predicate: (pg) => pg.url().includes('/consent.html'), timeout: 20000 });
-  await p.waitForLoadState();
-  await p.bringToFront();
-  const words = await p.textContent('#who');
-  await pause(GIF ? 2200 : 1300); // its buttons work only after a second with the focus
-  await p.click(allow ? '#allow' : '#deny');
-  return words;
-}
+// No window ever asks: installing the extension is the consent. noPrompt: no
+// extension window opened within ms.
+const noPrompt = (ms) => ctx.waitForEvent('page', { predicate: (pg) => pg.url().startsWith(`chrome-extension://${EXT_ID}/`) && !pg.url().includes('popup.html'), timeout: ms }).then(() => false, () => true);
 const page = (re) => ctx.pages().find((pg) => re.test(pg.url()));
+const popupDo = async (fn) => { const pop = await ctx.newPage(); await pop.goto(`chrome-extension://${EXT_ID}/popup.html`); const r = await fn(pop); await pop.close(); return r; };
 
-// 1. The control: the person says no. Nothing is done, and no tab group made.
+// 1. The control: the switch in the button off. Every request is refused,
+// saying so, and nothing is done.
 {
-  const r = call('browser_tabs_context');
-  const words = await answerConsent(false);
-  check(/"web helper" \(\w+\), a reminal session on this computer \(.+\), wants to use your browser/.test(words), `the window names the session and the computer: ${JSON.stringify(words)}`);
-  const res = await r;
-  check(res.err && /did not allow/.test(res.err), `denied: the agent is told (${res.err})`);
-  check((await groups()).length === 0, 'denied: no tab group was made');
-  const again = await call('browser_tabs_context');
-  check(again.err && /did not allow/.test(again.err), 'denied: asked again, it is still no (not asked twice)');
-  // The person forgets the denial in the extension's button, so it may ask again.
-  const pop = await ctx.newPage();
-  await pop.goto(`chrome-extension://${EXT_ID}/popup.html`);
-  await pop.click('text=Forget');
-  await pop.close();
+  await popupDo(async (pop) => { check(await pop.isChecked('#agents'), 'the switch is on as installed'); await pop.uncheck('#agents'); });
+  const res = await call('browser_tabs_context');
+  check(res.err && /switched off agents' use of this browser/.test(res.err), `switched off: the agent is told (${res.err})`);
+  const r2 = await call('browser_tabs_create', { url: `${PAGES}/form.html` });
+  check(r2.err && /switched off/.test(r2.err) && (await groups()).length === 0, 'switched off: no tab opened, no group made');
+  await popupDo(async (pop) => { await pop.check('#agents'); });
 }
 
-// 2. The person allows: a tab in the session's own group.
+// 2. Switched on (as installed): the first use needs no click. A tab in the
+// session's own group, at once.
 let tabId;
 {
+  const t0 = Date.now();
   const r = call('browser_tabs_create', { url: `${PAGES}/form.html` });
-  await answerConsent(true);
+  const none = noPrompt(3000);
   const res = await r;
+  const ms = Date.now() - t0;
   try { tabId = JSON.parse(res.text).tabId; } catch (_) {}
-  check(!res.err && tabId > 0, `allowed: a tab opened (${res.err || res.text})`);
+  check(!res.err && tabId > 0 && await none, `first use: a tab opened with no prompt, in ${ms} ms (${res.err || res.text})`);
   const g = await groups();
   check(g.length === 1 && g[0] === 'reminal: web helper', `in a tab group of the session's own (${JSON.stringify(g)})`);
+  const recs = await inSW((id) => chrome.storage.session.get(null).then((all) => Object.entries(all).filter(([k]) => k.startsWith(`s:${id}:`)).map(([, v]) => v)), ID);
+  check(recs.some((s) => s.noticed), 'its first use was announced (a notification with Stop)');
   await slow(1200);
+}
+
+// 2b. Another session works at once too, in a group of its own.
+{
+  const r = await call('browser_tabs_create', { url: `${PAGES}/form.html?second` }, '/tmp/q2');
+  check(!r.err, `a second session works at once (${r.err || r.text})`);
+  const g = await groups();
+  check(g.length === 2 && g.includes('reminal: second helper'), `and has a tab group of its own (${JSON.stringify(g)})`);
+}
+
+// 2c. Its tab survives what the browser does meanwhile: the connection to
+// reminal dropped (as when the extension's worker sleeps), the group
+// dropped, the debugger let go, the session's record gone for a while. The
+// same tab, the same group, no prompt.
+{
+  const ctxOf = async () => JSON.parse((await call('browser_tabs_context')).text.split('\n').slice(1).join('\n') || '[]');
+  // The native host ends (the worker's port closes, as when it sleeps).
+  execSync(`pkill -f "chrome-extension://[${EXT_ID[0]}]${EXT_ID.slice(1)}/" || true`, { stdio: "pipe" });
+  await pause(500);
+  let tabs = await ctxOf();
+  check(tabs.some((t) => t.tabId === tabId), `after the connection dropped, the session still has its tab (${JSON.stringify(tabs.map((t) => t.tabId))})`);
+  let r = await call('browser_screenshot');
+  check(r.content.some((c) => c.type === 'image'), `and acts on it (${r.err || 'a screenshot'})`);
+  // The browser drops the group and the debugger lets go.
+  await inSW((id) => chrome.tabs.ungroup(id).then(() => 'ungrouped', (e) => e.message), tabId);
+  await inSW((id) => chrome.debugger.detach({ tabId: id }).then(() => 'detached', (e) => e.message), tabId).catch(() => {});
+  tabs = await ctxOf();
+  const g = await groups();
+  check(tabs.some((t) => t.tabId === tabId) && g.includes('reminal: web helper'), `a group the browser dropped is made again, with the tab in it (${JSON.stringify(g)})`);
+  r = await call('browser_screenshot');
+  check(r.content.some((c) => c.type === 'image'), `and the debugger attaches again (${r.err || 'a screenshot'})`);
+  // The session's record gone for a while (judged stale after a clock jump,
+  // say), past the hub's check of ended sessions: the session is not ended.
+  const rec = `${HOME}/.reminal/active-${ID}.json`;
+  const saved = fs.readFileSync(rec);
+  fs.unlinkSync(rec);
+  await pause(12000);
+  fs.writeFileSync(rec, saved);
+  tabs = await ctxOf();
+  check(tabs.some((t) => t.tabId === tabId) && (await groups()).includes('reminal: web helper'), `a live session whose record went missing still has its tab and group (${JSON.stringify(tabs.map((t) => t.tabId))})`);
 }
 
 // 3. Screenshot, reading, typing, clicking.
@@ -116,7 +170,7 @@ let tabId;
   await slow(600);
   r = await call('browser_click', { ref: order });
   check(!r.err, `clicked Place order (${r.err || r.text})`);
-  const shown = await page(/form\.html/).evaluate(() => !!document.getElementById('__reminal_indicator'));
+  const shown = await page(/form\.html$/).evaluate(() => !!document.getElementById('__reminal_indicator'));
   check(shown, 'the page shows the agent is acting on it');
   const text = (await call('browser_get_page_text')).text || '';
   check(/Ordered: Medium for Ada Lovelace/.test(text), 'the order went through, as the page says');
@@ -259,7 +313,7 @@ for (const url of ['https://x@chromewebstore.google.com/', ' https://example.com
 {
   const other = await ctx.newPage();
   await other.goto(`${PAGES}/form.html?mine`);
-  const otherId = await sw.evaluate(() => chrome.tabs.query({}).then((t) => (t.find((x) => /mine/.test(x.url)) || {}).id));
+  const otherId = await inSW(() => chrome.tabs.query({}).then((t) => (t.find((x) => /mine/.test(x.url)) || {}).id));
   let r = await call('browser_navigate', { tabId: otherId, url: `${PAGES}/login.html` });
   check(r.err && /not in this session's tab group/.test(r.err), `a tab of the person's own is refused (${r.err})`);
   check(other.url().includes('mine'), 'and it was not touched');
@@ -268,43 +322,42 @@ for (const url of ['https://x@chromewebstore.google.com/', ' https://example.com
   check(r.err && /may only open web pages/.test(r.err), `chrome:// is refused (${r.err})`);
 }
 
-// 6. The person stops it in the extension's button, while an action is
-// under way (a page slow to load): Stop wins. Nothing brings the consent
-// back, and the next call asks again.
-const keysOf = () => sw.evaluate((id) => chrome.storage.session.get(null).then((all) => Object.keys(all).filter((k) => k.startsWith(`s:${id}:`) && all[k].allowed)), ID);
+// 6. The person stops one session in the extension's button, while it is
+// acting (a page slow to load): Stop wins and holds for that session's run;
+// the other session goes on. Then the switch off: every session refused.
+const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) => Object.entries(all).filter(([k]) => k.startsWith(`s:${id}:`)).map(([, v]) => v)), id);
 {
   const pop = await ctx.newPage();
   await pop.goto(`chrome-extension://${EXT_ID}/popup.html`);
-  check(/web helper/.test(await pop.textContent('#list')), 'the button lists the session');
+  check(/on/.test(await pop.textContent('#state')) && /web helper/.test(await pop.textContent('#list')) && /second helper/.test(await pop.textContent('#list')), 'the button shows the switch on and both sessions');
   await slow(1000);
   const going = call('browser_navigate', { url: `${PAGES}/slow.html` });
   await pause(1500); // the page is loading
-  await pop.click('text=Stop');
+  await pop.locator('li', { hasText: 'web helper' }).locator('button').click();
   await pop.close();
   await going;
-  check((await keysOf()).length === 0, 'Stop during an action: nothing brought the consent back');
-  check((await groups()).length === 0, 'Stop: its tab group is undone (the tabs stay)');
-  // The next call asks again; told no, no screenshot comes.
-  const afterP = call('browser_screenshot');
-  await answerConsent(false);
-  const after = await afterP;
-  check(after.err && !after.content.some((c) => c.type === 'image'), `after Stop it asks again, and a no means no screenshot (${after.err})`);
-  const pop2 = await ctx.newPage();
-  await pop2.goto(`chrome-extension://${EXT_ID}/popup.html`);
-  await pop2.click('text=Forget');
-  await pop2.close();
-  const r = call('browser_tabs_create', { url: `${PAGES}/form.html` });
-  await answerConsent(true);
-  check(!(await r).err, 'after Stop it asks again before doing anything');
+  const recs = await recOf(ID);
+  check(recs.length > 0 && recs.every((s) => s.stopped), 'Stop: that session is stopped, and nothing brought it back');
+  check(!(await groups()).includes('reminal: web helper'), `its tab group is undone, the tabs stay (${JSON.stringify(await groups())})`);
+  const a = await call('browser_screenshot');
+  check(a.err && /stopped/.test(a.err) && !a.content.some((c) => c.type === 'image'), `a stopped session is refused, and no screenshot comes (${a.err})`);
+  const other = await call('browser_tabs_context', {}, '/tmp/q2');
+  check(!other.err && /second\b/.test(other.text), `the other session goes on (${other.err || 'its tab'})`);
+  await popupDo(async (p) => { await p.uncheck('#agents'); });
+  const off = await call('browser_tabs_context', {}, '/tmp/q2');
+  check(off.err && /switched off/.test(off.err), `the switch off refuses every session (${off.err})`);
+  await popupDo(async (p) => { await p.check('#agents'); });
+  const on = await call('browser_tabs_context', {}, '/tmp/q2');
+  check(!on.err, `and on again, it goes on (${on.err || 'its tab'})`);
 }
 
-// 7. The session ends: its consent and its group go with it.
+// 7. A session ends: its records and its group go with it.
 {
-  execSync(`reminal kill -y ${ID}`, { stdio: "pipe" });
+  execSync(`reminal kill -y ${ID2}`, { stdio: 'pipe' });
   let left = [];
-  for (let i = 0; i < 40; i++) { left = await keysOf(); if (!left.length) break; await pause(500); }
-  check(left.length === 0, 'the session ended: its consent is gone');
-  check((await groups()).length === 0, 'and its tab group');
+  for (let i = 0; i < 40; i++) { left = await recOf(ID2); if (!left.length) break; await pause(500); }
+  check(left.length === 0, 'the session ended: its record is gone');
+  check(!(await groups()).includes('reminal: second helper'), 'and its tab group');
 }
 
 await ctx.close();

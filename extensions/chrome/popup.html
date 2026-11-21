@@ -1,12 +1,13 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>reminal</title><link rel="stylesheet" href="style.css"><style>body{width:340px}</style></head>
+<head><meta charset="utf-8"><title>reminal</title><link rel="stylesheet" href="style.css"><style>body{width:340px}.switch{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 12px}</style></head>
 <body>
 <main>
   <h1>reminal</h1>
   <p id="status" class="dim"></p>
+  <label class="switch"><span>Agents may use this browser: <strong id="state"></strong></span><input type="checkbox" id="agents"></label>
   <ul id="list"></ul>
-  <p id="none" class="dim" hidden>No reminal session uses this browser.</p>
+  <p id="none" class="dim" hidden>No reminal session is using this browser now.</p>
 </main>
 <script src="popup.js"></script>
 </body>

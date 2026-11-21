@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ func startHub(t *testing.T, allow func(peer int, session string) bool) *browserH
 	h := newBrowserHub()
 	h.allow = allow
 	h.allowBridge = func(int) bool { return true } // the test process stands in for the browser host
+	h.noWait = true
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	go serveBrowserOn(h, stop)
@@ -344,11 +346,12 @@ func TestAnEndIsToldOnlyToABrowser(t *testing.T) {
 	t.Setenv("HOME", t.TempDir()) // no session records: every session has ended
 	h := startHub(t, func(int, string) bool { return true })
 	h.mu.Lock()
-	h.seen["GONE1"] = true
+	h.seen["GONE1"] = exitedPID(t)
+	h.seen["LIVE1"] = os.Getpid() // live, though its record is not here (HOME is empty)
 	h.mu.Unlock()
 	h.tellEnded()
 	h.mu.Lock()
-	kept := h.seen["GONE1"]
+	_, kept := h.seen["GONE1"]
 	h.mu.Unlock()
 	if !kept {
 		t.Fatal("an end was marked told with no browser to tell")
@@ -366,5 +369,64 @@ func TestAnEndIsToldOnlyToABrowser(t *testing.T) {
 	line, _ := bufio.NewReader(c).ReadString('\n')
 	if !strings.Contains(line, `"ended"`) || !strings.Contains(line, "GONE1") {
 		t.Fatalf("the browser was told %q", line)
+	}
+}
+
+// exitedPID is the pid of a process that has run and ended.
+func exitedPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+// A live session whose record is missing (a record judged stale after a
+// clock jump is removed) is not told ended: its tabs are not taken away
+// mid-work. Only its process ending ends it.
+func TestALiveSessionWithoutItsRecordIsNotEnded(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	h := startHub(t, func(int, string) bool { return true })
+	h.mu.Lock()
+	h.seen["LIVE1"] = os.Getpid()
+	h.mu.Unlock()
+	var told []string
+	fakeHost(t, func(BrowserReq) BrowserResp { return BrowserResp{OK: true} })
+	sock, _ := BrowserSockPath()
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = c.Write([]byte(`{"t":"host"}` + "\n"))
+	time.Sleep(50 * time.Millisecond)
+	h.tellEnded()
+	_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	if line, _ := bufio.NewReader(c).ReadString('\n'); line != "" {
+		told = append(told, line)
+	}
+	h.mu.Lock()
+	_, kept := h.seen["LIVE1"]
+	h.mu.Unlock()
+	if len(told) > 0 || !kept {
+		t.Fatalf("a live session was told ended: %q (kept %v)", told, kept)
+	}
+}
+
+// With no bridge for a moment (the extension's worker asleep, its alarm about
+// to wake it), a request waits for one rather than failing.
+func TestARequestWaitsForTheBrowserToComeBack(t *testing.T) {
+	h := startHub(t, func(int, string) bool { return true })
+	h.mu.Lock()
+	h.noWait = false
+	h.mu.Unlock()
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		fakeHost(t, func(BrowserReq) BrowserResp { return BrowserResp{OK: true, Result: json.RawMessage(`"back"`)} })
+	}()
+	resp, err := AskBrowser(BrowserReq{Session: "S1", Tool: "tabs_context"})
+	if err != nil || !resp.OK || string(resp.Result) != `"back"` {
+		t.Fatalf("%+v, %v", resp, err)
 	}
 }

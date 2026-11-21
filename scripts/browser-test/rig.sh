@@ -22,12 +22,19 @@ sleep 2
 mcp() { ( printf '%s\n%s\n%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"op","version":"1"}}}' '{"jsonrpc":"2.0","method":"notifications/initialized"}' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}"; sleep 2 ) | reminal mcp 2>/dev/null | grep '"id":2'; }
 mcp send_keys "{\"session\":\"$ID\",\"keys\":\"bash /r/scripts/browser-test/agent.sh\",\"enter\":true}" >/dev/null
 for i in $(seq 1 20); do mcp read_transcript "{\"session\":\"$ID\"}" | grep -q "stand-in agent ready" && break; sleep 0.5; done
+# A second session, with its own stand-in agent: the person is not asked again for it.
+out2=$(reminal new "second helper" 2>&1)
+ID2=$(echo "$out2" | sed -n 's/^ *Session: *\([A-Z0-9]*\).*/\1/p' | head -1)
+echo "== second session $ID2"
+sleep 2
+mcp send_keys "{\"session\":\"$ID2\",\"keys\":\"bash /r/scripts/browser-test/agent.sh /tmp/q2\",\"enter\":true}" >/dev/null
+for i in $(seq 1 20); do mcp read_transcript "{\"session\":\"$ID2\"}" | grep -q "stand-in agent ready" && break; sleep 0.5; done
 echo "== the same tools from OUTSIDE the session (a program naming it):"
 REMINAL_SESSION=$ID mcp browser_tabs_context '{}' | grep -o '"text":"Error: [^"]*' | head -1 | sed 's/^/  /'
 REC=""
 if [ -n "${GIF:-}" ]; then ffmpeg -loglevel error -f x11grab -video_size 1280x800 -framerate 10 -i :99 -y /tmp/rec.mp4 & REC=$!; fi
 cp /r/scripts/browser-test/check.mjs /e2e/check.mjs
-cd /e2e && ID=$ID MODE=${MODE:-full} node check.mjs; rc=$?
+cd /e2e && ID=$ID ID2=$ID2 MODE=${MODE:-full} node check.mjs; rc=$?
 if [ -n "$REC" ]; then
   kill -INT $REC; wait $REC 2>/dev/null
   ffmpeg -loglevel error -i /tmp/rec.mp4 -vf "setpts=PTS/${GIF_SPEED:-1.6},fps=8,scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse=dither=bayer:bayer_scale=4" -y /s/browser.gif && ls -la /s/browser.gif | sed 's/^/  /'

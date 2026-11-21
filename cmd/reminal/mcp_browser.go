@@ -25,7 +25,7 @@ import (
 
 // browserControlWait covers the hub's own wait (the person's answer to the
 // consent window, then the action) and the hops around it.
-const browserControlWait = client.BrowserWait + 5*time.Second
+const browserControlWait = client.BrowserTotalWait + 10*time.Second
 
 // browserMaxType bounds what browser_type types in one go (and keeps the
 // request well under the 1 MB a message to the extension may be).
@@ -70,7 +70,7 @@ func browserTools(obj func(map[string]any, ...string) map[string]any, str func(s
 	tab := num("Optional: the tab, from browser_tabs_context. Default: the session's last used tab.")
 	ref := str("Optional: an element's ref from browser_read_page (e.g. \"ref_12\"). Or give x and y.")
 	common := "Works only inside a reminal session on this computer, with reminal's Chrome extension (`reminal integrate chrome`). " +
-		"The first call asks the person in their browser to allow this session; they may say no. " +
+		"The person sees it in the browser (a notification, the session's tab group, a border on the page) and can stop it, or switch it off in the extension's button. " +
 		"Only tabs in this session's own tab group are used. "
 	return []map[string]any{
 		{
