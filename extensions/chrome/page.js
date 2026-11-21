@@ -130,7 +130,7 @@ export function indicator(show, name) {
   root.innerHTML = '<style>.b{position:fixed;inset:0;border:3px solid #e8762d;border-radius:4px;box-sizing:border-box}' +
     '.l{position:fixed;bottom:12px;left:50%;transform:translateX(-50%);background:#e8762d;color:#fff;font:600 13px/1.3 system-ui,sans-serif;padding:6px 12px;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.25)}</style>' +
     '<div class="b"></div><div class="l"></div>';
-  root.querySelector('.l').textContent = `reminal: ${name} is using this tab`;
+  root.querySelector('.l').textContent = `${name} is using this tab`;
   (document.documentElement || document.body).appendChild(host);
 }
 
