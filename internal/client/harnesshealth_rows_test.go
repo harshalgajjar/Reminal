@@ -135,6 +135,12 @@ var loginRowCases = []loginRowCase{
 	{prog: "qwen", row: "✕ Model API authentication failed (HTTP 401). Check the configured provider credentials.", refused: true},
 
 	{prog: "opencode", row: "  ┃  Anthropic API key is missing. Pass it using the 'apiKey' parameter or the ANTHROPIC_API_KEY environment variable."},
+	// opencode 1.19.6: its GitLab login lapsed and not renewed, as its service
+	// refused it and as it has no token to renew with.
+	{prog: "opencode", row: "  ┃  OAuth token refresh failed and no fallback GITLAB_TOKEN environment variable is set. Refresh error: OAuth token exchange failed: 400 Bad Request. Re-authenticate with 'opencode auth login gitlab' or set GITLAB_TOKEN."},
+	{prog: "opencode", row: "  ┃  OAuth token refresh failed and no fallback GITLAB_TOKEN environment variable is set. Refresh error: OAuth token has expired and no refresh token is available. Re-authenticate with 'opencode auth login gitlab' or set GITLAB_TOKEN."},
+	// opencode 1.19.6 (recorded): its GitLab provider's own words.
+	{prog: "opencode", row: "  ┃  GitLab API key is missing. Pass it as the 'apiKey' parameter, set the GITLAB_TOKEN environment variable, or authenticate with 'opencode auth login gitlab'."},
 	{prog: "opencode", row: "  ┃  Unauthorized: request was blocked by a gateway or proxy. Your authentication token may be missing or expired — try running `opencode auth login <your provider URL>` to re-authenticate."},
 
 	{prog: "goose", row: "Authentication failed — check your API key. Run `goose configure` to update it."},
@@ -156,6 +162,8 @@ var loginRowCases = []loginRowCase{
 	{prog: "cursor-agent", row: "Authentication failed: your Cursor credentials or API key are invalid or expired. If you set CURSOR_API_KEY, check that it is correct, or run `cursor-agent login` to re-authenticate."},
 	{prog: "cursor-agent", row: "Your stored authentication is invalid. Please log in again.", bottom: true},
 	{prog: "cursor-agent", row: "⚠ Warning: The provided API key is invalid.", refused: true},
+	// Cline 3.0.75 (recorded): a run ended by its service turning the login away.
+	{prog: "cline", row: "error: Unauthorized: Please make sure you're using the latest version of Cline and re-authenticate your Cline account. (Request ID: qhnMsMwCWjFDRMhCjggRhNUlKeMgdJCq)", refused: true},
 
 	{prog: "pi", row: " Error: No API key found for the selected model."},
 	{prog: "pi", row: " Error: No API key found for anthropic."},
@@ -547,6 +555,12 @@ func TestAnAgentsOwnTextIsNotALoginAfterAll(t *testing.T) {
 		{"Codex's words with no mark of its own", "codex", "  Your session has expired. Please reauthenticate."},
 		{"pi's words with no Error: of its own", "pi", "  Your session has expired. Please reauthenticate."},
 		{"pi naming no provider of its own", "pi", " Error: No API key found for staging-server"},
+		// opencode 1.19.6's GitLab words carried on, and Cline's menu and
+		// sign-in rows each without the row that makes them the screen.
+		{"OpenCode's GitLab key notice carried on", "opencode", "  ┃  GitLab API key is missing. Pass it as the 'apiKey' parameter, set the GITLAB_TOKEN environment variable, or authenticate with 'opencode auth login gitlab' and then rerun the job."},
+		{"OpenCode's lapsed GitLab login with a refresh error of another's making", "opencode", "  ┃  OAuth token refresh failed and no fallback GITLAB_TOKEN environment variable is set. Refresh error: see the notes in the wiki for what I tried next. Re-authenticate with 'opencode auth login gitlab' or set GITLAB_TOKEN."},
+		{"Cline's welcome alone, in an answer", "cline", "  Welcome to Cline\n  is the heading the docs open with."},
+		{"a device address with nothing waiting under it", "cline", "  https://authkit.cline.bot/device?user_code=ABCD-EFGH\n  was the address in the log."},
 		{"pi naming something that only starts as a provider of its own", "pi", " Error: No API key found for qwen-token-plan-individual-cn-staging"},
 	} {
 		for _, prog := range []string{c.prog, ""} {

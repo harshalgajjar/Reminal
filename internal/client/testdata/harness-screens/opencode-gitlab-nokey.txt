@@ -1,0 +1,32 @@
+
+  ┃
+  ┃  hi
+  ┃
+
+  ┃
+  ┃  GitLab API key is missing. Pass it as the 'apiKey' parameter, set the GITLAB_TOKEN environment
+  ┃  variable, or authenticate with 'opencode auth login gitlab'.
+  ┃
+
+     ▣  Build · Agentic Chat (Claude Fable 5)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · Agentic Chat (Claude Fable 5) GitLab Duo
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /w                                                                            tab agents  ctrl+p commands
+
