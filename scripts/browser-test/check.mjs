@@ -151,6 +151,13 @@ let tabId;
   check(tabs.some((t) => t.tabId === tabId) && g.includes(`${ID} - reminal`), `a group the browser dropped is made again, with the tab in it (${JSON.stringify(g)})`);
   r = await call('browser_screenshot');
   check(r.content.some((c) => c.type === 'image'), `and the debugger attaches again (${r.err || 'a screenshot'})`);
+  // The extension forgot its record of the session (as when it reloads
+  // itself for an update): the group the browser still has under the
+  // session's name is taken up again, not left behind beside a new one.
+  await inSW((id) => chrome.storage.session.get(null).then((all) => chrome.storage.session.remove(Object.keys(all).filter((k) => k.startsWith(`s:${id}:`)))), ID);
+  tabs = await ctxOf();
+  const gs = await groups();
+  check(tabs.some((t) => t.tabId === tabId) && gs.filter((x) => x === `${ID} - reminal`).length === 1, `a session whose record the extension forgot takes up its group again (${JSON.stringify(gs)})`);
   // The session's record gone for a while (judged stale after a clock jump,
   // say), past the hub's check of ended sessions: the session is not ended.
   const rec = `${HOME}/.reminal/active-${ID}.json`;
@@ -693,6 +700,8 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   await pause(1500);
   let r = await call('browser_tabs_create', { url: `${PAGES}/toggle.html?third` }, '/tmp/q3');
   check(!r.err && (await groups()).includes(`${ID3} - reminal`), `a third session has its tab group (${r.err || r.text})`);
+  // And a group left under the name of a session long gone, that no record holds.
+  const orphan = await inSW(() => chrome.tabs.create({ url: 'about:blank', active: false }).then((t) => chrome.tabs.group({ tabIds: [t.id] }).then((g) => chrome.tabGroups.update(g, { title: 'ZZZZ9999 - reminal' }).then(() => t.id))));
   const daemon = Number(fs.readFileSync(`${HOME}/.reminal/daemon.pid`, 'utf8'));
   process.kill(daemon);
   await pause(1000);
@@ -704,10 +713,12 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   for (let i = 0; i < 30; i++) {
     await popupDo(async () => {}); // the button's panel asks it to connect, as a person opening it would
     rec3 = await recOf(ID3); g3 = await groups();
-    if (!rec3.length && !g3.includes(`${ID3} - reminal`)) break;
+    if (!rec3.length && !g3.includes(`${ID3} - reminal`) && !g3.includes('ZZZZ9999 - reminal')) break;
     await pause(2000);
   }
   check(!rec3.length && !g3.includes(`${ID3} - reminal`), `a session that ended while reminal was not looking: its record and tab group are let go (${JSON.stringify(g3)})`);
+  const orphanOpen = await inSW((id) => chrome.tabs.get(id).then((t) => t.groupId === -1, () => false), orphan);
+  check(!g3.includes('ZZZZ9999 - reminal') && orphanOpen, `a group left under the name of a session long gone is undone, its tab stays (${JSON.stringify(g3)})`);
   r = await call('browser_tabs_context');
   check(r.err && /stopped/.test(r.err), `and the sessions still running are as they were (${r.err || r.text})`);
 }
