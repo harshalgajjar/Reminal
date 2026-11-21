@@ -205,3 +205,18 @@ test('the device\'s voice makes nothing ahead', async () => {
   assert.equal(s.prepare('Hello.', { voice: 'b' }), null);
   s.close();
 });
+
+test('made ahead: let go, it is marked so and cannot be taken; what waits is listed', async () => {
+  const { s } = await open('a');
+  const p = s.prepare('One.', { voice: 'b' }), q = s.prepare('Two.', { voice: 'c' });
+  assert.deepEqual(s.waiting(), [p, q]);
+  s.drop(p);
+  assert.equal(p.dropped, true);
+  assert.deepEqual(s.waiting(), [q]);
+  assert.equal(s.take(p), false, 'one let go is not taken');
+  assert.notEqual(s.current, p);
+  s.play = () => {};
+  assert.equal(s.take(q), true);
+  assert.deepEqual(s.waiting(), []);
+  s.close();
+});
