@@ -128,11 +128,14 @@ function start(gen) {
   })();
   return g;
 }
-async function clip(text) {
+// v: the voice it is for (the one in use when it was asked for, which may
+// have changed by the time it is made).
+async function clip(text, v) {
+  const made = v || voice;
   await acquire(false);
   try {
-    const a = await say(text, { voice, speed });
-    postMessage({ type: 'clip', text, pcm: a.audio, rate: a.sampling_rate }, [a.audio.buffer]);
+    const a = await say(text, { voice: made, speed });
+    postMessage({ type: 'clip', text, v: made, pcm: a.audio, rate: a.sampling_rate }, [a.audio.buffer]);
   } catch (_) {} finally { release(); }
 }
 function close(g) { if (!g.closed) { g.closed = true; g.splitter.close(); } }
@@ -145,7 +148,7 @@ onmessage = async (e) => {
     if (m.type === 'voice') { voice = m.v || voice; return; }
     if (m.type === 'push') { const g = gens.get(m.gen) || start(m.gen); if (!g.closed) { if (!g.firstT) g.firstT = g.lastT = performance.now(); g.splitter.push(m.text); } return; }
     // A short clip made once and kept ("Okay."), after any waiting reply.
-    if (m.type === 'clip') { clip(m.text); return; }
+    if (m.type === 'clip') { clip(m.text, m.v); return; }
     // The first words of a reply go to the voice as soon as there is a phrase,
     // not a whole sentence, so it starts talking sooner.
     if (m.type === 'flush') { const g = gens.get(m.gen); if (g && !g.closed) g.splitter.flush(); return; }

@@ -15,6 +15,11 @@ import { levelOf, rmsOf } from './level.js';
 // starts with (it must be heard at once, while you are still talking).
 export const CLIPS = { ack: ['Okay.', 'Sure.', 'Got it.', 'Right.', 'Mm, okay.'], nod: ['Mm-hm.', 'Mhm.'], cue: [T.cutInCue] };
 
+// After a change of voice its clips are asked for this much later (a voice
+// changed for one line and changed back never has them made), and that much
+// later again while a reply is still being made.
+const CLIPS_AFTER_VOICE_MS = 1500, CLIPS_RETRY_MS = 1000;
+
 let nextGen = 0;
 export function newReply(fields) {
   return { gen: ++nextGen, fmt: new Speakable(), segs: [], sources: [], playHead: 0, playing: false, synthDone: false, heard: '', ...fields };
@@ -24,12 +29,21 @@ export class Speaker {
   // on: { started(r, what), heard(r), finished(r), failed(r, text, why) }
   // failed: the device's voice could not say text (a browser with no speech
   // engine says "synthesis-failed" and makes no sound).
-  constructor(on) { this.on = on; this.clips = { ack: [], nod: [], cue: [] }; this.lastAck = ''; this.lastNodT = 0; this.nodUntil = 0; this.buf = ''; }
+  constructor(on) { this.on = on; this.clipsBy = new Map(); this.voice = ''; this.lastAck = ''; this.lastNodT = 0; this.nodUntil = 0; this.buf = ''; }
+
+  // The clips of the voice in use. They are kept by voice: made once for
+  // each, and there again when a voice comes back.
+  get clips() { return this.clipsOf(this.voice); }
+  clipsOf(v) {
+    let c = this.clipsBy.get(v);
+    if (!c) { c = { ack: [], nod: [], cue: [], asked: false }; this.clipsBy.set(v, c); }
+    return c;
+  }
 
   // natural: Kokoro through `tts` (its worker), at `speed` x real time; else
   // the device's voice. guard: play through the echo canceller's loopback.
-  async open({ ctx, natural, tts, speed, guard, pace }) {
-    Object.assign(this, { ctx, natural, tts, speed, pace, current: null });
+  async open({ ctx, natural, tts, speed, guard, pace, voice }) {
+    Object.assign(this, { ctx, natural, tts, speed, pace, current: null, voice: voice || '' });
     this.out = ctx.createGain();
     this.meter = ctx.createAnalyser(); this.meter.fftSize = 1024; this.meterBuf = new Float32Array(1024);
     this.out.connect(this.meter);
@@ -43,10 +57,29 @@ export class Speaker {
     if (natural) this.makeClips();
   }
 
-  close() { clearInterval(this.watch); this.current = null; this.clips = { ack: [], nod: [], cue: [] }; }
+  close() { clearInterval(this.watch); clearTimeout(this.clipTimer); this.current = null; this.clipsBy = new Map(); }
 
-  makeClips() { this.clips = { ack: [], nod: [], cue: [] }; [...CLIPS.cue, ...CLIPS.ack, ...CLIPS.nod].forEach((text) => this.tts.postMessage({ type: 'clip', text })); }
-  setVoice(id) { if (this.tts) { this.tts.postMessage({ type: 'voice', v: id }); this.makeClips(); } }
+  // The clips of the voice in use, asked of the voice once.
+  makeClips() {
+    const c = this.clips;
+    if (c.asked || !this.tts) return;
+    c.asked = true;
+    [...CLIPS.cue, ...CLIPS.ack, ...CLIPS.nod].forEach((text) => this.tts.postMessage({ type: 'clip', text, v: this.voice }));
+  }
+  // A new voice: its clips are made a moment later and not while a reply is
+  // being made (each clip made is time the reply's next words wait), and not
+  // at all if this voice had them made before.
+  setVoice(id) {
+    if (!this.tts) return;
+    this.tts.postMessage({ type: 'voice', v: id });
+    this.voice = id;
+    clearTimeout(this.clipTimer);
+    const later = () => {
+      if (this.current && !this.current.synthDone) { this.clipTimer = setTimeout(later, CLIPS_RETRY_MS); return; }
+      this.makeClips();
+    };
+    if (!this.clips.asked) this.clipTimer = setTimeout(later, CLIPS_AFTER_VOICE_MS);
+  }
   setPace(p) { this.pace = p; if (this.tts) this.tts.postMessage({ type: 'speed', v: p }); }
 
   // ---------- saying a reply ----------
@@ -109,7 +142,8 @@ export class Speaker {
 
   // ---------- Kokoro's audio ----------
   onWorker(m) {
-    if (m.type === 'clip') { (CLIPS.cue.includes(m.text) ? this.clips.cue : CLIPS.nod.includes(m.text) ? this.clips.nod : this.clips.ack).push({ text: m.text, buf: this.buffer(m.pcm, m.rate) }); return; }
+    // A clip belongs to the voice it was made in, which may no longer be the one in use.
+    if (m.type === 'clip') { const c = this.clipsOf(m.v ?? this.voice); (CLIPS.cue.includes(m.text) ? c.cue : CLIPS.nod.includes(m.text) ? c.nod : c.ack).push({ text: m.text, buf: this.buffer(m.pcm, m.rate) }); return; }
     const r = this.current;
     if (!r || m.gen !== r.gen) return;
     if (m.type === 'audio') { clearTimeout(r.ackTimer); this.play(r, this.buffer(m.pcm, m.rate), m.text, false); }
