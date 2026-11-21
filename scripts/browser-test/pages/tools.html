@@ -1,0 +1,50 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Tools</title>
+<style>body{font:16px system-ui,sans-serif;margin:0;padding:24px 40px}label{display:block;margin:10px 0 4px}input,select,button{font:inherit;padding:6px}
+#menu .items{display:none}#menu:hover .items{display:block}
+.box{display:inline-block;width:120px;height:60px;line-height:60px;text-align:center;border:2px solid #888;margin:8px;user-select:none}
+#track{position:relative;width:300px;height:24px;background:#ddd;margin:12px 0}#knob{position:absolute;left:0;top:0;width:24px;height:24px;background:#36c;cursor:grab}
+#tall{height:2200px;background:linear-gradient(#fff,#cde)}</style></head>
+<body>
+<h1>Tools</h1>
+<div id="menu"><button id="more">More</button><div class="items"><a href="#secret-item" id="hidden-link">Hidden item</a></div></div>
+<p id="hovered"></p>
+<div><div class="box" id="card" draggable="true" aria-label="Card" role="button">Card</div><div class="box" id="bin" aria-label="Bin" role="button">Bin</div></div>
+<p id="dropped"></p>
+<div id="track"><div id="knob" role="slider" aria-label="Volume"></div></div><p id="vol">volume 0</p>
+<form onsubmit="event.preventDefault()">
+  <label for="first">First name</label><input id="first" value="old">
+  <label for="city">City</label><input id="city">
+  <label for="plan">Plan</label><select id="plan"><option value="f">Free</option><option value="p">Plus</option><option value="t">Team</option></select>
+  <label for="tags">Tags</label><select id="tags" multiple size="3"><option>red</option><option>green</option><option>blue</option></select>
+  <label><input type="checkbox" id="news"> Newsletter</label>
+  <label><input type="checkbox" id="terms" checked> Terms</label>
+</form>
+<p id="state"></p>
+<button id="alert" onclick="alert('Saved!'); document.getElementById('after').textContent='alert answered'">Show alert</button>
+<button id="confirm" onclick="document.getElementById('after').textContent = confirm('Delete it?') ? 'confirmed' : 'cancelled'">Ask</button>
+<button id="prompt" onclick="document.getElementById('after').textContent = 'named ' + prompt('Name?')">Name it</button>
+<p id="after"></p>
+<button id="later" onclick="setTimeout(() => { document.getElementById('late').textContent = 'Loaded results'; document.getElementById('spin').remove(); }, 1500)">Load</button>
+<p id="spin">Loading spinner</p><p id="late"></p>
+<button id="log" onclick="console.log('hello from the page', 42); console.warn('careful'); console.error('it broke'); fetch('/form.html?probe=1').then(() => fetch('/missing-file.html')); setTimeout(() => { throw new Error('uncaught boom'); }, 0)">Log</button>
+<label for="file">Attachment</label><input type="file" id="file">
+<button id="pick" onclick="document.getElementById('many').click()">Upload photos</button><input type="file" id="many" multiple hidden>
+<p id="files"></p>
+<a id="dl" href="/report.txt" download="report.txt">Get the report</a>
+<p id="size"></p>
+<div id="tall">tall</div>
+<script>
+menu.addEventListener('mouseenter', () => hovered.textContent = 'menu open');
+card.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', 'card'));
+bin.addEventListener('dragover', (e) => e.preventDefault());
+bin.addEventListener('drop', (e) => { e.preventDefault(); dropped.textContent = 'dropped ' + e.dataTransfer.getData('text/plain'); });
+let down = false;
+knob.addEventListener('mousedown', () => down = true);
+addEventListener('mouseup', () => down = false);
+addEventListener('mousemove', (e) => { if (!down) return; const x = Math.max(0, Math.min(276, e.clientX - track.getBoundingClientRect().left - 12)); knob.style.left = x + 'px'; vol.textContent = 'volume ' + Math.round(x / 2.76); });
+const show = () => state.textContent = JSON.stringify({ first: first.value, city: city.value, plan: plan.value, tags: [...tags.selectedOptions].map((o) => o.text), news: news.checked, terms: terms.checked });
+document.addEventListener('input', show); document.addEventListener('change', show);
+for (const i of [file, many]) i.addEventListener('change', () => Promise.all([...i.files].map((f) => f.text().then((t) => f.name + '=' + t.trim()))).then((l) => files.textContent = i.id + ': ' + l.join(', ')));
+const sz = () => size.textContent = 'width ' + innerWidth; addEventListener('resize', sz); sz();
+</script>
+</body></html>

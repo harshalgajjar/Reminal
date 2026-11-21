@@ -87,7 +87,20 @@ func main() {
 	}
 
 	if len(os.Args) > 1 {
+		// Chrome starts a native messaging host as `<path> <origin>`, the
+		// manifest giving no arguments of its own: reminal's extension
+		// asking is `reminal chrome-extension://<id>/` (browser_host.go).
+		if strings.HasPrefix(os.Args[1], "chrome-extension://") {
+			os.Args = append([]string{os.Args[0], "browser-host"}, os.Args[1:]...)
+		}
 		switch os.Args[1] {
+		case "browser-host":
+			// Hidden. Chrome's native messaging host for reminal's extension.
+			if err := runBrowserHost(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "browser-host: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "subreap":
 			// Hidden: run a command as the parent of everything it starts,
 			// collecting each process of its tree as it ends
@@ -264,6 +277,13 @@ func main() {
 				which = os.Args[2]
 			}
 			_ = client.RequestPermission(which)
+			return
+		case "browser":
+			// The browser_* tools from a session's shell (browser_cli.go).
+			if err := runBrowserCLI(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
 			return
 		case "mcp":
 			// Stdio MCP server. Speaks JSON-RPC on stdout, so nothing else may

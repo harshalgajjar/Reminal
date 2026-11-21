@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "reminal",
+  "description": "Lets agents in your reminal sessions on this computer use this browser. Switch it off from the reminal button.",
+  "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8koxslqCro4eiKclMwV3t786rHEBN+7fQftsIocnup6HQSouFZrIb93vs108BWqEBYMBN3OF9yz8bF3dci4uvvcAvYEg5F36W1Y0OHE0adg6l7aG1g6Kba6N71NCQPdE1qeSoZT60mj2StTpkZI6TMMyFFIEkRfjP5uakjvaIenNqKgVsdtjQHibOuTxARebSU5jclMLSeMgPyTN4gPkTKy18/w5vG2/AgvVthmx5FqBfqqhfp0XhxIqoEFNX9SPFwRMFx9214lvv1FOUqA6cMQuXkfABbSNCvxvqK5SOT7FQbAjKkbRCGakF5NPbbz33+4GoLqzisvzgyjz9q3iSwIDAQAB",
+  "minimum_chrome_version": "116",
+  "permissions": ["debugger", "scripting", "tabs", "tabGroups", "nativeMessaging", "storage", "notifications", "alarms", "downloads"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "reminal", "default_popup": "popup.html", "default_icon": { "16": "icons/16.png", "32": "icons/32.png" } },
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" }
+}

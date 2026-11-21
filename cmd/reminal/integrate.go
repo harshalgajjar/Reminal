@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -681,8 +682,19 @@ func runIntegrate(args []string) error {
 	}
 	widenPATH(home)
 
+	// The browser (integrate_chrome.go) is set up with everything else, or
+	// alone as `reminal integrate chrome`; the person's consent, asked in
+	// the browser for each session, is its gate.
+	wantBrowser := len(only) == 0 || slices.Contains(only, "chrome")
+
 	if check {
-		return printIntegrationReport(integrationReport(home, exe, only), asJSON)
+		if err := printIntegrationReport(integrationReport(home, exe, only), asJSON); err != nil {
+			return err
+		}
+		if wantBrowser && !asJSON {
+			printChromeCheck(home, exe)
+		}
+		return nil
 	}
 	if heal {
 		for _, line := range healHooks(home, sessionVersions(agentVersions)) {
@@ -732,7 +744,16 @@ func runIntegrate(args []string) error {
 		plan = append(plan, planStep{target: t, binPath: path, how: how})
 	}
 
-	if len(plan) == 0 {
+	var browsers []chromeBrowser
+	if wantBrowser {
+		if remove {
+			browsers = chromeOurs(home)
+		} else {
+			browsers = chromeBrowsers(home)
+		}
+	}
+
+	if len(plan) == 0 && len(browsers) == 0 {
 		fmt.Println("No supported agents found on PATH.")
 		if len(skipped) > 0 {
 			fmt.Printf("Looked for: %s\n", strings.Join(agentNames(), ", "))
@@ -744,9 +765,25 @@ func runIntegrate(args []string) error {
 	if remove {
 		action = "Remove"
 	}
-	fmt.Printf("%s reminal's MCP server (%s mcp) with:\n\n", action, exe)
+	if len(plan) > 0 {
+		fmt.Printf("%s reminal's MCP server (%s mcp) with:\n\n", action, exe)
+	}
 	for _, p := range plan {
 		fmt.Printf("  %-18s %s\n", p.target.Name, cDim(p.how))
+	}
+	if len(browsers) > 0 {
+		what := "Let agents in your reminal sessions use your browser (switch it off in the extension's button):"
+		if remove {
+			what = "Stop letting agents use your browser:"
+		}
+		if len(plan) > 0 {
+			fmt.Println()
+		}
+		fmt.Printf("%s\n\n", what)
+		for _, b := range browsers {
+			fmt.Printf("  %-18s %s\n", b.Name, cDim(tildePath(home, chromeHostManifestPath(home, b))))
+		}
+		fmt.Printf("  %-18s %s\n", "the extension", cDim(tildePath(home, chromeExtensionDir(home))))
 	}
 	if len(skipped) > 0 {
 		sort.Strings(skipped)
@@ -822,10 +859,16 @@ func runIntegrate(args []string) error {
 		}
 	}
 
-	if failures > 0 {
-		return fmt.Errorf("%d of %d failed", failures, len(plan))
+	if len(browsers) > 0 {
+		failures += applyChrome(home, exe, browsers, remove)
 	}
-	if !remove {
+
+	if failures > 0 {
+		return fmt.Errorf("%d of %d failed", failures, len(plan)+len(browsers))
+	}
+	if !remove && len(plan) == 0 {
+		fmt.Printf("\n%s\n", chromeLoadLine(home))
+	} else if !remove {
 		fmt.Printf("\nDone. Restart any running agent to pick it up. It can now leave\n" +
 			"notes on your windows (MCP), and its live state — working / needs you /\n" +
 			"done — shows in `reminal list` and the Machines view (attention hooks).\n" +
@@ -836,6 +879,9 @@ func runIntegrate(args []string) error {
 			if p.target.resumeHint() != "" {
 				fmt.Printf("  %-18s %s\n", p.target.Name, cDim(p.target.resumeHint()))
 			}
+		}
+		if len(browsers) > 0 {
+			fmt.Printf("\n%s\n", chromeLoadLine(home))
 		}
 	} else {
 		fmt.Printf("\nRemoved.\n")
@@ -969,6 +1015,10 @@ otherwise a merge into its JSON config, backed up first):
   • attention hooks — so the agent reports its live state (working / needs you /
     done) to ` + "`reminal list`" + ` and the Machines view. Agents without hook support
     fall back to reminal's screen-based detection automatically.
+
+And your browser (Chrome, Chromium, Edge, Brave, Arc; macOS and Linux): agents in
+your reminal sessions may use it through reminal's extension, each session
+only once you allow it there. Load the extension once from ~/.reminal/chrome-extension.
 
 Where an agent asks before each tool call (Claude Code, Gemini CLI, Qwen Code),
 its settings also allow reminal's speak tool, and only that one, so an answer
