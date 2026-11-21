@@ -80,6 +80,10 @@ async function onHostMessage(m) {
     if (m.ok) backoff = 1000;
     await setStatus({ connected: !!m.ok, error: m.error || '' });
     if (m.ok && m.ext) await newerFiles(String(m.ext));
+    // The sessions this browser holds tabs for: reminal says which of them
+    // ended while it was not looking (it was being updated, or this browser
+    // was closed), and their groups are let go.
+    if (m.ok) send({ t: 'have', sessions: [...new Set((await allS()).map(([, s]) => s.session).filter(Boolean))] });
     return;
   }
   if (m.t === 'refused') { setStatus({ connected: false, error: m.error || 'refused' }); return; }
@@ -288,9 +292,15 @@ async function handle(m) {
     })();
     // An action that took the tab somewhere else says where it is now, so
     // the agent need not ask.
+    // (If the action set a page loading, that is waited for, as
+    // browser_navigate waits.)
     if (was != null && typeof out === 'string') {
-      await new Promise((r) => setTimeout(r, 150));
-      const t = await chrome.tabs.get(tabId).catch(() => null);
+      await new Promise((r) => setTimeout(r, 40));
+      let t = await chrome.tabs.get(tabId).catch(() => null);
+      if (t && (t.status === 'loading' || t.pendingUrl)) {
+        await Promise.race([loaded(tabId), new Promise((r) => setTimeout(r, 10_000))]);
+        t = await chrome.tabs.get(tabId).catch(() => null);
+      }
       if (t && t.url && t.url !== was) return `${out}\nThe tab is now at ${JSON.stringify(t.url.slice(0, 300))}`;
     }
     return out;
@@ -420,7 +430,7 @@ async function navigate(c, url) {
 function loaded(tabId) {
   return new Promise((resolve) => {
     let done = false;
-    const finish = () => { if (done) return; done = true; chrome.tabs.onUpdated.removeListener(on); clearTimeout(t); setTimeout(resolve, 150); };
+    const finish = () => { if (done) return; done = true; chrome.tabs.onUpdated.removeListener(on); clearTimeout(t); setTimeout(resolve, 20); };
     const on = (id, info) => { if (id === tabId && info.status === 'complete') finish(); };
     const t = setTimeout(finish, 30_000);
     chrome.tabs.onUpdated.addListener(on);
@@ -585,6 +595,8 @@ async function focusedField(c) {
   return top.result;
 }
 
+const CHOOSER_HOLD = 400;
+const chooserHold = new Map();
 async function click(c, a) {
   const t = await target(c, a);
   const button = ['left', 'right', 'middle'].includes(a.button) ? a.button : 'left';
@@ -601,9 +613,17 @@ async function click(c, a) {
     await cdp(c, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: t.x, y: t.y, button, clickCount: i });
     await cdp(c, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: t.x, y: t.y, button, clickCount: i });
   }
-  await new Promise((r) => setTimeout(r, 300));
+  // The page's asking comes at once if it comes: looked for briefly, and the
+  // holding back kept a little longer (CHOOSER_HOLD) for one that is slow.
+  for (let i = 0; i < 6 && !choosers.has(c.tabId); i++) await new Promise((r) => setTimeout(r, 10));
   } finally {
-    chrome.debugger.sendCommand({ tabId: c.tabId }, 'Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {});
+    const until = Date.now() + CHOOSER_HOLD;
+    chooserHold.set(c.tabId, until);
+    setTimeout(() => {
+      if (chooserHold.get(c.tabId) !== until) return; // a later click holds it now
+      chooserHold.delete(c.tabId);
+      chrome.debugger.sendCommand({ tabId: c.tabId }, 'Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {});
+    }, CHOOSER_HOLD);
   }
   const chooser = choosers.has(c.tabId) ? ' The page is asking for a file: give it with browser_file_upload.' : '';
   return `Clicked ${t.what} at ${Math.round(t.x)}, ${Math.round(t.y)}.${chooser}`;

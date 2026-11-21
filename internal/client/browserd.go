@@ -258,6 +258,15 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 		}
 		var resp BrowserResp
 		if json.Unmarshal(line, &resp) != nil || resp.ID == 0 {
+			// Not an answer: the extension saying which sessions it holds
+			// tabs for, as it connects.
+			var have struct {
+				T        string   `json:"t"`
+				Sessions []string `json:"sessions"`
+			}
+			if json.Unmarshal(line, &have) == nil && have.T == "have" {
+				go h.haveSessions(have.Sessions)
+			}
 			continue
 		}
 		h.mu.Lock()
@@ -490,5 +499,70 @@ func (h *browserHub) waitForHost(d time.Duration) *browserConn {
 			return host
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// browserHaveRecheck is how long a session the extension holds tabs for,
+// and that looks gone, is left before it is looked at again and the
+// extension told (a live session's record can be missing for a moment).
+var browserHaveRecheck = 15 * time.Second
+
+var browserSessionID = regexp.MustCompile(`^[A-Z0-9]{4,32}$`)
+
+// haveSessions takes the sessions the extension says it holds tabs for (as
+// it connects). The hub knows the sessions that asked it since it started;
+// a session that ended while the hub was not running (reminal was being
+// updated), or before this hub's time, it never knew, and the extension
+// would keep its tab group for ever. Each one named is taken up again if it
+// is running (to be told of when it ends), and told as ended if, looked at
+// twice, it is not.
+func (h *browserHub) haveSessions(ids []string) {
+	if len(ids) > 200 {
+		ids = ids[:200]
+	}
+	alive := func(id string) int {
+		rec, err := session.ReadActiveByID(id)
+		if err == nil && rec.PID > 0 && proc.Alive(rec.PID) {
+			return rec.PID
+		}
+		return 0
+	}
+	var gone []string
+	for _, id := range ids {
+		if !browserSessionID.MatchString(id) {
+			continue
+		}
+		h.mu.Lock()
+		_, known := h.seen[id]
+		h.mu.Unlock()
+		if known {
+			continue
+		}
+		if pid := alive(id); pid != 0 {
+			h.mu.Lock()
+			h.seen[id] = pid
+			h.mu.Unlock()
+		} else {
+			gone = append(gone, id)
+		}
+	}
+	if len(gone) == 0 {
+		return
+	}
+	time.Sleep(browserHaveRecheck)
+	for _, id := range gone {
+		if pid := alive(id); pid != 0 {
+			h.mu.Lock()
+			h.seen[id] = pid
+			h.mu.Unlock()
+			continue
+		}
+		h.mu.Lock()
+		host := h.host
+		h.mu.Unlock()
+		if host != nil {
+			log.Printf("browser: session %s ended while reminal was not looking: its tabs are let go", id)
+			_ = host.send(map[string]string{"t": "ended", "session": id})
+		}
 	}
 }
