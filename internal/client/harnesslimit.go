@@ -259,6 +259,12 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// switch on with a "/" ("Switch to another model/"), and its action
 		// may follow on the same row: only that action's own words.
 		`you.?reoutofusagecredits(?:\.(?:/modeltoswitchmodels|switchtoanothermodel(?:/(?:(?:run)?/usage-creditstoraiseitandkeepusing`+claudeModel+`(?:orswitchmodelstocontinuethischat)?)?)?))?`,
+		// Claude Code 2.1.330: the same with the command that keeps the
+		// model going, or where to look. (An organization's credits run out
+		// is read already, on the notice's own row: claudeHitLimit.)
+		`you.?reoutofusagecredits\.(?:run/usage-creditstokeepusing`+claudeModel+`or/modeltoswitchmodels|seeusageinsettings)`,
+		// Claude Code 2.1.330: work stopped at the spending limit.
+		`stopped:thespendinglimitwasreached`,
 		// Claude Code 2.1.312: a limit that could not be lifted, and the
 		// automatic continue that gave up. Each with its own row ending only.
 		// ("Fast mode disabled · Out of usage credits" is not one: fast mode
@@ -297,7 +303,9 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// continuing on Opus …", which goes on now, on another model).
 		onGlyph("⎿", asLast(wholeNotices(
 			`outofusagecredits`,
-			`usagelimitreached(?:again)?(?:·continuingautomatically(?:at`+limitWhen+`|in`+limitWait+`)?·esctocancel)?`,
+			// (2.1.330 words the going on "set to continue automatically",
+			// with no "esc to cancel" after it.)
+			`usagelimitreached(?:again)?(?:·continuingautomatically(?:at`+limitWhen+`|in`+limitWait+`)?·esctocancel|·settocontinueautomatically(?:at`+limitWhen+`|in`+limitWait+`)?)?`,
 			`(?:fable|opus|sonnet)limitreached`,
 			// Claude Code 2.1.312: extra usage, a model's own limit, and its
 			// organization's — words an answer may say too (review).

@@ -391,8 +391,19 @@ var harnessLoginScreens = map[string][]loginRow{
 		`anthropicprofileloginexpired·re-authenticateyouranthropicprofile`,
 		// A Console sign-in wanted, and one saved that is not a Console
 		// account's.
-		`thiscomputer.?ssettingsrequireaconsolesign-in\(forceloginmethod\)\.signinagainwithaconsoleaccount`,
-		`claudecodecan.?tusetheanthropicconsolesign-insavedonthiscomputer,usuallybecauseitisn.?tforaconsoleaccount·run/loginandsigninwithaconsoleaccount`,
+		// 2.1.330 goes on to say where to get one, and for the saved
+		// sign-in gives another way out (a subscription, a Console account
+		// set up, or an API key): each with its own ending only.
+		`thiscomputer.?ssettingsrequireaconsolesign-in\(forceloginmethod\)\.signinagainwithaconsoleaccount(?:\.togetone,gotohttps://platform\.claude\.comoraskyouradministrator)?`,
+		`claudecodecan.?tusetheanthropicconsolesign-insavedonthiscomputer,usuallybecauseitisn.?tforaconsoleaccount·run/loginand(?:signinwithaconsoleaccount(?:·togetone,gotohttps://platform\.claude\.comoraskyouradministrator)?|select"claudeaccountwithsubscription",orsetupaconsoleaccountathttps://platform\.claude\.comandrun/loginagain,oruseananthropicapikeyinstead)`,
+		// 2.1.330: a sign-in method this computer's settings do not allow
+		// for the organization.
+		`thiscomputer.?ssettingsrequireadifferentsign-inmethod\(forceloginmethod\),soitcan.?tsignintoyourorganization`,
+		// 2.1.330: a login it could not renew because the new one could not
+		// be saved to the Keychain, in each of its three wordings.
+		`couldnotrefreshyourlogin:can.?tsavetothekeychain·iflocked,runsecurityunlock-keychain·inasandbox,runclaudeoutsideit·otherwise,retry,then/login`,
+		"failedtorefreshoauthtoken:can.?tsavetothekeychain\\.iflocked,run`?securityunlock-keychain`?\\.ifsandboxed,use`?claudesetup-token`?\\.otherwise,retry,then`?claudeauthlogin`?",
+		`oauthaccesstokencouldnotberefreshed:can.?tsavetothemacoskeychain\.unlockit,runclaudeoutsideanysandbox,retry,orsigninagain`,
 		// Teleport, which needs a claude.ai login.
 		`teleportrequiresaclaudeaccount\.run/loginandselect"claudeaccountwithsubscription"`,
 		// A login it could not refresh while another Claude Code was.
