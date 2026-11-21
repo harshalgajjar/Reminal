@@ -129,13 +129,14 @@ function start(gen) {
   return g;
 }
 // v: the voice it is for (the one in use when it was asked for, which may
-// have changed by the time it is made).
+// have changed by the time it is made). It goes back as it was asked: the
+// asker keeps its clips by that name, and one asked for with no voice named
+// is made in the voice in use here and kept under no name.
 async function clip(text, v) {
-  const made = v || voice;
   await acquire(false);
   try {
-    const a = await say(text, { voice: made, speed });
-    postMessage({ type: 'clip', text, v: made, pcm: a.audio, rate: a.sampling_rate }, [a.audio.buffer]);
+    const a = await say(text, { voice: v || voice, speed });
+    postMessage({ type: 'clip', text, v, pcm: a.audio, rate: a.sampling_rate }, [a.audio.buffer]);
   } catch (_) {} finally { release(); }
 }
 function close(g) { if (!g.closed) { g.closed = true; g.splitter.close(); } }

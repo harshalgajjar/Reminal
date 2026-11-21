@@ -129,3 +129,17 @@ test('a clip made in a voice no longer in use is kept for that voice', async () 
   assert.equal(count(s.clips), ALL.length, 'there when its voice is back');
   s.close();
 });
+
+// The stand-in above answers a clip under the voice it was asked for, as the
+// worker does (tts-worker.js clip()): this holds the two to the same thing.
+test('opened with no voice named: its clips are still its clips', async () => {
+  const { s, asked, made } = await open(undefined);
+  assert.deepEqual(asked.filter((m) => m.type === 'clip').map((m) => m.v), ALL.map(() => ''), 'asked for under no name');
+  made('');
+  assert.equal(count(s.clips), ALL.length, 'kept where they are looked for');
+  // The worker's own lines: what it sends back is what it was asked with.
+  const worker = fs.readFileSync(path.join(frame, 'tts-worker.js'), 'utf8');
+  assert.match(worker, /postMessage\(\{ type: 'clip', text, v, pcm/, 'the worker answers a clip with the voice it was asked for');
+  assert.match(worker, /say\(text, \{ voice: v \|\| voice, speed \}\)/, 'and makes it in that voice, or the one in use');
+  s.close();
+});
