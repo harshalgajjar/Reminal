@@ -35,6 +35,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # The voice frame's own tests (its conversation, its speaker, the check
+      # of its files): plain Node, no install, no network.
+      - name: Test the voice frame
+        run: node --test voice/assets/*.test.mjs
+
       - name: Test
         run: go test ./...
 
