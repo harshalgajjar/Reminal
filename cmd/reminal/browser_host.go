@@ -60,6 +60,11 @@ func runBrowserHost(args []string) error {
 	if _, err := conn.Write([]byte(`{"t":"host"}` + "\n")); err != nil {
 		return err
 	}
+	// The files a setup wrote, brought up to this reminal's first (it may
+	// have been upgraded since).
+	if home, err := os.UserHomeDir(); err == nil {
+		_ = refreshChromeExtension(chromeExtensionDir(home))
+	}
 	// With the version of the extension this reminal carries: an extension
 	// running other files reloads itself (chromeext.Version).
 	_ = writeNativeMessage(os.Stdout, map[string]any{"t": "status", "ok": true, "ext": chromeext.Version()})

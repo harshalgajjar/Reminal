@@ -37,6 +37,11 @@ async function call(tool, args = {}, q = "/tmp/q") {
   return { err: 'timed out', content: [] };
 }
 
+// Developer mode on, as in a browser where the person loaded the extension
+// unpacked (with it off, the browser switches an unpacked extension off when
+// it reloads).
+fs.mkdirSync(`${HOME}/.config/chromium/Default`, { recursive: true });
+fs.writeFileSync(`${HOME}/.config/chromium/Default/Preferences`, JSON.stringify({ extensions: { ui: { developer_mode: true } } }));
 const ctx = await chromium.launchPersistentContext(`${HOME}/.config/chromium`, {
   headless: false, viewport: null, ignoreDefaultArgs: ['--enable-automation'],
   args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--no-first-run', '--no-default-browser-check'],
@@ -349,6 +354,11 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   await popupDo(async (p) => { await p.check('#agents'); });
   const on = await call('browser_tabs_context', {}, '/tmp/q2');
   check(!on.err, `and on again, it goes on (${on.err || 'its tab'})`);
+  // Its tabs closed by the person: it is told so, not that it has none yet.
+  await inSW((id) => chrome.storage.session.get(null).then((all) => Promise.all(Object.entries(all).filter(([k]) => k.startsWith(`s:${id}:`)).flatMap(([, v]) => v.tabs || []).map((t) => chrome.tabs.remove(t).catch(() => {})))), ID2);
+  await pause(500);
+  const gone = await call('browser_tabs_context', {}, '/tmp/q2');
+  check(/closed now/.test(gone.text || gone.err || ''), `its tabs closed: it is told they were closed (${gone.text || gone.err})`);
 }
 
 // 7. A session ends: its records and its group go with it.
@@ -358,6 +368,29 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   for (let i = 0; i < 40; i++) { left = await recOf(ID2); if (!left.length) break; await pause(500); }
   check(left.length === 0, 'the session ended: its record is gone');
   check(!(await groups()).includes('reminal: second helper'), 'and its tab group');
+}
+
+// 8. reminal upgraded: the browser still runs the extension it loaded from
+// the older files. As it connects, the host brings the files up to its own
+// and says their version; the extension reloads itself from them.
+{
+  const real = await inSW(() => chrome.runtime.getManifest().version);
+  const mf = `${EXT}/manifest.json`;
+  fs.writeFileSync(mf, fs.readFileSync(mf, "utf8").replace(/"version": "[^"]*"/, '"version": "0.1.1.1"'));
+  const n0 = workers.length;
+  const onDisk = () => (fs.readFileSync(mf, "utf8").match(/"version": "([^"]*)"/) || [])[1];
+  await inSW(() => { setTimeout(() => chrome.runtime.reload(), 50); });
+  let now = "";
+  for (let i = 0; i < 80; i++) {
+    await pause(500);
+    now = await Promise.race([getSW().then((w) => w.evaluate(() => chrome.runtime.getManifest().version)).catch(() => ""), pause(3000).then(() => "")]);
+    if (workers.length >= n0 + 2 && now === real && onDisk() === real) break;
+  }
+  check(onDisk() === real, `the host brought the older files up to this reminal's (${onDisk()})`);
+  check(workers.length >= n0 + 2 && now === real, `and the extension reloaded itself from them (runs ${now || "nothing"}, started ${workers.length - n0} times: on the older files, then these)`);
+  let st = null;
+  for (let i = 0; i < 40; i++) { st = await store("host"); if (st && st.connected && !st.error) break; await pause(500); }
+  check(st && st.connected && !st.error, `connected after it, nothing for the person to do (${JSON.stringify(st)})`);
 }
 
 await ctx.close();

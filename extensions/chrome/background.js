@@ -271,10 +271,16 @@ async function sessionTabs(s, regroup = true) {
   return tabs;
 }
 
+// noTabs: what a session with no tab is told: it never opened one, or the
+// ones it opened are closed now (by the person, or the browser restarting).
+const noTabs = (s) => (s && s.opened
+  ? 'The tabs this session opened are closed now: open a new one with browser_tabs_create.'
+  : 'This session has no tabs yet: open one with browser_tabs_create.');
+
 async function tabsContext(k) {
   const s = await getS(k);
   const tabs = await sessionTabs(s);
-  if (!tabs.length) return 'This session has no tabs yet: open one with browser_tabs_create.';
+  if (!tabs.length) return noTabs(s);
   return JSON.stringify(tabs.map((t) => ({ tabId: t.id, title: t.title, url: t.url, active: t.active, last: t.id === s.lastTab })));
 }
 
@@ -299,7 +305,7 @@ async function tabsCreate(k, alive, name, url) {
   } else {
     await chrome.tabs.group({ tabIds: [tab.id], groupId: group });
   }
-  await putS(k, { groupId: group, color, lastTab: tab.id, tabs: [...new Set([...(s.tabs || []), tab.id])] });
+  await putS(k, { groupId: group, color, opened: true, lastTab: tab.id, tabs: [...new Set([...(s.tabs || []), tab.id])] });
   if (url) await loaded(tab.id);
   return JSON.stringify({ tabId: tab.id, url: href });
 }
@@ -309,7 +315,7 @@ async function tabsCreate(k, alive, name, url) {
 async function sessionTab(k, want) {
   const s = await getS(k);
   const tabs = await sessionTabs(s);
-  if (!tabs.length) throw new Error('This session has no tabs yet: open one with browser_tabs_create.');
+  if (!tabs.length) throw new Error(noTabs(s));
   let tab;
   if (want != null) {
     tab = tabs.find((t) => t.id === Number(want));

@@ -51,6 +51,24 @@ func TestChromeExtensionIsWrittenWithItsFilesVersion(t *testing.T) {
 	if regexp.MustCompile(`"version":\s*"` + regexp.QuoteMeta(v) + `"`).Match(kept) {
 		t.Error("the kept manifest already has the written version: nothing to tell them apart")
 	}
+	// An older reminal's files there are brought up to this one's; a folder
+	// no setup wrote is left alone.
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"version": "0.1.1.1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := refreshChromeExtension(dir); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := os.ReadFile(filepath.Join(dir, "manifest.json")); string(again) != string(raw) {
+		t.Error("an older version's files were not brought up to this one's")
+	}
+	none := filepath.Join(t.TempDir(), "none")
+	if err := refreshChromeExtension(none); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(none); err == nil {
+		t.Error("a folder no setup wrote was created")
+	}
 	// Every other file is written as kept.
 	for _, p := range []string{"background.js", "popup.js", "page.js"} {
 		a, _ := chromeext.Files.ReadFile(p)

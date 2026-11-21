@@ -199,3 +199,22 @@ func writeChromeExtension(dir string) error {
 		return os.WriteFile(dst, b, 0o644)
 	})
 }
+
+// refreshChromeExtension brings the extension's files in dir up to this
+// binary's, when a setup wrote them there before and they are another
+// version's (reminal was upgraded since). The browser's host does it as the
+// extension connects, so the extension, told the version, reloads itself
+// from files that are there. A folder no setup wrote is left alone.
+func refreshChromeExtension(dir string) error {
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return nil
+	}
+	var m struct {
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(raw, &m) == nil && m.Version == chromeext.Version() {
+		return nil
+	}
+	return writeChromeExtension(dir)
+}
