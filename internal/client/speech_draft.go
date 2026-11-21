@@ -143,9 +143,10 @@ func typedIn(prog, row string) bool { return typedCells(prog, styledCells(row)) 
 
 func typedCells(prog string, cells []styledCell) bool {
 	var rest strings.Builder
-	for _, c := range cells {
+	on := cursorOnPlaceholder(prog, cells)
+	for i, c := range cells {
 		switch {
-		case c.cursor(), voicePlaceholder(prog, c):
+		case i == on, c.cursor(), voicePlaceholder(prog, c):
 		case c.r == ' ' || c.r == '​':
 			rest.WriteRune(' ')
 		default:
@@ -154,6 +155,39 @@ func typedCells(prog string, cells []styledCell) bool {
 	}
 	text := strings.Join(strings.Fields(rest.String()), " ")
 	return text != "" && !isPlaceholderText(prog, text)
+}
+
+// cursorOnPlaceholder is the cell of a cursor drawn on a placeholder's
+// first letter (that letter in reverse video or underlined, the rest of the
+// placeholder after it in its own style), or -1. Only that shape: nothing
+// but blanks before it, and after it placeholder cells alone, at least one
+// of them a letter. A lone reverse letter, or one with typed text after it,
+// is the cursor on a draft.
+func cursorOnPlaceholder(prog string, cells []styledCell) int {
+	blank := func(c styledCell) bool { return c.r == ' ' || c.r == ' ' || c.r == '​' }
+	for i, c := range cells {
+		if blank(c) && !c.reverse && !c.underlne {
+			continue
+		}
+		if blank(c) || !(c.reverse || c.underlne) {
+			return -1
+		}
+		letters := 0
+		for _, n := range cells[i+1:] {
+			switch {
+			case blank(n):
+			case voicePlaceholder(prog, n):
+				letters++
+			default:
+				return -1
+			}
+		}
+		if letters == 0 {
+			return -1
+		}
+		return i
+	}
+	return -1
 }
 
 // voicePlaceholderText is, by agent, its placeholder's words, read as empty

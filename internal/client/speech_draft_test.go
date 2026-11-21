@@ -150,6 +150,23 @@ func TestVoiceClaudeFaintSuggestionIsNotADraft(t *testing.T) {
 	if !voiceBoxDraft("claude", box("❯ Try \"fix the tests\"")) {
 		t.Error("the same words not faint (typed) not read as a draft")
 	}
+	// The cursor drawn on the suggestion's first letter (that letter in
+	// reverse video, the rest faint): still an empty box.
+	if voiceBoxDraft("claude", box("❯ \x1b[7mT\x1b[0m\x1b[2mry \"fix the tests\"\x1b[0m")) {
+		t.Error("the cursor on a faint suggestion's first letter read as a draft")
+	}
+	// A lone letter under the cursor, or one with typed text after it, is
+	// the cursor on a draft; so is typed text before a suggestion.
+	for _, row := range []string{
+		"❯ \x1b[7mT\x1b[0m",
+		"❯ \x1b[7mT\x1b[0mry the other way",
+		"❯ \x1b[7mT\x1b[0mry \x1b[2m\"fix the tests\"\x1b[0m",
+		"❯ no \x1b[7mT\x1b[0m\x1b[2mry \"fix the tests\"\x1b[0m",
+	} {
+		if !voiceBoxDraft("claude", box(row)) {
+			t.Errorf("%q: the cursor on typed text not read as a draft", row)
+		}
+	}
 }
 
 // The placeholder is read by its words, whatever its colour: rewritten from
