@@ -662,6 +662,39 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   check(!(await groups()).includes(`${ID2} - reminal`), 'and its tab group');
 }
 
+// 7b. A session that ends while reminal is not looking (its daemon being
+// replaced by an update): the extension says which sessions it holds tabs
+// for as it connects again, and that one's group is let go.
+{
+  const ID3 = (execSync('reminal new "third helper"').toString().match(/Session:\s*([A-Z0-9]+)/) || [])[1];
+  await pause(2000);
+  const rpc = (name, args) => {
+    fs.writeFileSync('/tmp/k.json', ['{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"op","version":"1"}}}', '{"jsonrpc":"2.0","method":"notifications/initialized"}', JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } })].join('\n') + '\n');
+    execSync('(cat /tmp/k.json; sleep 2) | reminal mcp >/dev/null 2>&1', { shell: '/bin/bash' });
+  };
+  rpc('send_keys', { session: ID3, keys: 'bash /r/scripts/browser-test/agent.sh /tmp/q3', enter: true });
+  await pause(1500);
+  let r = await call('browser_tabs_create', { url: `${PAGES}/toggle.html?third` }, '/tmp/q3');
+  check(!r.err && (await groups()).includes(`${ID3} - reminal`), `a third session has its tab group (${r.err || r.text})`);
+  const daemon = Number(fs.readFileSync(`${HOME}/.reminal/daemon.pid`, 'utf8'));
+  process.kill(daemon);
+  await pause(1000);
+  execSync(`reminal kill -y ${ID3} >/dev/null 2>&1 || true`, { shell: '/bin/bash' });
+  await pause(1000);
+  execSync('nohup reminal daemon > /tmp/daemon2.log 2>&1 &', { shell: '/bin/bash' });
+  await pause(2500);
+  let rec3 = [], g3 = [];
+  for (let i = 0; i < 30; i++) {
+    await popupDo(async () => {}); // the button's panel asks it to connect, as a person opening it would
+    rec3 = await recOf(ID3); g3 = await groups();
+    if (!rec3.length && !g3.includes(`${ID3} - reminal`)) break;
+    await pause(2000);
+  }
+  check(!rec3.length && !g3.includes(`${ID3} - reminal`), `a session that ended while reminal was not looking: its record and tab group are let go (${JSON.stringify(g3)})`);
+  r = await call('browser_tabs_context');
+  check(r.err && /stopped/.test(r.err), `and the sessions still running are as they were (${r.err || r.text})`);
+}
+
 // 8. reminal upgraded: the browser still runs the extension it loaded from
 // the older files. As it connects, the host brings the files up to its own
 // and says their version; the extension reloads itself from them.
