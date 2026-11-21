@@ -220,7 +220,7 @@ async function announce(k, s, name) {
   await putS(k, { noticed: true });
   chrome.notifications.create('use:' + k, {
     type: 'basic', iconUrl: 'icons/128.png', title: 'reminal',
-    message: `"${name}", a reminal session on this computer, is using this browser.`,
+    message: `${name} is using this browser.`,
     buttons: [{ title: 'Stop' }],
   });
 }
@@ -254,7 +254,9 @@ function guardFor(k) {
 async function handle(m) {
   await consent(m);
   const k = keyOf(m);
-  const name = m.name || m.session;
+  // What the person sees a session called, everywhere: its id, as its tab
+  // group is titled. Never the name the session was given.
+  const name = m.session ? `${m.session} - reminal` : 'reminal';
   let s = await getS(k);
   if (await isStopped(k, s)) throw new Error(STOPPED);
   const before = s;

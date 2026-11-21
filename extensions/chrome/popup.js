@@ -31,7 +31,7 @@ async function render() {
     const li = document.createElement('li');
     const who = document.createElement('span');
     who.className = 'who';
-    who.textContent = `${s.name || s.session}${s.stopped ? ' (stopped)' : ''}`;
+    who.textContent = `${s.session ? s.session + ' - reminal' : 'reminal'}${s.stopped ? ' (stopped)' : ''}`;
     who.title = s.session || '';
     li.append(who);
     if (!s.stopped) {

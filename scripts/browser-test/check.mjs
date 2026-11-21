@@ -118,7 +118,8 @@ let tabId;
   const g = await groups();
   check(g.length === 1 && g[0] === `${ID} - reminal`, `in a tab group of the session's own (${JSON.stringify(g)})`);
   const recs = await inSW((id) => chrome.storage.session.get(null).then((all) => Object.entries(all).filter(([k]) => k.startsWith(`s:${id}:`)).map(([, v]) => v)), ID);
-  check(recs.some((s) => s.noticed), 'its first use was announced (a notification with Stop)');
+  check(recs.some((s) => s.noticed), "its first use was announced (a notification with Stop)");
+  check(recs.length > 0 && recs.every((s) => s.name === `${ID} - reminal`), `the page label, the notification and the panel call it by its id, not the name it was given (${JSON.stringify(recs.map((s) => s.name))})`);
   await slow(1200);
 }
 
@@ -360,7 +361,7 @@ let tabId;
   r = await call('browser_evaluate', { expression: '1 + 1' });
   check(r.err && /Running scripts in pages is off/.test(r.err), `evaluate: switched off again, refused again (${r.err})`);
   const seen = await popupDo(async (p) => p.textContent('#notes'));
-  check(/web helper: ran a script on 127\.0\.0\.1/.test(seen), `the button's panel shows that a script ran, and where (${seen.trim().slice(0, 80)})`);
+  check(seen.includes(`${ID} - reminal: ran a script on 127.0.0.1`) && !/web helper/.test(seen), `the button's panel shows that a script ran, and where (${seen.trim().slice(0, 80)})`);
 
   // Files: given to a field, and to an upload the page asks for; never a
   // key or a sign-in file. A download; the page as a PDF.
@@ -382,7 +383,7 @@ let tabId;
   r = await call('browser_file_upload', { paths: ['/tmp/up/a.txt', '/tmp/up/b.txt'] });
   check(!r.err && (await txt('files')) === 'many: a.txt=alpha, b.txt=beta', `file_upload: files given to the upload the page asked for (${r.err || await txt('files')})`);
   const gave = await popupDo(async (p) => p.textContent('#notes'));
-  check(/web helper: gave a\.txt, b\.txt on 127\.0\.0\.1/.test(gave), `the button's panel names the files given, and the site (${gave.trim().slice(0, 90)})`);
+  check(gave.includes(`${ID} - reminal: gave a.txt, b.txt on 127.0.0.1`), `the button's panel names the files given, and the site (${gave.trim().slice(0, 90)})`);
   await popupDo(async (p) => { await p.uncheck('#uploads'); });
   await call('browser_click', { ref: refs.dl });
   r = await call('browser_downloads', { wait: 10 });
@@ -625,11 +626,11 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
 {
   const pop = await ctx.newPage();
   await pop.goto(`chrome-extension://${EXT_ID}/popup.html`);
-  check(/on/.test(await pop.textContent('#state')) && /web helper/.test(await pop.textContent('#list')) && /second helper/.test(await pop.textContent('#list')), 'the button shows the switch on and both sessions');
+  check(/on/.test(await pop.textContent('#state')) && (await pop.textContent("#list")).includes(`${ID} - reminal`) && (await pop.textContent("#list")).includes(`${ID2} - reminal`) && !/helper/.test(await pop.textContent("#list")), "the button shows the switch on and both sessions, each by its id and never by the name it was given");
   await slow(1000);
   const going = call('browser_navigate', { url: `${PAGES}/slow.html` });
   await pause(1500); // the page is loading
-  await pop.locator('li', { hasText: 'web helper' }).locator('button').click();
+  await pop.locator('li', { hasText: `${ID} - reminal` }).locator('button').click();
   await pop.close();
   await going;
   const recs = await recOf(ID);
