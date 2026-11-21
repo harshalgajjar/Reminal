@@ -391,8 +391,19 @@ var harnessLoginScreens = map[string][]loginRow{
 		`anthropicprofileloginexpired·re-authenticateyouranthropicprofile`,
 		// A Console sign-in wanted, and one saved that is not a Console
 		// account's.
-		`thiscomputer.?ssettingsrequireaconsolesign-in\(forceloginmethod\)\.signinagainwithaconsoleaccount`,
-		`claudecodecan.?tusetheanthropicconsolesign-insavedonthiscomputer,usuallybecauseitisn.?tforaconsoleaccount·run/loginandsigninwithaconsoleaccount`,
+		// 2.1.330 goes on to say where to get one, and for the saved
+		// sign-in gives another way out (a subscription, a Console account
+		// set up, or an API key): each with its own ending only.
+		`thiscomputer.?ssettingsrequireaconsolesign-in\(forceloginmethod\)\.signinagainwithaconsoleaccount(?:\.togetone,gotohttps://platform\.claude\.comoraskyouradministrator)?`,
+		`claudecodecan.?tusetheanthropicconsolesign-insavedonthiscomputer,usuallybecauseitisn.?tforaconsoleaccount·run/loginand(?:signinwithaconsoleaccount(?:·togetone,gotohttps://platform\.claude\.comoraskyouradministrator)?|select"claudeaccountwithsubscription",orsetupaconsoleaccountathttps://platform\.claude\.comandrun/loginagain,oruseananthropicapikeyinstead)`,
+		// 2.1.330: a sign-in method this computer's settings do not allow
+		// for the organization.
+		`thiscomputer.?ssettingsrequireadifferentsign-inmethod\(forceloginmethod\),soitcan.?tsignintoyourorganization`,
+		// 2.1.330: a login it could not renew because the new one could not
+		// be saved to the Keychain, in each of its three wordings.
+		`couldnotrefreshyourlogin:can.?tsavetothekeychain·iflocked,runsecurityunlock-keychain·inasandbox,runclaudeoutsideit·otherwise,retry,then/login`,
+		"failedtorefreshoauthtoken:can.?tsavetothekeychain\\.iflocked,run`?securityunlock-keychain`?\\.ifsandboxed,use`?claudesetup-token`?\\.otherwise,retry,then`?claudeauthlogin`?",
+		`oauthaccesstokencouldnotberefreshed:can.?tsavetothemacoskeychain\.unlockit,runclaudeoutsideanysandbox,retry,orsigninagain`,
 		// Teleport, which needs a claude.ai login.
 		`teleportrequiresaclaudeaccount\.run/loginandselect"claudeaccountwithsubscription"`,
 		// A login it could not refresh while another Claude Code was.
@@ -410,7 +421,7 @@ const opencodeKeyMissing = `[a-z0-9.\-]*apikeyismissing\.passitusingthe'[a-z0-9_
 // piProviders are pi's providers by their ids (pi 1.4.0's own list): what
 // its "No API key found for anthropic." names. Any other word there is not
 // pi's ("No API key found for staging-server", from a tool).
-const piProviders = `amazon-bedrock|ant-ling|anthropic|openai|azure|openai-codex|radius|nvidia|deepseek|google|google-vertex|github-copilot|openrouter|vercel-ai-gateway|xai|groq|cerebras|zai|zai-coding-cn|mistral|minimax|minimax-cn|moonshotai|moonshotai-cn|huggingface|fireworks|together|baseten|opencode|opencode-go|kimi-coding|meta|cloudflare-workers-ai|cloudflare-ai-gateway|qwen-token-plan|qwen-token-plan-cn|qwen-token-plan-individual|xiaomi|xiaomi-token-plan-cn|xiaomi-token-plan-ams|xiaomi-token-plan-sgp`
+const piProviders = `amazon-bedrock|ant-ling|anthropic|openai|azure|openai-codex|radius|nvidia|deepseek|google|google-vertex|github-copilot|openrouter|vercel-ai-gateway|xai|groq|cerebras|zai|zai-coding-cn|mistral|minimax|minimax-cn|moonshotai|moonshotai-cn|huggingface|fireworks|together|baseten|opencode|opencode-go|kimi-coding|meta|cloudflare-workers-ai|cloudflare-ai-gateway|qwen-token-plan|qwen-token-plan-cn|qwen-token-plan-individual|qwen-token-plan-individual-cn|xiaomi|xiaomi-token-plan-cn|xiaomi-token-plan-ams|xiaomi-token-plan-sgp`
 
 // cursorKeyRefused is Cursor CLI turning away the API key it was given, its
 // own row: "⚠ Warning: The provided API key is invalid.", then where the key

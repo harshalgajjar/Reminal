@@ -107,6 +107,16 @@ var loginRowCases = []loginRowCase{
 	{prog: "claude", row: "  ⎿  Anthropic profile login expired · Re-authenticate your Anthropic profile"},
 	{prog: "claude", row: "  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account."},
 	{prog: "claude", row: "● Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and sign in with a Console account"},
+	// Claude Code 2.1.330 (source): the Console rows go on to say where to
+	// get an account, or give another way out; a sign-in method not allowed
+	// for the organization; a login that could not be saved to the Keychain.
+	{prog: "claude", row: "  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account. To get one, go to https://platform.claude.com or ask your administrator."},
+	{prog: "claude", row: "● Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and sign in with a Console account · To get one, go to https://platform.claude.com or ask your administrator"},
+	{prog: "claude", row: "● Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and select \"Claude account with subscription\", or set up a Console account at https://platform.claude.com and run /login again, or use an Anthropic API key instead"},
+	{prog: "claude", row: "  ⎿  This computer's settings require a different sign-in method (forceLoginMethod), so it can't sign in to your organization."},
+	{prog: "claude", row: "  ⎿  Could not refresh your login: can't save to the Keychain · If locked, run security unlock-keychain · In a sandbox, run claude outside it · Otherwise, retry, then /login"},
+	{prog: "claude", row: "● Failed to refresh OAuth token: can't save to the Keychain. If locked, run `security unlock-keychain`. If sandboxed, use `claude setup-token`. Otherwise, retry, then `claude auth login`"},
+	{prog: "claude", row: "  ⎿  OAuth access token could not be refreshed: can't save to the macOS Keychain. Unlock it, run claude outside any sandbox, retry, or sign in again"},
 	{prog: "claude", row: "  ⎿  Teleport requires a Claude account. Run /login and select \"Claude account with subscription\"."},
 	{prog: "claude", row: "  ⎿  Could not refresh your login because another Claude Code process is refreshing it · sign in again with /login"},
 	{prog: "claude", row: "● Could not refresh your login because another Claude Code process is refreshing it (or exited mid-refresh) · Try again in a minute; if it keeps happening, close other Claude Code windows or sign in again with /login"},
@@ -149,6 +159,8 @@ var loginRowCases = []loginRowCase{
 
 	{prog: "pi", row: " Error: No API key found for the selected model."},
 	{prog: "pi", row: " Error: No API key found for anthropic."},
+	// pi 1.6.0 (recorded, no account): a provider newer than the list had.
+	{prog: "pi", row: " Error: No API key found for qwen-token-plan-individual-cn."},
 	{prog: "pi", row: ` Error: Authentication failed for "anthropic". Credentials may have expired or network is unavailable. Run '/login anthropic' to re-authenticate.`},
 	{prog: "pi", row: " Error: Your session has expired. Please reauthenticate."},
 
@@ -535,6 +547,7 @@ func TestAnAgentsOwnTextIsNotALoginAfterAll(t *testing.T) {
 		{"Codex's words with no mark of its own", "codex", "  Your session has expired. Please reauthenticate."},
 		{"pi's words with no Error: of its own", "pi", "  Your session has expired. Please reauthenticate."},
 		{"pi naming no provider of its own", "pi", " Error: No API key found for staging-server"},
+		{"pi naming something that only starts as a provider of its own", "pi", " Error: No API key found for qwen-token-plan-individual-cn-staging"},
 	} {
 		for _, prog := range []string{c.prog, ""} {
 			if loggedOutBy(c.screen+loginRowFrame, prog) {
@@ -675,6 +688,16 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"the same carried on", "claude", "● The banner said Anthropic profile login expired · Re-authenticate your Anthropic profile, so I re-authenticated and the run continued." + box, false},
 		{"Claude Code's Console sign-in wanted", "claude", "answer\n  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account." + box, true},
 		{"the same quoted", "claude", "● It reported \"require a Console sign-in (forceLoginMethod)\" so I asked you to sign in, then kept going." + box, false},
+		// Claude Code 2.1.330: the same rows as it words them now, and each
+		// carried on in an agent's answer.
+		{"Claude Code 2.1.330's Console sign-in wanted", "claude", "answer\n  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account. To get one, go to https://platform.claude.com or ask your administrator." + box, true},
+		{"the same carried on", "claude", "● This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account. To get one, go to https://platform.claude.com or ask your administrator, which I have noted for you." + box, false},
+		{"Claude Code 2.1.330's saved Console sign-in", "claude", "answer\n  ⎿  Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and sign in with a Console account · To get one, go to https://platform.claude.com or ask your administrator" + box, true},
+		{"the same carried on", "claude", "● Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and sign in with a Console account · To get one, go to https://platform.claude.com or ask your administrator about the team plan first." + box, false},
+		{"Claude Code 2.1.330's sign-in method not allowed", "claude", "answer\n  ⎿  This computer's settings require a different sign-in method (forceLoginMethod), so it can't sign in to your organization." + box, true},
+		{"the same carried on", "claude", "● This computer's settings require a different sign-in method (forceLoginMethod), so it can't sign in to your organization until IT changes the policy, they said." + box, false},
+		{"Claude Code 2.1.330's Keychain refusal", "claude", "answer\n  ⎿  Could not refresh your login: can't save to the Keychain · If locked, run security unlock-keychain · In a sandbox, run claude outside it · Otherwise, retry, then /login" + box, true},
+		{"the same carried on", "claude", "● Could not refresh your login: can't save to the Keychain · If locked, run security unlock-keychain · In a sandbox, run claude outside it · Otherwise, retry, then /login is what the docs say to do." + box, false},
 		{"Claude Code's Teleport sign-in", "claude", "answer\n  ⎿  Teleport requires a Claude account. Run /login and select \"Claude account with subscription\"." + box, true},
 		{"the same carried on", "claude", "● Teleport requires a Claude account. Run /login and select \"Claude account with subscription\", done, resuming." + box, false},
 		// Not a sign-in: a file sent to a connector, refused (the tool call.s

@@ -82,6 +82,9 @@ var limitScreens = []struct {
 	// Held until the time it says, then going on by itself.
 	{"claude", "  ⎿  Usage limit reached · continuing automatically at 3pm · esc to cancel\n❯ ", limitLA(2026, 10, 19, 15, 0)},
 	{"claude", "  ⎿  Usage limit reached again · continuing automatically in 2h 5m · esc to cancel\n❯ ", limitLA(2026, 10, 19, 12, 5)},
+	// Claude Code 2.1.330 words it "set to continue automatically".
+	{"claude", "  ⎿  Usage limit reached · set to continue automatically at 3pm\n❯ ", limitLA(2026, 10, 19, 15, 0)},
+	{"claude", "  ⎿  Usage limit reached again · set to continue automatically in 2h 5m\n❯ ", limitLA(2026, 10, 19, 12, 5)},
 	// Claude Code 2.1.317–318: a goal paused at
 	// its limit, and a group's pooled budget on the Claude apps gateway,
 	// with when it resets.
@@ -137,6 +140,14 @@ var limitScreens = []struct {
 	// which ends the turn.
 	{"claude", "  ⎿  API Error: Usage credits ran out before the response was finished.\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Usage credits ran out before the response was finished.\n\n❯ ", time.Time{}},
+	// Claude Code 2.1.330 (source): out of usage credits with the command
+	// that keeps the model going, or where to look; an organization's; work
+	// stopped at the spending limit.
+	{"claude", "  ⎿  You're out of usage credits. Run /usage-credits to keep using Opus 5.5 or /model to switch models.\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  You're out of usage credits. See Usage in Settings\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Your organization is out of usage credits.\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Your organization is out of usage credits. Contact your admin to add more.\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Stopped: the spending limit was reached\n\n❯ ", time.Time{}},
 	// Claude Code 2.1.323 (source): the API's credit balance too low, on
 	// one row; narrower than it, the row is clipped before the link.
 	{"claude", "  ⎿  Credit balance too low · Add funds: https://platform.claude.com/settings/billing\n\n❯ ", time.Time{}},
@@ -275,6 +286,10 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		{"claude", "  you've hit your limit · resets 4pm is all it answers.", "wrapped prose"},
 		{"claude", "  ⎿  \"Usage limit reached · resets 4pm\",", "a test's string, in a tool's output"},
 		{"claude", "● Usage credits ran out before the response was finished, so I summarised what I had and stopped.", "a 2.1.328 notice carried on"},
+		{"claude", "● You're out of usage credits. See Usage in Settings is the message it showed, so I switched models.", "a 2.1.330 notice carried on"},
+		{"claude", "● Your organization is out of usage credits. Contact your admin to add more, the banner said, and I did.", "a 2.1.330 notice carried on"},
+		{"claude", "● Stopped: the spending limit was reached once before, so I set a lower cap this time.", "a 2.1.330 notice carried on"},
+		{"claude", "  ⎿  Usage limit reached · set to continue automatically at 3pm, then it resumed and finished.", "a 2.1.330 notice carried on"},
 		{"claude", "● You've hit your session limit · resets 3pm, and the next window\n  opens then.", "a sentence that wraps on"},
 		// Claude Code 2.1.312: rows that leave the agent working, and its
 		// notices quoted in answers that go on.
