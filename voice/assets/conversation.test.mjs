@@ -350,7 +350,9 @@ Object.assign(voice, {
     return p;
   },
   take(p) { this.current = p; made.taken.push(p); this.said.push(p.words); this.play(p, p.words); },
-  drop(p) { made.dropped.push(p); },
+  drop(p) { p.dropped = true; made.dropped.push(p); },
+  // Made ahead and neither taken nor let go: each of these holds the voice.
+  waiting() { return [...new Set(made.prepared.map((x) => x.p))].filter((p) => !made.taken.includes(p) && !made.dropped.includes(p)); },
 });
 function fresh() {
   sent.length = 0; rows.length = 0; voice.said.length = 0; voice.cancelled.length = 0;
@@ -475,4 +477,33 @@ test('two lines in two voices held while they made a sound come out as two repli
   assert.equal(made.prepared[0].p.voice, 'am_adam');
   mic(12000, false);
   assert.equal(made.taken.length, 1, 'and is said after it, in its own voice');
+});
+
+test('three lines in three voices waiting: each made once, each said once, none left holding the voice', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  talk.agentSaid(talk.line(FIRST, { voice: 'af_bella' }));
+  mic(1600, false);
+  talk.agentSaid(talk.line('Second speaker.', { voice: 'am_adam' }));
+  talk.agentSaid(talk.line('Third speaker.', { voice: 'bf_emma' }));
+  talk.agentSaid(talk.line('Fourth speaker.', { voice: 'bm_george' }));
+  assert.equal(made.prepared.length, 3, 'each is made while the first is heard');
+  mic(40000, false);                // all four heard, one after another
+  assert.equal(made.prepared.length, 3, `none is made a second time as the one before it starts (made: ${made.prepared.map((x) => x.p.voice).join(', ')})`);
+  assert.deepEqual(made.taken.map((p) => p.voice), ['am_adam', 'bf_emma', 'bm_george'], 'each said once, in order');
+  assert.equal(made.dropped.length, 0, 'none had to be let go');
+  assert.equal(voice.waiting().length, 0, 'and nothing made ahead is left: the voice is free');
+});
+
+test('a line made ahead and then held while they talk, and given up, lets its sound go', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  talk.agentSaid(talk.line(FIRST, { voice: 'af_bella' }));
+  mic(1600, false);
+  talk.agentSaid(talk.line(SECOND, { voice: 'am_adam' }));   // made ahead, waiting
+  assert.equal(voice.waiting().length, 1);
+  mic(9000, true, 'no stop I want to ask something else entirely');   // they talk over it and on
+  mic(3000, false);                                                   // their turn goes
+  assert.equal(made.taken.length, 0, 'it is not said');
+  assert.equal(voice.waiting().length, 0, 'and nothing is left holding the voice');
 });

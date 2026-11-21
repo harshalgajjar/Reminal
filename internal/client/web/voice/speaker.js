@@ -122,14 +122,18 @@ export class Speaker {
   }
   // The reply made ahead is the one being said now: what is made of it plays
   // at once, the rest as it comes.
+  // (False for one let go meanwhile: there is nothing of it to play.)
   take(p) {
-    this.ahead.delete(p.gen);
+    if (!this.ahead.delete(p.gen)) return false;
     this.current = p;
     p.synthDone = !!p.madeAll;
     for (const a of p.made.splice(0)) this.play(p, a.buf, a.text, false);
+    return true;
   }
+  // The replies made ahead and not yet taken.
+  waiting() { return [...this.ahead.values()]; }
   // Made ahead and not wanted after all.
-  drop(p) { if (this.ahead.delete(p.gen) && this.tts) this.tts.postMessage({ type: 'cancel', gen: p.gen }); }
+  drop(p) { p.dropped = true; if (this.ahead.delete(p.gen) && this.tts) this.tts.postMessage({ type: 'cancel', gen: p.gen }); }
 
   // No more for this reply: it finishes once all of it has been heard.
   end(r) {
