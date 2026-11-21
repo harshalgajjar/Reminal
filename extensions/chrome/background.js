@@ -83,7 +83,7 @@ async function onHostMessage(m) {
     // The sessions this browser holds tabs for: reminal says which of them
     // ended while it was not looking (it was being updated, or this browser
     // was closed), and their groups are let go.
-    if (m.ok) send({ t: 'have', sessions: [...new Set((await allS()).map(([, s]) => s.session).filter(Boolean))] });
+    if (m.ok) send({ t: 'have', sessions: [...new Set([...(await allS()).map(([, s]) => s.session).filter(Boolean), ...(await groupsOfSessions()).keys()])] });
     return;
   }
   if (m.t === 'refused') { setStatus({ connected: false, error: m.error || 'refused' }); return; }
@@ -176,6 +176,24 @@ async function endSession(id) {
     await chrome.storage.session.remove(k);
     await letGo(s, "the session ended");
   }
+  // And a group under its name that no record holds any more (the records
+  // went when the extension reloaded itself): its tabs stay, ungrouped.
+  for (const g of (await groupsOfSessions()).get(id) || []) {
+    for (const t of await chrome.tabs.query({ groupId: g }).catch(() => [])) {
+      await detach(t.id);
+      try { await chrome.tabs.ungroup(t.id); } catch (_) {}
+    }
+  }
+}
+// groupsOfSessions: the tab groups in the browser named as a session's are
+// ("<id> - reminal"), by session id.
+async function groupsOfSessions() {
+  const out = new Map();
+  for (const g of await chrome.tabGroups.query({}).catch(() => [])) {
+    const m = /^([A-Z0-9]{4,32}) - reminal$/.exec(g.title || '');
+    if (m) out.set(m[1], [...(out.get(m[1]) || []), g.id]);
+  }
+  return out;
 }
 // switchOff: the switch in the button goes off; every session lets go.
 async function switchOff() {
@@ -325,6 +343,13 @@ async function sessionTabs(s, regroup = true) {
   const ids = new Set(s.tabs || []);
   let group = s.groupId;
   try { if (group != null) await chrome.tabGroups.get(group); } catch (_) { group = null; }
+  // A run with no group of its own takes up the one the browser still has
+  // under the session's name: the extension forgets its records when it
+  // reloads itself for an update, and the group and its tabs are still there.
+  if (group == null && regroup) {
+    const named = (await groupsOfSessions()).get(s.session);
+    if (named && named.length) group = named[0];
+  }
   const inGroup = group == null ? [] : await chrome.tabs.query({ groupId: group }).catch(() => []);
   for (const t of inGroup) ids.add(t.id);
   let tabs = [];
