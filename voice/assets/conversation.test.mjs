@@ -66,7 +66,7 @@ export function timeDuck() {} export function timeStop() {} export function time
 `);
 const talk = await import(pathToFileURL(path.join(tmp, 'conversation.mjs')));
 const { sent } = await import(pathToFileURL(path.join(tmp, 'bridge.mjs')));
-const { rows } = await import(pathToFileURL(path.join(tmp, 'panel.mjs')));
+const { rows, statusClass } = await import(pathToFileURL(path.join(tmp, 'panel.mjs')));
 const { T, FRAME_MS } = await import(pathToFileURL(path.join(tmp, 'tuning.mjs')));
 
 // The agent's voice: makes a line in synthMs, then plays it at ~12 characters
@@ -293,4 +293,45 @@ test('a fast turn model saying "not finished" as they stop for it sends nothing 
   const all = sent.map((s) => s.text).join(' | ');
   assert.ok(!/after it came in/.test(all), all);
   assert.match(all, /before they stopped for your cut-in they had also said: "the second stretch of it"/);
+});
+
+// A sound with no words in it (a cough, a breath): loud enough to start a
+// turn, too quiet for any word.
+function sound(ms) {
+  loud = new Float32Array(512).fill(0.1); gap = new Float32Array(512); gap[0] = 0.1;
+  mic(ms, true);
+}
+const HELD = 'The build passed.';
+
+test('a line held while they made a sound with no words is said once the sound ends', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  sent.length = 0; rows.length = 0; voice.said.length = 0; voice.cancelled.length = 0;
+  talk.start({ stt, speaker: voice, turnModel: { slow: true, finished: async () => 0.9 }, nods: () => false });
+  sound(300);
+  talk.agentSaid(HELD);                     // while they cough: held, not said over them
+  assert.ok(!voice.said.includes(HELD), 'not said over them');
+  assert.ok(rows.some((r) => /not read out: you were talking/.test(r.note) && !r.removed), 'shown as held');
+  sound(300);
+  mic(3000, false);                         // the turn ends with no words
+  assert.ok(voice.said.includes(HELD), `the held line is said (said: ${JSON.stringify(voice.said)})`);
+  assert.ok(rows.some((r) => r.who === 'agent' && !r.removed && r.text.includes(HELD)), 'its row stays on screen');
+  assert.equal(said().length, 0, 'nothing is sent for a turn with no words');
+  assert.notEqual(statusClass(), 'think', 'not left on "Thinking"');
+  mic(3000, false);
+  assert.ok(rows.some((r) => r.who === 'agent' && !r.removed && r.text === HELD), 'and shown as heard');
+});
+
+test('control: a line held while they said something stays on screen, unsaid, and their turn goes', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  sent.length = 0; rows.length = 0; voice.said.length = 0; voice.cancelled.length = 0;
+  talk.start({ stt, speaker: voice, turnModel: { slow: true, finished: async () => 0.9 }, nods: () => false });
+  mic(600, true, 'what about the tests');
+  talk.agentSaid(HELD);
+  mic(600, true);
+  mic(3000, false);
+  assert.ok(!voice.said.includes(HELD), 'not read out after they spoke: it answers them anew');
+  const row = rows.find((r) => /not read out: you were talking/.test(r.note));
+  assert.ok(row && !row.removed && row.text === HELD, 'left on screen, marked not read out');
+  assert.equal(said().length, 1, 'their turn goes to the agent');
+  assert.equal(said()[0].text, 'what about the tests');
 });
