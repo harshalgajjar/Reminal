@@ -278,3 +278,37 @@ func TestSpeechDraftRuleLeavesOtherAgentsAsTheyWere(t *testing.T) {
 		t.Errorf("claude with no box on screen: speechBlocked = %q, want it typed into as before", got)
 	}
 }
+
+// A signed-in Claude Code (2.1.330), recorded as its terminal got it: an
+// empty box shows a greyed line, "Try ..." at first and a suggested next
+// message after a turn, drawn faint with the terminal's own cursor on its
+// first letter. (The captures are as recorded but for the address in the
+// typed request, changed to example.net.) Both are on screen in the captures (the control: the box is
+// found, and the grey words are there), and voice types into both. The same
+// words typed are a draft.
+func TestVoiceSignedInClaudeSuggestionIsAnEmptyBox(t *testing.T) {
+	for name, words := range map[string]string{
+		"p07-signed-in-first-run-placeholder-2.1.330-w120.ans": `Try "fix lint errors"`,
+		"p08-signed-in-after-turn-suggestion-2.1.330-w120.ans": "just fetch it another way",
+	} {
+		a := styledScreen(t, "claude", filepath.Join("claude-drafts", name), 120, 40)
+		render := a.screen.Render()
+		if !strings.Contains(stripANSI(render), "❯ "+words) {
+			t.Fatalf("%s: the greyed words are not in the box on screen:\n%s", name, voiceBottomRows(render))
+		}
+		if !voiceBoxDrawn("claude", render) {
+			t.Errorf("%s: the box is not found", name)
+		}
+		if voiceBoxDraft("claude", render) {
+			t.Errorf("%s: a greyed suggestion in an empty box read as a draft", name)
+		}
+		if got := a.speechBlocked(); got != "" {
+			t.Errorf("%s: speechBlocked = %q, want voice to type into it", name, got)
+		}
+		// The same row with the words not faint is something typed.
+		rule := strings.Repeat("─", 60)
+		if !voiceBoxDraft("claude", rule+"\n❯ "+words+"\n"+rule+"\n") {
+			t.Errorf("%s: the same words typed are not read as a draft", name)
+		}
+	}
+}
