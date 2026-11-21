@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.328
+▝▜██████▀  Opus 5.5 · API Usage Billing
+ ▝▝   ▝▝   /w
+
+
+❯ please ask me
+
+● Declined to answer Claude's questions:
+  ⎿  · Which one should I use? (Alpha / Beta)
+
+❯ please list sessions
+
+● Done: [tool_result "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a
+  file edit, the new_string was NOT written to the file). STOP what you are doing and wait f
+
+✻ Cogitated for 0s · done 1:23 PM
+
+
+
+
+
+
+
+
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  Select model
+  Your pick is the default for new sessions. For other models, use --model.
+
+  ❯ 1. Default (recommended) ✔  Use the default model (currently Opus 5.5) · $4/$20 per Mtok
+    2. Opus                     Opus 5.5 · Best for everyday, complex tasks · $4/$20 per Mtok
+    3. Fable                    Fable 5.2 · Most capable for your hardest and longest-running tasks · $8/$40 per Mtok
+    4. Sonnet                   Sonnet 5.5 · Efficient for routine tasks · $2/$10 per Mtok
+    5. Haiku                    Haiku 5.5 · Fastest for quick answers · $0.10/$0.50 per Mtok ($0.50/$2.50 for prompts
+                                over 100k)
+
+  ◐ Medium effort (default) ←/→ to adjust
+
+  s to use this session only · Enter to save · Esc to cancel

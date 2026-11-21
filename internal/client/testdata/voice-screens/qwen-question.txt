@@ -1,0 +1,40 @@
+
+   ▄▄▄▄▄▄  ▄▄     ▄▄ ▄▄▄▄▄▄▄ ▄▄▄    ▄▄   ┌──────────────────────────────────────────────────────────┐
+  ██╔═══██╗██║    ██║██╔════╝████╗  ██║  │ >_ Qwen Code (v0.28.0)                                   │
+  ██║   ██║██║ █╗ ██║█████╗  ██╔██╗ ██║  │                                                          │
+  ██║▄▄ ██║██║███╗██║██╔══╝  ██║╚██╗██║  │ API Key | m (/model to change)                           │
+  ╚██████╔╝╚███╔███╔╝███████╗██║ ╚████║  │ /w                                                       │
+   ╚══▀▀═╝  ╚══╝╚══╝ ╚══════╝╚═╝  ╚═══╝  └──────────────────────────────────────────────────────────┘
+
+  Tips: You can run any shell commands from Qwen Code using ! (e.g. !ls).
+
+  > /mcp
+  ●︎ Read context files: ~/.qwen/output-language.md
+
+  > [voice] hello there
+
+  ◆︎ done.
+
+  > please run the command
+  - Shell touch /tmp/APPROVED (make a file)
+
+  > please ask me
+  ? AskUserQuestion Ask user 1 question ←
+
+   Pick
+
+   Which one should I use?
+
+   ❯ 1. Alpha
+        the first
+     2. Beta
+        the second
+     3. Type something...
+
+
+   ↑/↓: Navigate | Enter: Select | Esc: Cancel
+
+
+  ⠏ Waiting for user confirmation...
+
+

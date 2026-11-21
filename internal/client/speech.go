@@ -303,7 +303,7 @@ func (a *Agent) typeSpoken(line string) {
 			return
 		}
 		time.Sleep(EnterSettle)
-		if a.speechBlocked() != "" {
+		if a.speechBlockedAfterWords() != "" {
 			a.speechNotice(speechUnsent) // the words are in the box, not sent
 			return
 		}

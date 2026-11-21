@@ -1,0 +1,40 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m[39m[49m [38;5;246mv2.1.328
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mOpus 5.5 · API Usage Billing
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/w
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[39m  [38;5;153m❯ /add-dir                    Add a working directory
+[39m  [38;5;246m  /auto-mode-setup            Teach auto mode about your environment
+[39m  [38;5;246m  /autocompact                Set how full the context gets before auto-summarizing
+[39m  [38;5;246m  /background                 Send this session to the background and free the terminal
+[39m  [38;5;246m  /branch                     Create a branch of the current conversation at this point[39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m❯ /[7m
+[0m[38;5;244m[49m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on[39m

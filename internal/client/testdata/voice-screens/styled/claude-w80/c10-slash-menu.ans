@@ -1,0 +1,24 @@
+
+
+[38;5;246m[48;5;237m❯ [38;5;231mplease work slowly[39m
+
+[38;5;231m[49m●[39m Worked slowly.
+
+[38;5;246m✻[39m [38;5;246mCrunched for 25s · done 1:52 PM
+
+[48;5;237m❯ [38;5;231mplease write a file[39m
+[49m
+[38;5;211m●[39m [1mWrite[0m[39m[49m(x.txt)
+[38;5;246m  ⎿  Rejected write to [1mx.txt
+[0m[39m[49m     [2m 1 hi[0m[39m[49m
+
+[38;5;246m[48;5;237m❯[39m [38;5;231m/model[39m [49m
+
+  [38;5;153m❯ /add-dir                    Add a working directory[39m
+  [38;5;246m  /auto-mode-setup            Teach auto mode about your environment[39m
+  [38;5;246m  /autocompact                Set how full the context gets before[39m
+                                [38;5;246mauto-summarizing
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m❯ /[7m [0m[39m[49m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on[39m
