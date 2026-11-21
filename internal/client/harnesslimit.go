@@ -260,9 +260,12 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// may follow on the same row: only that action's own words.
 		`you.?reoutofusagecredits(?:\.(?:/modeltoswitchmodels|switchtoanothermodel(?:/(?:(?:run)?/usage-creditstoraiseitandkeepusing`+claudeModel+`(?:orswitchmodelstocontinuethischat)?)?)?))?`,
 		// Claude Code 2.1.330: the same with the command that keeps the
-		// model going, or where to look. (An organization's credits run out
-		// is read already, on the notice's own row: claudeHitLimit.)
-		`you.?reoutofusagecredits\.(?:run/usage-creditstokeepusing`+claudeModel+`or/modeltoswitchmodels|seeusageinsettings)`,
+		// model going. (An organization's credits run out is read already,
+		// on the notice's own row: claudeHitLimit. "You're out of usage
+		// credits. See Usage in Settings" is not a notice: it is the small
+		// print under "Not now" in the question "... Switch models?", which
+		// is waiting for an answer, not for a limit to reset.)
+		`you.?reoutofusagecredits\.run/usage-creditstokeepusing`+claudeModel+`or/modeltoswitchmodels`,
 		// Claude Code 2.1.330: work stopped at the spending limit.
 		`stopped:thespendinglimitwasreached`,
 		// Claude Code 2.1.312: a limit that could not be lifted, and the

@@ -144,7 +144,6 @@ var limitScreens = []struct {
 	// that keeps the model going, or where to look; an organization's; work
 	// stopped at the spending limit.
 	{"claude", "  ⎿  You're out of usage credits. Run /usage-credits to keep using Opus 5.5 or /model to switch models.\n\n❯ ", time.Time{}},
-	{"claude", "  ⎿  You're out of usage credits. See Usage in Settings\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Your organization is out of usage credits.\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Your organization is out of usage credits. Contact your admin to add more.\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Stopped: the spending limit was reached\n\n❯ ", time.Time{}},
@@ -286,7 +285,11 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		{"claude", "  you've hit your limit · resets 4pm is all it answers.", "wrapped prose"},
 		{"claude", "  ⎿  \"Usage limit reached · resets 4pm\",", "a test's string, in a tool's output"},
 		{"claude", "● Usage credits ran out before the response was finished, so I summarised what I had and stopped.", "a 2.1.328 notice carried on"},
-		{"claude", "● You're out of usage credits. See Usage in Settings is the message it showed, so I switched models.", "a 2.1.330 notice carried on"},
+		// The small print under a choice of Claude Code's "Switch models?"
+		// question: the question waits for an answer; no limit is waited on.
+		{"claude", "   You're out of usage credits. See Usage in Settings", "a choice's description in a question"},
+		{"claude", "   You've hit your monthly spend limit. See Usage in Settings", "a choice's description in a question"},
+		{"claude", "   Opus 5.5 needs usage credits. See Usage in Settings", "a choice's description in a question"},
 		{"claude", "● Your organization is out of usage credits. Contact your admin to add more, the banner said, and I did.", "a 2.1.330 notice carried on"},
 		{"claude", "● Stopped: the spending limit was reached once before, so I set a lower cap this time.", "a 2.1.330 notice carried on"},
 		{"claude", "  ⎿  Usage limit reached · set to continue automatically at 3pm, then it resumed and finished.", "a 2.1.330 notice carried on"},
