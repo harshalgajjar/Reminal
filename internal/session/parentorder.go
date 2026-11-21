@@ -1,0 +1,14 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (C) 2026 Harshal Gajjar
+
+package session
+
+import "time"
+
+// parentIsOlder: a process said to be another's parent is, only if both
+// start times are known and the parent's is not after the child's. (Where
+// an id can outlive its process and be given to a new one, the id a child
+// holds for its parent may by now be a stranger's.)
+func parentIsOlder(parent time.Time, parentKnown bool, child time.Time, childKnown bool) bool {
+	return parentKnown && childKnown && !parent.After(child)
+}

@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -56,12 +55,9 @@ func markPageWords(blocks []any) []any {
 }
 
 // browserToolsHere: the browser tools are offered only where they can work:
-// not on Windows yet, and only once `reminal integrate` has registered the
-// browser host for a browser here.
+// once `reminal integrate` has registered the browser host for a browser
+// here.
 func browserToolsHere() bool {
-	if runtime.GOOS == "windows" {
-		return false
-	}
 	home, err := os.UserHomeDir()
 	return err == nil && len(chromeOurs(home)) > 0
 }

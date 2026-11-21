@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -106,7 +107,15 @@ func runBrowserCLI(args []string) error {
 				p = "screenshot-" + time.Now().Format("20060102-150405.000") + ".png"
 			}
 			if err := os.WriteFile(p, raw, 0o644); err != nil {
-				return err
+				if out != "" {
+					return err
+				}
+				// No place was asked for and the shell's folder cannot be
+				// written (C:\ on Windows, a read-only one): the temp folder.
+				p = filepath.Join(os.TempDir(), p)
+				if err := os.WriteFile(p, raw, 0o644); err != nil {
+					return err
+				}
 			}
 			out = "" // a second image gets a name of its own
 			fmt.Println("Saved the image: " + p)

@@ -34,6 +34,9 @@ var browserSecretFolders = []string{
 	"/library/application support/bravesoftware", "/library/application support/arc", "/library/application support/firefox",
 	"/library/application support/vivaldi", "/library/application support/com.operasoftware.opera",
 	"/appdata/local/google/chrome", "/appdata/local/microsoft/edge", "/appdata/roaming/mozilla",
+	"/appdata/local/chromium", "/appdata/local/bravesoftware",
+	"/appdata/roaming/microsoft/credentials", "/appdata/local/microsoft/credentials", "/appdata/roaming/microsoft/protect",
+	"/appdata/roaming/microsoft/crypto", "/appdata/local/microsoft/vault",
 	"/snap/firefox", "/snap/chromium",
 }
 
@@ -43,6 +46,9 @@ var browserSecretFolders = []string{
 // Mac's disk does not tell ".SSH" from ".ssh".
 func browserSecretPath(real string) bool {
 	low := strings.ToLower(filepath.ToSlash(real))
+	if namesAStream(low) {
+		return true
+	}
 	for _, part := range strings.Split(low, "/") {
 		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
 			return true
@@ -54,6 +60,22 @@ func browserSecretPath(real string) bool {
 		}
 	}
 	return browserSecretFile(filepath.Base(low))
+}
+
+// namesAStream: on Windows a colon after the drive names a stream inside a
+// file ("key.pem::$DATA" is key.pem): never given, whatever it is called.
+func namesAStream(p string) bool {
+	if chromeOS != "windows" {
+		return false
+	}
+	p = filepath.ToSlash(p)
+	for _, pre := range []string{"//?/", "//./"} {
+		p = strings.TrimPrefix(p, pre)
+	}
+	if len(p) >= 2 && p[1] == ':' {
+		p = p[2:]
+	}
+	return strings.Contains(p, ":")
 }
 
 // browserSecretFile reports whether a file's name marks it as a secret: a
@@ -87,7 +109,11 @@ func browserUploadPath(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	real, err := filepath.EvalSymlinks(abs)
+	const refused = "%s looks like a key, a password or a sign-in file: reminal does not upload those. Ask the person to upload it."
+	if namesAStream(abs) {
+		return "", fmt.Errorf(refused, p)
+	}
+	real, err := browserRealPath(abs)
 	if err != nil {
 		return "", fmt.Errorf("%s: no such file", p)
 	}
@@ -101,7 +127,6 @@ func browserUploadPath(p string) (string, error) {
 	if st.Size() > browserUploadMaxBytes {
 		return "", fmt.Errorf("%s is %d MB: at most %d MB a file", p, st.Size()>>20, browserUploadMaxBytes>>20)
 	}
-	const refused = "%s looks like a key, a password or a sign-in file: reminal does not upload those. Ask the person to upload it."
 	if browserSecretPath(real) {
 		return "", fmt.Errorf(refused, p)
 	}

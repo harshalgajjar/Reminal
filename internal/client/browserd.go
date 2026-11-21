@@ -15,7 +15,7 @@ package client
 // says {"t":"host"} first and then carries messages both ways; a session
 // sends one request {"t":"req","session":…,"run":…,"tool":…,"args":…} and
 // reads one answer. A request is taken only from the process that is that
-// session: its peer pid (SO_PEERCRED, LOCAL_PEERPID) must be the session's
+// session: its peer pid (SO_PEERCRED, LOCAL_PEERPID, SIO_AF_UNIX_GETPEERPID) must be the session's
 // own, so another program of the same user cannot use a consent the person
 // gave a session. A bridge is taken only from reminal's own browser-host,
 // started by a browser of Chrome's family.
@@ -29,7 +29,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -132,13 +131,8 @@ func newBrowserHub() *browserHub {
 	return &browserHub{waiting: map[uint64]waiter{}, seen: map[string]int{}}
 }
 
-// ServeBrowser serves browser.sock until stop closes. Not on Windows in
-// this first version: a caller's pid cannot be read there the same way, and
-// without it any program could act as a session the person allowed.
+// ServeBrowser serves browser.sock until stop closes.
 func ServeBrowser(stop <-chan struct{}) {
-	if runtime.GOOS == "windows" {
-		return
-	}
 	serveBrowserOn(newBrowserHub(), stop)
 }
 
@@ -236,7 +230,11 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 		ok = browserBridgeOK
 	}
 	if err != nil || !ok(peer) {
-		log.Printf("browser: refused a bridge from pid %d: not reminal's browser-host under a browser", peer)
+		if err != nil {
+			log.Printf("browser: refused a bridge: cannot tell which process it is: %v", err)
+		} else {
+			log.Printf("browser: refused a bridge from pid %d: not reminal's browser-host under a browser", peer)
+		}
 		_ = (&browserConn{c: conn}).send(map[string]string{"t": "refused", "error": "not reminal's browser host"})
 		_ = conn.Close()
 		return
@@ -300,7 +298,7 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 // it (the one that started it for its extension).
 func browserBridgeOK(pid int) bool {
 	args := processArgs(pid)
-	exe := processExecPath(pid)
+	exe := browserExecPath(pid)
 	if exe == "" && len(args) > 0 {
 		exe = args[0]
 	}
@@ -329,11 +327,15 @@ func browserBridgeOK(pid int) bool {
 		if p <= 1 {
 			return false
 		}
-		name := filepath.Base(processExecPath(p))
+		name := filepath.Base(browserExecPath(p))
 		if name == "." || name == "" || name == "/" {
 			if a := processArgs(p); len(a) > 0 {
 				name = filepath.Base(a[0])
 			}
+		}
+		// (Windows names its programs chrome.exe, msedge.exe.)
+		if len(name) > 4 && strings.EqualFold(name[len(name)-4:], ".exe") {
+			name = name[:len(name)-4]
 		}
 		if browserProcessName.MatchString(name) {
 			return true

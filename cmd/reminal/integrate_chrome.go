@@ -15,7 +15,8 @@ package main
 //     with "Load unpacked" (it is not in the Chrome Web Store yet).
 // The browser_* tools are in reminal's MCP server, which integrate registers
 // with each agent anyway. --remove takes these away with the rest; --check
-// reads them back. Not on Windows yet.
+// reads them back. On Windows the manifest is one file under ~/.reminal and
+// each browser is pointed at it in the person's own registry hive.
 
 import (
 	"encoding/json"
@@ -24,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	chromeext "reminal/extensions/chrome"
 )
@@ -37,39 +39,58 @@ const browserExtensionID = "igahbbfpoepnabdbgndnheeieimlhpjh"
 const browserHostName = "app.reminal.browser"
 
 // chromeBrowser is a browser of Chrome's family: its name, and its user data
-// folder (relative to $HOME), whose NativeMessagingHosts it reads.
+// folder (relative to $HOME), whose NativeMessagingHosts it reads. On
+// Windows it reads them from the registry instead, under Reg (in HKCU).
 type chromeBrowser struct {
 	Name string
 	Dir  string
+	Reg  string
 }
 
+// chromeOS and the registry calls, as vars so a test can stand in for
+// Windows.
+var (
+	chromeOS = runtime.GOOS
+	regSet   = chromeRegSet
+	regGet   = chromeRegGet
+	regDel   = chromeRegDel
+)
+
 func chromeBrowserTable() []chromeBrowser {
-	if runtime.GOOS == "darwin" {
+	if chromeOS == "windows" {
+		// Chrome Beta and Brave read Chrome's own key; Edge and Chromium
+		// each have theirs.
+		al := filepath.Join("AppData", "Local")
+		return []chromeBrowser{
+			{"Google Chrome", filepath.Join(al, "Google", "Chrome", "User Data"), `Software\Google\Chrome`},
+			{"Google Chrome Beta", filepath.Join(al, "Google", "Chrome Beta", "User Data"), `Software\Google\Chrome`},
+			{"Chromium", filepath.Join(al, "Chromium", "User Data"), `Software\Chromium`},
+			{"Microsoft Edge", filepath.Join(al, "Microsoft", "Edge", "User Data"), `Software\Microsoft\Edge`},
+			{"Brave", filepath.Join(al, "BraveSoftware", "Brave-Browser", "User Data"), `Software\Google\Chrome`},
+		}
+	}
+	if chromeOS == "darwin" {
 		as := filepath.Join("Library", "Application Support")
 		return []chromeBrowser{
-			{"Google Chrome", filepath.Join(as, "Google", "Chrome")},
-			{"Google Chrome Beta", filepath.Join(as, "Google", "Chrome Beta")},
-			{"Chromium", filepath.Join(as, "Chromium")},
-			{"Microsoft Edge", filepath.Join(as, "Microsoft Edge")},
-			{"Brave", filepath.Join(as, "BraveSoftware", "Brave-Browser")},
-			{"Arc", filepath.Join(as, "Arc", "User Data")},
+			{"Google Chrome", filepath.Join(as, "Google", "Chrome"), ""},
+			{"Google Chrome Beta", filepath.Join(as, "Google", "Chrome Beta"), ""},
+			{"Chromium", filepath.Join(as, "Chromium"), ""},
+			{"Microsoft Edge", filepath.Join(as, "Microsoft Edge"), ""},
+			{"Brave", filepath.Join(as, "BraveSoftware", "Brave-Browser"), ""},
+			{"Arc", filepath.Join(as, "Arc", "User Data"), ""},
 		}
 	}
 	return []chromeBrowser{
-		{"Google Chrome", filepath.Join(".config", "google-chrome")},
-		{"Google Chrome Beta", filepath.Join(".config", "google-chrome-beta")},
-		{"Chromium", filepath.Join(".config", "chromium")},
-		{"Microsoft Edge", filepath.Join(".config", "microsoft-edge")},
-		{"Brave", filepath.Join(".config", "BraveSoftware", "Brave-Browser")},
+		{"Google Chrome", filepath.Join(".config", "google-chrome"), ""},
+		{"Google Chrome Beta", filepath.Join(".config", "google-chrome-beta"), ""},
+		{"Chromium", filepath.Join(".config", "chromium"), ""},
+		{"Microsoft Edge", filepath.Join(".config", "microsoft-edge"), ""},
+		{"Brave", filepath.Join(".config", "BraveSoftware", "Brave-Browser"), ""},
 	}
 }
 
 // chromeBrowsers are the ones installed here: their user data folder is.
-// None on Windows, where the browser is not offered yet.
 func chromeBrowsers(home string) []chromeBrowser {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
 	var out []chromeBrowser
 	for _, b := range chromeBrowserTable() {
 		if st, err := os.Stat(filepath.Join(home, b.Dir)); err == nil && st.IsDir() {
@@ -83,6 +104,12 @@ func chromeBrowsers(home string) []chromeBrowser {
 func chromeOurs(home string) []chromeBrowser {
 	var out []chromeBrowser
 	for _, b := range chromeBrowserTable() {
+		if b.Reg != "" {
+			// Several browsers read one key: only those that are here.
+			if st, err := os.Stat(filepath.Join(home, b.Dir)); err != nil || !st.IsDir() {
+				continue
+			}
+		}
 		raw, err := os.ReadFile(chromeHostManifestPath(home, b))
 		if err != nil {
 			continue
@@ -90,7 +117,7 @@ func chromeOurs(home string) []chromeBrowser {
 		var m struct {
 			Name string `json:"name"`
 		}
-		if json.Unmarshal(raw, &m) == nil && m.Name == browserHostName {
+		if json.Unmarshal(raw, &m) == nil && m.Name == browserHostName && chromePointed(home, b) {
 			out = append(out, b)
 		}
 	}
@@ -98,7 +125,17 @@ func chromeOurs(home string) []chromeBrowser {
 }
 
 func chromeHostManifestPath(home string, b chromeBrowser) string {
+	if b.Reg != "" {
+		// One file for every browser here: each is pointed at it.
+		return filepath.Join(home, ".reminal", "browser-host", browserHostName+".json")
+	}
 	return filepath.Join(home, b.Dir, "NativeMessagingHosts", browserHostName+".json")
+}
+
+// chromePointed: the browser is pointed at reminal's manifest (Windows; the
+// others find it in their own folder, so there it is always so).
+func chromePointed(home string, b chromeBrowser) bool {
+	return b.Reg == "" || strings.EqualFold(regGet(b.Reg), chromeHostManifestPath(home, b))
 }
 
 // chromeHostManifest is the host manifest reminal writes: this reminal, for
@@ -145,8 +182,15 @@ func applyChrome(home, exe string, browsers []chromeBrowser, remove bool) (failu
 			if os.IsNotExist(err) {
 				err = nil
 			}
+			if b.Reg != "" {
+				if rerr := regDel(b.Reg); err == nil {
+					err = rerr
+				}
+			}
 		} else if err = os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
-			err = writeAgentConfig(path, chromeHostManifest(exe))
+			if err = writeAgentConfig(path, chromeHostManifest(exe)); err == nil && b.Reg != "" {
+				err = regSet(b.Reg, path)
+			}
 		}
 		if err != nil {
 			failures++
@@ -170,7 +214,7 @@ func printChromeCheck(home, exe string) {
 		mark, what := "·", "not set up"
 		if raw, err := os.ReadFile(chromeHostManifestPath(home, b)); err == nil {
 			mark, what = "!", "set up for a different reminal (re-run integrate)"
-			if string(raw) == string(chromeHostManifest(exe)) {
+			if string(raw) == string(chromeHostManifest(exe)) && chromePointed(home, b) {
 				mark, what = "✓", "set up (browser)"
 			}
 		}
