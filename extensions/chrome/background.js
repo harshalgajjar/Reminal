@@ -55,9 +55,33 @@ function retry() { clearTimeout(retrying); retrying = setTimeout(connect, backof
 function send(m) { try { port && port.postMessage(m); } catch (_) {} }
 async function setStatus(s) { await chrome.storage.session.set({ host: { ...s, at: Date.now() } }); }
 
+// reminal says, as it connects, the version of the extension it carries (its
+// files' own, see Version in embed.go). The browser goes on running the
+// extension it loaded when reminal writes newer files, across its own
+// restart too: this one then reloads itself from them, once per version (if
+// it still differs after that, it was loaded from another folder: said in
+// the button's panel, not tried again).
+async function newerFiles(ext) {
+  const mine = chrome.runtime.getManifest().version;
+  if (ext === mine) { chrome.storage.local.remove('reloadedFor'); return; }
+  const { reloadedFor } = await chrome.storage.local.get('reloadedFor');
+  if (reloadedFor === ext) {
+    setStatus({ connected: true, error: `reminal has a newer extension (${ext}) than the one loaded here (${mine}): reload it on the extensions page` });
+    return;
+  }
+  await chrome.storage.local.set({ reloadedFor: ext });
+  console.log('[reminal] reloading: reminal carries', ext, 'this is', mine);
+  chrome.runtime.reload();
+}
+
 async function onHostMessage(m) {
   if (!m || typeof m !== 'object') return;
-  if (m.t === 'status') { if (m.ok) backoff = 1000; setStatus({ connected: !!m.ok, error: m.error || '' }); return; }
+  if (m.t === 'status') {
+    if (m.ok) backoff = 1000;
+    await setStatus({ connected: !!m.ok, error: m.error || '' });
+    if (m.ok && m.ext) await newerFiles(String(m.ext));
+    return;
+  }
   if (m.t === 'refused') { setStatus({ connected: false, error: m.error || 'refused' }); return; }
   if (m.t === 'ended') { await endSession(String(m.session || '')); return; }
   if (m.t !== 'req' || !m.id) return;

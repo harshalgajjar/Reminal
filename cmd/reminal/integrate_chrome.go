@@ -192,7 +192,7 @@ func writeChromeExtension(dir string) error {
 		if d.IsDir() {
 			return os.MkdirAll(dst, 0o755)
 		}
-		b, err := fs.ReadFile(chromeext.Files, p)
+		b, err := chromeext.File(p)
 		if err != nil {
 			return err
 		}

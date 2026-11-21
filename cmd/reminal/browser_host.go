@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	chromeext "reminal/extensions/chrome"
 	"reminal/internal/client"
 )
 
@@ -59,7 +60,9 @@ func runBrowserHost(args []string) error {
 	if _, err := conn.Write([]byte(`{"t":"host"}` + "\n")); err != nil {
 		return err
 	}
-	_ = writeNativeMessage(os.Stdout, map[string]any{"t": "status", "ok": true})
+	// With the version of the extension this reminal carries: an extension
+	// running other files reloads itself (chromeext.Version).
+	_ = writeNativeMessage(os.Stdout, map[string]any{"t": "status", "ok": true, "ext": chromeext.Version()})
 	return relayNative(os.Stdin, os.Stdout, conn)
 }
 
