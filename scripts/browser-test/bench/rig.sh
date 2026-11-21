@@ -33,6 +33,7 @@ node -e '
 const a=JSON.parse(require("fs").readFileSync("/tmp/ours.json")),b=JSON.parse(require("fs").readFileSync("/tmp/pw.json"));
 const pad=(s,n)=>String(s).padEnd(n);
 console.log(pad("task",36)+pad("reminal",26)+"Playwright MCP");
-console.log(pad("first page open",36)+pad(a.firstPageMs+" ms",26)+b.firstPageMs+" ms");
+console.log(pad("first page open",36)+pad(a.firstPageMs+" ms",26)+b.firstPageMs+" ms");console.log(pad("tool definitions",36)+pad(a.tools+" tools, "+a.defChars+" chars",26+14)+b.tools+" tools, "+b.defChars+" chars");
 for(const k of Object.keys(a.tasks)){const x=a.tasks[k],y=b.tasks[k];const f=(t)=>t.ms==null?"FAILED: "+t.why.slice(0,60):`${t.ms} ms, ${t.chars} chars, ${t.calls} calls`+(t.failed?` (${t.failed} failed)`:"");console.log(pad(k,36)+pad(f(x),26+14)+f(y));}'
+node -e 'const a=JSON.parse(require("fs").readFileSync("/tmp/ours.json"));if(a.each){console.log("\none call of each tool (reminal), median ms:");for(const [k,v] of Object.entries(a.each))console.log("  "+k.padEnd(24)+v)}'
 cp /tmp/ours.json /tmp/pw.json /s/ 2>/dev/null

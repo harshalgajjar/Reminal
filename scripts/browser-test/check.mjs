@@ -239,6 +239,21 @@ let tabId;
   const pass = (formTree.match(/\[(ref_\d+)\] \(password/) || [])[1];
   r = await call('browser_fill_form', { tabId, fields: [{ ref: pass, value: 'hunter2' }] });
   check(pass && r.err && /never types into password/.test(r.err), `fill_form: a password field is refused (${r.err})`);
+  // The fields of a sign-in other than its password, and a payment field:
+  // held to the rules where the field is, as a click on it is.
+  const email = (formTree.match(/textbox "Email" \[(ref_\d+)\]/) || [])[1];
+  r = await call('browser_fill_form', { tabId, fields: [{ ref: email, value: 'a@b.c' }] });
+  const typedEmail = await page(/form\.html$/).evaluate(() => document.querySelector('[name=user]').value);
+  check(email && r.err && /Paused: this is part of a sign-in form/.test(r.err) && typedEmail === '', `fill_form: a field of a sign-in is paused, nothing typed (${r.err})`);
+  {
+    const P = JSON.parse((await call('browser_tabs_create', { url: `${PAGES}/pay.html` })).text).tabId;
+    const pt = (await call('browser_read_page', { tabId: P })).text || '';
+    const card = (pt.match(/\[(ref_\d+)\] \(payment/) || [])[1];
+    r = await call('browser_fill_form', { tabId: P, fields: [{ ref: card, value: '4242424242424242' }] });
+    const typedCard = await page(/pay\.html/).evaluate(() => [...document.querySelectorAll('input')].map((i) => i.value).join(''));
+    check(card && r.err && /never types into password or payment/.test(r.err) && typedCard === '', `fill_form: a payment field is refused, nothing typed (${r.err})`);
+    await call('browser_tabs_close', { tabId: P });
+  }
   await call('browser_tabs_select', { tabId: T });
   await slow(600);
 
@@ -432,6 +447,8 @@ let tabId;
   check(!r.err && (await txt('size')) !== 'width 500', `resize: back to the window's size (${r.err || await txt('size')})`);
   let png = pngOf(await call('browser_screenshot', { fullPage: true }));
   check(png && png.readUInt32BE(20) > 2000, `screenshot: the whole page (${png ? png.readUInt32BE(16) + 'x' + png.readUInt32BE(20) : 'none'})`);
+  const jpg = pngOf(await call('browser_screenshot', { format: 'jpeg' }));
+  check(jpg && jpg[0] === 0xff && jpg[1] === 0xd8, `screenshot: as a JPEG when asked (${jpg ? jpg.length + ' bytes' : 'none'})`);
   png = pngOf(await call('browser_screenshot', { ref: refs.knob }));
   check(png && png.readUInt32BE(16) === 24 && png.readUInt32BE(20) === 24, `screenshot: one element (${png ? png.readUInt32BE(16) + 'x' + png.readUInt32BE(20) : 'none'})`);
   r = await call('browser_navigate', { url: 'reload' });
