@@ -377,18 +377,49 @@ function replyTo(turn) {
 }
 
 // It spoke with no turn of yours to answer (a long task finishing, say).
-function ownReply() {
+// made: a reply whose sound was made ahead (speaker.prepare), now the one said.
+function ownReply(made) {
   leaveReply();
   const at = now();
-  reply = newReply({ turn: { endT: at, decidedT: at, textT: at, why: 'it spoke up', text: '' }, row: panel.addRow('agent'), text: '', writing: true, own: true });
+  const fields = { turn: { endT: at, decidedT: at, textT: at, why: 'it spoke up', text: '' }, row: panel.addRow('agent'), text: '', writing: true, own: true };
+  reply = made ? Object.assign(made, fields) : newReply(fields);
   speaker.current = reply;
   return reply;
+}
+
+// A line that is to be said in a voice (and at a pace) of its own. It is a
+// String that carries them, so it goes wherever a line goes (held back while
+// you talk, a cut-in, after a reply) and comes out with them.
+export function line(text, opts) {
+  const l = new String(text);
+  l.opts = { voice: (opts && opts.voice) || '', pace: (opts && opts.pace) || 0 };
+  return l;
+}
+// A line that must wait for the reply being heard has its sound made
+// meanwhile (where the voice can), joining the one before it when that one
+// waits too and is in the same voice.
+function makeAhead(l) {
+  if (!l.opts || !speaker.prepare) return;
+  const before = afterReply[afterReply.length - 2];
+  if (before && before.ahead && before.opts && before.opts.voice === l.opts.voice && before.opts.pace === l.opts.pace) {
+    speaker.prepare(' ' + l, l.opts, before.ahead);
+    l.ahead = before.ahead;
+    return;
+  }
+  const p = speaker.prepare(String(l), l.opts);
+  if (p) l.ahead = p;
+}
+// The lines waiting for the reply being heard are given up: what was made
+// ahead for them goes.
+function dropAfterReply() {
+  for (const l of afterReply.splice(0)) if (l.ahead && speaker.drop) speaker.drop(l.ahead);
 }
 
 // A line the agent said with speak.
 export function agentSaid(text) {
   if (!running) return;
   let r = reply;
+  const own = text.opts || null; // a voice of its own
   log('speak', r ? r.gen : '-', text.slice(0, 40));
   // You are talking and it is not mid-reply: never over you. A late line of
   // an answer you have moved on from is held back.
@@ -396,11 +427,21 @@ export function agentSaid(text) {
   // Cutting in on long talk sent in parts: a cue first.
   if (you !== 'quiet' && partsSent) { offerCutIn(text); return; }
   // Its turn is over but that reply is still being heard: after it, not over it.
-  if (r && r.agentDone) { afterReply.push(text); return; }
-  if (!r) r = ownReply();
+  if (r && r.agentDone) { afterReply.push(text); makeAhead(text); return; }
+  // In another voice than the reply being said: a reply of its own, after it.
+  if (r && own && ((r.voice || '') !== own.voice || (r.pace || 0) !== own.pace)) {
+    if (r.own) endReply(r);
+    afterReply.push(text); makeAhead(text);
+    return;
+  }
+  // Its sound was made ahead: that reply is the one said now (or it joined
+  // the one being said, and its words are already with the voice).
+  const made = text.ahead && text.ahead !== r ? text.ahead : null, joined = !!text.ahead && text.ahead === r;
+  if (!r) { r = ownReply(made); if (own && !made) { r.voice = own.voice; r.pace = own.pace; } }
   r.text += (r.text ? ' ' : '') + text;
   r.spoke = true; r.lastLineT = now();
-  speaker.say(r, text);
+  if (made) speaker.take(r);
+  else if (!joined) speaker.say(r, String(text));
   paint(r);
   if (r.own) { clearTimeout(r.endTimer); r.endTimer = setTimeout(() => endReply(r), T.ownReplyEndMs); }
 }
@@ -438,7 +479,7 @@ function leaveReply() {
   [r.ackTimer, r.endTimer, r.pulseTimer].forEach(clearTimeout);
   speaker.cancel(r);
   paint(r);
-  afterReply.length = 0;
+  dropAfterReply();
   reply = null;
 }
 
@@ -536,7 +577,7 @@ function cutOff(t, { quietly = false } = {}) {
   ducked = false;
   if (!r) return;
   reply = null;
-  afterReply.length = 0;
+  dropAfterReply();
   clearTimeout(r.ackTimer); lastHadAck = !!r.acked;
   const heard = speaker.natural ? r.segs.filter((s) => !s.ack && s.start <= speaker.ctx.currentTime).map((s) => s.text).join(' ') : r.heard;
   if (!quietly && !r.resumed) { log('cut', r.gen, heard.slice(-40)); send('cut', { text: heard }); }
@@ -732,7 +773,7 @@ export function agentStateIs(state) {
 // conversation shows where the new one begins.
 export function sessionSwitched(id, name) {
   held = []; heldRow = null; cutIn = null; cutNote = ''; cutLate = null; beforeCut = [];
-  afterReply.length = 0; agentState = '';
+  dropAfterReply(); agentState = '';
   panel.setAgentName(name);
   if (reply) {
     const r = reply;
