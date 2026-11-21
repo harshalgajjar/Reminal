@@ -263,6 +263,12 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// model going, or where to look. (An organization's credits run out
 		// is read already, on the notice's own row: claudeHitLimit.)
 		`you.?reoutofusagecredits\.(?:run/usage-creditstokeepusing`+claudeModel+`or/modeltoswitchmodels|seeusageinsettings)`,
+		// Claude Code 2.1.330: its lower-priority mode ended at the weekly
+		// limit, or is gone, and new messages wait for the limit to reset.
+		// ("Extra usage is now covering your requests · lower-priority mode
+		// ended" is not one: the session goes on.)
+		`lower-prioritymodeended·youhavereachedyourweeklyusagelimit`,
+		`lower-prioritymodeisnolongeravailable·ithasended;newmessageswaitforyourusagelimittoreset`,
 		// Claude Code 2.1.330: work stopped at the spending limit.
 		`stopped:thespendinglimitwasreached`,
 		// Claude Code 2.1.312: a limit that could not be lifted, and the
