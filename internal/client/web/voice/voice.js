@@ -138,7 +138,7 @@ async function start() {
     await loadPageScripts();
     const { natural, speed, turnModel } = await loadModels(s);
     speaker = new Speaker(speakerEvents());
-    await speaker.open({ ctx, natural, tts, speed, guard: s.guard, pace: s.pace });
+    await speaker.open({ ctx, natural, tts, speed, guard: s.guard, pace: s.pace, voice: s.who });
     const runtime = await pageRuntime();
     mic = await vad.MicVAD.new({
       model: 'v5', baseAssetPath: VAD, startOnLoad: false,
@@ -246,7 +246,7 @@ async function switchToNatural() {
     w = got.w;
     if (mine !== run) { w.terminate(); return; } // stopped meanwhile
     const next = new Speaker(speakerEvents());
-    await next.open({ ctx, natural: true, tts: w, speed: got.m.speed, guard: s.guard, pace: s.pace });
+    await next.open({ ctx, natural: true, tts: w, speed: got.m.speed, guard: s.guard, pace: s.pace, voice: s.who });
     if (mine !== run) { next.close(); w.terminate(); return; }
     speaker.close();
     tts = w; speaker = next;
