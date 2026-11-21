@@ -310,13 +310,29 @@ var harnessLoginScreens = map[string][]loginRow{
 	// key is missing. Pass it using the 'apiKey' parameter or the
 	// ANTHROPIC_API_KEY environment variable."), as does a gateway that
 	// turned its token away.
+	// 1.19.6 (recorded, opencode-gitlab-nokey.txt): its GitLab provider says
+	// it in words of its own, in the conversation and in a notice at the
+	// top of the screen.
 	"opencode": loginRows(
 		opencodeKeyMissing,
+		opencodeGitLabKeyMissing,
+		// Its GitLab login lapsed and could not be renewed, with what the
+		// renewal said: the service's refusal by its status, or no token
+		// to renew with (the two things the provider can put there).
+		`oauthtokenrefreshfailedandnofallback[a-z0-9_]+environmentvariableisset\.refresherror:(?:oauthtokenexchangefailed:[0-9]{3}[a-z]{0,40}|oauthtokenhasexpiredandnorefreshtokenisavailable)\.re-authenticatewith'opencodeauthlogin[a-z0-9.\-]+'orset[a-z0-9_]+`,
 		`unauthorized:requestwasblockedbyagatewayorproxy\.yourauthenticationtokenmaybemissingorexpired—tryrunning.?opencodeauthlogin<yourproviderurl>.?tore-authenticate`,
 	),
 	// Kilo Code CLI 7.8.27, OpenCode's fork, says a provider's key is
 	// missing in OpenCode's words. Its own gateway needs no login.
 	"kilo": loginRows(opencodeKeyMissing),
+	// Cline 3.0.75 with no account (recorded, cline-first.txt): its first
+	// screen, a menu of ways to sign in ("Welcome to Cline", then "Connect a
+	// model provider to get started."): Enter there starts one. And its
+	// device sign-in (cline-device.txt): the address to enter its code at,
+	// with "Waiting for sign-in..." under it; either alone is not it. (Its
+	// menu is taller than the rows read for most: harnessRowsFor.)
+	"cline": loginAll(loginThen(`welcometocline`, `connectamodelprovidertogetstarted`),
+		loginThen(`https://[a-z0-9.\-]+/device\?user_code=[a-z0-9\-]+`, `waitingforsign-in(?:\.{3}|…)?`)),
 	// Cursor CLI: its first screen with no login ("Press any key to log
 	// in..." — a key typed there starts signing in), the sign-in itself, and
 	// a login it has not got or can no longer use. A key it was given and
@@ -391,8 +407,19 @@ var harnessLoginScreens = map[string][]loginRow{
 		`anthropicprofileloginexpired·re-authenticateyouranthropicprofile`,
 		// A Console sign-in wanted, and one saved that is not a Console
 		// account's.
-		`thiscomputer.?ssettingsrequireaconsolesign-in\(forceloginmethod\)\.signinagainwithaconsoleaccount`,
-		`claudecodecan.?tusetheanthropicconsolesign-insavedonthiscomputer,usuallybecauseitisn.?tforaconsoleaccount·run/loginandsigninwithaconsoleaccount`,
+		// 2.1.330 goes on to say where to get one, and for the saved
+		// sign-in gives another way out (a subscription, a Console account
+		// set up, or an API key): each with its own ending only.
+		`thiscomputer.?ssettingsrequireaconsolesign-in\(forceloginmethod\)\.signinagainwithaconsoleaccount(?:\.togetone,gotohttps://platform\.claude\.comoraskyouradministrator)?`,
+		`claudecodecan.?tusetheanthropicconsolesign-insavedonthiscomputer,usuallybecauseitisn.?tforaconsoleaccount·run/loginand(?:signinwithaconsoleaccount(?:·togetone,gotohttps://platform\.claude\.comoraskyouradministrator)?|select"claudeaccountwithsubscription",orsetupaconsoleaccountathttps://platform\.claude\.comandrun/loginagain,oruseananthropicapikeyinstead)`,
+		// 2.1.330: a sign-in method this computer's settings do not allow
+		// for the organization.
+		`thiscomputer.?ssettingsrequireadifferentsign-inmethod\(forceloginmethod\),soitcan.?tsignintoyourorganization`,
+		// 2.1.330: a login it could not renew because the new one could not
+		// be saved to the Keychain, in each of its three wordings.
+		`couldnotrefreshyourlogin:can.?tsavetothekeychain·iflocked,runsecurityunlock-keychain·inasandbox,runclaudeoutsideit·otherwise,retry,then/login`,
+		"failedtorefreshoauthtoken:can.?tsavetothekeychain\\.iflocked,run`?securityunlock-keychain`?\\.ifsandboxed,use`?claudesetup-token`?\\.otherwise,retry,then`?claudeauthlogin`?",
+		`oauthaccesstokencouldnotberefreshed:can.?tsavetothemacoskeychain\.unlockit,runclaudeoutsideanysandbox,retry,orsigninagain`,
 		// Teleport, which needs a claude.ai login.
 		`teleportrequiresaclaudeaccount\.run/loginandselect"claudeaccountwithsubscription"`,
 		// A login it could not refresh while another Claude Code was.
@@ -403,6 +430,12 @@ var harnessLoginScreens = map[string][]loginRow{
 	)),
 }
 
+// opencodeGitLabKeyMissing is the same from OpenCode's GitLab provider, which
+// words it apart: "GitLab API key is missing. Pass it as the 'apiKey'
+// parameter, set the GITLAB_TOKEN environment variable, or authenticate with
+// 'opencode auth login gitlab'."
+const opencodeGitLabKeyMissing = `[a-z0-9.\-]*apikeyismissing\.passitasthe'[a-z0-9_]+'parameter,setthe[a-z0-9_]+environmentvariable,orauthenticatewith'opencodeauthlogin[a-z0-9.\-]+'`
+
 // opencodeKeyMissing is OpenCode's row for a provider it was set up for and
 // has no key for, as Kilo Code CLI says it too.
 const opencodeKeyMissing = `[a-z0-9.\-]*apikeyismissing\.passitusingthe'[a-z0-9_]+'parameter(?:orthe[a-z0-9_]+environmentvariable|\.environmentvariables(?:are|is)notsupportedinthisenvironment)`
@@ -410,7 +443,7 @@ const opencodeKeyMissing = `[a-z0-9.\-]*apikeyismissing\.passitusingthe'[a-z0-9_
 // piProviders are pi's providers by their ids (pi 1.4.0's own list): what
 // its "No API key found for anthropic." names. Any other word there is not
 // pi's ("No API key found for staging-server", from a tool).
-const piProviders = `amazon-bedrock|ant-ling|anthropic|openai|azure|openai-codex|radius|nvidia|deepseek|google|google-vertex|github-copilot|openrouter|vercel-ai-gateway|xai|groq|cerebras|zai|zai-coding-cn|mistral|minimax|minimax-cn|moonshotai|moonshotai-cn|huggingface|fireworks|together|baseten|opencode|opencode-go|kimi-coding|meta|cloudflare-workers-ai|cloudflare-ai-gateway|qwen-token-plan|qwen-token-plan-cn|qwen-token-plan-individual|xiaomi|xiaomi-token-plan-cn|xiaomi-token-plan-ams|xiaomi-token-plan-sgp`
+const piProviders = `amazon-bedrock|ant-ling|anthropic|openai|azure|openai-codex|radius|nvidia|deepseek|google|google-vertex|github-copilot|openrouter|vercel-ai-gateway|xai|groq|cerebras|zai|zai-coding-cn|mistral|minimax|minimax-cn|moonshotai|moonshotai-cn|huggingface|fireworks|together|baseten|opencode|opencode-go|kimi-coding|meta|cloudflare-workers-ai|cloudflare-ai-gateway|qwen-token-plan|qwen-token-plan-cn|qwen-token-plan-individual|qwen-token-plan-individual-cn|xiaomi|xiaomi-token-plan-cn|xiaomi-token-plan-ams|xiaomi-token-plan-sgp`
 
 // cursorKeyRefused is Cursor CLI turning away the API key it was given, its
 // own row: "⚠ Warning: The provided API key is invalid.", then where the key
@@ -469,6 +502,12 @@ var harnessKeyRefusals = map[string][]loginRow{
 	// Kilo Code CLI 7.8.27 prints the service's words the same way, in the
 	// same box.
 	"kilo": loginOpen(`^[^a-z0-9]*incorrectapikeyprovided`),
+	// Cline 3.0.75 with a login its service turns away: a run ends on the
+	// service's words ("error: Unauthorized: Please make sure you're using
+	// the latest version of Cline and re-authenticate your Cline account.
+	// (Request ID: …)"). The whole row, to its request id: the same words
+	// quoted or carried on in an answer are not it.
+	"cline": loginRows(`error:unauthorized:pleasemakesureyou.?reusingthelatestversionofclineandre-authenticateyourclineaccount\.\(requestid:[a-z0-9\-]{6,64}\)`),
 	// Codex with an OpenAI key the service refuses: "■ unexpected status 401
 	// Unauthorized: Incorrect API key provided: …", from the row's start (the
 	// same words in a sentence, or a tool's output at a shell, are not it).
@@ -742,6 +781,11 @@ const harnessRows = 12
 // than that, and its error for a turn sits above them all.
 func harnessRowsFor(prog string) int {
 	if prog == "gemini" {
+		return 20
+	}
+	// Cline's first screen is a menu of four boxes under its heading: the
+	// heading is the nineteenth row up.
+	if prog == "cline" {
 		return 20
 	}
 	return harnessRows

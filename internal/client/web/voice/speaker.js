@@ -15,6 +15,13 @@ import { levelOf, rmsOf } from './level.js';
 // starts with (it must be heard at once, while you are still talking).
 export const CLIPS = { ack: ['Okay.', 'Sure.', 'Got it.', 'Right.', 'Mm, okay.'], nod: ['Mm-hm.', 'Mhm.'], cue: [T.cutInCue] };
 
+// After a change of voice its clips are asked for this much later (a voice
+// changed for one line and changed back never has them made), and that much
+// later again while a reply is still being made.
+const CLIPS_AFTER_VOICE_MS = 1500, CLIPS_RETRY_MS = 1000;
+// How much is made ahead at most: seconds of sound waiting, and replies.
+const AHEAD_MAX_S = 30, AHEAD_MAX_REPLIES = 4;
+
 let nextGen = 0;
 export function newReply(fields) {
   return { gen: ++nextGen, fmt: new Speakable(), segs: [], sources: [], playHead: 0, playing: false, synthDone: false, heard: '', ...fields };
@@ -24,12 +31,21 @@ export class Speaker {
   // on: { started(r, what), heard(r), finished(r), failed(r, text, why) }
   // failed: the device's voice could not say text (a browser with no speech
   // engine says "synthesis-failed" and makes no sound).
-  constructor(on) { this.on = on; this.clips = { ack: [], nod: [], cue: [] }; this.lastAck = ''; this.lastNodT = 0; this.nodUntil = 0; this.buf = ''; }
+  constructor(on) { this.on = on; this.clipsBy = new Map(); this.ahead = new Map(); this.voice = ''; this.lastAck = ''; this.lastNodT = 0; this.nodUntil = 0; this.buf = ''; }
+
+  // The clips of the voice in use. They are kept by voice: made once for
+  // each, and there again when a voice comes back.
+  get clips() { return this.clipsOf(this.voice); }
+  clipsOf(v) {
+    let c = this.clipsBy.get(v);
+    if (!c) { c = { ack: [], nod: [], cue: [], asked: false }; this.clipsBy.set(v, c); }
+    return c;
+  }
 
   // natural: Kokoro through `tts` (its worker), at `speed` x real time; else
   // the device's voice. guard: play through the echo canceller's loopback.
-  async open({ ctx, natural, tts, speed, guard, pace }) {
-    Object.assign(this, { ctx, natural, tts, speed, pace, current: null });
+  async open({ ctx, natural, tts, speed, guard, pace, voice }) {
+    Object.assign(this, { ctx, natural, tts, speed, pace, current: null, voice: voice || '' });
     this.out = ctx.createGain();
     this.meter = ctx.createAnalyser(); this.meter.fftSize = 1024; this.meterBuf = new Float32Array(1024);
     this.out.connect(this.meter);
@@ -43,10 +59,29 @@ export class Speaker {
     if (natural) this.makeClips();
   }
 
-  close() { clearInterval(this.watch); this.current = null; this.clips = { ack: [], nod: [], cue: [] }; }
+  close() { clearInterval(this.watch); clearTimeout(this.clipTimer); this.current = null; this.clipsBy = new Map(); this.ahead = new Map(); }
 
-  makeClips() { this.clips = { ack: [], nod: [], cue: [] }; [...CLIPS.cue, ...CLIPS.ack, ...CLIPS.nod].forEach((text) => this.tts.postMessage({ type: 'clip', text })); }
-  setVoice(id) { if (this.tts) { this.tts.postMessage({ type: 'voice', v: id }); this.makeClips(); } }
+  // The clips of the voice in use, asked of the voice once.
+  makeClips() {
+    const c = this.clips;
+    if (c.asked || !this.tts) return;
+    c.asked = true;
+    [...CLIPS.cue, ...CLIPS.ack, ...CLIPS.nod].forEach((text) => this.tts.postMessage({ type: 'clip', text, v: this.voice }));
+  }
+  // A new voice: its clips are made a moment later and not while a reply is
+  // being made (each clip made is time the reply's next words wait), and not
+  // at all if this voice had them made before.
+  setVoice(id) {
+    if (!this.tts) return;
+    this.tts.postMessage({ type: 'voice', v: id });
+    this.voice = id;
+    clearTimeout(this.clipTimer);
+    const later = () => {
+      if (this.current && !this.current.synthDone) { this.clipTimer = setTimeout(later, CLIPS_RETRY_MS); return; }
+      this.makeClips();
+    };
+    if (!this.clips.asked) this.clipTimer = setTimeout(later, CLIPS_AFTER_VOICE_MS);
+  }
   setPace(p) { this.pace = p; if (this.tts) this.tts.postMessage({ type: 'speed', v: p }); }
 
   // ---------- saying a reply ----------
@@ -60,6 +95,45 @@ export class Speaker {
     if (this.natural) { r.synthDone = false; this.tts.postMessage({ type: 'flush', gen: r.gen }); }
     else if (this.buf.trim()) this.utter(r, this.flushBuf());
   }
+
+  // ---------- made ahead ----------
+  // A line in a voice of its own that must wait for the reply being heard:
+  // its sound is made meanwhile and kept, so it starts the moment it may
+  // (made only once it could be heard, there is a silence between the two
+  // while its first words are made). Returns the reply it will be (take()
+  // plays it), or null where nothing is made ahead: the device's voice, or
+  // too much waiting already (AHEAD_MAX_S of sound).
+  // into: a reply being made ahead that this line joins.
+  prepare(text, { voice, pace } = {}, into) {
+    if (!this.natural) return null;
+    let p = into;
+    if (!p) {
+      let waiting = 0;
+      for (const q of this.ahead.values()) for (const a of q.made) waiting += a.buf.duration;
+      if (waiting > AHEAD_MAX_S || this.ahead.size >= AHEAD_MAX_REPLIES) return null;
+      p = newReply({ voice: voice || '', pace: pace || 0, made: [], madeAll: false });
+      this.ahead.set(p.gen, p);
+    }
+    for (const w of text.match(/\s*\S+\s*/g) || []) this.words(p, p.fmt.push(w));
+    this.words(p, p.fmt.end());
+    p.fmt = new Speakable();
+    this.tts.postMessage({ type: 'flush', gen: p.gen });
+    return p;
+  }
+  // The reply made ahead is the one being said now: what is made of it plays
+  // at once, the rest as it comes.
+  // (False for one let go meanwhile: there is nothing of it to play.)
+  take(p) {
+    if (!this.ahead.delete(p.gen)) return false;
+    this.current = p;
+    p.synthDone = !!p.madeAll;
+    for (const a of p.made.splice(0)) this.play(p, a.buf, a.text, false);
+    return true;
+  }
+  // The replies made ahead and not yet taken.
+  waiting() { return [...this.ahead.values()]; }
+  // Made ahead and not wanted after all.
+  drop(p) { p.dropped = true; if (this.ahead.delete(p.gen) && this.tts) this.tts.postMessage({ type: 'cancel', gen: p.gen }); }
 
   // No more for this reply: it finishes once all of it has been heard.
   end(r) {
@@ -79,7 +153,8 @@ export class Speaker {
   // once, then whole sentences, which it phrases better.
   word(r, w) {
     if (this.natural) {
-      this.tts.postMessage({ type: 'push', gen: r.gen, text: w });
+      // (A reply with a voice or a pace of its own is made in them.)
+      this.tts.postMessage(r.voice || r.pace ? { type: 'push', gen: r.gen, text: w, voice: r.voice || undefined, speed: r.pace || undefined } : { type: 'push', gen: r.gen, text: w });
       r.words = (r.words || 0) + 1;
       const max = r.firstOut ? (this.speed >= 3 ? 28 : 12) : 6;
       if (/[.!?]["')]*\s*$/.test(w)) { r.words = 0; r.firstOut = true; }
@@ -109,7 +184,15 @@ export class Speaker {
 
   // ---------- Kokoro's audio ----------
   onWorker(m) {
-    if (m.type === 'clip') { (CLIPS.cue.includes(m.text) ? this.clips.cue : CLIPS.nod.includes(m.text) ? this.clips.nod : this.clips.ack).push({ text: m.text, buf: this.buffer(m.pcm, m.rate) }); return; }
+    // A clip belongs to the voice it was made in, which may no longer be the one in use.
+    if (m.type === 'clip') { const c = this.clipsOf(m.v ?? this.voice); (CLIPS.cue.includes(m.text) ? c.cue : CLIPS.nod.includes(m.text) ? c.nod : c.ack).push({ text: m.text, buf: this.buffer(m.pcm, m.rate) }); return; }
+    // The sound of a reply made ahead is kept until it is taken.
+    const p = this.ahead.get(m.gen);
+    if (p) {
+      if (m.type === 'audio') p.made.push({ buf: this.buffer(m.pcm, m.rate), text: m.text });
+      else if (m.type === 'done') p.madeAll = true;
+      return;
+    }
     const r = this.current;
     if (!r || m.gen !== r.gen) return;
     if (m.type === 'audio') { clearTimeout(r.ackTimer); this.play(r, this.buffer(m.pcm, m.rate), m.text, false); }

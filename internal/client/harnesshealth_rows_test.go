@@ -107,6 +107,16 @@ var loginRowCases = []loginRowCase{
 	{prog: "claude", row: "  ⎿  Anthropic profile login expired · Re-authenticate your Anthropic profile"},
 	{prog: "claude", row: "  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account."},
 	{prog: "claude", row: "● Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and sign in with a Console account"},
+	// Claude Code 2.1.330 (source): the Console rows go on to say where to
+	// get an account, or give another way out; a sign-in method not allowed
+	// for the organization; a login that could not be saved to the Keychain.
+	{prog: "claude", row: "  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account. To get one, go to https://platform.claude.com or ask your administrator."},
+	{prog: "claude", row: "● Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and sign in with a Console account · To get one, go to https://platform.claude.com or ask your administrator"},
+	{prog: "claude", row: "● Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and select \"Claude account with subscription\", or set up a Console account at https://platform.claude.com and run /login again, or use an Anthropic API key instead"},
+	{prog: "claude", row: "  ⎿  This computer's settings require a different sign-in method (forceLoginMethod), so it can't sign in to your organization."},
+	{prog: "claude", row: "  ⎿  Could not refresh your login: can't save to the Keychain · If locked, run security unlock-keychain · In a sandbox, run claude outside it · Otherwise, retry, then /login"},
+	{prog: "claude", row: "● Failed to refresh OAuth token: can't save to the Keychain. If locked, run `security unlock-keychain`. If sandboxed, use `claude setup-token`. Otherwise, retry, then `claude auth login`"},
+	{prog: "claude", row: "  ⎿  OAuth access token could not be refreshed: can't save to the macOS Keychain. Unlock it, run claude outside any sandbox, retry, or sign in again"},
 	{prog: "claude", row: "  ⎿  Teleport requires a Claude account. Run /login and select \"Claude account with subscription\"."},
 	{prog: "claude", row: "  ⎿  Could not refresh your login because another Claude Code process is refreshing it · sign in again with /login"},
 	{prog: "claude", row: "● Could not refresh your login because another Claude Code process is refreshing it (or exited mid-refresh) · Try again in a minute; if it keeps happening, close other Claude Code windows or sign in again with /login"},
@@ -125,6 +135,12 @@ var loginRowCases = []loginRowCase{
 	{prog: "qwen", row: "✕ Model API authentication failed (HTTP 401). Check the configured provider credentials.", refused: true},
 
 	{prog: "opencode", row: "  ┃  Anthropic API key is missing. Pass it using the 'apiKey' parameter or the ANTHROPIC_API_KEY environment variable."},
+	// opencode 1.19.6: its GitLab login lapsed and not renewed, as its service
+	// refused it and as it has no token to renew with.
+	{prog: "opencode", row: "  ┃  OAuth token refresh failed and no fallback GITLAB_TOKEN environment variable is set. Refresh error: OAuth token exchange failed: 400 Bad Request. Re-authenticate with 'opencode auth login gitlab' or set GITLAB_TOKEN."},
+	{prog: "opencode", row: "  ┃  OAuth token refresh failed and no fallback GITLAB_TOKEN environment variable is set. Refresh error: OAuth token has expired and no refresh token is available. Re-authenticate with 'opencode auth login gitlab' or set GITLAB_TOKEN."},
+	// opencode 1.19.6 (recorded): its GitLab provider's own words.
+	{prog: "opencode", row: "  ┃  GitLab API key is missing. Pass it as the 'apiKey' parameter, set the GITLAB_TOKEN environment variable, or authenticate with 'opencode auth login gitlab'."},
 	{prog: "opencode", row: "  ┃  Unauthorized: request was blocked by a gateway or proxy. Your authentication token may be missing or expired — try running `opencode auth login <your provider URL>` to re-authenticate."},
 
 	{prog: "goose", row: "Authentication failed — check your API key. Run `goose configure` to update it."},
@@ -146,9 +162,13 @@ var loginRowCases = []loginRowCase{
 	{prog: "cursor-agent", row: "Authentication failed: your Cursor credentials or API key are invalid or expired. If you set CURSOR_API_KEY, check that it is correct, or run `cursor-agent login` to re-authenticate."},
 	{prog: "cursor-agent", row: "Your stored authentication is invalid. Please log in again.", bottom: true},
 	{prog: "cursor-agent", row: "⚠ Warning: The provided API key is invalid.", refused: true},
+	// Cline 3.0.75 (recorded): a run ended by its service turning the login away.
+	{prog: "cline", row: "error: Unauthorized: Please make sure you're using the latest version of Cline and re-authenticate your Cline account. (Request ID: qhnMsMwCWjFDRMhCjggRhNUlKeMgdJCq)", refused: true},
 
 	{prog: "pi", row: " Error: No API key found for the selected model."},
 	{prog: "pi", row: " Error: No API key found for anthropic."},
+	// pi 1.6.0 (recorded, no account): a provider newer than the list had.
+	{prog: "pi", row: " Error: No API key found for qwen-token-plan-individual-cn."},
 	{prog: "pi", row: ` Error: Authentication failed for "anthropic". Credentials may have expired or network is unavailable. Run '/login anthropic' to re-authenticate.`},
 	{prog: "pi", row: " Error: Your session has expired. Please reauthenticate."},
 
@@ -535,6 +555,13 @@ func TestAnAgentsOwnTextIsNotALoginAfterAll(t *testing.T) {
 		{"Codex's words with no mark of its own", "codex", "  Your session has expired. Please reauthenticate."},
 		{"pi's words with no Error: of its own", "pi", "  Your session has expired. Please reauthenticate."},
 		{"pi naming no provider of its own", "pi", " Error: No API key found for staging-server"},
+		// opencode 1.19.6's GitLab words carried on, and Cline's menu and
+		// sign-in rows each without the row that makes them the screen.
+		{"OpenCode's GitLab key notice carried on", "opencode", "  ┃  GitLab API key is missing. Pass it as the 'apiKey' parameter, set the GITLAB_TOKEN environment variable, or authenticate with 'opencode auth login gitlab' and then rerun the job."},
+		{"OpenCode's lapsed GitLab login with a refresh error of another's making", "opencode", "  ┃  OAuth token refresh failed and no fallback GITLAB_TOKEN environment variable is set. Refresh error: see the notes in the wiki for what I tried next. Re-authenticate with 'opencode auth login gitlab' or set GITLAB_TOKEN."},
+		{"Cline's welcome alone, in an answer", "cline", "  Welcome to Cline\n  is the heading the docs open with."},
+		{"a device address with nothing waiting under it", "cline", "  https://authkit.cline.bot/device?user_code=ABCD-EFGH\n  was the address in the log."},
+		{"pi naming something that only starts as a provider of its own", "pi", " Error: No API key found for qwen-token-plan-individual-cn-staging"},
 	} {
 		for _, prog := range []string{c.prog, ""} {
 			if loggedOutBy(c.screen+loginRowFrame, prog) {
@@ -675,6 +702,16 @@ func TestLoginStatusWordingAndAnAnswersRows(t *testing.T) {
 		{"the same carried on", "claude", "● The banner said Anthropic profile login expired · Re-authenticate your Anthropic profile, so I re-authenticated and the run continued." + box, false},
 		{"Claude Code's Console sign-in wanted", "claude", "answer\n  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account." + box, true},
 		{"the same quoted", "claude", "● It reported \"require a Console sign-in (forceLoginMethod)\" so I asked you to sign in, then kept going." + box, false},
+		// Claude Code 2.1.330: the same rows as it words them now, and each
+		// carried on in an agent's answer.
+		{"Claude Code 2.1.330's Console sign-in wanted", "claude", "answer\n  ⎿  This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account. To get one, go to https://platform.claude.com or ask your administrator." + box, true},
+		{"the same carried on", "claude", "● This computer's settings require a Console sign-in (forceLoginMethod). Sign in again with a Console account. To get one, go to https://platform.claude.com or ask your administrator, which I have noted for you." + box, false},
+		{"Claude Code 2.1.330's saved Console sign-in", "claude", "answer\n  ⎿  Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and sign in with a Console account · To get one, go to https://platform.claude.com or ask your administrator" + box, true},
+		{"the same carried on", "claude", "● Claude Code can't use the Anthropic Console sign-in saved on this computer, usually because it isn't for a Console account · Run /login and sign in with a Console account · To get one, go to https://platform.claude.com or ask your administrator about the team plan first." + box, false},
+		{"Claude Code 2.1.330's sign-in method not allowed", "claude", "answer\n  ⎿  This computer's settings require a different sign-in method (forceLoginMethod), so it can't sign in to your organization." + box, true},
+		{"the same carried on", "claude", "● This computer's settings require a different sign-in method (forceLoginMethod), so it can't sign in to your organization until IT changes the policy, they said." + box, false},
+		{"Claude Code 2.1.330's Keychain refusal", "claude", "answer\n  ⎿  Could not refresh your login: can't save to the Keychain · If locked, run security unlock-keychain · In a sandbox, run claude outside it · Otherwise, retry, then /login" + box, true},
+		{"the same carried on", "claude", "● Could not refresh your login: can't save to the Keychain · If locked, run security unlock-keychain · In a sandbox, run claude outside it · Otherwise, retry, then /login is what the docs say to do." + box, false},
 		{"Claude Code's Teleport sign-in", "claude", "answer\n  ⎿  Teleport requires a Claude account. Run /login and select \"Claude account with subscription\"." + box, true},
 		{"the same carried on", "claude", "● Teleport requires a Claude account. Run /login and select \"Claude account with subscription\", done, resuming." + box, false},
 		// Not a sign-in: a file sent to a connector, refused (the tool call.s

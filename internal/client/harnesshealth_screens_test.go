@@ -49,6 +49,15 @@ func TestAgentsLoginScreensAsTheyDrawThem(t *testing.T) {
 		{"qwen-badkey", "qwen", true},
 		// opencode 1.18.34 works with no login (its free models): at work.
 		{"opencode-noupd", "opencode", false},
+		// opencode 1.19.6 on its GitLab provider with no token, after a
+		// message: its words in the conversation (a notice at the top of
+		// the screen says the same for a few seconds, over them).
+		{"opencode-gitlab-nokey", "opencode", true},
+		// Cline 3.0.75 with no account: its first screen at 110 and 80
+		// wide, and its device sign-in waiting for the code to be entered.
+		{"cline-first", "cline", true},
+		{"cline-first-80", "cline", true},
+		{"cline-device", "cline", true},
 		// Copilot CLI 1.0.106 with no login, at 120 and 80 wide; and at
 		// rest on a provider of its own (COPILOT_PROVIDER_BASE_URL), which
 		// needs none.

@@ -140,7 +140,7 @@ function voiced(t) {
   voicedMs += FRAME_MS; silenceMs = 0; lastVoiceT = t;
   checked = rechecked = finalStarted = thinking = false;
   if (cutIn && cueHeardFor(t) > T.cutInWaitMs) cutInDecided(false);
-  if (cutLate && t - cutLate.at > T.cutInLateMs) cutLate = null; // talked on past it: no taking it late
+  if (cutLate && t - cutLate.at > T.cutInLateMs) { cutLate = null; orphansGo(); } // talked on past it: no taking it late
   if (you !== 'talking') { you = 'talking'; show(ducked ? 'ducked' : 'hearing'); }
   // Words decide first (overheard); this is for speech the text model cannot
   // make out. A backchannel it did make out may run longer.
@@ -150,7 +150,7 @@ function voiced(t) {
 function quiet(t) {
   silenceMs += FRAME_MS;
   if (cutIn && cueStarted(t) && silenceMs >= T.cutInStopMs) cutInDecided(true);
-  else if (cutLate && silenceMs >= T.cutInStopMs) { if (t - cutLate.at <= T.cutInLateMs) cutInTakenLate(); else cutLate = null; }
+  else if (cutLate && silenceMs >= T.cutInStopMs) { if (t - cutLate.at <= T.cutInLateMs) cutInTakenLate(); else { cutLate = null; orphansGo(); } }
   if (you === 'quiet') return;
   if (ducked) { if (silenceMs >= T.backchannelQuietMs) liftDuck(); return; }
   // The final words, started a moment before the turn model is asked, so they
@@ -355,7 +355,7 @@ function nod() {
 
 // Your words to the agent; after a cut-in you talked over, with a note first.
 function toAgent(t, text) {
-  if (cutNote) { text = `(they talked on over your cut-in: "${cutNote}"; they did not hear it) ` + text; cutNote = ''; cutLate = null; }
+  if (cutNote) { text = `(they talked on over your cut-in: "${cutNote}"; they did not hear it) ` + text; cutNote = ''; cutLate = null; orphansGo(); }
   if (beforeCut.length) { text = `(before they stopped for your cut-in they had also said: "${beforeCut.join(' ')}") ` + text; beforeCut = []; }
   send(t, { text });
 }
@@ -377,18 +377,69 @@ function replyTo(turn) {
 }
 
 // It spoke with no turn of yours to answer (a long task finishing, say).
-function ownReply() {
+// made: a reply whose sound was made ahead (speaker.prepare), now the one said.
+function ownReply(made) {
   leaveReply();
   const at = now();
-  reply = newReply({ turn: { endT: at, decidedT: at, textT: at, why: 'it spoke up', text: '' }, row: panel.addRow('agent'), text: '', writing: true, own: true });
+  const fields = { turn: { endT: at, decidedT: at, textT: at, why: 'it spoke up', text: '' }, row: panel.addRow('agent'), text: '', writing: true, own: true };
+  reply = made ? Object.assign(made, fields) : newReply(fields);
   speaker.current = reply;
   return reply;
+}
+
+// A line that is to be said in a voice (and at a pace) of its own. It is a
+// String that carries them, so it goes wherever a line goes (held back while
+// you talk, a cut-in, after a reply) and comes out with them.
+// (A line with no words in it is no line: it stays the plain text it was,
+// which is false where an empty line is asked after.)
+export function line(text, opts) {
+  if (typeof text !== 'string' || !text.trim()) return text;
+  const l = new String(text);
+  l.opts = { voice: (opts && opts.voice) || '', pace: (opts && opts.pace) || 0 };
+  return l;
+}
+// A line that must wait for the reply being heard has its sound made
+// meanwhile (where the voice can), joining the one before it when that one
+// waits too and is in the same voice.
+function makeAhead(l) {
+  if (!l.opts || !speaker.prepare) return;
+  // Made already (it waited once, and waits again behind the reply that was
+  // before it): the reply it has is the one it keeps. Making it again left
+  // the first never taken, and the voice held by it for good.
+  if (l.ahead && !l.ahead.dropped) return;
+  l.ahead = null;
+  const before = afterReply[afterReply.length - 2];
+  if (before && before.ahead && before.opts && before.opts.voice === l.opts.voice && before.opts.pace === l.opts.pace) {
+    speaker.prepare(' ' + l, l.opts, before.ahead);
+    l.ahead = before.ahead;
+    return;
+  }
+  const p = speaker.prepare(String(l), l.opts);
+  if (p) l.ahead = p;
+}
+// The lines waiting for the reply being heard are given up: what was made
+// ahead for them goes.
+function dropAfterReply() {
+  afterReply.splice(0);
+  orphansGo();
+}
+// A reply made ahead that no waiting line holds any more is let go (the
+// voice is told to stop making it): none may be left, for the voice makes
+// one reply at a time and one never taken would hold it for good. Looked
+// for wherever lines are given up: lines waiting after a reply, lines held
+// while you talked, a cut-in you talked over.
+function orphansGo() {
+  if (!speaker || !speaker.waiting || !speaker.drop) return;
+  const kept = new Set();
+  for (const list of [afterReply, held, cutIn ? cutIn.lines : [], cutLate ? cutLate.lines : []]) for (const l of list) if (l && l.ahead) kept.add(l.ahead);
+  for (const p of speaker.waiting()) if (!kept.has(p)) speaker.drop(p);
 }
 
 // A line the agent said with speak.
 export function agentSaid(text) {
   if (!running) return;
   let r = reply;
+  const own = text.opts || null; // a voice of its own
   log('speak', r ? r.gen : '-', text.slice(0, 40));
   // You are talking and it is not mid-reply: never over you. A late line of
   // an answer you have moved on from is held back.
@@ -396,11 +447,23 @@ export function agentSaid(text) {
   // Cutting in on long talk sent in parts: a cue first.
   if (you !== 'quiet' && partsSent) { offerCutIn(text); return; }
   // Its turn is over but that reply is still being heard: after it, not over it.
-  if (r && r.agentDone) { afterReply.push(text); return; }
-  if (!r) r = ownReply();
+  if (r && r.agentDone) { afterReply.push(text); makeAhead(text); return; }
+  // In another voice than the reply being said: a reply of its own, after it.
+  if (r && own && ((r.voice || '') !== own.voice || (r.pace || 0) !== own.pace)) {
+    if (r.own) endReply(r);
+    afterReply.push(text); makeAhead(text);
+    return;
+  }
+  // Its sound was made ahead: that reply is the one said now (or it joined
+  // the one being said, and its words are already with the voice).
+  // (One let go meanwhile is none: the line is said as any line.)
+  if (text.ahead && text.ahead.dropped) text.ahead = null;
+  const made = text.ahead && text.ahead !== r ? text.ahead : null, joined = !!text.ahead && text.ahead === r;
+  if (!r) { r = ownReply(made); if (own && !made) { r.voice = own.voice; r.pace = own.pace; } }
   r.text += (r.text ? ' ' : '') + text;
   r.spoke = true; r.lastLineT = now();
-  speaker.say(r, text);
+  if (made) speaker.take(r);
+  else if (!joined) speaker.say(r, String(text));
   paint(r);
   if (r.own) { clearTimeout(r.endTimer); r.endTimer = setTimeout(() => endReply(r), T.ownReplyEndMs); }
 }
@@ -426,6 +489,7 @@ function finishReply() {
   if (you === 'quiet') show('listening');
   // Lines it said while this one was still being heard: a reply of their own.
   afterReply.splice(0).forEach((t) => agentSaid(t));
+  orphansGo();
 }
 
 // The current reply, left for a new one: one whose words have been heard
@@ -438,7 +502,7 @@ function leaveReply() {
   [r.ackTimer, r.endTimer, r.pulseTimer].forEach(clearTimeout);
   speaker.cancel(r);
   paint(r);
-  afterReply.length = 0;
+  dropAfterReply();
   reply = null;
 }
 
@@ -536,7 +600,7 @@ function cutOff(t, { quietly = false } = {}) {
   ducked = false;
   if (!r) return;
   reply = null;
-  afterReply.length = 0;
+  dropAfterReply();
   clearTimeout(r.ackTimer); lastHadAck = !!r.acked;
   const heard = speaker.natural ? r.segs.filter((s) => !s.ack && s.start <= speaker.ctx.currentTime).map((s) => s.text).join(' ') : r.heard;
   if (!quietly && !r.resumed) { log('cut', r.gen, heard.slice(-40)); send('cut', { text: heard }); }
@@ -577,7 +641,7 @@ function holdBack(text) {
 function releaseHeld(sayIt) {
   const lines = held.splice(0), row = heldRow;
   heldRow = null;
-  if (!lines.length || !sayIt) return;
+  if (!lines.length || !sayIt) { orphansGo(); return; }
   row.remove();
   lines.forEach((t) => agentSaid(t));
 }
@@ -601,7 +665,7 @@ function offerCutIn(text) {
   if (cutIn) { cutIn.lines.push(text); return; }
   // One judged talked over a moment ago: a line now joins it (and what the
   // agent is told it said); after that window, a line is a new cut-in.
-  if (cutLate && now() - cutLate.at > T.cutInLateMs) cutLate = null;
+  if (cutLate && now() - cutLate.at > T.cutInLateMs) { cutLate = null; orphansGo(); }
   if (cutLate) {
     cutLate.lines.push(text);
     cutNote = cutLate.lines.join(' ').slice(0, 300);
@@ -732,7 +796,7 @@ export function agentStateIs(state) {
 // conversation shows where the new one begins.
 export function sessionSwitched(id, name) {
   held = []; heldRow = null; cutIn = null; cutNote = ''; cutLate = null; beforeCut = [];
-  afterReply.length = 0; agentState = '';
+  dropAfterReply(); agentState = '';
   panel.setAgentName(name);
   if (reply) {
     const r = reply;

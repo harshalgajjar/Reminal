@@ -7,6 +7,8 @@
 //   said {text} | part {text} | cut {text} | listening {on} | close
 // From the viewer ("reminal-viewer"):
 //   speak {text}        a line the agent said with reminal's speak tool
+//                       (with voice or pace: said in that voice, at that pace,
+//                       as a reply of its own; the viewer sends neither)
 //   agent {state}       the agent's state: working, done, needs you
 //   name {name}         what to call the agent (its session's name)
 //   session {id, name}  the viewer switched to another session

@@ -138,7 +138,7 @@ async function start() {
     await loadPageScripts();
     const { natural, speed, turnModel } = await loadModels(s);
     speaker = new Speaker(speakerEvents());
-    await speaker.open({ ctx, natural, tts, speed, guard: s.guard, pace: s.pace });
+    await speaker.open({ ctx, natural, tts, speed, guard: s.guard, pace: s.pace, voice: s.who });
     const runtime = await pageRuntime();
     mic = await vad.MicVAD.new({
       model: 'v5', baseAssetPath: VAD, startOnLoad: false,
@@ -246,7 +246,7 @@ async function switchToNatural() {
     w = got.w;
     if (mine !== run) { w.terminate(); return; } // stopped meanwhile
     const next = new Speaker(speakerEvents());
-    await next.open({ ctx, natural: true, tts: w, speed: got.m.speed, guard: s.guard, pace: s.pace });
+    await next.open({ ctx, natural: true, tts: w, speed: got.m.speed, guard: s.guard, pace: s.pace, voice: s.who });
     if (mine !== run) { next.close(); w.terminate(); return; }
     speaker.close();
     tts = w; speaker = next;
@@ -293,7 +293,14 @@ panel.initSettings(() => talk.running || starting).then(() => {
 // ---------- the viewer ----------
 onMessage((m) => {
   switch (m.t) {
-    case 'speak': if (typeof m.text === 'string') talk.agentSaid(m.text); break;
+    // (voice, pace: a line to be said in a voice of its own; the viewer sends neither.)
+    case 'speak': {
+      if (typeof m.text !== 'string') break;
+      const voice = typeof m.voice === 'string' && /^[a-z]{2}_[a-z]{2,20}$/.test(m.voice) ? m.voice : '';
+      const pace = +m.pace >= 0.5 && +m.pace <= 2 ? +m.pace : 0;
+      talk.agentSaid(voice || pace ? talk.line(m.text, { voice, pace }) : m.text);
+      break;
+    }
     case 'notice': talk.notTyped(String(m.why || '')); break;
     case 'agent': talk.agentStateIs(String(m.state || '')); break;
     case 'session': talk.sessionSwitched(String(m.id || ''), String(m.name || '')); break;
