@@ -1,0 +1,24 @@
+
+[38;5;246m[48;5;237m❯ [38;5;231mplease ask me[39m
+
+[38;5;246m[49m●[39m Declined to answer Claude's questions:
+[38;5;246m  ⎿  · Which one should I use? (Alpha / Beta)[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mhello[39m
+
+[38;5;231m[49m●[39m Done: [tool_result "The user doesn't want to proceed with this tool use. The
+  tool use was rejected (eg. if it was a file edit, the new_string was NOT
+  written to the file). STOP what you are doing and wait f
+
+[38;5;246m✻[39m [38;5;246mCogitated for 0s · done 1:51 PM
+
+[48;5;237m❯ [38;5;231mplease work slowly[39m
+
+[38;5;231m[49m●[39m Worked slowly.
+
+[38;5;246m✻[39m [38;5;246mCrunched for 25s · done 1:52 PM[39m
+
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m❯ 1. buy milk[7m [0m[39m[49m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on[39m

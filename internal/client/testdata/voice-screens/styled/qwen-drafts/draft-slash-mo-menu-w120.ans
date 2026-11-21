@@ -1,0 +1,40 @@
+
+  [38;5;74m ▄[38;5;110m▄▄▄▄▄  ▄▄   [38;5;104m  [38;5;140m▄▄ ▄▄▄▄▄[38;5;139m▄▄ ▄▄▄ [38;5;175m   ▄[38;5;174m▄[39m   [38;5;103m┌──────────────────────────────────────────────────────────┐
+[39m  [38;5;74m██[38;5;110m╔═══██╗██║   [38;5;104m █[38;5;140m█║██╔═══[38;5;139m═╝████╗[38;5;175m  ██[38;5;174m║[39m  [38;5;103m│[39m [1m[38;5;183m>_ Qwen Code[0m[38;5;103m[49m (v0.28.0)[39m                                   [38;5;103m│
+[39m  [38;5;74m██[38;5;110m║   ██║██║ █╗[38;5;104m █[38;5;140m█║█████╗[38;5;139m  ██╔██[38;5;175m╗ ██[38;5;174m║[39m  [38;5;103m│[39m                                                          [38;5;103m│
+[39m  [38;5;74m██[38;5;110m║▄▄ ██║██║███[38;5;104m╗█[38;5;140m█║██╔══╝[38;5;139m  ██║╚█[38;5;175m█╗██[38;5;174m║[39m  [38;5;103m│[39m [38;5;103mAPI Key | m (/model to change)[39m                           [38;5;103m│
+[39m  [38;5;74m╚█[38;5;110m█████╔╝╚███╔█[38;5;104m██[38;5;140m╔╝██████[38;5;139m█╗██║ ╚[38;5;175m████[38;5;174m║[39m  [38;5;103m│[39m [38;5;103m/w[39m                                                       [38;5;103m│
+[39m  [38;5;74m ╚[38;5;110m══▀▀═╝  ╚══╝╚[38;5;104m══[38;5;140m╝ ╚═════[38;5;139m═╝╚═╝  [38;5;175m╚═══[38;5;174m╝[39m  [38;5;103m└──────────────────────────────────────────────────────────┘
+
+[39m  [38;5;103mTips: Add a QWEN.md file to give Qwen Code persistent project context.
+[39m  ●︎ Auto mode enabled.
+       An LLM classifier evaluates each tool call — safe actions auto-approve,
+       risky ones are blocked. Exit: Shift+Tab or /approval-mode default.
+  ●︎ Extensions changed on disk. Run /reload-plugins to apply updates.
+  ●︎ Read context files: ~/.qwen/output-language.md
+
+  [38;5;183m>[39m [38;5;183mhello
+[39m  [38;5;151m✓[39m [1mspeak (reminal MCP Server)[0m[39m[49m [38;5;103m{"text":"Hello from the stand-in."}
+[39m    Not spoken: no one is listening by voice right now. Reply on screen only.
+
+  [38;5;183m◆︎[39m done.
+
+[38;5;153m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> [39m/mo[4m ​
+[0m[38;5;153m[49m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;183m> model[38;5;103m [--fast|--voice|--vision|--compaction|--image] [--pr…[39m  [38;5;183mSwitch the model for this session (--fast for sugges…
+[39m  [38;5;103m  approval-mode <mode>[39m                                         [38;5;103mView or change the approval mode for tool usage
+[39m  [38;5;103m  memory [migrate-team][39m                                        [38;5;103mOpen the memory manager.
+[39m  [38;5;103m  import-config [all|claude-code|claude-desktop] [--scope us…[39m  [38;5;103mImport MCP servers from Claude configs
+[39m  [38;5;103m  permissions[39m                                                  [38;5;103mManage permission rules
+
+
+
+
+
+
+
+
+
+
+

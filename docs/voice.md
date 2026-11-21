@@ -30,6 +30,15 @@ would run), or at a password prompt. It checks before the words and again
 before the Return. When it refuses, the viewer gets a notice and the frame
 says why.
 
+Nor after a draft. For Claude Code, Qwen Code and Gemini CLI, whose input
+box reminal knows (`speech_box.go`), the box on screen holding anything the
+person has typed (a half-written message, a slash command) is refused
+(`speech_draft.go`): the said line would land after it and the Return would
+send both. An empty box still draws a cursor and, for Qwen and Gemini, a
+placeholder; those are told from typed text by their styles and words. The
+check before the Return skips this, as the box then holds the said words.
+Other agents, and these with no box on screen, are typed into as before.
+
 ## The frame's files (`internal/client/web/voice/`)
 
 | File | What it does |

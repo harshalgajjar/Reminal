@@ -19,6 +19,7 @@ const (
 	speechAsking  = "asking"   // a prompt on screen waits for an answer there
 	speechHidden  = "hidden"   // the terminal hides what is typed (a password)
 	speechUnsent  = "unsent"   // typed, but a prompt came up before the Return: left unsent in the box
+	// speechDraft (speech_draft.go): the box holds something typed
 )
 
 // speechBlocked says why words may not be typed now, or "" if they may.
@@ -31,7 +32,14 @@ const (
 // On Windows the program is the agent among the shell's children (a console
 // has no foreground process group), and whether input is hidden cannot be
 // asked, so there the gate rests on the prompt check.
-func (a *Agent) speechBlocked() string {
+func (a *Agent) speechBlocked() string { return a.speechCheck(true) }
+
+// speechBlockedAfterWords is speechBlocked asked again before the Return,
+// once the said words are in the box: what is in the box now is ours, not a
+// draft of the person's.
+func (a *Agent) speechBlockedAfterWords() string { return a.speechCheck(false) }
+
+func (a *Agent) speechCheck(refuseDraft bool) string {
 	if a.speech.blocked != nil {
 		return a.speech.blocked()
 	}
@@ -45,6 +53,11 @@ func (a *Agent) speechBlocked() string {
 		return speechHidden
 	case !isAgentProgram(fg):
 		return speechNoAgent
+	// Where reminal knows the agent's box (voiceBoxMarks) and it is on
+	// screen holding something typed, the said line would land after it.
+	// Anywhere else this says nothing, and the checks below decide.
+	case refuseDraft && a.draftNow(fg):
+		return speechDraft
 	case state == "input" || a.promptOnScreenNow(fg):
 		return speechAsking
 	}
