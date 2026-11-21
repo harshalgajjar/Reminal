@@ -143,7 +143,11 @@ function start(gen, own = {}) {
         const other = [...early].find((x) => !x.cancelled && x.splitter.out.length);
         if (other) {
           early.delete(other);
-          try { await piece(other, other.splitter.out.shift()); } catch (err) { postMessage({ type: 'error', gen: other.gen, message: describe(err) }); }
+          // (One that cannot be made goes back where it was: that reply is
+          // made from its first words when its turn comes, and what went
+          // wrong is dealt with there, as for any reply.)
+          const text = other.splitter.out.shift();
+          try { await piece(other, text); } catch (_) { other.splitter.out.unshift(text); }
         } else if (splitter.out.length) {
           await piece(g, splitter.out.shift());
         } else if (splitter.closed) {
