@@ -260,6 +260,7 @@ async function handle(m) {
   if (m.tool === 'tabs_select') return tabsSelect(k, c);
   await indicate(tabId, name, true);
   const was = ACTS.has(m.tool) ? (await chrome.tabs.get(tabId)).url : null;
+  const began = Date.now();
   try {
     const out = await (async () => {
     switch (m.tool) {
@@ -295,9 +296,11 @@ async function handle(m) {
     // (If the action set a page loading, that is waited for, as
     // browser_navigate waits.)
     if (was != null && typeof out === 'string') {
-      await new Promise((r) => setTimeout(r, 40));
+      // The browser says at once when an action starts a page loading
+      // (navAt, from the debugger's events): no fixed wait to find out.
+      await new Promise((r) => setTimeout(r, 6));
       let t = await chrome.tabs.get(tabId).catch(() => null);
-      if (t && (t.status === 'loading' || t.pendingUrl)) {
+      if (t && ((navAt.get(tabId) || 0) >= began || t.status === 'loading' || t.pendingUrl)) {
         await Promise.race([loaded(tabId), new Promise((r) => setTimeout(r, 10_000))]);
         t = await chrome.tabs.get(tabId).catch(() => null);
       }
@@ -427,10 +430,23 @@ async function navigate(c, url) {
   return JSON.stringify({ tabId: c.tabId, title: t.title, url: t.url });
 }
 
+// settled: after the browser says a page has loaded, the page is given until
+// it has drawn a frame: that is when it puts its focus where it means to (an
+// autofocus field), and a key pressed before that would be judged against
+// the wrong element. Asked of the page itself, so it takes as long as the
+// page takes and no longer (a tab not showing draws nothing and moves no
+// focus: no wait).
+async function settled(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, func: page.drawn });
+  } catch (_) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
 function loaded(tabId) {
   return new Promise((resolve) => {
     let done = false;
-    const finish = () => { if (done) return; done = true; chrome.tabs.onUpdated.removeListener(on); clearTimeout(t); setTimeout(resolve, 20); };
+    const finish = () => { if (done) return; done = true; chrome.tabs.onUpdated.removeListener(on); clearTimeout(t); settled(tabId).then(resolve); };
     const on = (id, info) => { if (id === tabId && info.status === 'complete') finish(); };
     const t = setTimeout(finish, 30_000);
     chrome.tabs.onUpdated.addListener(on);
@@ -506,6 +522,10 @@ chrome.tabs.onRemoved.addListener((tabId) => { attached.delete(tabId); canceled.
 
 const FULL_PAGE_MAX = 12000;
 async function screenshot(c, a = {}) {
+  // JPEG when asked: smaller, and quicker for the browser to make.
+  const jpeg = String(a.format || '').toLowerCase() === 'jpeg' || String(a.format || '').toLowerCase() === 'jpg';
+  const fmt = jpeg ? { format: 'jpeg', quality: 80 } : { format: 'png' };
+  const mimeType = jpeg ? 'image/jpeg' : 'image/png';
   const m = await cdp(c, 'Page.getLayoutMetrics');
   const vp = m.cssVisualViewport || m.visualViewport;
   const w = Math.round(vp.clientWidth), h = Math.round(vp.clientHeight);
@@ -513,19 +533,19 @@ async function screenshot(c, a = {}) {
     // One element, as it is drawn.
     const r = await inPage(c, page.rect, a.ref);
     if (r.error) throw new Error(r.error);
-    const shot = await cdp(c, 'Page.captureScreenshot', { format: 'png', clip: { x: vp.pageX + r.x, y: vp.pageY + r.y, width: Math.max(1, r.w), height: Math.max(1, r.h), scale: 1 } });
-    return { image: shot.data, mimeType: 'image/png', note: `${r.what}, ${Math.round(r.w)}x${Math.round(r.h)} pixels. Not for click coordinates: those are in a screenshot of the visible part.` };
+    const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, clip: { x: vp.pageX + r.x, y: vp.pageY + r.y, width: Math.max(1, r.w), height: Math.max(1, r.h), scale: 1 } });
+    return { image: shot.data, mimeType, note: `${r.what}, ${Math.round(r.w)}x${Math.round(r.h)} pixels. Not for click coordinates: those are in a screenshot of the visible part.` };
   }
   if (a.fullPage) {
     // The whole page, top to bottom (cut at FULL_PAGE_MAX pixels high).
     const cs = m.cssContentSize || m.contentSize;
     const fw = Math.round(cs.width), fh = Math.min(Math.round(cs.height), FULL_PAGE_MAX);
-    const shot = await cdp(c, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: fw, height: fh, scale: 1 } });
-    return { image: shot.data, mimeType: 'image/png', note: `The whole page, ${fw}x${fh} pixels${fh < Math.round(cs.height) ? ' (cut: the page is ' + Math.round(cs.height) + ' high)' : ''}. Not for click coordinates: those are in a screenshot of the visible part.` };
+    const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, captureBeyondViewport: true, clip: { x: 0, y: 0, width: fw, height: fh, scale: 1 } });
+    return { image: shot.data, mimeType, note: `The whole page, ${fw}x${fh} pixels${fh < Math.round(cs.height) ? ' (cut: the page is ' + Math.round(cs.height) + ' high)' : ''}. Not for click coordinates: those are in a screenshot of the visible part.` };
   }
   // The visible part, at CSS pixels: the coordinates browser_click takes.
-  const shot = await cdp(c, 'Page.captureScreenshot', { format: 'png', clip: { x: vp.pageX, y: vp.pageY, width: w, height: h, scale: 1 } });
-  return { image: shot.data, mimeType: 'image/png', note: `${w}x${h} pixels; click at x, y in these pixels.` };
+  const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, clip: { x: vp.pageX, y: vp.pageY, width: w, height: h, scale: 1 } });
+  return { image: shot.data, mimeType, note: `${w}x${h} pixels; click at x, y in these pixels.` };
 }
 
 // inPage: fn in the page's top frame, after the rules. inFrames: in every
@@ -615,7 +635,12 @@ async function click(c, a) {
   }
   // The page's asking comes at once if it comes: looked for briefly, and the
   // holding back kept a little longer (CHOOSER_HOLD) for one that is slow.
-  for (let i = 0; i < 6 && !choosers.has(c.tabId); i++) await new Promise((r) => setTimeout(r, 10));
+  // Waited for where the click was on a file field. Elsewhere on a page
+  // with one (an upload button presses a hidden file field), the page is
+  // asked a question after the click: its answer comes after the page has
+  // run the click, and so after its asking for a file, if it asked.
+  if (t.fileField) { for (let i = 0; i < 12 && !choosers.has(c.tabId); i++) await new Promise((r) => setTimeout(r, 5)); }
+  else if (t.fileish) { for (let i = 0; i < 3 && !choosers.has(c.tabId); i++) await cdp(c, 'Runtime.evaluate', { expression: '0' }).catch(() => {}); }
   } finally {
     const until = Date.now() + CHOOSER_HOLD;
     chooserHold.set(c.tabId, until);
@@ -742,7 +767,7 @@ async function handleDialog(c, a) {
 // Its console and its requests, kept by tab while the debugger is attached
 // (from the session's first action on the tab), the newest KEPT of each.
 const KEPT = 500;
-const logs = new Map(), reqs = new Map(), drags = new Map(), choosers = new Map(), dls = new Map(), guards = new Map();
+const logs = new Map(), reqs = new Map(), drags = new Map(), choosers = new Map(), dls = new Map(), guards = new Map(), navAt = new Map(), mainFrame = new Map();
 // guard: which of a tab's kept requests never give out their response's
 // body. A tab that has shown a sign-in or a payment field (seen by a tool's
 // check, by the check made as each page loads, or by the watch rules.js
@@ -767,7 +792,7 @@ async function loadedCheck(tabId) {
 }
 const kept = (map, tabId) => { if (!map.has(tabId)) map.set(tabId, []); return map.get(tabId); };
 const push = (map, tabId, v) => { const l = kept(map, tabId); l.push(v); if (l.length > KEPT) l.splice(0, l.length - KEPT); };
-function forget(tabId) { for (const m of [logs, reqs, drags, dialogs, dialogWaiters, choosers, dls, guards]) m.delete(tabId); }
+function forget(tabId) { for (const m of [logs, reqs, drags, dialogs, dialogWaiters, choosers, dls, guards, navAt, mainFrame]) m.delete(tabId); }
 const argText = (o) => (o.value !== undefined ? (typeof o.value === 'string' ? o.value : JSON.stringify(o.value)) : (o.description || o.unserializableValue || o.type || ''));
 chrome.debugger.onEvent.addListener((src, method, p) => {
   const tabId = src.tabId;
@@ -796,7 +821,14 @@ chrome.debugger.onEvent.addListener((src, method, p) => {
       push(reqs, tabId, { id: p.requestId, method: p.request.method, url: p.request.url, type: p.type || '', loader: p.loaderId });
       break;
     }
+    // The tab's own page starting to load something (a link clicked, a form
+    // sent): when, for the action that did it to wait for.
+    case 'Page.frameRequestedNavigation':
+    case 'Page.frameStartedLoading':
+      if (!mainFrame.has(tabId) || mainFrame.get(tabId) === p.frameId) navAt.set(tabId, Date.now());
+      break;
     case 'Page.frameNavigated':
+      if (!p.frame.parentId) mainFrame.set(tabId, p.frame.id);
       // The tab went to a new page: the page it left keeps its bodies shut
       // (a sign-in form there may have come and gone with no tool looking:
       // only that page knew), and what the new one loads is judged anew.
@@ -980,6 +1012,8 @@ async function fillForm(c, a) {
   if (!fields.length) throw new Error('fields is required: [{ref, value}, ...]');
   if (fields.length > 50) throw new Error('at most 50 fields at a time');
   const done = [];
+  const frames = await frameChecks(c);
+  if (frames.some((r) => r.result.captcha)) throw new Error('Paused: a CAPTCHA is showing on this page. Ask the person to solve it, then continue.');
   for (const f of fields) {
     try {
       const kind = await inPage(c, page.fieldKind, String(f.ref || ''));
@@ -994,11 +1028,18 @@ async function fillForm(c, a) {
       } else if (kind.kind === 'text') {
         const text = String(f.value ?? '');
         if (text.length > 100000) throw new Error('a value is too long (at most 100000 characters)');
-        await click(c, { ref: f.ref });
-        const focus = await focusedField(c);
-        if (focus.refused) throw new Error(focus.refused);
-        if (focus.paused) throw new Error(focus.paused);
-        await inPage(c, page.selectAll, String(f.ref));
+        // The field takes the focus with what is in it selected (held to
+        // the rules where it is); a field that will not take it that way
+        // is clicked as a person would.
+        const took = await inPage(c, page.focusField, String(f.ref));
+        if (took.error) throw new Error(took.error);
+        if (!took.focused) {
+          await click(c, { ref: f.ref });
+          const focus = await focusedField(c);
+          if (focus.refused) throw new Error(focus.refused);
+          if (focus.paused) throw new Error(focus.paused);
+          await inPage(c, page.selectAll, String(f.ref));
+        }
         if (text) await cdp(c, 'Input.insertText', { text });
         else await cdp(c, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }).then(() => cdp(c, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }));
         done.push(`Filled ${kind.what} (${text.length} characters).`);

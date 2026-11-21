@@ -24,7 +24,12 @@ export function locate(ref, x, y) {
   }
   const frame = !!el && /^(IFRAME|FRAME|OBJECT|EMBED)$/.test(el.tagName);
   const frameSrc = !frame ? "" : el.tagName === "IFRAME" && el.hasAttribute("srcdoc") ? "about:srcdoc" : (el.src || el.data || "about:blank");
-  return { x, y, what: R.what(el), paused: R.paused(el), secret: R.secret(el) ? R.NEVER : "", frame, frameSrc };
+  // A click here may make the page ask for a file: on a file field, or on
+  // anything but a text field in a page that has one (an upload button
+  // presses a hidden file field).
+  const fileField = !!el && el.tagName === 'INPUT' && el.type === 'file';
+  const fileish = fileField || (!!el && !R.textField(el) && R.deepAll(document, 'input[type=file]').length > 0);
+  return { x, y, what: R.what(el), paused: R.paused(el), secret: R.secret(el) ? R.NEVER : "", frame, frameSrc, fileish, fileField };
 }
 
 // focused: what typing would go into, in this frame (each frame answers):
@@ -243,4 +248,38 @@ export function storage(kind, action, key, value) {
   if (action === 'set') { s.setItem(key, value); return `Set "${key}".`; }
   if (action === 'delete') { s.removeItem(key); return `Deleted "${key}".`; }
   const n = s.length; s.clear(); return `Cleared the ${kind} storage (${n} keys).`;
+}
+
+// focusField: a text field given the focus, what is in it selected, for
+// browser_fill_form to type over: held to the rules as a click on it is
+// (never a password or payment field, paused in a sign-in or with a CAPTCHA
+// showing). focused false: it did not take the focus this way.
+export function focusField(ref) {
+  const R = globalThis.__reminal;
+  const w = R.refs.get(ref);
+  const el = w && w.deref();
+  if (!el || !el.isConnected) return { error: `${ref} is not on the page any more: read it again with browser_read_page.` };
+  if (R.secret(el)) return { error: R.NEVER };
+  const paused = R.paused(el);
+  if (paused) return { error: paused };
+  if (el.disabled || el.readOnly) return { error: `${R.what(el)} cannot be typed into (it is disabled or read-only).` };
+  if (!R.visible(el)) return { focused: false };
+  el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+  el.focus();
+  let at = document.activeElement;
+  while (at && at.shadowRoot && at.shadowRoot.activeElement) at = at.shadowRoot.activeElement;
+  if (at !== el) return { focused: false };
+  if (typeof el.select === 'function') el.select();
+  else { const range = document.createRange(); range.selectNodeContents(el); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+  return { focused: true };
+}
+
+// drawn: resolves when the page has drawn a frame (at once in a tab that is
+// not showing, and after 200 ms at the latest).
+export function drawn() {
+  if (document.visibilityState === 'hidden') return true;
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(false), 200);
+    requestAnimationFrame(() => { clearTimeout(t); resolve(true); });
+  });
 }

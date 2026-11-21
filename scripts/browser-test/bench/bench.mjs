@@ -106,10 +106,13 @@ const TASKS = {
 await rpc('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'bench', version: '1' } });
 proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
 if (process.env.SCHEMAS) fs.writeFileSync(process.env.SCHEMAS, JSON.stringify(((await rpc('tools/list', {})).result.tools || []).filter((t) => /^browser_(type|click|select_option|fill_form|wait_for|navigate)$/.test(t.name)).map((t) => ({ name: t.name, schema: t.inputSchema })), null, 1));
+// What an agent that loads every tool's description pays before it starts.
+const defs = ((await rpc('tools/list', {})).result.tools || []).filter((t) => /^browser_/.test(t.name));
+const defChars = JSON.stringify(defs).length;
 const t0 = Date.now();
 await B.open(`${PAGES}/form.html`);
 const first = Date.now() - t0;
-const out = { who: WHO, firstPageMs: first, tasks: {} };
+const out = { who: WHO, firstPageMs: first, tools: defs.length, defChars, tasks: {} };
 for (const [name, run] of Object.entries(TASKS)) {
   const ms = [], ch = [], n = []; let failed = 0, why = '';
   for (let i = 0; i < RUNS; i++) {
@@ -119,6 +122,35 @@ for (const [name, run] of Object.entries(TASKS)) {
   }
   const med = (l) => (l.length ? [...l].sort((a, b) => a - b)[Math.floor(l.length / 2)] : null);
   out.tasks[name] = { ms: med(ms), chars: med(ch), calls: med(n), failed, why };
+}
+// One tool at a time (ours only): what a single call costs, the median of 30.
+if (WHO === 'ours') {
+  await B.go(`${PAGES}/tools.html`);
+  const s = await B.snapshot();
+  const first = must(B.ref(s, 'textbox', 'First name'), 'first'), load = must(B.ref(s, 'button', 'More'), 'more');
+  const each = {
+    tabs_context: () => tool('browser_tabs_context'),
+    find: () => tool('browser_find', { query: 'button load' }),
+    'read_page interactive': () => tool('browser_read_page', { filter: 'interactive' }),
+    'read_page all': () => tool('browser_read_page'),
+    get_page_text: () => tool('browser_get_page_text'),
+    screenshot: () => tool('browser_screenshot'),
+    'screenshot jpeg': () => tool('browser_screenshot', { format: 'jpeg' }),
+    hover: () => tool('browser_hover', { ref: load }),
+    click: () => tool('browser_click', { ref: load }),
+    type: () => tool('browser_type', { ref: first, text: 'x' }),
+    'fill_form 1 field': () => tool('browser_fill_form', { fields: [{ ref: first, value: 'Ada' }] }),
+    key: () => tool('browser_key', { key: 'End' }),
+    'wait_for (there)': () => tool('browser_wait_for', { text: 'Tools' }),
+    'navigate reload': () => tool('browser_navigate', { url: 'reload' }),
+  };
+  out.each = {};
+  for (const [name, run] of Object.entries(each)) {
+    const ms = [];
+    for (let i = 0; i < 30; i++) { const t = performance.now(); try { await run(); } catch (e) { out.each[name] = String(e.message).slice(0, 80); break; } ms.push(performance.now() - t); }
+    if (ms.length) out.each[name] = Math.round([...ms].sort((a, b) => a - b)[15] * 10) / 10;
+    if (name === 'navigate reload') break;
+  }
 }
 fs.writeFileSync(OUT, JSON.stringify(out, null, 2));
 proc.kill();
