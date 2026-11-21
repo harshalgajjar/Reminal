@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -246,12 +247,17 @@ func TestSpeechTypesNothingAfterADraft(t *testing.T) {
 		"empty": {"claude-w120/c03-after-turn.ans", 2},
 	} {
 		a := styledScreen(t, "claude", c.file, 120, 40)
+		// The Return is typed from another goroutine, after EnterSettle.
+		var mu sync.Mutex
 		var typed []string
-		a.speech.typeKeys = func(b []byte) error { typed = append(typed, string(b)); return nil }
+		a.speech.typeKeys = func(b []byte) error { mu.Lock(); typed = append(typed, string(b)); mu.Unlock(); return nil }
 		speechIn(t, a, map[string]any{"kind": "said", "text": "and then"})
 		time.Sleep(EnterSettle + 300*time.Millisecond)
-		if len(typed) != c.typed {
-			t.Errorf("%s: typed %q, want %d writes", name, typed, c.typed)
+		mu.Lock()
+		got := append([]string(nil), typed...)
+		mu.Unlock()
+		if len(got) != c.typed {
+			t.Errorf("%s: typed %q, want %d writes", name, got, c.typed)
 		}
 	}
 }
