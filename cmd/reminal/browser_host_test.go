@@ -139,7 +139,7 @@ func runIntegrateIn(t *testing.T, home string, args ...string) string {
 // files.
 func TestIntegrateSetsUpTheBrowserToo(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("not on Windows yet")
+		t.Skip("on Windows this writes the person's own registry; the stand-in test covers it")
 	}
 	home := t.TempDir()
 	exe, _ := os.Executable()
@@ -231,7 +231,7 @@ func TestIntegrateWithNoBrowserWritesNoneOfIt(t *testing.T) {
 // ask the person first.
 func TestBrowserToolsAreListed(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("not on Windows yet")
+		t.Skip("on Windows this writes the person's own registry; the stand-in test covers it")
 	}
 	// Set up by `reminal integrate`: the host manifest is here.
 	home := t.TempDir()
@@ -279,8 +279,8 @@ func TestBrowserToolsAreNotListedBeforeIntegrate(t *testing.T) {
 			t.Fatalf("%s listed with no browser set up", n)
 		}
 	}
-	if runtime.GOOS == "windows" && browserToolsHere() {
-		t.Fatal("offered on Windows")
+	if browserToolsHere() {
+		t.Fatal("offered with no browser set up")
 	}
 }
 

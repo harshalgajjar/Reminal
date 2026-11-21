@@ -34,6 +34,9 @@ var browserSecretFolders = []string{
 	"/library/application support/bravesoftware", "/library/application support/arc", "/library/application support/firefox",
 	"/library/application support/vivaldi", "/library/application support/com.operasoftware.opera",
 	"/appdata/local/google/chrome", "/appdata/local/microsoft/edge", "/appdata/roaming/mozilla",
+	"/appdata/local/chromium", "/appdata/local/bravesoftware",
+	"/appdata/roaming/microsoft/credentials", "/appdata/local/microsoft/credentials", "/appdata/roaming/microsoft/protect",
+	"/appdata/roaming/microsoft/crypto", "/appdata/local/microsoft/vault",
 	"/snap/firefox", "/snap/chromium",
 }
 
@@ -43,6 +46,17 @@ var browserSecretFolders = []string{
 // Mac's disk does not tell ".SSH" from ".ssh".
 func browserSecretPath(real string) bool {
 	low := strings.ToLower(filepath.ToSlash(real))
+	if chromeOS == "windows" {
+		// A colon after the drive names a stream inside a file
+		// ("key.pem::$DATA" is key.pem): never given, whatever it is called.
+		rest := low
+		if len(rest) >= 2 && rest[1] == ':' {
+			rest = rest[2:]
+		}
+		if strings.Contains(rest, ":") {
+			return true
+		}
+	}
 	for _, part := range strings.Split(low, "/") {
 		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
 			return true
