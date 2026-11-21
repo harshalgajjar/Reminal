@@ -1,0 +1,40 @@
+
+[38;5;174m ▐[48;5;16m▛███▛█[39m[49m   [1mClaude Code[0m[39m[49m [38;5;246mv2.1.328
+[38;5;174m▝▜[48;5;16m█████[49m█▀[39m  [38;5;246mOpus 5.5 · API Usage Billing
+[38;5;174m ▝▝   ▝▝ [39m  [38;5;246m/w
+
+
+[48;5;237m❯ [38;5;231mplease ask me[39m
+
+[38;5;246m[49m●[39m Declined to answer Claude's questions:
+[38;5;246m  ⎿  · Which one should I use? (Alpha / Beta)[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mhello[39m
+[49m
+[38;5;231m●[39m Done: [tool_result "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a
+  file edit, the new_string was NOT written to the file). STOP what you are doing and wait f
+
+[38;5;246m✻[39m [38;5;246mWorked for 0s · done 1:48 PM[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mplease work slowly[39m
+
+[38;5;231m[49m●[39m Worked slowly.
+
+[38;5;246m✻[39m [38;5;246mBrewed for 25s · done 1:49 PM[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231mplease write a file[39m
+
+[38;5;211m[49m●[39m [1mWrite[0m[39m[49m(x.txt)
+[38;5;246m  ⎿  Rejected write to [1mx.txt
+[0m[39m[49m     [2m 1 hi[0m[39m[49m
+
+
+  [38;5;153m❯ /add-dir                    Add a working directory
+[39m  [38;5;246m  /auto-mode-setup            Teach auto mode about your environment[39m
+  [38;5;246m  /autocompact                Set how full the context gets before auto-summarizing[39m
+  [38;5;246m  /background                 Send this session to the background and free the terminal[39m
+  [38;5;246m  /branch                     Create a branch of the current conversation at this point[39m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m❯ /[7m [0m[39m[49m
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[39m  [38;5;246m⏸ manual mode on[39m

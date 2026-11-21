@@ -1,0 +1,40 @@
+████ ▄▄▄▄▄ █  ▀▀█▄███ ▄  █▄█  █▄▄████
+████ █   █ █▄▀█▀ ▀██▄▀▀▀  ▄▄  █▀▀████
+████ █▄▄▄█ █ █ ▄ ▀ █   █▀ █▀  ▄▀▄████
+████▄▄▄▄▄▄▄█▄█▄▄██▄█████▄▄▄█▄▄█▄▄████
+█████████████████████████████████████
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+  [1m[32mHOST:[0m[39m[49m This terminal IS the shared shell — type away. Remote viewers join in parallel.
+  Press Ctrl-] to stop sharing (shell keeps running · Ctrl-] again to fully exit) · `reminal info` reprints join info
+
+root@ab24d8f48c26:/w# [2m  reminal: Connection refused — the relay isn't accepting connections at that address. Retrying un
+til it is back.
+[0m[39m[49mgemini
+
+ [38;5;74m▝[38;5;110m▜[38;5;140m▄[38;5;139m [38;5;174m [39m   [1m[38;5;231mGemini CLI[0m[38;5;248m[49m v0.69.0
+[39m [38;5;74m [38;5;110m [38;5;140m▝[38;5;139m▜[38;5;174m▄
+[39m [38;5;74m [38;5;110m▗[38;5;140m▟[38;5;139m▀[38;5;174m [39m   [38;5;231mAuthenticated with gemini-api-key[38;5;248m /auth
+[39m [38;5;74m▝[38;5;110m▀[38;5;140m  [38;5;139m [38;5;174m
+
+
+[38;5;231mTips for getting started:
+1. Create [1mGEMINI.md[0m[38;5;231m[49m files to customize your interactions
+2. [38;5;248m/help[38;5;231m for more information
+3. Ask coding questions, edit code or run commands
+4. Be specific for the best results
+[38;5;240m▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+[39m[48;5;240m [38;5;183m> [38;5;231mhello[39m
+[38;5;240m[49m▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+[38;5;183m✦ [38;5;231mdone.
+
+
+[39m  [3m[38;5;231mExecuting Hook: /usr/local/bin/reminal hook done[0m[39m[49m                                                      [38;5;248m? for shortcuts
+[2m[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[0m[39m[49m [38;5;248mShift+Tab to accept edits[39m                                                                                 [38;5;248m1 MCP server
+[38;5;240m▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+[39m[48;5;240m [38;5;183m> [7m[39m [0m[38;5;248m[48;5;240m Type your message or @path/to/file[39m
+[38;5;240m[49m▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+[39m [38;5;248mworkspace (/directory)[39m                                        [38;5;248msandbox[39m                                           [38;5;248m/model
+[39m [38;5;231m/w[39m                                                            [38;5;217mno sandbox[39m                                          [38;5;231mAuto
+

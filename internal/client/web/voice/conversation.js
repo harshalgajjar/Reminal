@@ -753,6 +753,7 @@ const NOT_TYPED = {
   'no-agent': 'No agent is running there, so I did not type that in.',
   hidden: 'The terminal is asking for a password, so I did not type that in.',
   unsent: 'It started asking on screen before I could send that. Your words are in its box, not sent.',
+  draft: 'There is something typed in its box, so I did not type over it. Send or clear it, then speak.',
 };
 export function notTyped(why) {
   if (!running) return;

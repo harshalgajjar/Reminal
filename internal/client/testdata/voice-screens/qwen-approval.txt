@@ -1,0 +1,40 @@
+
+   ▄▄▄▄▄▄  ▄▄     ▄▄ ▄▄▄▄▄▄▄ ▄▄▄    ▄▄   ┌──────────────────────────────────────────────────────────┐
+  ██╔═══██╗██║    ██║██╔════╝████╗  ██║  │ >_ Qwen Code (v0.28.0)                                   │
+  ██║   ██║██║ █╗ ██║█████╗  ██╔██╗ ██║  │                                                          │
+  ██║▄▄ ██║██║███╗██║██╔══╝  ██║╚██╗██║  │ API Key | m (/model to change)                           │
+  ╚██████╔╝╚███╔███╔╝███████╗██║ ╚████║  │ /w                                                       │
+   ╚══▀▀═╝  ╚══╝╚══╝ ╚══════╝╚═╝  ╚═══╝  └──────────────────────────────────────────────────────────┘
+
+  Tips: You can run any shell commands from Qwen Code using ! (e.g. !ls).
+
+  > /mcp
+  ●︎ Read context files: ~/.qwen/output-language.md
+
+  > [voice] hello there
+
+  ◆︎ done.
+
+  > please run the command
+  ? Shell touch /tmp/APPROVED (make a file) ←
+
+     touch /tmp/APPROVED
+
+   Allow execution of: 'touch'?
+
+   › 1. Yes, allow once
+     2. Always allow run 'touch *' commands in this project
+     3. Always allow run 'touch *' commands for this user
+     4. No, suggest changes (esc)
+
+
+  ⠏ Waiting for user confirmation...
+
+
+
+
+
+
+
+
+
