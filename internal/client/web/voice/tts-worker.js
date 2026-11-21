@@ -98,39 +98,68 @@ function release() {
   setTimeout(() => { const next = waitReply.shift() || waitClip.shift(); if (next) next(); else busy = false; }, 0);
 }
 
+// A reply waiting its turn may be given one piece early (`first`): while the
+// reply before it is still being made, a caller that knows there is sound
+// enough already made of that one asks for the waiting reply's first words,
+// so it can start the moment the other ends. One piece, once a reply; the
+// reply that holds the turn makes it between two of its own. Nothing else
+// about the order changes: a reply is made to its end before the next, and a
+// clip only when no reply is open.
+const early = new Set(); // replies asked for with `first`, not yet given their piece
+let nudge = null;        // wakes the reply that holds the turn while it waits for words
+function kick() { if (nudge) { const w = nudge; nudge = null; w(); } }
+
+// One piece of a reply made and sent back. A voice of its own that cannot be
+// had (no such voice, or its file not to be fetched): the voice in use says
+// it, this piece and the rest, so the reply is heard and ends as any does.
+async function piece(g, text) {
+  let audio;
+  try {
+    audio = await say(text, { voice: g.voice || voice, speed: g.speed || speed });
+  } catch (err) {
+    if (!g.voice) throw err;
+    g.voice = undefined;
+    audio = await say(text, { voice, speed: g.speed || speed });
+  }
+  if (g.cancelled) return;
+  const pcm = audio.audio;
+  postMessage({ type: 'audio', gen: g.gen, text, pcm, rate: audio.sampling_rate, ms: Math.round(performance.now() - (g.lastT || performance.now())) }, [pcm.buffer]);
+  g.lastT = performance.now();
+}
+
 // own: the voice and the pace of this reply alone, when its first words named
 // them (else the ones in use).
 function start(gen, own = {}) {
   const splitter = new Splitter();
-  const g = { splitter, cancelled: false, closed: false, voice: own.voice, speed: own.speed };
+  const g = { gen, splitter, cancelled: false, closed: false, voice: own.voice, speed: own.speed };
   gens.set(gen, g);
   (async () => {
     await acquire(true);
+    early.delete(g); // it has the turn now: its words come in their order
     try {
-      if (!g.cancelled) {
-        for await (const text of splitter) {
-          if (g.cancelled) break;
-          // A voice of its own that cannot be had (no such voice, or its
-          // file not to be fetched): the voice in use says it, this piece
-          // and the rest, so the reply is heard and ends as any does.
-          let audio;
-          try {
-            audio = await say(text, { voice: g.voice || voice, speed: g.speed || speed });
-          } catch (err) {
-            if (!g.voice) throw err;
-            g.voice = undefined;
-            audio = await say(text, { voice, speed: g.speed || speed });
-          }
-          if (g.cancelled) break;
-          const pcm = audio.audio;
-          postMessage({ type: 'audio', gen, text, pcm, rate: audio.sampling_rate, ms: Math.round(performance.now() - (g.lastT || performance.now())) }, [pcm.buffer]);
-          g.lastT = performance.now();
-          // Without a real turn of the event loop here a cancel never gets
-          // read: a reply that was talked over went on being made, and held
-          // up the next.
-          await new Promise((r) => setTimeout(r, 0));
-          if (g.cancelled) break;
+      for (;;) {
+        if (g.cancelled) break;
+        // A waiting reply's first piece, asked for and ready: made now.
+        const other = [...early].find((x) => !x.cancelled && x.splitter.out.length);
+        if (other) {
+          early.delete(other);
+          // (One that cannot be made goes back where it was: that reply is
+          // made from its first words when its turn comes, and what went
+          // wrong is dealt with there, as for any reply.)
+          const text = other.splitter.out.shift();
+          try { await piece(other, text); } catch (_) { other.splitter.out.unshift(text); }
+        } else if (splitter.out.length) {
+          await piece(g, splitter.out.shift());
+        } else if (splitter.closed) {
+          break;
+        } else {
+          await new Promise((r) => { splitter.wake = r; nudge = r; });
+          continue;
         }
+        // Without a real turn of the event loop here a cancel never gets
+        // read: a reply that was talked over went on being made, and held
+        // up the next.
+        await new Promise((r) => setTimeout(r, 0));
       }
     } catch (err) {
       postMessage({ type: 'error', gen, message: describe(err) });
@@ -159,14 +188,16 @@ onmessage = async (e) => {
     if (m.type === 'load') return await load(m);
     if (m.type === 'speed') { speed = +m.v || 1; return; }
     if (m.type === 'voice') { voice = m.v || voice; return; }
-    if (m.type === 'push') { const g = gens.get(m.gen) || start(m.gen, { voice: typeof m.voice === 'string' && m.voice ? m.voice : undefined, speed: +m.speed > 0 ? +m.speed : undefined }); if (!g.closed) { if (!g.firstT) g.firstT = g.lastT = performance.now(); g.splitter.push(m.text); } return; }
+    if (m.type === 'push') { const g = gens.get(m.gen) || start(m.gen, { voice: typeof m.voice === 'string' && m.voice ? m.voice : undefined, speed: +m.speed > 0 ? +m.speed : undefined }); if (!g.closed) { if (!g.firstT) g.firstT = g.lastT = performance.now(); g.splitter.push(m.text); } kick(); return; }
+    // A waiting reply's first words may be made next (once a reply).
+    if (m.type === 'first') { const g = gens.get(m.gen); if (g && !g.asked && !g.cancelled) { g.asked = true; early.add(g); kick(); } return; }
     // A short clip made once and kept ("Okay."), after any waiting reply.
     if (m.type === 'clip') { clip(m.text, m.v); return; }
     // The first words of a reply go to the voice as soon as there is a phrase,
     // not a whole sentence, so it starts talking sooner.
-    if (m.type === 'flush') { const g = gens.get(m.gen); if (g && !g.closed) g.splitter.flush(); return; }
+    if (m.type === 'flush') { const g = gens.get(m.gen); if (g && !g.closed) g.splitter.flush(); kick(); return; }
     if (m.type === 'end') { const g = gens.get(m.gen); if (g) close(g); return; }
-    if (m.type === 'cancel') { const g = gens.get(m.gen); if (g) { g.cancelled = true; close(g); } return; }
+    if (m.type === 'cancel') { const g = gens.get(m.gen); if (g) { g.cancelled = true; early.delete(g); close(g); } return; }
   } catch (err) {
     postMessage({ type: 'error', gen: m.gen, message: describe(err) });
   }

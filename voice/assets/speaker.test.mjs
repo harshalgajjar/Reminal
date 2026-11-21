@@ -220,3 +220,43 @@ test('made ahead: let go, it is marked so and cannot be taken; what waits is lis
   assert.deepEqual(s.waiting(), []);
   s.close();
 });
+
+// ---------- a waiting reply's first words, asked for early ----------
+test('hurry: asked of the voice once, and only when enough of the reply being said is made and unheard', async () => {
+  const { s, asked } = await open('a');
+  const firsts = () => asked.filter((m) => m.type === 'first').map((m) => m.gen);
+  const p = s.prepare('Second speaker here.', { voice: 'b' });
+  const r = { gen: 900, segs: [], heard: '', playHead: 0, synthDone: false, playing: true };
+  s.current = r;
+  ctx.currentTime = 10;
+  r.playHead = 11;                 // one second made and unheard: not enough to cover the first words
+  s.track();
+  assert.deepEqual(firsts(), [], 'not while the reply being said would run dry');
+  r.playHead = 13.5;               // three and a half seconds: enough (the voice here makes 1 s of speech a second)
+  s.track();
+  assert.deepEqual(firsts(), [p.gen]);
+  s.track(); s.track();
+  assert.deepEqual(firsts(), [p.gen], 'once a reply');
+  ctx.currentTime = 0;
+  s.close();
+});
+
+test('hurry: not asked when all of the reply being said is made (the voice is free anyway), nor on a slow voice without more sound', async () => {
+  const done = await open('a');
+  const p = done.s.prepare('Second.', { voice: 'b' });
+  done.s.current = { gen: 901, segs: [], heard: '', playHead: 100, synthDone: true, playing: true };
+  done.s.track();
+  assert.deepEqual(done.asked.filter((m) => m.type === 'first'), []);
+  assert.ok(p);
+  done.s.close();
+  const slow = await open('a');
+  slow.s.speed = 0.4;               // makes 0.4 s of speech a second: the first words take about 5 s
+  slow.s.prepare('Second.', { voice: 'b' });
+  slow.s.current = { gen: 902, segs: [], heard: '', playHead: 5, synthDone: false, playing: true };
+  slow.s.track();
+  assert.deepEqual(slow.asked.filter((m) => m.type === 'first'), [], 'five seconds unheard is not enough there');
+  slow.s.current.playHead = 8;
+  slow.s.track();
+  assert.equal(slow.asked.filter((m) => m.type === 'first').length, 1, 'eight is');
+  slow.s.close();
+});
