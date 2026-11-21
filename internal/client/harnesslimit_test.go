@@ -147,6 +147,9 @@ var limitScreens = []struct {
 	{"claude", "  ⎿  Your organization is out of usage credits.\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Your organization is out of usage credits. Contact your admin to add more.\n\n❯ ", time.Time{}},
 	{"claude", "  ⎿  Stopped: the spending limit was reached\n\n❯ ", time.Time{}},
+	// Claude Code 2.1.330 (source): lower-priority mode ended at the limit.
+	{"claude", "  ⎿  Lower-priority mode ended · you have reached your weekly usage limit\n\n❯ ", time.Time{}},
+	{"claude", "  ⎿  Lower-priority mode is no longer available · it has ended; new messages wait for your usage limit to reset\n\n❯ ", time.Time{}},
 	// Claude Code 2.1.323 (source): the API's credit balance too low, on
 	// one row; narrower than it, the row is clipped before the link.
 	{"claude", "  ⎿  Credit balance too low · Add funds: https://platform.claude.com/settings/billing\n\n❯ ", time.Time{}},
@@ -292,6 +295,8 @@ func TestHarnessLimitIsNotConversation(t *testing.T) {
 		{"claude", "   Opus 5.5 needs usage credits. See Usage in Settings", "a choice's description in a question"},
 		{"claude", "● Your organization is out of usage credits. Contact your admin to add more, the banner said, and I did.", "a 2.1.330 notice carried on"},
 		{"claude", "● Stopped: the spending limit was reached once before, so I set a lower cap this time.", "a 2.1.330 notice carried on"},
+		{"claude", "● Lower-priority mode ended · you have reached your weekly usage limit, the banner said, so I waited.", "a 2.1.330 notice carried on"},
+		{"claude", "  ⎿  Extra usage is now covering your requests · lower-priority mode ended", "the session goes on"},
 		{"claude", "  ⎿  Usage limit reached · set to continue automatically at 3pm, then it resumed and finished.", "a 2.1.330 notice carried on"},
 		{"claude", "● You've hit your session limit · resets 3pm, and the next window\n  opens then.", "a sentence that wraps on"},
 		// Claude Code 2.1.312: rows that leave the agent working, and its
