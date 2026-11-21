@@ -390,7 +390,10 @@ function ownReply(made) {
 // A line that is to be said in a voice (and at a pace) of its own. It is a
 // String that carries them, so it goes wherever a line goes (held back while
 // you talk, a cut-in, after a reply) and comes out with them.
+// (A line with no words in it is no line: it stays the plain text it was,
+// which is false where an empty line is asked after.)
 export function line(text, opts) {
+  if (typeof text !== 'string' || !text.trim()) return text;
   const l = new String(text);
   l.opts = { voice: (opts && opts.voice) || '', pace: (opts && opts.pace) || 0 };
   return l;

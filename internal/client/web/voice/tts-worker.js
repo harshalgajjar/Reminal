@@ -110,7 +110,17 @@ function start(gen, own = {}) {
       if (!g.cancelled) {
         for await (const text of splitter) {
           if (g.cancelled) break;
-          const audio = await say(text, { voice: g.voice || voice, speed: g.speed || speed });
+          // A voice of its own that cannot be had (no such voice, or its
+          // file not to be fetched): the voice in use says it, this piece
+          // and the rest, so the reply is heard and ends as any does.
+          let audio;
+          try {
+            audio = await say(text, { voice: g.voice || voice, speed: g.speed || speed });
+          } catch (err) {
+            if (!g.voice) throw err;
+            g.voice = undefined;
+            audio = await say(text, { voice, speed: g.speed || speed });
+          }
           if (g.cancelled) break;
           const pcm = audio.audio;
           postMessage({ type: 'audio', gen, text, pcm, rate: audio.sampling_rate, ms: Math.round(performance.now() - (g.lastT || performance.now())) }, [pcm.buffer]);

@@ -452,3 +452,27 @@ test('lines waiting with sound made ahead are given up when they talk over the r
   assert.equal(made.taken.length, 0, 'the waiting line is not said after being talked over');
   assert.equal(made.dropped.length, 1, 'and what was made for it is let go');
 });
+
+test('a line with a voice but no words is the plain empty line it was', () => {
+  assert.equal(talk.line('', { voice: 'af_bella' }), '');
+  assert.equal(talk.line('   ', { voice: 'af_bella' }), '   ');
+  assert.ok(!talk.line('', { voice: 'af_bella' }), 'false where an empty line is asked after');
+  assert.equal(typeof talk.line('', { voice: 'af_bella' }), 'string');
+  assert.equal(String(talk.line('Hi.', { voice: 'af_bella' })), 'Hi.');
+});
+
+test('two lines in two voices held while they made a sound come out as two replies, each in its own', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  sound(300);
+  talk.agentSaid(talk.line('First speaker, held.', { voice: 'af_bella' }));
+  talk.agentSaid(talk.line('Second speaker, held.', { voice: 'am_adam' }));
+  sound(300);
+  mic(3000, false);                 // the sound ends: both are said
+  assert.deepEqual(voice.said.filter((s) => /held/.test(s)).slice(0, 1), ['First speaker, held.'], 'the first is said alone, not joined with the second');
+  assert.ok(!voice.said.some((s) => /First speaker, held\..*Second speaker, held\./.test(s)), 'never the two as one');
+  assert.equal(made.prepared.length, 1, 'the second waits for the first, its sound made meanwhile');
+  assert.equal(made.prepared[0].p.voice, 'am_adam');
+  mic(12000, false);
+  assert.equal(made.taken.length, 1, 'and is said after it, in its own voice');
+});
