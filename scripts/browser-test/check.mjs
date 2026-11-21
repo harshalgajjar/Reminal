@@ -42,10 +42,11 @@ async function call(tool, args = {}, q = "/tmp/q") {
 // it reloads).
 fs.mkdirSync(`${HOME}/.config/chromium/Default`, { recursive: true });
 fs.writeFileSync(`${HOME}/.config/chromium/Default/Preferences`, JSON.stringify({ extensions: { ui: { developer_mode: true } } }));
-const ctx = await chromium.launchPersistentContext(`${HOME}/.config/chromium`, {
+const launch = () => chromium.launchPersistentContext(`${HOME}/.config/chromium`, {
   headless: false, viewport: null, ignoreDefaultArgs: ['--enable-automation'],
   args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--no-first-run', '--no-default-browser-check'],
 });
+const ctx = await launch();
 // The browser's window fills the screen; the consent window keeps its own size
 // (a size flag would apply to every window).
 {
@@ -359,6 +360,26 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   await pause(500);
   const gone = await call('browser_tabs_context', {}, '/tmp/q2');
   check(/closed now/.test(gone.text || gone.err || ''), `its tabs closed: it is told they were closed (${gone.text || gone.err})`);
+  // A tab the person takes out of the session's group is theirs again.
+  const keep = JSON.parse((await call('browser_tabs_create', { url: `${PAGES}/form.html` }, '/tmp/q2')).text.split('\n').pop());
+  const out = JSON.parse((await call('browser_tabs_create', { url: `${PAGES}/toggle.html` }, '/tmp/q2')).text.split('\n').pop());
+  await inSW((id) => chrome.tabs.ungroup(id), out.tabId);
+  const left = await call('browser_tabs_context', {}, '/tmp/q2');
+  check(!left.err && left.text.includes(String(keep.tabId)) && !left.text.includes(String(out.tabId)), `a tab taken out of the group is no longer the session's (${left.err || 'it lists ' + (left.text.match(/"tabId":\d+/g) || []).join(' ')})`);
+  const taken = await call('browser_screenshot', { tabId: out.tabId }, '/tmp/q2');
+  check(taken.err && /not in this session/.test(taken.err), `and is refused (${taken.err})`);
+  check(await inSW((id) => chrome.tabs.get(id).then((t) => t.groupId === -1), out.tabId), 'and was not put back in the group');
+  // Cancel in the browser's own "started debugging" bar is the person's Stop.
+  await inSW((id) => chrome.tabs.update(id, { active: true }), keep.tabId);
+  const shot = await call('browser_screenshot', { tabId: keep.tabId }, '/tmp/q2');
+  check(!shot.err && shot.content.some((c) => c.type === 'image'), `before Cancel, the session's tab is used (${shot.err || 'a screenshot'})`);
+  await slow(800);
+  execSync('xdotool mousemove 331 112 click 1'); // the bar's Cancel, with the window at 0,0
+  await pause(1500);
+  const after = await call('browser_screenshot', { tabId: keep.tabId }, '/tmp/q2');
+  check(after.err && /stopped/.test(after.err) && !after.content.some((c) => c.type === 'image'), `Cancel in the browser's debugging bar stops the session: not attached again (${after.err || 'a screenshot came'})`);
+  const recs2 = await recOf(ID2);
+  check(recs2.length > 0 && recs2.every((s) => s.stopped), 'and it shows as stopped');
 }
 
 // 7. A session ends: its records and its group go with it.
@@ -393,6 +414,14 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   check(st && st.connected && !st.error, `connected after it, nothing for the person to do (${JSON.stringify(st)})`);
 }
 
+// 9. The browser restarts while a stopped session goes on: still stopped.
 await ctx.close();
+{
+  const again = await launch();
+  await pause(4000);
+  const a = await call('browser_tabs_context');
+  check(a.err && /stopped/.test(a.err), `Stop holds across the browser restarting (${a.err || a.text})`);
+  await again.close();
+}
 console.log(fails.length ? `${fails.length} failed` : 'all ok');
 process.exit(fails.length ? 1 : 0);

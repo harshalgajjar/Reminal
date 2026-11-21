@@ -140,14 +140,32 @@ async function letGo(s, why) {
     try { await chrome.tabs.ungroup(tab.id); } catch (_) {}
   }
 }
+// Stopped runs are kept in the profile's own storage too: the browser empties
+// the session's storage when it restarts, while the run goes on, and a Stop
+// holds for the run. Dropped when the session ends; the oldest go past
+// STOPPED_KEPT (a session that ended while the browser was closed).
+const STOPPED_KEPT = 200;
+async function stoppedRuns() { return (await chrome.storage.local.get('stopped')).stopped || {}; }
+async function keepStopped(k) {
+  const all = await stoppedRuns();
+  all[k] = Date.now();
+  const keys = Object.keys(all).sort((a, b) => all[b] - all[a]);
+  for (const old of keys.slice(STOPPED_KEPT)) delete all[old];
+  await chrome.storage.local.set({ stopped: all });
+}
+async function isStopped(k, s) { return !!(s && s.stopped) || k in (await stoppedRuns()); }
 // stop: the person's Stop, for this run of the session.
-async function stop(k) {
+async function stop(k, why = "stopped by the person") {
   bump(k);
+  await keepStopped(k);
   const s = await putS(k, { stopped: true });
-  await letGo(s, "stopped by the person");
+  await letGo(s, why);
 }
 // endSession: the session is gone; its runs' records and groups go too.
 async function endSession(id) {
+  const kept = await stoppedRuns();
+  const mine = Object.keys(kept).filter((k) => k.startsWith(`s:${id}:`));
+  if (mine.length) { for (const k of mine) delete kept[k]; await chrome.storage.local.set({ stopped: kept }); }
   for (const [k, s] of await allS()) {
     if (!k.startsWith(`s:${id}:`)) continue;
     bump(k);
@@ -206,7 +224,7 @@ function guardFor(k) {
   return async () => {
     const s = await getS(k);
     if (!(await allowedHere()) || allEpoch !== all) throw new Error(OFF);
-    if (!s || s.stopped || epochOf(k) !== epoch) throw new Error(STOPPED);
+    if (!s || epochOf(k) !== epoch || await isStopped(k, s)) throw new Error(STOPPED);
     return s;
   };
 }
@@ -216,7 +234,7 @@ async function handle(m) {
   const k = keyOf(m);
   const name = m.name || m.session;
   let s = await getS(k);
-  if (s && s.stopped) throw new Error(STOPPED);
+  if (await isStopped(k, s)) throw new Error(STOPPED);
   const before = s;
   s = await putS(k, { session: m.session, run: m.run || "", name, machine: m.machine || "" });
   await announce(k, before, name);
@@ -248,8 +266,10 @@ async function handle(m) {
 }
 
 // sessionTabs: the tabs of a run, by the ids it keeps (still open), in its
-// group. regroup: a tab the browser took out of the group (or a group it
-// dropped) is put back, in a group made again if need be.
+// group. regroup: when the group itself is gone (the browser dropped it),
+// it is made again from the run's tabs. While the group is there, a tab
+// outside it was taken out by the person: it is theirs again, and dropped
+// from the run's.
 async function sessionTabs(s, regroup = true) {
   if (!s) return [];
   const ids = new Set(s.tabs || []);
@@ -257,12 +277,14 @@ async function sessionTabs(s, regroup = true) {
   try { if (group != null) await chrome.tabGroups.get(group); } catch (_) { group = null; }
   const inGroup = group == null ? [] : await chrome.tabs.query({ groupId: group }).catch(() => []);
   for (const t of inGroup) ids.add(t.id);
-  const tabs = [];
+  let tabs = [];
   for (const id of ids) { try { tabs.push(await chrome.tabs.get(id)); } catch (_) {} }
   if (regroup && tabs.length) {
-    const loose = tabs.filter((t) => group == null || t.groupId !== group).map((t) => t.id);
-    if (loose.length) {
-      group = await chrome.tabs.group(group == null ? { tabIds: loose } : { tabIds: loose, groupId: group });
+    if (group != null) {
+      for (const t of tabs.filter((t) => t.groupId !== group)) await detach(t.id);
+      tabs = tabs.filter((t) => t.groupId === group);
+    } else {
+      group = await chrome.tabs.group({ tabIds: tabs.map((t) => t.id) });
       await chrome.tabGroups.update(group, { title: `reminal: ${s.name || s.session}`, color: s.color || 'blue' }).catch(() => {});
     }
     const key = `s:${s.session}:${s.run || ''}`;
@@ -375,6 +397,7 @@ function loaded(tabId) {
 const attached = new Set();
 async function cdp(c, method, params = {}) {
   await c.alive();
+  if (canceled.has(c.tabId)) throw new Error(STOPPED);
   if (!attached.has(c.tabId)) {
     try {
       await chrome.debugger.attach({ tabId: c.tabId }, '1.3');
@@ -386,17 +409,33 @@ async function cdp(c, method, params = {}) {
   try {
     return await chrome.debugger.sendCommand({ tabId: c.tabId }, method, params);
   } catch (e) {
-    // Detached under us (the bar's Cancel, the worker's sleep): once more.
+    // Detached under us (the worker's sleep): once more. Not after Cancel in
+    // the browser's own "started debugging" bar: that is the person's Stop.
     if (!/not attached|detached/i.test(String(e && e.message))) throw e;
     attached.delete(c.tabId);
+    if (canceled.has(c.tabId)) throw new Error(STOPPED);
+    await c.alive();
     await chrome.debugger.attach({ tabId: c.tabId }, '1.3');
     attached.add(c.tabId);
     return chrome.debugger.sendCommand({ tabId: c.tabId }, method, params);
   }
 }
 async function detach(tabId) { attached.delete(tabId); try { await chrome.debugger.detach({ tabId }); } catch (_) {} }
-chrome.debugger.onDetach.addListener((src) => attached.delete(src.tabId));
-chrome.tabs.onRemoved.addListener((tabId) => attached.delete(tabId));
+// Cancel in the browser's "reminal started debugging this browser" bar is
+// the person saying stop, in the one control the browser itself offers: the
+// run whose tab it was is stopped, as by its Stop. (The bar detaches every
+// tab, so every run using the browser then.) canceled holds the tab at once,
+// before the run's record is written.
+const canceled = new Set();
+chrome.debugger.onDetach.addListener((src, reason) => {
+  attached.delete(src.tabId);
+  if (reason !== 'canceled_by_user' || src.tabId == null) return;
+  canceled.add(src.tabId);
+  allS().then(async (all) => {
+    for (const [k, s] of all) if ((s.tabs || []).includes(src.tabId) && !s.stopped) await stop(k, "the person pressed Cancel in the browser's debugging bar");
+  });
+});
+chrome.tabs.onRemoved.addListener((tabId) => { attached.delete(tabId); canceled.delete(tabId); });
 
 async function screenshot(c) {
   const m = await cdp(c, 'Page.getLayoutMetrics');
