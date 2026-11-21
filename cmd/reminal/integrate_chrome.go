@@ -58,13 +58,15 @@ var (
 
 func chromeBrowserTable() []chromeBrowser {
 	if chromeOS == "windows" {
+		// Chrome Beta and Brave read Chrome's own key; Edge and Chromium
+		// each have theirs.
 		al := filepath.Join("AppData", "Local")
 		return []chromeBrowser{
 			{"Google Chrome", filepath.Join(al, "Google", "Chrome", "User Data"), `Software\Google\Chrome`},
-			{"Google Chrome Beta", filepath.Join(al, "Google", "Chrome Beta", "User Data"), `Software\Google\Chrome Beta`},
+			{"Google Chrome Beta", filepath.Join(al, "Google", "Chrome Beta", "User Data"), `Software\Google\Chrome`},
 			{"Chromium", filepath.Join(al, "Chromium", "User Data"), `Software\Chromium`},
 			{"Microsoft Edge", filepath.Join(al, "Microsoft", "Edge", "User Data"), `Software\Microsoft\Edge`},
-			{"Brave", filepath.Join(al, "BraveSoftware", "Brave-Browser", "User Data"), `Software\BraveSoftware\Brave-Browser`},
+			{"Brave", filepath.Join(al, "BraveSoftware", "Brave-Browser", "User Data"), `Software\Google\Chrome`},
 		}
 	}
 	if chromeOS == "darwin" {
@@ -102,6 +104,12 @@ func chromeBrowsers(home string) []chromeBrowser {
 func chromeOurs(home string) []chromeBrowser {
 	var out []chromeBrowser
 	for _, b := range chromeBrowserTable() {
+		if b.Reg != "" {
+			// Several browsers read one key: only those that are here.
+			if st, err := os.Stat(filepath.Join(home, b.Dir)); err != nil || !st.IsDir() {
+				continue
+			}
+		}
 		raw, err := os.ReadFile(chromeHostManifestPath(home, b))
 		if err != nil {
 			continue

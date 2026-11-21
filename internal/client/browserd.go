@@ -230,7 +230,11 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 		ok = browserBridgeOK
 	}
 	if err != nil || !ok(peer) {
-		log.Printf("browser: refused a bridge from pid %d: not reminal's browser-host under a browser", peer)
+		if err != nil {
+			log.Printf("browser: refused a bridge: cannot tell which process it is: %v", err)
+		} else {
+			log.Printf("browser: refused a bridge from pid %d: not reminal's browser-host under a browser", peer)
+		}
 		_ = (&browserConn{c: conn}).send(map[string]string{"t": "refused", "error": "not reminal's browser host"})
 		_ = conn.Close()
 		return

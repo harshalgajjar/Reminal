@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,17 +137,22 @@ func TestBrowserBatchStepsAreCheckedAsSent(t *testing.T) {
 	// The browser's host looks again: a request that reached the hub another
 	// way, with a secret, or a path not as the check leaves it, is answered
 	// with a refusal in its place; a checked one goes through.
+	// (A path goes into the JSON as JSON: a Windows path has backslashes.)
+	q := func(p string) string {
+		b, _ := json.Marshal(p)
+		return string(b)
+	}
 	real, _ := browserUploadPath(ok)
-	if b := hostRefuses([]byte(`{"t":"req","id":4,"tool":"file_upload","args":{"paths":["` + real + `"]}}`)); b != nil {
+	if b := hostRefuses([]byte(`{"t":"req","id":4,"tool":"file_upload","args":{"paths":[` + q(real) + `]}}`)); b != nil {
 		t.Errorf("a checked upload was refused by the host: %s", b)
 	}
-	realSecret, _ := filepath.EvalSymlinks(secret)
+	realSecret, _ := browserRealPath(secret)
 	for _, msg := range []string{
-		`{"t":"req","id":5,"tool":"file_upload","args":{"paths":["` + realSecret + `"]}}`,
+		`{"t":"req","id":5,"tool":"file_upload","args":{"paths":[` + q(realSecret) + `]}}`,
 		`{"t":"req","id":5,"tool":"file_upload","args":{"paths":["a.txt"]}}`,
 		`{"t":"req","id":5,"tool":"file_upload","args":{}}`,
-		`{"t":"req","id":5,"tool":"batch","args":{"actions":[{"tool":"file_upload","args":{"paths":["` + realSecret + `"]}}]}}`,
-		`{"t":"req","id":5,"tool":"batch","args":{"actions":[{"tool":["file_upload"],"args":{"paths":["` + realSecret + `"]}}]}}`,
+		`{"t":"req","id":5,"tool":"batch","args":{"actions":[{"tool":"file_upload","args":{"paths":[` + q(realSecret) + `]}}]}}`,
+		`{"t":"req","id":5,"tool":"batch","args":{"actions":[{"tool":["file_upload"],"args":{"paths":[` + q(realSecret) + `]}}]}}`,
 	} {
 		b := hostRefuses([]byte(msg))
 		if b == nil || !strings.Contains(string(b), `"ok":false`) || !strings.Contains(string(b), `"id":5`) {

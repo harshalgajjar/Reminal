@@ -39,7 +39,9 @@ func peerPID(c net.Conn) (int, error) {
 	if serr != nil {
 		return 0, serr
 	}
-	if n != uint32(unsafe.Sizeof(pid)) || pid == 0 {
+	// (Windows fills the pid in and reports no bytes written, so the count
+	// is not what says whether it answered: the pid is.)
+	if pid == 0 {
 		return 0, errors.New("the socket did not say which process is at its other end")
 	}
 	return int(pid), nil

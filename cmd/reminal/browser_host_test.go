@@ -217,6 +217,9 @@ func TestIntegrateSetsUpTheBrowserToo(t *testing.T) {
 
 // With no browser of Chrome's family here, integrate writes nothing of it.
 func TestIntegrateWithNoBrowserWritesNoneOfIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("on Windows the home folder cannot be stood in for by HOME: this would set up the person's own browser")
+	}
 	home := t.TempDir()
 	out := runIntegrateIn(t, home, "-y")
 	if _, err := os.Stat(chromeExtensionDir(home)); !os.IsNotExist(err) {
@@ -273,6 +276,9 @@ func TestBrowserToolsAreListed(t *testing.T) {
 // Not set up (no host manifest: `reminal integrate` has not run): the
 // browser tools are not offered, as they could not work.
 func TestBrowserToolsAreNotListedBeforeIntegrate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("on Windows the home folder cannot be stood in for by HOME")
+	}
 	t.Setenv("HOME", t.TempDir())
 	for _, tl := range mcpToolList() {
 		if n, _ := tl["name"].(string); strings.HasPrefix(n, "browser_") {

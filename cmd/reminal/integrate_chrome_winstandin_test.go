@@ -31,7 +31,7 @@ func TestTheBrowserIsSetUpOnWindowsThroughTheRegistry(t *testing.T) {
 	reg := asWindows(t)
 	home := t.TempDir()
 	table := chromeBrowserTable()
-	chrome, edge, brave := table[0], table[3], table[4]
+	chrome, chromium, edge, brave := table[0], table[2], table[3], table[4]
 	for _, b := range []chromeBrowser{chrome, edge} {
 		if err := os.MkdirAll(filepath.Join(home, b.Dir), 0o755); err != nil {
 			t.Fatal(err)
@@ -56,7 +56,10 @@ func TestTheBrowserIsSetUpOnWindowsThroughTheRegistry(t *testing.T) {
 	if reg[chrome.Reg] != manifest || reg[edge.Reg] != manifest {
 		t.Fatalf("each browser here is pointed at the manifest: %v", reg)
 	}
-	if _, ok := reg[brave.Reg]; ok || len(reg) != 2 {
+	if brave.Reg != chrome.Reg || table[1].Reg != chrome.Reg {
+		t.Fatalf("Brave and Chrome Beta read Chrome's key: %q %q", brave.Reg, table[1].Reg)
+	}
+	if _, ok := reg[chromium.Reg]; ok || len(reg) != 2 {
 		t.Fatalf("a browser that is not here was pointed at it: %v", reg)
 	}
 	if got := chromeOurs(home); len(got) != 2 {
@@ -88,7 +91,11 @@ func TestTheBrowserIsSetUpOnWindowsThroughTheRegistry(t *testing.T) {
 // its streams.
 func TestSecretPathsOnWindows(t *testing.T) {
 	plain := `c:/users/sam/documents/notes.txt`
-	if browserSecretPath(plain + "::$data") {
+	old := chromeOS
+	chromeOS = "linux"
+	control := browserSecretPath(plain + "::$data")
+	chromeOS = old
+	if control {
 		t.Fatal("control: a colon in a name is refused where it does not name a stream")
 	}
 	asWindows(t)
