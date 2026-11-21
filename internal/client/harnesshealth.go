@@ -310,13 +310,29 @@ var harnessLoginScreens = map[string][]loginRow{
 	// key is missing. Pass it using the 'apiKey' parameter or the
 	// ANTHROPIC_API_KEY environment variable."), as does a gateway that
 	// turned its token away.
+	// 1.19.6 (recorded, opencode-gitlab-nokey.txt): its GitLab provider says
+	// it in words of its own, in the conversation and in a notice at the
+	// top of the screen.
 	"opencode": loginRows(
 		opencodeKeyMissing,
+		opencodeGitLabKeyMissing,
+		// Its GitLab login lapsed and could not be renewed, with what the
+		// renewal said: the service's refusal by its status, or no token
+		// to renew with (the two things the provider can put there).
+		`oauthtokenrefreshfailedandnofallback[a-z0-9_]+environmentvariableisset\.refresherror:(?:oauthtokenexchangefailed:[0-9]{3}[a-z]{0,40}|oauthtokenhasexpiredandnorefreshtokenisavailable)\.re-authenticatewith'opencodeauthlogin[a-z0-9.\-]+'orset[a-z0-9_]+`,
 		`unauthorized:requestwasblockedbyagatewayorproxy\.yourauthenticationtokenmaybemissingorexpired—tryrunning.?opencodeauthlogin<yourproviderurl>.?tore-authenticate`,
 	),
 	// Kilo Code CLI 7.8.27, OpenCode's fork, says a provider's key is
 	// missing in OpenCode's words. Its own gateway needs no login.
 	"kilo": loginRows(opencodeKeyMissing),
+	// Cline 3.0.75 with no account (recorded, cline-first.txt): its first
+	// screen, a menu of ways to sign in ("Welcome to Cline", then "Connect a
+	// model provider to get started."): Enter there starts one. And its
+	// device sign-in (cline-device.txt): the address to enter its code at,
+	// with "Waiting for sign-in..." under it; either alone is not it. (Its
+	// menu is taller than the rows read for most: harnessRowsFor.)
+	"cline": loginAll(loginThen(`welcometocline`, `connectamodelprovidertogetstarted`),
+		loginThen(`https://[a-z0-9.\-]+/device\?user_code=[a-z0-9\-]+`, `waitingforsign-in(?:\.{3}|…)?`)),
 	// Cursor CLI: its first screen with no login ("Press any key to log
 	// in..." — a key typed there starts signing in), the sign-in itself, and
 	// a login it has not got or can no longer use. A key it was given and
@@ -414,6 +430,12 @@ var harnessLoginScreens = map[string][]loginRow{
 	)),
 }
 
+// opencodeGitLabKeyMissing is the same from OpenCode's GitLab provider, which
+// words it apart: "GitLab API key is missing. Pass it as the 'apiKey'
+// parameter, set the GITLAB_TOKEN environment variable, or authenticate with
+// 'opencode auth login gitlab'."
+const opencodeGitLabKeyMissing = `[a-z0-9.\-]*apikeyismissing\.passitasthe'[a-z0-9_]+'parameter,setthe[a-z0-9_]+environmentvariable,orauthenticatewith'opencodeauthlogin[a-z0-9.\-]+'`
+
 // opencodeKeyMissing is OpenCode's row for a provider it was set up for and
 // has no key for, as Kilo Code CLI says it too.
 const opencodeKeyMissing = `[a-z0-9.\-]*apikeyismissing\.passitusingthe'[a-z0-9_]+'parameter(?:orthe[a-z0-9_]+environmentvariable|\.environmentvariables(?:are|is)notsupportedinthisenvironment)`
@@ -480,6 +502,12 @@ var harnessKeyRefusals = map[string][]loginRow{
 	// Kilo Code CLI 7.8.27 prints the service's words the same way, in the
 	// same box.
 	"kilo": loginOpen(`^[^a-z0-9]*incorrectapikeyprovided`),
+	// Cline 3.0.75 with a login its service turns away: a run ends on the
+	// service's words ("error: Unauthorized: Please make sure you're using
+	// the latest version of Cline and re-authenticate your Cline account.
+	// (Request ID: …)"). The whole row, to its request id: the same words
+	// quoted or carried on in an answer are not it.
+	"cline": loginRows(`error:unauthorized:pleasemakesureyou.?reusingthelatestversionofclineandre-authenticateyourclineaccount\.\(requestid:[a-z0-9\-]{6,64}\)`),
 	// Codex with an OpenAI key the service refuses: "■ unexpected status 401
 	// Unauthorized: Incorrect API key provided: …", from the row's start (the
 	// same words in a sentence, or a tool's output at a shell, are not it).
@@ -753,6 +781,11 @@ const harnessRows = 12
 // than that, and its error for a turn sits above them all.
 func harnessRowsFor(prog string) int {
 	if prog == "gemini" {
+		return 20
+	}
+	// Cline's first screen is a menu of four boxes under its heading: the
+	// heading is the nineteenth row up.
+	if prog == "cline" {
 		return 20
 	}
 	return harnessRows
