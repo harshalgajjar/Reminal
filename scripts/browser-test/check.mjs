@@ -113,7 +113,7 @@ let tabId;
   try { tabId = JSON.parse(res.text).tabId; } catch (_) {}
   check(!res.err && tabId > 0 && await none, `first use: a tab opened with no prompt, in ${ms} ms (${res.err || res.text})`);
   const g = await groups();
-  check(g.length === 1 && g[0] === 'reminal: web helper', `in a tab group of the session's own (${JSON.stringify(g)})`);
+  check(g.length === 1 && g[0] === `${ID} - reminal`, `in a tab group of the session's own (${JSON.stringify(g)})`);
   const recs = await inSW((id) => chrome.storage.session.get(null).then((all) => Object.entries(all).filter(([k]) => k.startsWith(`s:${id}:`)).map(([, v]) => v)), ID);
   check(recs.some((s) => s.noticed), 'its first use was announced (a notification with Stop)');
   await slow(1200);
@@ -124,7 +124,7 @@ let tabId;
   const r = await call('browser_tabs_create', { url: `${PAGES}/form.html?second` }, '/tmp/q2');
   check(!r.err, `a second session works at once (${r.err || r.text})`);
   const g = await groups();
-  check(g.length === 2 && g.includes('reminal: second helper'), `and has a tab group of its own (${JSON.stringify(g)})`);
+  check(g.length === 2 && g.includes(`${ID2} - reminal`), `and has a tab group of its own (${JSON.stringify(g)})`);
 }
 
 // 2c. Its tab survives what the browser does meanwhile: the connection to
@@ -145,7 +145,7 @@ let tabId;
   await inSW((id) => chrome.debugger.detach({ tabId: id }).then(() => 'detached', (e) => e.message), tabId).catch(() => {});
   tabs = await ctxOf();
   const g = await groups();
-  check(tabs.some((t) => t.tabId === tabId) && g.includes('reminal: web helper'), `a group the browser dropped is made again, with the tab in it (${JSON.stringify(g)})`);
+  check(tabs.some((t) => t.tabId === tabId) && g.includes(`${ID} - reminal`), `a group the browser dropped is made again, with the tab in it (${JSON.stringify(g)})`);
   r = await call('browser_screenshot');
   check(r.content.some((c) => c.type === 'image'), `and the debugger attaches again (${r.err || 'a screenshot'})`);
   // The session's record gone for a while (judged stale after a clock jump,
@@ -156,7 +156,7 @@ let tabId;
   await pause(12000);
   fs.writeFileSync(rec, saved);
   tabs = await ctxOf();
-  check(tabs.some((t) => t.tabId === tabId) && (await groups()).includes('reminal: web helper'), `a live session whose record went missing still has its tab and group (${JSON.stringify(tabs.map((t) => t.tabId))})`);
+  check(tabs.some((t) => t.tabId === tabId) && (await groups()).includes(`${ID} - reminal`), `a live session whose record went missing still has its tab and group (${JSON.stringify(tabs.map((t) => t.tabId))})`);
 }
 
 // 3. Screenshot, reading, typing, clicking.
@@ -344,7 +344,7 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   await going;
   const recs = await recOf(ID);
   check(recs.length > 0 && recs.every((s) => s.stopped), 'Stop: that session is stopped, and nothing brought it back');
-  check(!(await groups()).includes('reminal: web helper'), `its tab group is undone, the tabs stay (${JSON.stringify(await groups())})`);
+  check(!(await groups()).includes(`${ID} - reminal`), `its tab group is undone, the tabs stay (${JSON.stringify(await groups())})`);
   const a = await call('browser_screenshot');
   check(a.err && /stopped/.test(a.err) && !a.content.some((c) => c.type === 'image'), `a stopped session is refused, and no screenshot comes (${a.err})`);
   const other = await call('browser_tabs_context', {}, '/tmp/q2');
@@ -388,7 +388,7 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   let left = [];
   for (let i = 0; i < 40; i++) { left = await recOf(ID2); if (!left.length) break; await pause(500); }
   check(left.length === 0, 'the session ended: its record is gone');
-  check(!(await groups()).includes('reminal: second helper'), 'and its tab group');
+  check(!(await groups()).includes(`${ID2} - reminal`), 'and its tab group');
 }
 
 // 8. reminal upgraded: the browser still runs the extension it loaded from

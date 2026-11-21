@@ -106,7 +106,7 @@ func chromeHostManifestPath(home string, b chromeBrowser) string {
 func chromeHostManifest(exe string) []byte {
 	m := map[string]any{
 		"name":            browserHostName,
-		"description":     "reminal: agents in your reminal sessions use this browser, when you allow it",
+		"description":     "reminal: agents in your reminal sessions use this browser",
 		"path":            exe,
 		"type":            "stdio",
 		"allowed_origins": []string{"chrome-extension://" + browserExtensionID + "/"},

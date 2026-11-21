@@ -285,7 +285,7 @@ async function sessionTabs(s, regroup = true) {
       tabs = tabs.filter((t) => t.groupId === group);
     } else {
       group = await chrome.tabs.group({ tabIds: tabs.map((t) => t.id) });
-      await chrome.tabGroups.update(group, { title: `reminal: ${s.name || s.session}`, color: s.color || 'blue' }).catch(() => {});
+      await chrome.tabGroups.update(group, { title: `${s.session} - reminal`, color: s.color || 'blue' }).catch(() => {});
     }
     const key = `s:${s.session}:${s.run || ''}`;
     await putS(key, { groupId: group, tabs: tabs.map((t) => t.id) });
@@ -323,7 +323,7 @@ async function tabsCreate(k, alive, name, url) {
   const color = s.color || COLORS[(await allS()).length % COLORS.length];
   if (group == null) {
     group = await chrome.tabs.group({ tabIds: [tab.id] });
-    await chrome.tabGroups.update(group, { title: `reminal: ${name}`, color });
+    await chrome.tabGroups.update(group, { title: `${s.session} - reminal`, color });
   } else {
     await chrome.tabs.group({ tabIds: [tab.id], groupId: group });
   }

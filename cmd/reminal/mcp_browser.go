@@ -81,7 +81,7 @@ func browserTools(obj func(map[string]any, ...string) map[string]any, str func(s
 		},
 		{
 			"name":        "browser_tabs_create",
-			"description": "Open a new tab in this session's tab group (made if needed, named after the session). " + common,
+			"description": "Open a new tab in this session's tab group (made if needed, named with the session's id). " + common,
 			"inputSchema": obj(map[string]any{"url": str("Optional URL to open (default: a blank tab).")}),
 		},
 		{
