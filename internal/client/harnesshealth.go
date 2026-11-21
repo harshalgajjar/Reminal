@@ -421,7 +421,7 @@ const opencodeKeyMissing = `[a-z0-9.\-]*apikeyismissing\.passitusingthe'[a-z0-9_
 // piProviders are pi's providers by their ids (pi 1.4.0's own list): what
 // its "No API key found for anthropic." names. Any other word there is not
 // pi's ("No API key found for staging-server", from a tool).
-const piProviders = `amazon-bedrock|ant-ling|anthropic|openai|azure|openai-codex|radius|nvidia|deepseek|google|google-vertex|github-copilot|openrouter|vercel-ai-gateway|xai|groq|cerebras|zai|zai-coding-cn|mistral|minimax|minimax-cn|moonshotai|moonshotai-cn|huggingface|fireworks|together|baseten|opencode|opencode-go|kimi-coding|meta|cloudflare-workers-ai|cloudflare-ai-gateway|qwen-token-plan|qwen-token-plan-cn|qwen-token-plan-individual|xiaomi|xiaomi-token-plan-cn|xiaomi-token-plan-ams|xiaomi-token-plan-sgp`
+const piProviders = `amazon-bedrock|ant-ling|anthropic|openai|azure|openai-codex|radius|nvidia|deepseek|google|google-vertex|github-copilot|openrouter|vercel-ai-gateway|xai|groq|cerebras|zai|zai-coding-cn|mistral|minimax|minimax-cn|moonshotai|moonshotai-cn|huggingface|fireworks|together|baseten|opencode|opencode-go|kimi-coding|meta|cloudflare-workers-ai|cloudflare-ai-gateway|qwen-token-plan|qwen-token-plan-cn|qwen-token-plan-individual|qwen-token-plan-individual-cn|xiaomi|xiaomi-token-plan-cn|xiaomi-token-plan-ams|xiaomi-token-plan-sgp`
 
 // cursorKeyRefused is Cursor CLI turning away the API key it was given, its
 // own row: "⚠ Warning: The provided API key is invalid.", then where the key

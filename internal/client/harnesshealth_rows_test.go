@@ -159,6 +159,8 @@ var loginRowCases = []loginRowCase{
 
 	{prog: "pi", row: " Error: No API key found for the selected model."},
 	{prog: "pi", row: " Error: No API key found for anthropic."},
+	// pi 1.6.0 (recorded, no account): a provider newer than the list had.
+	{prog: "pi", row: " Error: No API key found for qwen-token-plan-individual-cn."},
 	{prog: "pi", row: ` Error: Authentication failed for "anthropic". Credentials may have expired or network is unavailable. Run '/login anthropic' to re-authenticate.`},
 	{prog: "pi", row: " Error: Your session has expired. Please reauthenticate."},
 
@@ -545,6 +547,7 @@ func TestAnAgentsOwnTextIsNotALoginAfterAll(t *testing.T) {
 		{"Codex's words with no mark of its own", "codex", "  Your session has expired. Please reauthenticate."},
 		{"pi's words with no Error: of its own", "pi", "  Your session has expired. Please reauthenticate."},
 		{"pi naming no provider of its own", "pi", " Error: No API key found for staging-server"},
+		{"pi naming something that only starts as a provider of its own", "pi", " Error: No API key found for qwen-token-plan-individual-cn-staging"},
 	} {
 		for _, prog := range []string{c.prog, ""} {
 			if loggedOutBy(c.screen+loginRowFrame, prog) {
