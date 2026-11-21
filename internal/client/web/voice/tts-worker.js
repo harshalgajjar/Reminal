@@ -98,9 +98,11 @@ function release() {
   setTimeout(() => { const next = waitReply.shift() || waitClip.shift(); if (next) next(); else busy = false; }, 0);
 }
 
-function start(gen) {
+// own: the voice and the pace of this reply alone, when its first words named
+// them (else the ones in use).
+function start(gen, own = {}) {
   const splitter = new Splitter();
-  const g = { splitter, cancelled: false, closed: false };
+  const g = { splitter, cancelled: false, closed: false, voice: own.voice, speed: own.speed };
   gens.set(gen, g);
   (async () => {
     await acquire(true);
@@ -108,7 +110,17 @@ function start(gen) {
       if (!g.cancelled) {
         for await (const text of splitter) {
           if (g.cancelled) break;
-          const audio = await say(text, { voice, speed });
+          // A voice of its own that cannot be had (no such voice, or its
+          // file not to be fetched): the voice in use says it, this piece
+          // and the rest, so the reply is heard and ends as any does.
+          let audio;
+          try {
+            audio = await say(text, { voice: g.voice || voice, speed: g.speed || speed });
+          } catch (err) {
+            if (!g.voice) throw err;
+            g.voice = undefined;
+            audio = await say(text, { voice, speed: g.speed || speed });
+          }
           if (g.cancelled) break;
           const pcm = audio.audio;
           postMessage({ type: 'audio', gen, text, pcm, rate: audio.sampling_rate, ms: Math.round(performance.now() - (g.lastT || performance.now())) }, [pcm.buffer]);
@@ -147,7 +159,7 @@ onmessage = async (e) => {
     if (m.type === 'load') return await load(m);
     if (m.type === 'speed') { speed = +m.v || 1; return; }
     if (m.type === 'voice') { voice = m.v || voice; return; }
-    if (m.type === 'push') { const g = gens.get(m.gen) || start(m.gen); if (!g.closed) { if (!g.firstT) g.firstT = g.lastT = performance.now(); g.splitter.push(m.text); } return; }
+    if (m.type === 'push') { const g = gens.get(m.gen) || start(m.gen, { voice: typeof m.voice === 'string' && m.voice ? m.voice : undefined, speed: +m.speed > 0 ? +m.speed : undefined }); if (!g.closed) { if (!g.firstT) g.firstT = g.lastT = performance.now(); g.splitter.push(m.text); } return; }
     // A short clip made once and kept ("Okay."), after any waiting reply.
     if (m.type === 'clip') { clip(m.text, m.v); return; }
     // The first words of a reply go to the voice as soon as there is a phrase,

@@ -335,3 +335,144 @@ test('control: a line held while they said something stays on screen, unsaid, an
   assert.equal(said().length, 1, 'their turn goes to the agent');
   assert.equal(said()[0].text, 'what about the tests');
 });
+
+// ---------- a line in a voice of its own ----------
+// A caller may give a line a voice (and a pace); the viewer never does. Such
+// a line is a reply of its own, said in that voice, and where it must wait
+// for the reply being heard its sound is made meanwhile.
+const made = { prepared: [], taken: [], dropped: [] };
+let madeGen = 1000;
+Object.assign(voice, {
+  prepare(text, opts, into) {
+    const p = into || { gen: ++madeGen, segs: [], sources: [], playHead: 0, playing: false, synthDone: false, heard: '', voice: opts.voice, pace: opts.pace, words: '' };
+    p.words += text;
+    made.prepared.push({ p, text, joined: !!into });
+    return p;
+  },
+  take(p) { this.current = p; made.taken.push(p); this.said.push(p.words); this.play(p, p.words); },
+  drop(p) { made.dropped.push(p); },
+});
+function fresh() {
+  sent.length = 0; rows.length = 0; voice.said.length = 0; voice.cancelled.length = 0;
+  made.prepared.length = 0; made.taken.length = 0; made.dropped.length = 0;
+  talk.start({ stt, speaker: voice, turnModel: { slow: true, finished: async () => 0.9 }, nods: () => false });
+}
+const FIRST = 'The first speaker says a fairly long sentence so that it is still being heard.';
+const SECOND = 'And the second one answers.';
+
+test('a line with a voice of its own, nobody talking: said at once, in that voice', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  talk.agentSaid(talk.line(FIRST, { voice: 'af_bella', pace: 1.2 }));
+  assert.deepEqual(voice.said, [FIRST], 'said as any line is');
+  assert.equal(typeof voice.said[0], 'string', 'the voice is handed plain text');
+  assert.equal(voice.current.voice, 'af_bella');
+  assert.equal(voice.current.pace, 1.2);
+  assert.equal(made.prepared.length, 0, 'nothing to make ahead: nothing is being heard');
+});
+
+test('control: a plain line has no voice of its own, and nothing is made ahead for it', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  talk.agentSaid(FIRST);
+  mic(1600, false);                 // its turn ends (a reply of its own), still being heard
+  talk.agentSaid(SECOND);           // waits for it, as before
+  assert.equal(voice.current.voice, undefined);
+  assert.equal(made.prepared.length, 0, 'a plain line is not made ahead');
+  assert.ok(!voice.said.includes(SECOND), 'not said over the reply being heard');
+  mic(9000, false);
+  assert.deepEqual(voice.said, [FIRST, SECOND], 'said after it, as before');
+});
+
+test('a line in another voice while a reply is being heard: made meanwhile, said after it, once', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  talk.agentSaid(talk.line(FIRST, { voice: 'af_bella' }));
+  mic(1600, false);                 // made (1.2 s) and its turn over; it plays for some seconds yet
+  const first = voice.current;
+  talk.agentSaid(talk.line(SECOND, { voice: 'am_adam' }));
+  assert.equal(made.prepared.length, 1, 'its sound is made while the first is heard');
+  assert.equal(made.prepared[0].p.voice, 'am_adam');
+  assert.ok(!voice.said.includes(SECOND), 'not said over the first');
+  assert.equal(voice.current, first, 'the first is still the one being said');
+  mic(9000, false);                 // the first has been heard
+  assert.equal(made.taken.length, 1, 'the one made ahead is the one said next');
+  assert.equal(made.taken[0], made.prepared[0].p);
+  assert.equal(voice.said.filter((s) => s.includes(SECOND)).length, 1, 'and its words go to the voice once');
+  assert.ok(rows.some((r) => r.who === 'agent' && !r.removed && String(r.text).includes(SECOND)), 'shown as its own reply');
+});
+
+test('a line in another voice while a reply of its own is still being said ends that one first', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  talk.agentSaid(talk.line(FIRST, { voice: 'af_bella' }));
+  talk.agentSaid(talk.line(SECOND, { voice: 'am_adam' })); // at once, before the first's turn is over
+  assert.deepEqual(voice.said, [FIRST], 'not joined to the first speaker\'s reply');
+  assert.equal(made.prepared.length, 1);
+  mic(12000, false);
+  assert.equal(made.taken.length, 1, 'said after the first, as a reply of its own');
+});
+
+test('two waiting lines in the same voice are one reply made ahead; another voice is another', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  talk.agentSaid(talk.line(FIRST, { voice: 'af_bella' }));
+  mic(1600, false);
+  talk.agentSaid(talk.line('Second, part one.', { voice: 'am_adam' }));
+  talk.agentSaid(talk.line('Second, part two.', { voice: 'am_adam' }));
+  talk.agentSaid(talk.line('Third speaker.', { voice: 'bf_emma' }));
+  assert.deepEqual(made.prepared.map((x) => [x.p.voice, x.joined]), [['am_adam', false], ['am_adam', true], ['bf_emma', false]]);
+  assert.equal(made.prepared[0].p, made.prepared[1].p, 'the two lines are one reply');
+  mic(30000, false);
+  assert.deepEqual(made.taken.map((p) => p.voice), ['am_adam', 'bf_emma'], 'each said once, in order');
+  assert.ok(!voice.said.includes('Second, part two.'), 'the joined line is not said a second time');
+});
+
+test('a line with a voice held while they made a sound keeps its voice when it is said', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  sound(300);
+  talk.agentSaid(talk.line(HELD, { voice: 'af_bella' }));
+  assert.ok(!voice.said.includes(HELD), 'not said over them');
+  sound(300);
+  mic(3000, false);
+  assert.ok(voice.said.includes(HELD), 'said once the sound ends');
+  assert.equal(voice.current && voice.current.voice, 'af_bella', 'in its own voice');
+});
+
+test('lines waiting with sound made ahead are given up when they talk over the reply', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  talk.agentSaid(talk.line(FIRST, { voice: 'af_bella' }));
+  mic(1600, false);
+  talk.agentSaid(talk.line(SECOND, { voice: 'am_adam' }));
+  assert.equal(made.prepared.length, 1);
+  mic(1500, true, 'no wait stop that is wrong');   // they talk over it
+  mic(3000, false);
+  assert.equal(made.taken.length, 0, 'the waiting line is not said after being talked over');
+  assert.equal(made.dropped.length, 1, 'and what was made for it is let go');
+});
+
+test('a line with a voice but no words is the plain empty line it was', () => {
+  assert.equal(talk.line('', { voice: 'af_bella' }), '');
+  assert.equal(talk.line('   ', { voice: 'af_bella' }), '   ');
+  assert.ok(!talk.line('', { voice: 'af_bella' }), 'false where an empty line is asked after');
+  assert.equal(typeof talk.line('', { voice: 'af_bella' }), 'string');
+  assert.equal(String(talk.line('Hi.', { voice: 'af_bella' })), 'Hi.');
+});
+
+test('two lines in two voices held while they made a sound come out as two replies, each in its own', (t) => {
+  t.after(() => { talk.stop(); timers = []; });
+  fresh();
+  sound(300);
+  talk.agentSaid(talk.line('First speaker, held.', { voice: 'af_bella' }));
+  talk.agentSaid(talk.line('Second speaker, held.', { voice: 'am_adam' }));
+  sound(300);
+  mic(3000, false);                 // the sound ends: both are said
+  assert.deepEqual(voice.said.filter((s) => /held/.test(s)).slice(0, 1), ['First speaker, held.'], 'the first is said alone, not joined with the second');
+  assert.ok(!voice.said.some((s) => /First speaker, held\..*Second speaker, held\./.test(s)), 'never the two as one');
+  assert.equal(made.prepared.length, 1, 'the second waits for the first, its sound made meanwhile');
+  assert.equal(made.prepared[0].p.voice, 'am_adam');
+  mic(12000, false);
+  assert.equal(made.taken.length, 1, 'and is said after it, in its own voice');
+});

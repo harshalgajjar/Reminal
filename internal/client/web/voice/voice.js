@@ -293,7 +293,14 @@ panel.initSettings(() => talk.running || starting).then(() => {
 // ---------- the viewer ----------
 onMessage((m) => {
   switch (m.t) {
-    case 'speak': if (typeof m.text === 'string') talk.agentSaid(m.text); break;
+    // (voice, pace: a line to be said in a voice of its own; the viewer sends neither.)
+    case 'speak': {
+      if (typeof m.text !== 'string') break;
+      const voice = typeof m.voice === 'string' && /^[a-z]{2}_[a-z]{2,20}$/.test(m.voice) ? m.voice : '';
+      const pace = +m.pace >= 0.5 && +m.pace <= 2 ? +m.pace : 0;
+      talk.agentSaid(voice || pace ? talk.line(m.text, { voice, pace }) : m.text);
+      break;
+    }
     case 'notice': talk.notTyped(String(m.why || '')); break;
     case 'agent': talk.agentStateIs(String(m.state || '')); break;
     case 'session': talk.sessionSwitched(String(m.id || ''), String(m.name || '')); break;

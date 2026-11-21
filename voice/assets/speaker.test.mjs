@@ -143,3 +143,65 @@ test('opened with no voice named: its clips are still its clips', async () => {
   assert.match(worker, /say\(text, \{ voice: v \|\| voice, speed \}\)/, 'and makes it in that voice, or the one in use');
   s.close();
 });
+
+// ---------- a reply made ahead ----------
+test('a reply with a voice of its own has every word sent to the voice with it', async () => {
+  const { s, asked } = await open('a');
+  const r = { gen: 7, fmt: new (await import(pathToFileURL(path.join(tmp, 'speakable.mjs')))).Speakable(), segs: [], sources: [], playHead: 0, voice: 'b', pace: 1.3 };
+  s.say(r, 'Hello there.');
+  const pushes = asked.filter((m) => m.type === 'push');
+  assert.ok(pushes.length >= 2 && pushes.every((m) => m.gen === 7 && m.voice === 'b' && m.speed === 1.3), JSON.stringify(pushes));
+  const plain = { gen: 8, fmt: r.fmt.constructor ? new r.fmt.constructor() : r.fmt, segs: [], sources: [], playHead: 0 };
+  s.say(plain, 'Hi.');
+  assert.ok(asked.filter((m) => m.type === 'push' && m.gen === 8).every((m) => !('voice' in m) && !('speed' in m)), 'a plain reply names neither');
+  s.close();
+});
+
+test('made ahead: its sound is kept, not played, until it is taken', async () => {
+  const { s, asked } = await open('a');
+  const played = [];
+  s.play = (r, buf, text) => { played.push(text); r.playing = true; };
+  const p = s.prepare('Second speaker here.', { voice: 'b' });
+  assert.ok(p && p.voice === 'b');
+  assert.ok(asked.some((m) => m.type === 'push' && m.gen === p.gen && m.voice === 'b'), 'asked of the voice at once');
+  s.onWorker({ type: 'audio', gen: p.gen, text: 'Second speaker here.', pcm: new Float32Array(2400).fill(0.2), rate: 24000 });
+  assert.deepEqual(played, [], 'not played while it waits');
+  assert.notEqual(s.current, p);
+  s.take(p);
+  assert.deepEqual(played, ['Second speaker here.'], 'played when taken');
+  assert.equal(s.current, p);
+  s.onWorker({ type: 'audio', gen: p.gen, text: 'More.', pcm: new Float32Array(2400).fill(0.2), rate: 24000 });
+  assert.deepEqual(played, ['Second speaker here.', 'More.'], 'what comes after plays as it comes');
+  s.close();
+});
+
+test('made ahead: a second line joins it; dropped, the voice is told to stop making it', async () => {
+  const { s, asked } = await open('a');
+  const p = s.prepare('One.', { voice: 'b' });
+  assert.equal(s.prepare(' Two.', { voice: 'b' }, p), p);
+  assert.equal(new Set(asked.filter((m) => m.type === 'push' && m.voice === 'b').map((m) => m.gen)).size, 1, 'one reply');
+  s.drop(p);
+  assert.ok(asked.some((m) => m.type === 'cancel' && m.gen === p.gen));
+  s.onWorker({ type: 'audio', gen: p.gen, text: 'One.', pcm: new Float32Array(2400).fill(0.2), rate: 24000 }); // late: ignored
+  s.close();
+});
+
+test('made ahead: only so much waits (four replies, or half a minute of sound)', async () => {
+  const { s } = await open('a');
+  const ps = [1, 2, 3, 4].map((i) => s.prepare('Line ' + i + '.', { voice: 'b' }));
+  assert.ok(ps.every(Boolean));
+  assert.equal(s.prepare('Line 5.', { voice: 'b' }), null, 'a fifth is not made ahead');
+  s.close();
+  const again = await open('a');
+  const p = again.s.prepare('Long.', { voice: 'b' });
+  again.s.onWorker({ type: 'audio', gen: p.gen, text: 'Long.', pcm: new Float32Array(24000 * 31).fill(0.2), rate: 24000 });
+  assert.equal(again.s.prepare('After it.', { voice: 'b' }), null, 'nor more once half a minute waits');
+  again.s.close();
+});
+
+test('the device\'s voice makes nothing ahead', async () => {
+  const s = new Speaker({ started() {}, heard() {}, finished() {}, failed() {} });
+  await s.open({ ctx, natural: false, tts: null, speed: 1, pace: 1 });
+  assert.equal(s.prepare('Hello.', { voice: 'b' }), null);
+  s.close();
+});
