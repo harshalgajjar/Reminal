@@ -50,6 +50,8 @@
     return PAY_WORDS.test([el.name, el.id, el.getAttribute('aria-label'), el.placeholder].filter(Boolean).join(' '));
   };
   R.secret = (el) => R.passwordish(el) || R.payment(el);
+  // A dropdown that is part of a payment (a card's expiry month and year).
+  R.secretSelect = (el) => !!el && el.tagName === 'SELECT' && (/\bcc-/.test((el.getAttribute('autocomplete') || '').toLowerCase()) || PAY_WORDS.test([el.name, el.id, el.getAttribute('aria-label')].filter(Boolean).join(' ')) || /exp.*(month|year)|card.?exp/i.test([el.name, el.id, el.getAttribute('aria-label')].filter(Boolean).join(' ')));
 
   // Watch for a password field turning into text (shown), so it stays one.
   const mark = () => R.deepAll(document, 'input').forEach((i) => { if ((i.type || '').toLowerCase() === 'password') R.wasPassword.add(i); });
@@ -61,6 +63,10 @@
         if (m.type === 'attributes' && m.oldValue && m.oldValue.toLowerCase() === 'password') R.wasPassword.add(m.target);
         if (m.type === 'childList') mark();
       }
+      // A sign-in or payment field that comes and goes between an agent's
+      // tools is remembered for this document (R.ever): looked for at most
+      // twice a second.
+      if (!R.ever && !R.everTimer) R.everTimer = setTimeout(() => { R.everTimer = 0; if (R.personOnlyFields()) R.ever = true; }, 500);
     }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['type'], attributeOldValue: true });
   }
 
@@ -91,7 +97,9 @@
   };
   // Anything here that only the person does: a sign-in, a payment field, a
   // CAPTCHA (for a frame an action may land in).
-  R.personOnly = () => R.captcha() || R.deepAll(document, 'input, textarea, [contenteditable]').some(R.secret);
+  R.personOnlyFields = () => R.deepAll(document, 'input, textarea, [contenteditable]').some(R.secret);
+  R.personOnly = () => R.captcha() || R.personOnlyFields();
+  if (R.personOnlyFields()) R.ever = true;
   R.paused = (el) => (R.captcha() ? R.CAPTCHA : R.signIn(el) ? R.SIGN_IN : '');
   R.what = (el) => {
     if (!el || el === document.body || el === document.documentElement) return 'the page';

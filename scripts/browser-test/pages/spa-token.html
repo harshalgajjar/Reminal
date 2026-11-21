@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><title>App</title><style>body{font:16px system-ui,sans-serif;padding:40px}</style></head>
+<body><h1>App</h1><div id="gate"></div><p id="state">signing in</p>
+<label for="exp">Card expiry month</label><select id="exp" name="cc-exp-month" autocomplete="cc-exp-month"><option>01</option><option>02</option></select>
+<script>
+// A single-page app: its sign-in form comes, the person signs in, the form
+// goes (no navigation), and the app has fetched its session meanwhile.
+setTimeout(() => { gate.innerHTML = '<input type="password" id="p" placeholder="Password">'; }, 300);
+setTimeout(() => { gate.innerHTML = ''; fetch('/report.txt?token=1').then(() => { state.textContent = 'signed in'; if (location.search === '?go=1') location.href = '/tools.html?gone'; }); }, 1500);
+</script></body></html>
