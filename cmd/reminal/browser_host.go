@@ -127,6 +127,11 @@ func relayNative(in io.Reader, out io.Writer, hub net.Conn) error {
 							return
 						}
 					}
+				} else if refused := hostRefuses(msg); refused != nil {
+					if werr := toHub(refused); werr != nil {
+						done <- werr
+						return
+					}
 				} else if werr := writeNativeRaw(out, msg); werr != nil {
 					done <- werr
 					return
@@ -180,6 +185,68 @@ func writeNativeRaw(w io.Writer, b []byte) error {
 	binary.NativeEndian.PutUint32(hdr[:], uint32(len(b)))
 	if _, err := w.Write(append(hdr[:], b...)); err != nil {
 		return err
+	}
+	return nil
+}
+
+// hostRefuses is the last look at a request before the browser gets it:
+// the files an upload names are checked here too (as the agent's side
+// checks them, mcp_browser_files.go), so nothing that reaches the hub
+// another way hands the browser a file it should not. Returns the answer
+// to send back in the request's place, or nil to let it through.
+func hostRefuses(msg []byte) []byte {
+	var req struct {
+		T    string         `json:"t"`
+		ID   uint64         `json:"id"`
+		Tool string         `json:"tool"`
+		Args map[string]any `json:"args"`
+	}
+	if json.Unmarshal(msg, &req) != nil || req.T != "req" || (req.Tool != "file_upload" && req.Tool != "batch") {
+		return nil
+	}
+	var err error
+	if req.Tool == "file_upload" {
+		err = hostUploadPaths(req.Args)
+	} else {
+		steps, _ := req.Args["actions"].([]any)
+		for _, s := range steps {
+			step, ok := s.(map[string]any)
+			name, isName := step["tool"].(string)
+			if !ok || !isName {
+				err = errors.New("a batch step is not {tool, args}")
+				break
+			}
+			if strings.TrimPrefix(name, "browser_") == "file_upload" {
+				sub, _ := step["args"].(map[string]any)
+				if err = hostUploadPaths(sub); err != nil {
+					break
+				}
+			}
+		}
+	}
+	if err == nil {
+		return nil
+	}
+	b, _ := json.Marshal(map[string]any{"id": req.ID, "ok": false, "error": err.Error()})
+	return b
+}
+
+// hostUploadPaths: every path already as the check leaves it (absolute,
+// links followed) and passing it again.
+func hostUploadPaths(args map[string]any) error {
+	paths, _ := args["paths"].([]any)
+	if len(paths) == 0 {
+		return errors.New("paths is required: the files to give the page")
+	}
+	for _, v := range paths {
+		s, _ := v.(string)
+		real, err := browserUploadPath(s)
+		if err != nil {
+			return err
+		}
+		if real != s {
+			return fmt.Errorf("%s was not checked where the agent runs", s)
+		}
 	}
 	return nil
 }

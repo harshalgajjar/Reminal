@@ -46,7 +46,9 @@ export function focused() {
 // lands on a frame, whose inside cannot be told apart from here.
 export function frameCheck() {
   const R = globalThis.__reminal;
-  return { personOnly: R.personOnly(), captcha: R.captcha(), url: location.href };
+  const personOnly = R.personOnly();
+  if (personOnly) R.ever = true;
+  return { personOnly, ever: !!R.ever, captcha: R.captcha(), url: location.href };
 }
 
 export function middle() { return { x: innerWidth / 2, y: innerHeight / 2 }; }
@@ -173,6 +175,8 @@ export function selectOption(ref, values) {
   const el = w && w.deref();
   if (!el || !el.isConnected) return { error: `${ref} is not on the page any more: read it again with browser_read_page.` };
   if (el.tagName !== 'SELECT') return { error: `${R.what(el)} is not a dropdown (a select): click it and its options instead.` };
+  // A card's expiry, a dropdown marked as part of a payment: the person's.
+  if (R.secretSelect(el)) return { error: R.NEVER };
   const paused = R.paused(el);
   if (paused) return { error: paused };
   if (el.disabled) return { error: `${R.what(el)} is disabled.` };
@@ -180,7 +184,7 @@ export function selectOption(ref, values) {
   const picked = [];
   for (const v of el.multiple ? values : values.slice(0, 1)) {
     const o = [...el.options].find((o) => o.value === v) || [...el.options].find((o) => norm(o.text) === norm(v));
-    if (!o) return { error: `No option "${v}" in ${R.what(el)}. Its options: ${[...el.options].map((o) => `"${o.text.trim()}"`).slice(0, 40).join(', ')}.` };
+    if (!o) return { error: `No option ${JSON.stringify(String(v).slice(0, 60))} in ${R.what(el)}. Its options: ${[...el.options].map((o) => JSON.stringify(o.text.trim().slice(0, 60))).slice(0, 40).join(', ')}.` };
     picked.push(o);
   }
   if (el.multiple) for (const o of el.options) o.selected = picked.includes(o);

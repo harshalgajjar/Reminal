@@ -275,10 +275,42 @@ let tabId;
   r = await call('browser_network_requests', { tabId, pattern: 'form\\.html' });
   const fid = ((r.text || '').match(/^(\S+) GET /m) || [])[1];
   r = fid ? await call('browser_network_requests', { tabId, requestId: fid }) : { err: 'no request kept for the form tab', text: '' };
-  check(!r.err && /The body is not given: this page has a sign-in/.test(r.text) && !/Order a pizza/.test(r.text), `network_requests: no body on a page with a sign-in (${r.err || r.text.split('\n').pop()})`);
+  check(!r.err && /The body is not given: this page has, or had, a sign-in/.test(r.text) && !/Order a pizza/.test(r.text), `network_requests: no body on a page with a sign-in (${r.err || r.text.split('\n').pop()})`);
   await call('browser_tabs_select', { tabId: T });
   r = await call('browser_network_requests', { failed: true });
   check(!r.err && /404 .*missing-file\.html/.test(r.text) && !/probe=1/.test(r.text), `network_requests: only the failed ones when asked (${r.err || r.text.split('\n').slice(1).join(' | ')})`);
+
+  // A single-page app's sign-in: the form comes and goes with no tool
+  // looking and no navigation; what the app fetched meanwhile stays shut.
+  // After the tab goes to another page, that page's requests are given.
+  {
+    const S = JSON.parse((await call('browser_tabs_create', { url: `${PAGES}/toggle.html?app` })).text).tabId;
+    await call('browser_screenshot', { tabId: S }); // attached: its requests are kept from here
+    await call('browser_navigate', { tabId: S, url: `${PAGES}/spa-token.html` });
+    r = await call('browser_wait_for', { tabId: S, text: 'signed in', timeout: 8 });
+    check(!r.err, `a single-page app signed in, its form gone (${r.err || r.text})`);
+    r = await call('browser_network_requests', { tabId: S, pattern: 'token=1' });
+    const tid = ((r.text || '').match(/^(\S+) GET 200 .*token=1/m) || [])[1];
+    r = tid ? await call('browser_network_requests', { tabId: S, requestId: tid }) : { err: 'the request was not kept', text: '' };
+    check(!r.err && /has, or had, a sign-in/.test(r.text) && !/quarterly report/.test(r.text), `network_requests: what it fetched while signing in gives no body, though the form is gone (${r.err || r.text.split('\n').pop()})`);
+    const st = (await call('browser_read_page', { tabId: S })).text || '';
+    const exp = (st.match(/combobox "Card expiry month" \[(ref_\d+)\]/) || [])[1];
+    r = await call('browser_select_option', { tabId: S, ref: exp, values: ['02'] });
+    check(exp && r.err && /never types into password or payment/.test(r.err), `select_option: a card's expiry dropdown is the person's (${r.err})`);
+    await call('browser_navigate', { tabId: S, url: `${PAGES}/tools.html?after` });
+    await call('browser_evaluate', { tabId: S, expression: '1' }).catch(() => {});
+    const lt = (await call('browser_find', { tabId: S, query: 'button log' })).text || '';
+    await call('browser_click', { tabId: S, ref: (lt.match(/\[(ref_\d+)\]/) || [])[1] });
+    await pause(1000);
+    r = await call('browser_network_requests', { tabId: S, pattern: 'probe=1' });
+    const pid = ((r.text || '').match(/^(\S+) GET 200 .*probe=1/m) || [])[1];
+    r = pid ? await call('browser_network_requests', { tabId: S, requestId: pid }) : { err: 'the request was not kept', text: '' };
+    check(!r.err && /Order a pizza/.test(r.text), `network_requests: on the next page it goes to, bodies are given again (${r.err || r.text.length + ' characters'})`);
+    r = await call('browser_network_requests', { tabId: S, requestId: tid });
+    check(!r.err && !/quarterly report/.test(r.text), `and the earlier page's stay shut (${r.err || r.text.split('\n').pop()})`);
+    await call('browser_tabs_close', { tabId: S });
+    await call('browser_tabs_select', { tabId: T });
+  }
 
   // Scripts in the page: off as installed, the person's to switch on.
   r = await call('browser_evaluate', { expression: 'document.title' });
@@ -343,6 +375,9 @@ let tabId;
   check(!r.err && /theme=dark \(127\.0\.0\.1\//.test(r.text), `cookies: listed once switched on (${r.err || r.text.split('\n').slice(1).join(' | ')})`);
   r = await call('browser_cookies', { action: 'set', name: 'lang', value: 'fr' });
   check(!r.err && /lang=fr/.test(await pg().evaluate(() => document.cookie)), `cookies: one set, and the page has it (${r.err || r.text})`);
+  r = await call('browser_cookies', { action: 'set', name: 'sid', value: 'fixed', domain: 'example.com' });
+  const other = await inSW(() => chrome.cookies ? chrome.cookies.getAll({ domain: 'example.com' }).then((l) => l.length) : 0).catch(() => 0);
+  check(/sid=fixed/.test(await pg().evaluate(() => document.cookie)) && other === 0, `cookies: set is for the tab's own site, whatever domain is asked (${r.err || r.text})`);
   r = await call('browser_cookies', { action: 'delete', name: 'theme' });
   check(!r.err && !/theme=/.test(await pg().evaluate(() => document.cookie)), `cookies: one deleted (${r.err || r.text})`);
   r = await call('browser_storage', { action: 'get', key: 'draft' });
@@ -369,6 +404,10 @@ let tabId;
   check(JSON.parse(await txt('state')).city === 'Oslo', 'and the step after it was not run');
   r = await call('browser_batch', { actions: [{ tool: 'file_upload', args: { ref: refs.file, paths: ['/tmp/up/.env'] } }] });
   check(r.err && /step 1: .*does not upload those/.test(r.err), `batch: a step is held to its own tool's rules (${r.err})`);
+  r = await call('browser_batch', { actions: [{ tool: ['file_upload'], args: { ref: refs.file, paths: ['/tmp/up/.env'] } }] });
+  check(r.err && /step 1: tool must be a tool's name/.test(r.err) && !/a\.txt=alpha, \.env/.test(await txt('files')), `batch: a step whose tool is not a name is refused (${r.err})`);
+  r = await call('browser_batch', { actions: [{ tool: 'find', args: { query: 'button load' } }, { tool: 'find', args: { query: 'button ask' } }] });
+  check(!r.err && (r.text.match(/The text below is a web page's content/g) || []).length === 2, `batch: every step's answer is marked as the page's words (${r.err || (r.text.match(/The text below/g) || []).length + ' marks'})`);
   r = await call('browser_batch', { actions: [{ tool: 'evaluate', args: { expression: '1' } }] });
   check(!r.err && /Stopped at 1\. evaluate: Running scripts in pages is off/.test(r.text), `batch: a switched-off tool is off in a batch too (${r.err || r.text.split('\n').pop()})`);
 

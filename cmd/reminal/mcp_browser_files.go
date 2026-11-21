@@ -23,16 +23,39 @@ const (
 	browserUploadMaxBytes = 200 << 20
 )
 
-// browserSecretDirs are folders whose files are never uploaded: keys,
-// tokens and sign-ins live there.
-var browserSecretDirs = map[string]bool{
-	".ssh": true, ".gnupg": true, ".aws": true, ".azure": true, ".kube": true, ".docker": true,
-	".reminal": true, ".password-store": true, "Keychains": true, ".config/gcloud": true,
+// browserSecretFolders are folders (lowercased, as part of a path) whose
+// files are never uploaded: the system's keychains and the browsers' own
+// profiles (cookies, saved sign-ins, keys). Any folder whose name starts
+// with a dot is refused too (browserSecretPath): that is where tools keep
+// their tokens (.ssh, .aws, .config/gh, .claude, .npm ...).
+var browserSecretFolders = []string{
+	"/library/keychains", "/library/cookies", "/library/safari",
+	"/library/application support/google/chrome", "/library/application support/chromium", "/library/application support/microsoft edge",
+	"/library/application support/bravesoftware", "/library/application support/arc", "/library/application support/firefox",
+	"/library/application support/vivaldi", "/library/application support/com.operasoftware.opera",
+	"/appdata/local/google/chrome", "/appdata/local/microsoft/edge", "/appdata/roaming/mozilla",
+	"/snap/firefox", "/snap/chromium",
 }
 
-// (Any file whose name starts with a dot is refused too: settings and
-// tokens, not what a person uploads to a page.)
-//
+// browserSecretPath reports whether a file (its real, absolute path) is one
+// an agent must not hand to a page. This is the one list: anything else
+// that gives a local file to a page asks here. Compared in lower case: a
+// Mac's disk does not tell ".SSH" from ".ssh".
+func browserSecretPath(real string) bool {
+	low := strings.ToLower(filepath.ToSlash(real))
+	for _, part := range strings.Split(low, "/") {
+		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
+			return true
+		}
+	}
+	for _, f := range browserSecretFolders {
+		if strings.Contains(low, f+"/") {
+			return true
+		}
+	}
+	return browserSecretFile(filepath.Base(low))
+}
+
 // browserSecretFile reports whether a file's name marks it as a secret: a
 // private key, a credentials or environment file, a password store, a
 // browser's own store of cookies and sign-ins.
@@ -79,14 +102,8 @@ func browserUploadPath(p string) (string, error) {
 		return "", fmt.Errorf("%s is %d MB: at most %d MB a file", p, st.Size()>>20, browserUploadMaxBytes>>20)
 	}
 	const refused = "%s looks like a key, a password or a sign-in file: reminal does not upload those. Ask the person to upload it."
-	if browserSecretFile(filepath.Base(real)) || strings.HasPrefix(filepath.Base(real), ".") {
+	if browserSecretPath(real) {
 		return "", fmt.Errorf(refused, p)
-	}
-	parts := strings.Split(filepath.ToSlash(filepath.Dir(real)), "/")
-	for i, part := range parts {
-		if browserSecretDirs[part] || (i > 0 && browserSecretDirs[parts[i-1]+"/"+part]) {
-			return "", fmt.Errorf(refused, p)
-		}
 	}
 	return real, nil
 }
@@ -147,4 +164,56 @@ func browserSavePDF(args map[string]any, b64 string) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("Saved the page as a PDF: %s (%d bytes).", abs, len(data)), nil
+}
+
+// browserBatchSteps reads a batch's steps into the form they are sent in:
+// each a tool's name (a string) and its arguments (an object), checked as
+// that tool is on its own. What is sent on is what was checked here, never
+// the caller's own JSON: the extension cannot read a step another way.
+func browserBatchSteps(args map[string]any) error {
+	raw, ok := args["actions"].([]any)
+	if !ok || len(raw) == 0 {
+		return errors.New("actions is required: [{tool, args}, ...]")
+	}
+	steps := make([]any, 0, len(raw))
+	for i, s := range raw {
+		step, ok := s.(map[string]any)
+		if !ok {
+			return fmt.Errorf("step %d is not {tool, args}", i+1)
+		}
+		name, ok := step["tool"].(string)
+		if !ok || name == "" {
+			return fmt.Errorf("step %d: tool must be a tool's name", i+1)
+		}
+		sub := map[string]any{}
+		if v, has := step["args"]; has && v != nil {
+			if sub, ok = v.(map[string]any); !ok {
+				return fmt.Errorf("step %d: args must be an object", i+1)
+			}
+		}
+		name = strings.TrimPrefix(name, "browser_")
+		if err := browserCheckCall(name, sub); err != nil {
+			return fmt.Errorf("step %d: %w", i+1, err)
+		}
+		steps = append(steps, map[string]any{"tool": name, "args": sub})
+	}
+	args["actions"] = steps
+	return nil
+}
+
+// browserCheckCall is what a tool's call is held to before it leaves for
+// the browser (tool without "browser_"): the files an upload names, how
+// much is typed at once, a batch's steps.
+func browserCheckCall(tool string, args map[string]any) error {
+	switch tool {
+	case "file_upload":
+		return browserUploadArgs(args)
+	case "type":
+		if text, _ := args["text"].(string); len(text) > browserMaxType {
+			return fmt.Errorf("text is %d characters: type at most %d at a time", len(text), browserMaxType)
+		}
+	case "batch":
+		return browserBatchSteps(args)
+	}
+	return nil
 }

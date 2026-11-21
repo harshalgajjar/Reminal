@@ -291,7 +291,7 @@ async function handle(m) {
     if (was != null && typeof out === 'string') {
       await new Promise((r) => setTimeout(r, 150));
       const t = await chrome.tabs.get(tabId).catch(() => null);
-      if (t && t.url && t.url !== was) return `${out}\nThe tab is now at ${t.url}`;
+      if (t && t.url && t.url !== was) return `${out}\nThe tab is now at ${JSON.stringify(t.url.slice(0, 300))}`;
     }
     return out;
   } finally {
@@ -461,9 +461,6 @@ async function attach(tabId) {
   }
   attached.add(tabId);
   for (const d of ['Page', 'Runtime', 'Log', 'Network']) await chrome.debugger.sendCommand({ tabId }, d + '.enable', {}).catch(() => {});
-  // A file chooser the page asks for is kept for browser_file_upload: the
-  // person's screen gets no file window from an agent's click.
-  await chrome.debugger.sendCommand({ tabId }, 'Page.setInterceptFileChooserDialog', { enabled: true }).catch(() => {});
 }
 // sendOrDialog: a command, given up when the page opens a dialog under it
 // (a click whose handler calls alert() does not come back until the dialog
@@ -530,6 +527,14 @@ async function inPage(c, fn, ...args) {
   if (!r) throw new Error('The page could not be read.');
   return r.result;
 }
+// frameChecks: every frame's frameCheck, and what it means for the tab's
+// kept requests (guard, below): a tab that shows, or has shown, something
+// only the person does gives out no response bodies from then.
+async function frameChecks(c) {
+  const rs = await inFrames(c, page.frameCheck);
+  if (rs.some((r) => r.result.personOnly || r.result.ever)) sawPersonOnly(c.tabId);
+  return rs;
+}
 async function inFrames(c, fn) {
   await c.alive();
   await chrome.scripting.executeScript({ target: { tabId: c.tabId, allFrames: true }, files: ['rules.js'] }).catch(() => {});
@@ -544,7 +549,7 @@ async function target(c, a) {
   const t = await inPage(c, page.locate, a.ref || null, a.x == null ? null : Number(a.x), a.y == null ? null : Number(a.y));
   if (t.error) throw new Error(t.error);
   if (t.paused) throw new Error(t.paused);
-  const frames = await inFrames(c, page.frameCheck);
+  const frames = await frameChecks(c);
   if (frames.some((r) => r.result.captcha)) throw new Error('Paused: a CAPTCHA is showing on this page. Ask the person to solve it, then continue.');
   if (t.frame) {
     // A frame whose inside cannot be checked (not a web page, or no frame
@@ -584,14 +589,22 @@ async function click(c, a) {
   const t = await target(c, a);
   const button = ['left', 'right', 'middle'].includes(a.button) ? a.button : 'left';
   const count = a.double ? 2 : 1;
+  // A file chooser this click makes the page ask for is kept for
+  // browser_file_upload: no file window opens on the person's screen from an
+  // agent's click. Only round the click: the person's own click on an
+  // upload button in this tab opens their file window as ever.
+  choosers.delete(c.tabId);
+  await cdp(c, 'Page.setInterceptFileChooserDialog', { enabled: true }).catch(() => {});
+  try {
   await cdp(c, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: t.x, y: t.y });
   for (let i = 1; i <= count; i++) {
     await cdp(c, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: t.x, y: t.y, button, clickCount: i });
     await cdp(c, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: t.x, y: t.y, button, clickCount: i });
   }
-  // The page asked for files (a file field, an upload button): no window
-  // opens for the person; the agent gives them.
-  await new Promise((r) => setTimeout(r, 80));
+  await new Promise((r) => setTimeout(r, 300));
+  } finally {
+    chrome.debugger.sendCommand({ tabId: c.tabId }, 'Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {});
+  }
   const chooser = choosers.has(c.tabId) ? ' The page is asking for a file: give it with browser_file_upload.' : '';
   return `Clicked ${t.what} at ${Math.round(t.x)}, ${Math.round(t.y)}.${chooser}`;
 }
@@ -709,10 +722,32 @@ async function handleDialog(c, a) {
 // Its console and its requests, kept by tab while the debugger is attached
 // (from the session's first action on the tab), the newest KEPT of each.
 const KEPT = 500;
-const logs = new Map(), reqs = new Map(), drags = new Map(), choosers = new Map(), dls = new Map();
+const logs = new Map(), reqs = new Map(), drags = new Map(), choosers = new Map(), dls = new Map(), guards = new Map();
+// guard: which of a tab's kept requests never give out their response's
+// body. A tab that has shown a sign-in or a payment field (seen by a tool's
+// check, by the check made as each page loads, or by the watch rules.js
+// keeps in the page for one that comes and goes) gives out none for the
+// documents it had then (their loaders), nor for any it loads until it has
+// gone to a new page: a single-page app's sign-in form is gone once the
+// person is in, and the token it was answered with is still kept.
+const guardOf = (tabId) => { if (!guards.has(tabId)) guards.set(tabId, { shown: false, live: new Set(), blocked: new Set() }); return guards.get(tabId); };
+function sawPersonOnly(tabId) {
+  const g = guardOf(tabId);
+  g.shown = true;
+  for (const l of g.live) g.blocked.add(l);
+}
+// loadedCheck: as a page finishes loading in an attached tab, the rules go
+// into its frames (their watch starts) and it is looked at once.
+async function loadedCheck(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['rules.js'] });
+    const rs = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: page.frameCheck });
+    if (rs.some((r) => r && r.result && (r.result.personOnly || r.result.ever))) sawPersonOnly(tabId);
+  } catch (_) {}
+}
 const kept = (map, tabId) => { if (!map.has(tabId)) map.set(tabId, []); return map.get(tabId); };
 const push = (map, tabId, v) => { const l = kept(map, tabId); l.push(v); if (l.length > KEPT) l.splice(0, l.length - KEPT); };
-function forget(tabId) { for (const m of [logs, reqs, drags, dialogs, dialogWaiters, choosers, dls]) m.delete(tabId); }
+function forget(tabId) { for (const m of [logs, reqs, drags, dialogs, dialogWaiters, choosers, dls, guards]) m.delete(tabId); }
 const argText = (o) => (o.value !== undefined ? (typeof o.value === 'string' ? o.value : JSON.stringify(o.value)) : (o.description || o.unserializableValue || o.type || ''));
 chrome.debugger.onEvent.addListener((src, method, p) => {
   const tabId = src.tabId;
@@ -734,9 +769,24 @@ chrome.debugger.onEvent.addListener((src, method, p) => {
     case 'Log.entryAdded':
       push(logs, tabId, { level: p.entry.level, text: `${p.entry.text}${p.entry.url ? ' (' + p.entry.url + ')' : ''}`.slice(0, 2000) });
       break;
-    case 'Network.requestWillBeSent':
-      push(reqs, tabId, { id: p.requestId, method: p.request.method, url: p.request.url, type: p.type || '' });
+    case 'Network.requestWillBeSent': {
+      const g = guardOf(tabId);
+      g.live.add(p.loaderId);
+      if (g.shown) g.blocked.add(p.loaderId);
+      push(reqs, tabId, { id: p.requestId, method: p.request.method, url: p.request.url, type: p.type || '', loader: p.loaderId });
       break;
+    }
+    case 'Page.frameNavigated':
+      // The tab went to a new page: what it loads from here is judged anew
+      // (the page it left keeps its bodies shut).
+      if (!p.frame.parentId) {
+        const g = guardOf(tabId);
+        g.shown = false;
+        g.live = new Set([p.frame.loaderId]);
+        g.blocked.delete(p.frame.loaderId);
+      }
+      break;
+    case 'Page.loadEventFired': loadedCheck(tabId); break;
     case 'Network.responseReceived': {
       const r = kept(reqs, tabId).findLast((x) => x.id === p.requestId);
       if (r) { r.status = p.response.status; r.mime = p.response.mimeType; }
@@ -787,8 +837,8 @@ async function networkRequests(c, a) {
     let body = '';
     // Not on a page with a sign-in or a payment field: what comes back there
     // (a session, a token) is the person's.
-    const frames = await inFrames(c, page.frameCheck);
-    if (frames.some((f) => f.result.personOnly)) return `${r.method} ${r.url}\nstatus: ${r.status ?? (r.failed || 'pending')}\n\n(The body is not given: this page has a sign-in or payment field.)`;
+    const frames = await frameChecks(c);
+    if (frames.some((f) => f.result.personOnly || f.result.ever) || guardOf(c.tabId).blocked.has(r.loader)) return `${r.method} ${r.url}\nstatus: ${r.status ?? (r.failed || 'pending')}\n\n(The body is not given: this page has, or had, a sign-in or payment field.)`;
     try {
       const b = await cdp(c, 'Network.getResponseBody', { requestId: r.id });
       body = b.base64Encoded ? `(${Math.round(b.body.length * 0.75)} bytes, not text)` : (b.body.length > BODY_MAX ? b.body.slice(0, BODY_MAX) + `\n(cut at ${BODY_MAX} characters)` : b.body);
@@ -835,7 +885,7 @@ async function evaluate(c, a) {
   const code = String(a.expression ?? a.function ?? '');
   if (!code.trim()) throw new Error('expression is required');
   if (code.length > 50000) throw new Error('expression is too long (at most 50000 characters)');
-  const frames = await inFrames(c, page.frameCheck);
+  const frames = await frameChecks(c);
   if (frames.some((r) => r.result.captcha)) throw new Error('Paused: a CAPTCHA is showing on this page. Ask the person to solve it, then continue.');
   if (frames.some((r) => r.result.personOnly)) throw new Error('Paused: this page has a sign-in or payment field, so scripts are not run in it. Ask the person to do that part, then continue.');
   // A function ("() => ...", "async function ...") is called; anything else is an expression.
@@ -890,7 +940,7 @@ async function drag(c, a) {
 async function selectOption(c, a) {
   const values = Array.isArray(a.values) ? a.values.map(String) : a.value != null ? [String(a.value)] : [];
   if (!a.ref || !values.length) throw new Error('Give the dropdown\'s ref and the values (an option\'s text or value).');
-  const frames = await inFrames(c, page.frameCheck);
+  const frames = await frameChecks(c);
   if (frames.some((r) => r.result.captcha)) throw new Error('Paused: a CAPTCHA is showing on this page. Ask the person to solve it, then continue.');
   const r = await inPage(c, page.selectOption, a.ref, values);
   if (r.error) throw new Error(r.error);
@@ -1040,7 +1090,7 @@ async function downloads(c, a) {
       const hit = found.find((x) => Math.abs(new Date(x.startTime).getTime() - d.at) < 15000);
       if (hit && hit.filename) path = hit.filename;
     } catch (_) {}
-    out.push(`${d.name || '(no name)'}: ${d.state === 'completed' ? 'done' : d.state === 'canceled' ? 'cancelled' : 'in progress'}${d.total ? `, ${d.received || 0} of ${d.total} bytes` : ''}${path ? `, at ${path}` : ''} (${d.url.slice(0, 200)})`);
+    out.push(`${String(d.name || '(no name)').replace(/[\u0000-\u001f]/g, ' ').slice(0, 200)}: ${d.state === 'completed' ? 'done' : d.state === 'canceled' ? 'cancelled' : 'in progress'}${d.total ? `, ${d.received || 0} of ${d.total} bytes` : ''}${path ? `, at ${path}` : ''} (${d.url.slice(0, 200)})`);
   }
   return out.join('\n');
 }
@@ -1076,7 +1126,8 @@ async function cookies(c, a) {
   if (action === 'set') {
     if (!a.name) throw new Error('name is required');
     const p = { url, name: String(a.name), value: String(a.value ?? '') };
-    for (const k of ['domain', 'path', 'sameSite']) if (a[k] != null) p[k] = String(a[k]);
+    // For the tab's own site only (the url): never a domain of the caller's.
+    for (const k of ['path', 'sameSite']) if (a[k] != null) p[k] = String(a[k]);
     for (const k of ['secure', 'httpOnly']) if (a[k] != null) p[k] = !!a[k];
     if (a.expires != null) p.expires = Number(a.expires);
     const r = await cdp(c, 'Network.setCookie', p);
@@ -1142,7 +1193,9 @@ async function batch(m, a) {
   const parts = [];
   let site = await siteNow(), stopped = '';
   for (let i = 0; i < actions.length; i++) {
-    const tool = String((actions[i] && actions[i].tool) || '').replace(/^browser_/, '');
+    const step = actions[i];
+    if (!step || typeof step !== 'object' || typeof step.tool !== 'string' || (step.args != null && (typeof step.args !== 'object' || Array.isArray(step.args)))) throw new Error(`step ${i + 1} is not {tool, args}`);
+    const tool = step.tool.replace(/^browser_/, '');
     const label = `${i + 1}. ${tool}`;
     if (!tool || tool === 'batch' || tool === 'pdf_save') { stopped = `${label}: not a tool a batch can run.`; break; }
     let out;
