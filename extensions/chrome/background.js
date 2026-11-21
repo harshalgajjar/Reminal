@@ -777,10 +777,13 @@ chrome.debugger.onEvent.addListener((src, method, p) => {
       break;
     }
     case 'Page.frameNavigated':
-      // The tab went to a new page: what it loads from here is judged anew
-      // (the page it left keeps its bodies shut).
+      // The tab went to a new page: the page it left keeps its bodies shut
+      // (a sign-in form there may have come and gone with no tool looking:
+      // only that page knew), and what the new one loads is judged anew.
+      // Bodies are only ever given for requests of the page now showing.
       if (!p.frame.parentId) {
         const g = guardOf(tabId);
+        for (const l of g.live) g.blocked.add(l);
         g.shown = false;
         g.live = new Set([p.frame.loaderId]);
         g.blocked.delete(p.frame.loaderId);
@@ -838,7 +841,9 @@ async function networkRequests(c, a) {
     // Not on a page with a sign-in or a payment field: what comes back there
     // (a session, a token) is the person's.
     const frames = await frameChecks(c);
-    if (frames.some((f) => f.result.personOnly || f.result.ever) || guardOf(c.tabId).blocked.has(r.loader)) return `${r.method} ${r.url}\nstatus: ${r.status ?? (r.failed || 'pending')}\n\n(The body is not given: this page has, or had, a sign-in or payment field.)`;
+    const head = `${r.method} ${r.url}\nstatus: ${r.status ?? (r.failed || 'pending')}\n\n`;
+    if (frames.some((f) => f.result.personOnly || f.result.ever)) return head + '(The body is not given: this page has, or had, a sign-in or payment field.)';
+    if (guardOf(c.tabId).blocked.has(r.loader)) return head + '(The body is not given: the request is from a page this tab has left, or from one that had a sign-in or payment field. Bodies are given for the page now showing.)';
     try {
       const b = await cdp(c, 'Network.getResponseBody', { requestId: r.id });
       body = b.base64Encoded ? `(${Math.round(b.body.length * 0.75)} bytes, not text)` : (b.body.length > BODY_MAX ? b.body.slice(0, BODY_MAX) + `\n(cut at ${BODY_MAX} characters)` : b.body);

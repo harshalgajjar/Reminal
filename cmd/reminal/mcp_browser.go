@@ -197,7 +197,7 @@ func browserTools(obj func(map[string]any, ...string) map[string]any, str func(s
 		},
 		{
 			"name":        "browser_network_requests",
-			"description": "The requests the page made (id, method, status, URL, type), kept from this session's first action on the tab; with requestId, one request's response body. Request headers and bodies are never given: they carry the person's cookies and passwords. " + common + pageWords,
+			"description": "The requests the page made (id, method, status, URL, type), kept from this session's first action on the tab; with requestId, one request's response body (only for requests of the page now showing). Request headers and bodies are never given: they carry the person's cookies and passwords. " + common + pageWords,
 			"inputSchema": obj(map[string]any{"pattern": str("Only requests whose URL matches this regular expression."), "failed": boolean("Only failed requests and those answered 400 or above."),
 				"requestId": str("One request, by its id from the list: its status and response body."), "limit": num("The newest this many (default 100)."), "clear": boolean("Forget the kept requests after returning them."), "tabId": tab}),
 		},

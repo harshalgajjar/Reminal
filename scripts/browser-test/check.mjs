@@ -308,6 +308,14 @@ let tabId;
     check(!r.err && /Order a pizza/.test(r.text), `network_requests: on the next page it goes to, bodies are given again (${r.err || r.text.length + ' characters'})`);
     r = await call('browser_network_requests', { tabId: S, requestId: tid });
     check(!r.err && !/quarterly report/.test(r.text), `and the earlier page's stay shut (${r.err || r.text.split('\n').pop()})`);
+    // The same app going on to another page by itself, with no tool looking
+    // in between: only the page it left knew of its form.
+    await call('browser_navigate', { tabId: S, url: `${PAGES}/spa-token.html?go=1` });
+    r = await call('browser_wait_for', { tabId: S, text: 'Tools', timeout: 8 });
+    r = await call('browser_network_requests', { tabId: S, pattern: 'token=1' });
+    const gid = [...(r.text || '').matchAll(/^(\S+) GET 200 .*token=1/mg)].map((m) => m[1]).pop();
+    r = gid && gid !== tid ? await call('browser_network_requests', { tabId: S, requestId: gid }) : { err: 'the request was not kept', text: '' };
+    check(!r.err && /from a page this tab has left/.test(r.text) && !/quarterly report/.test(r.text), `network_requests: a page the tab left by itself, its form never seen by a tool, gives no body (${r.err || r.text.split('\n').pop()})`);
     await call('browser_tabs_close', { tabId: S });
     await call('browser_tabs_select', { tabId: T });
   }

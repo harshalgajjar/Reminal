@@ -5,5 +5,5 @@
 // A single-page app: its sign-in form comes, the person signs in, the form
 // goes (no navigation), and the app has fetched its session meanwhile.
 setTimeout(() => { gate.innerHTML = '<input type="password" id="p" placeholder="Password">'; }, 300);
-setTimeout(() => { gate.innerHTML = ''; fetch('/report.txt?token=1').then(() => { state.textContent = 'signed in'; }); }, 1500);
+setTimeout(() => { gate.innerHTML = ''; fetch('/report.txt?token=1').then(() => { state.textContent = 'signed in'; if (location.search === '?go=1') location.href = '/tools.html?gone'; }); }, 1500);
 </script></body></html>
