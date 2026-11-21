@@ -75,6 +75,9 @@ const inSW = async (fn, arg) => {
     }
   }
 };
+// A page's dialog stays open until it is answered (left to itself, the
+// driver would dismiss it).
+ctx.on('dialog', () => {});
 const sw0 = await getSW();
 check(sw0.url().startsWith(`chrome-extension://${EXT_ID}/`), `the extension loaded with its fixed id (${sw0.url()})`);
 const store = (k) => inSW((k) => chrome.storage.session.get(k).then((o) => o[k]), k);
@@ -185,6 +188,222 @@ let tabId;
   r = await call('browser_scroll', { direction: 'up', amount: 2 });
   check(!r.err, `scrolled (${r.err || r.text})`);
   await slow(1500);
+}
+
+// 3b. The rest of the tools, on a page made for them, in a second tab of
+// the session's.
+{
+  const T = JSON.parse((await call('browser_tabs_create', { url: `${PAGES}/tools.html` })).text).tabId;
+  const pg = () => page(/tools\.html/);
+  const txt = (id) => pg().evaluate((id) => document.getElementById(id).textContent, id);
+  const pngOf = (res) => { const i = res.content.find((c) => c.type === 'image'); return i ? Buffer.from(i.data, 'base64') : null; };
+  let r = await call('browser_find', { query: 'button load' });
+  const load = ((r.text || '').match(/button "Load" \[(ref_\d+)\]/) || [])[1];
+  check(!r.err && load && r.text.split('\n').length <= 3, `find: the one matching line, with its ref (${r.err || r.text.split('\n').slice(1).join(' | ')})`);
+  const refs = {};
+  const tree = (await call('browser_read_page')).text || '';
+  for (const [k, re] of Object.entries({ more: /button "More" \[(ref_\d+)\]/, knob: /slider "Volume" \[(ref_\d+)\]/, card: /button "Card" \[(ref_\d+)\]/, bin: /button "Bin" \[(ref_\d+)\]/,
+    first: /textbox "First name" \[(ref_\d+)\]/, city: /textbox "City" \[(ref_\d+)\]/, plan: /combobox "Plan" \[(ref_\d+)\]/, tags: /combobox "Tags" \[(ref_\d+)\]/, news: /checkbox "Newsletter" \[(ref_\d+)\]/, terms: /checkbox "Terms" \[(ref_\d+)\]/,
+    file: /textbox "Attachment" \[(ref_\d+)\]|button "Attachment" \[(ref_\d+)\]/, pick: /button "Upload photos" \[(ref_\d+)\]/, dl: /link "Get the report" \[(ref_\d+)\]/,
+    alert: /button "Show alert" \[(ref_\d+)\]/, confirm: /button "Ask" \[(ref_\d+)\]/, prompt: /button "Name it" \[(ref_\d+)\]/, log: /button "Log" \[(ref_\d+)\]/ })) { const m = tree.match(re) || []; refs[k] = m[1] || m[2]; }
+  check(Object.values(refs).every(Boolean), `the page's elements have refs (${Object.entries(refs).filter(([, v]) => !v).map(([k]) => k).join(', ') || 'all'})`);
+
+  // Waiting.
+  await call('browser_click', { ref: load });
+  r = await call('browser_wait_for', { text: 'Loaded results', textGone: 'Loading spinner' });
+  check(!r.err && /"Loaded results" is on the page/.test(r.text), `wait_for: text that comes later, and text that goes (${r.err || r.text})`);
+  r = await call('browser_wait_for', { text: 'never there', timeout: 1 });
+  check(r.err && /Timed out after 1 s: "never there" is not on the page/.test(r.err), `wait_for: says what it was still waiting for (${r.err})`);
+
+  // Hover and drag.
+  r = await call('browser_hover', { ref: refs.more });
+  check(!r.err && (await txt('hovered')) === 'menu open', `hover: the menu opened (${r.err || r.text})`);
+  await call('browser_hover', { ref: refs.knob }); // scrolled to where the drag will find it
+  const tr = await pg().evaluate(() => { const b = document.getElementById('track').getBoundingClientRect(); return { x: b.left, y: b.top }; });
+  r = await call('browser_drag', { startRef: refs.knob, endX: tr.x + 212, endY: tr.y + 12 });
+  const vol = Number(((await txt('vol')).match(/\d+/) || [0])[0]);
+  check(!r.err && vol > 50, `drag: a slider moved with the mouse (${r.err || 'volume ' + vol})`);
+  r = await call('browser_drag', { startRef: refs.card, endRef: refs.bin });
+  check(!r.err && (await txt('dropped')) === 'dropped card', `drag: the browser's own drag and drop, with its data (${r.err || await txt('dropped')})`);
+  await slow(600);
+
+  // Dropdowns and a whole form.
+  r = await call('browser_select_option', { ref: refs.plan, values: ['Team'] });
+  check(!r.err && JSON.parse(await txt('state')).plan === 't', `select_option: by the option's text, and the page heard it (${r.err || r.text})`);
+  r = await call('browser_select_option', { ref: refs.plan, values: ['Gold'] });
+  check(r.err && /No option "Gold".*"Free", "Plus", "Team"/.test(r.err), `select_option: a missing option says which there are (${r.err})`);
+  r = await call('browser_fill_form', { fields: [{ ref: refs.first, value: 'Ada' }, { ref: refs.city, value: 'Paris' }, { ref: refs.plan, value: 'Plus' }, { ref: refs.tags, value: ['red', 'blue'] }, { ref: refs.news, value: true }, { ref: refs.terms, value: false }] });
+  const st = JSON.parse(await txt('state'));
+  check(!r.err && st.first === 'Ada' && st.city === 'Paris' && st.plan === 'p' && st.tags.join() === 'red,blue' && st.news === true && st.terms === false, `fill_form: six fields in one call, the old text replaced (${r.err || JSON.stringify(st)})`);
+  const formTree = (await call('browser_read_page', { tabId })).text || '';
+  const pass = (formTree.match(/\[(ref_\d+)\] \(password/) || [])[1];
+  r = await call('browser_fill_form', { tabId, fields: [{ ref: pass, value: 'hunter2' }] });
+  check(pass && r.err && /never types into password/.test(r.err), `fill_form: a password field is refused (${r.err})`);
+  await call('browser_tabs_select', { tabId: T });
+  await slow(600);
+
+  // The page's dialogs.
+  r = await call('browser_click', { ref: refs.alert });
+  check(r.err && /A dialog is open on the page \(alert: "Saved!"\)/.test(r.err), `a click that opens an alert comes back saying so (${r.err})`);
+  r = await call('browser_screenshot');
+  check(r.err && /A dialog is open/.test(r.err), `and the other tools say it is open (${r.err})`);
+  r = await call('browser_handle_dialog', {});
+  check(!r.err && /Accepted the alert/.test(r.text) && (await txt('after')) === 'alert answered', `handle_dialog: accepted, the page goes on (${r.err || r.text})`);
+  await call('browser_click', { ref: refs.confirm });
+  r = await call('browser_handle_dialog', { accept: false });
+  check(!r.err && (await txt('after')) === 'cancelled', `handle_dialog: a confirm dismissed (${r.err || r.text})`);
+  await call('browser_click', { ref: refs.prompt });
+  r = await call('browser_handle_dialog', { promptText: 'Rex' });
+  check(!r.err && (await txt('after')) === 'named Rex', `handle_dialog: a prompt answered (${r.err || r.text})`);
+  r = await call('browser_handle_dialog', {});
+  check(r.err && /No dialog is open/.test(r.err), `handle_dialog with none open says so (${r.err})`);
+
+  // The console and the requests.
+  await call('browser_click', { ref: refs.log });
+  await pause(1200);
+  r = await call('browser_console_messages', {});
+  check(!r.err && /\[log\] hello from the page 42/.test(r.text) && /\[warning\] careful/.test(r.text) && /\[error\] it broke/.test(r.text) && /uncaught boom/.test(r.text), `console_messages: logs, warnings, errors and an uncaught exception (${r.err || r.text.split('\n').length + ' lines'})`);
+  check(/^\(The text below is a web page's content/.test(r.text), 'and they are marked as the page\'s words');
+  r = await call('browser_console_messages', { level: 'error' });
+  check(!r.err && /it broke/.test(r.text) && !/hello from the page/.test(r.text), `console_messages: only errors when asked (${r.err || r.text.split('\n').length + ' lines'})`);
+  r = await call('browser_network_requests', { pattern: 'probe=1' });
+  const rid = ((r.text || '').match(/^(\S+) GET 200 .*probe=1/m) || [])[1];
+  check(!r.err && rid, `network_requests: a request the page made, with its status (${r.err || r.text.split('\n').slice(1).join(' | ')})`);
+  r = await call('browser_network_requests', { requestId: rid });
+  check(!r.err && /Order a pizza/.test(r.text) && !/cookie/i.test(r.text.split('\n\n')[0]), `network_requests: one response's body, no request headers (${r.err || r.text.length + ' characters'})`);
+  await call('browser_navigate', { tabId, url: 'reload' }); // its requests are kept from here
+  r = await call('browser_network_requests', { tabId, pattern: 'form\\.html' });
+  const fid = ((r.text || '').match(/^(\S+) GET /m) || [])[1];
+  r = fid ? await call('browser_network_requests', { tabId, requestId: fid }) : { err: 'no request kept for the form tab', text: '' };
+  check(!r.err && /The body is not given: this page has a sign-in/.test(r.text) && !/Order a pizza/.test(r.text), `network_requests: no body on a page with a sign-in (${r.err || r.text.split('\n').pop()})`);
+  await call('browser_tabs_select', { tabId: T });
+  r = await call('browser_network_requests', { failed: true });
+  check(!r.err && /404 .*missing-file\.html/.test(r.text) && !/probe=1/.test(r.text), `network_requests: only the failed ones when asked (${r.err || r.text.split('\n').slice(1).join(' | ')})`);
+
+  // Scripts in the page: off as installed, the person's to switch on.
+  r = await call('browser_evaluate', { expression: 'document.title' });
+  check(r.err && /Running scripts in pages is off/.test(r.err), `evaluate: off as installed, and says whose switch it is (${r.err})`);
+  await popupDo(async (p) => { await p.check('#scripts'); });
+  r = await call('browser_evaluate', { expression: 'document.title' });
+  check(!r.err && /\nTools$/.test(r.text), `evaluate: an expression (${r.err || r.text.split('\n').pop()})`);
+  r = await call('browser_evaluate', { expression: 'async () => { await new Promise((r) => setTimeout(r, 50)); return { buttons: document.querySelectorAll("button").length }; }' });
+  check(!r.err && /"buttons": 7/.test(r.text), `evaluate: an async function, its result as JSON (${r.err || r.text.split('\n').slice(1).join(' ')})`);
+  r = await call('browser_evaluate', { expression: '(() => { throw new Error("nope"); })()' });
+  check(r.err && /The script threw: Error: nope/.test(r.err), `evaluate: a throw comes back as an error (${r.err})`);
+  r = await call('browser_evaluate', { tabId, expression: 'document.querySelector("[type=password]").value = "x"' });
+  const pw = await page(/form\.html$/).evaluate(() => document.querySelector('[type=password]').value);
+  check(r.err && /Paused: this page has a sign-in/.test(r.err) && pw === '', `evaluate: not run on a page with a sign-in (${r.err})`);
+  await call('browser_tabs_select', { tabId: T });
+  await popupDo(async (p) => { await p.uncheck('#scripts'); });
+  r = await call('browser_evaluate', { expression: '1 + 1' });
+  check(r.err && /Running scripts in pages is off/.test(r.err), `evaluate: switched off again, refused again (${r.err})`);
+  const seen = await popupDo(async (p) => p.textContent('#notes'));
+  check(/web helper: ran a script on 127\.0\.0\.1/.test(seen), `the button's panel shows that a script ran, and where (${seen.trim().slice(0, 80)})`);
+
+  // Files: given to a field, and to an upload the page asks for; never a
+  // key or a sign-in file. A download; the page as a PDF.
+  fs.mkdirSync('/tmp/up', { recursive: true });
+  fs.writeFileSync('/tmp/up/a.txt', 'alpha\n'); fs.writeFileSync('/tmp/up/b.txt', 'beta\n'); fs.writeFileSync('/tmp/up/.env', 'TOKEN=secret\n'); fs.writeFileSync('/tmp/up/server.pem', 'key\n');
+  r = await call('browser_file_upload', { ref: refs.file, paths: ['/tmp/up/a.txt'] });
+  check(r.err && /Giving files from this computer to pages is off/.test(r.err) && (await txt('files')) === '', `file_upload: off as installed (${r.err})`);
+  await popupDo(async (p) => { await p.check('#uploads'); });
+  r = await call('browser_file_upload', { ref: refs.file, paths: ['/tmp/up/a.txt'] });
+  check(!r.err && (await txt('files')) === 'file: a.txt=alpha', `file_upload: a file given to a file field, and the page read it (${r.err || await txt('files')})`);
+  r = await call('browser_file_upload', { ref: refs.file, paths: ['/tmp/up/a.txt', '/tmp/up/b.txt'] });
+  check(r.err && /takes one file/.test(r.err), `file_upload: two files to a field for one are refused (${r.err})`);
+  for (const p of ['/tmp/up/.env', '/tmp/up/server.pem']) {
+    r = await call('browser_file_upload', { ref: refs.file, paths: [p] });
+    check(r.err && /reminal does not upload those/.test(r.err) && (await txt('files')) === 'file: a.txt=alpha', `file_upload: ${p} is refused, nothing given (${r.err})`);
+  }
+  r = await call('browser_click', { ref: refs.pick });
+  check(!r.err && /asking for a file/.test(r.text), `a click on the page's upload button says the page asks for a file, and no file window opens (${r.err || r.text})`);
+  r = await call('browser_file_upload', { paths: ['/tmp/up/a.txt', '/tmp/up/b.txt'] });
+  check(!r.err && (await txt('files')) === 'many: a.txt=alpha, b.txt=beta', `file_upload: files given to the upload the page asked for (${r.err || await txt('files')})`);
+  const gave = await popupDo(async (p) => p.textContent('#notes'));
+  check(/web helper: gave a\.txt, b\.txt on 127\.0\.0\.1/.test(gave), `the button's panel names the files given, and the site (${gave.trim().slice(0, 90)})`);
+  await popupDo(async (p) => { await p.uncheck('#uploads'); });
+  await call('browser_click', { ref: refs.dl });
+  r = await call('browser_downloads', { wait: 10 });
+  check(!r.err && /report\.txt: done/.test(r.text), `downloads: the file this tab downloaded (${r.err || r.text.split('\n').slice(1).join(' | ')})`);
+  try { fs.unlinkSync('/tmp/up/out.pdf'); } catch (_) {}
+  r = await call('browser_pdf_save', { path: '/tmp/up/out.pdf' });
+  const pdf = fs.existsSync('/tmp/up/out.pdf') ? fs.readFileSync('/tmp/up/out.pdf') : Buffer.alloc(0);
+  check(!r.err && pdf.slice(0, 5).toString() === '%PDF-' && pdf.length > 1000, `pdf_save: the page written as a PDF (${r.err || r.text})`);
+  r = await call('browser_pdf_save', { path: '/tmp/up/out.pdf' });
+  check(r.err && /already there/.test(r.err), `pdf_save: never over a file that is there (${r.err})`);
+
+  // Cookies and site storage: off as installed; the person's switch.
+  await pg().evaluate(() => { document.cookie = 'theme=dark; path=/'; localStorage.setItem('draft', 'hello'); });
+  r = await call('browser_cookies', {});
+  check(r.err && /cookies and site storage is off/.test(r.err), `cookies: off as installed (${r.err})`);
+  r = await call('browser_storage', {});
+  check(r.err && /cookies and site storage is off/.test(r.err), `storage: off with the same switch (${r.err})`);
+  await popupDo(async (p) => { await p.check('#cookies'); });
+  r = await call('browser_cookies', {});
+  check(!r.err && /theme=dark \(127\.0\.0\.1\//.test(r.text), `cookies: listed once switched on (${r.err || r.text.split('\n').slice(1).join(' | ')})`);
+  r = await call('browser_cookies', { action: 'set', name: 'lang', value: 'fr' });
+  check(!r.err && /lang=fr/.test(await pg().evaluate(() => document.cookie)), `cookies: one set, and the page has it (${r.err || r.text})`);
+  r = await call('browser_cookies', { action: 'delete', name: 'theme' });
+  check(!r.err && !/theme=/.test(await pg().evaluate(() => document.cookie)), `cookies: one deleted (${r.err || r.text})`);
+  r = await call('browser_storage', { action: 'get', key: 'draft' });
+  check(!r.err && /\nhello$/.test(r.text), `storage: a value read (${r.err || r.text.split('\n').pop()})`);
+  r = await call('browser_storage', { action: 'set', key: 'draft', value: 'bye' });
+  check(!r.err && (await pg().evaluate(() => localStorage.getItem('draft'))) === 'bye', `storage: a value set (${r.err || r.text})`);
+  const read = await popupDo(async (p) => p.textContent('#notes'));
+  check(/read the cookies on 127\.0\.0\.1/.test(read) && /changed the local storage/.test(read), `the button's panel shows cookies and storage were used (${read.trim().slice(0, 100)})`);
+  await popupDo(async (p) => { await p.uncheck('#cookies'); });
+
+  // How the page is shown; several tools in one call.
+  r = await call('browser_emulate', { colorScheme: 'dark' });
+  check(!r.err && await pg().evaluate(() => matchMedia('(prefers-color-scheme: dark)').matches), `emulate: a dark colour scheme (${r.err || r.text})`);
+  r = await call('browser_emulate', { colorScheme: 'none', offline: true });
+  const off = await pg().evaluate(() => fetch('/form.html').then(() => 'online', () => 'offline'));
+  check(!r.err && off === 'offline', `emulate: the network cut for this tab (${r.err || off})`);
+  await call('browser_emulate', { offline: false });
+  r = await call('browser_batch', { actions: [{ tool: 'fill_form', args: { fields: [{ ref: refs.first, value: 'Grace' }] } }, { tool: 'select_option', args: { ref: refs.plan, values: ['Free'] } }, { tool: 'find', args: { query: 'button load' } }] });
+  const bst = JSON.parse(await txt('state'));
+  check(!r.err && bst.first === 'Grace' && bst.plan === 'f' && /3\. find: .*button "Load"/.test(r.text), `batch: three tools in one call, each answer numbered (${r.err || r.text.split('\n').length + ' lines'})`);
+  r = await call('browser_batch', { actions: [{ tool: 'fill_form', args: { fields: [{ ref: refs.city, value: 'Oslo' }] } }, { tool: 'click', args: { ref: refs.alert } }, { tool: 'fill_form', args: { fields: [{ ref: refs.city, value: 'NEVER' }] } }] });
+  check(!r.err && /Stopped at 2\. click: A dialog is open/.test(r.text) && /1 of 3 ran/.test(r.text), `batch: stops where a dialog opens, and says what ran (${r.err || r.text.split('\n').pop()})`);
+  await call('browser_handle_dialog', {});
+  check(JSON.parse(await txt('state')).city === 'Oslo', 'and the step after it was not run');
+  r = await call('browser_batch', { actions: [{ tool: 'file_upload', args: { ref: refs.file, paths: ['/tmp/up/.env'] } }] });
+  check(r.err && /step 1: .*does not upload those/.test(r.err), `batch: a step is held to its own tool's rules (${r.err})`);
+  r = await call('browser_batch', { actions: [{ tool: 'evaluate', args: { expression: '1' } }] });
+  check(!r.err && /Stopped at 1\. evaluate: Running scripts in pages is off/.test(r.text), `batch: a switched-off tool is off in a batch too (${r.err || r.text.split('\n').pop()})`);
+
+  // The same tools from the session's shell.
+  r = await call('__cli', { line: 'reminal browser find query="button load"' });
+  check(/button "Load" \[ref_\d+\]/.test(r.text), `the command-line form: reminal browser find (${r.text.trim().split('\n').pop()})`);
+
+  // Size and screenshots.
+  r = await call('browser_resize', { width: 500, height: 700 });
+  for (let i = 0; i < 20 && (await txt('size')) !== 'width 500'; i++) await pause(100);
+  check(!r.err && (await txt('size')) === 'width 500', `resize: the page laid out 500 wide (${r.err || await txt('size')})`);
+  r = await call('browser_resize', {});
+  for (let i = 0; i < 20 && (await txt('size')) === 'width 500'; i++) await pause(100);
+  check(!r.err && (await txt('size')) !== 'width 500', `resize: back to the window's size (${r.err || await txt('size')})`);
+  let png = pngOf(await call('browser_screenshot', { fullPage: true }));
+  check(png && png.readUInt32BE(20) > 2000, `screenshot: the whole page (${png ? png.readUInt32BE(16) + 'x' + png.readUInt32BE(20) : 'none'})`);
+  png = pngOf(await call('browser_screenshot', { ref: refs.knob }));
+  check(png && png.readUInt32BE(16) === 24 && png.readUInt32BE(20) === 24, `screenshot: one element (${png ? png.readUInt32BE(16) + 'x' + png.readUInt32BE(20) : 'none'})`);
+  r = await call('browser_navigate', { url: 'reload' });
+  check(!r.err && (await txt('after')) === '', `navigate: reload (${r.err || r.text})`);
+
+  // Its tabs: select one, close one; never the person's.
+  r = await call('browser_tabs_select', { tabId });
+  const active = await inSW((id) => chrome.tabs.get(id).then((t) => t.active), tabId);
+  check(!r.err && active, `tabs_select: the first tab is shown, and the next actions go to it (${r.err || r.text})`);
+  r = await call('browser_tabs_close', { tabId: T });
+  const left = (await call('browser_tabs_context')).text || '';
+  check(!r.err && !left.includes(String(T)) && left.includes(String(tabId)), `tabs_close: the second tab is closed, the first stays (${r.err || r.text})`);
+  const mine = await ctx.newPage();
+  await mine.goto(`${PAGES}/form.html?keep`);
+  const mineId = await inSW(() => chrome.tabs.query({}).then((t) => (t.find((x) => /\?keep/.test(x.url)) || {}).id));
+  r = await call('browser_tabs_close', { tabId: mineId });
+  check(r.err && /not in this session's tab group/.test(r.err) && !mine.isClosed(), `tabs_close: a tab of the person's own is refused (${r.err})`);
+  await mine.close();
+  await slow(800);
 }
 
 // 4. The rules: sign-in forms, passwords and payment fields, CAPTCHAs.
@@ -374,8 +593,13 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   const shot = await call('browser_screenshot', { tabId: keep.tabId }, '/tmp/q2');
   check(!shot.err && shot.content.some((c) => c.type === 'image'), `before Cancel, the session's tab is used (${shot.err || 'a screenshot'})`);
   await slow(800);
-  execSync('xdotool mousemove 331 112 click 1'); // the bar's Cancel, with the window at 0,0
-  await pause(1500);
+  // The bar's Cancel, with the window at 0,0. Once more if something of the
+  // browser's own (its downloads bubble) took the first click.
+  for (let i = 0; i < 2; i++) {
+    execSync('xdotool mousemove 331 112 click 1');
+    await pause(1500);
+    if ((await recOf(ID2)).some((s) => s.stopped)) break;
+  }
   const after = await call('browser_screenshot', { tabId: keep.tabId }, '/tmp/q2');
   check(after.err && /stopped/.test(after.err) && !after.content.some((c) => c.type === 'image'), `Cancel in the browser's debugging bar stops the session: not attached again (${after.err || 'a screenshot came'})`);
   const recs2 = await recOf(ID2);

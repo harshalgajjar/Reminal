@@ -7,12 +7,21 @@
 // run of the session).
 async function render() {
   const all = await chrome.storage.session.get(null);
-  const { agents } = await chrome.storage.local.get('agents');
+  const { agents, ...more } = await chrome.storage.local.get(['agents', 'scripts', 'uploads', 'cookies']);
   const host = all.host || {};
   document.getElementById('status').textContent = host.connected ? 'Connected to reminal on this computer.' : `Not connected to reminal${host.error ? `: ${host.error}` : ''}. Is reminal installed, with \`reminal integrate\`?`;
   const on = agents !== 'off';
   document.getElementById('agents').checked = on;
   document.getElementById('state').textContent = on ? 'on' : 'off';
+  for (const box of document.querySelectorAll('input.more')) { box.checked = more[box.id] === 'on'; box.disabled = !on; }
+  // What ran that the person should be able to see afterwards.
+  const notes = document.getElementById('notes');
+  notes.replaceChildren();
+  for (const n of (all.notes || []).slice(-8).reverse()) {
+    const li = document.createElement('li');
+    li.textContent = `${new Date(n.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ${n.who}: ${n.text}`;
+    notes.append(li);
+  }
   const list = document.getElementById('list');
   list.replaceChildren();
   const keys = Object.keys(all).filter((k) => k.startsWith('s:'));
@@ -39,5 +48,13 @@ document.getElementById('agents').addEventListener('change', async (e) => {
   await chrome.runtime.sendMessage({ t: 'switch', on: e.target.checked });
   render();
 });
+// Scripts in pages, files given to pages, cookies and storage: each its own
+// switch, off as installed.
+for (const box of document.querySelectorAll('input.more')) {
+  box.addEventListener('change', async (e) => {
+    await chrome.storage.local.set({ [box.id]: e.target.checked ? 'on' : 'off' });
+    render();
+  });
+}
 render();
 chrome.storage.onChanged.addListener(render);

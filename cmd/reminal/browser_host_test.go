@@ -242,7 +242,9 @@ func TestBrowserToolsAreListed(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]bool{}
-	for _, n := range []string{"tabs_context", "tabs_create", "navigate", "screenshot", "read_page", "get_page_text", "click", "type", "key", "scroll"} {
+	for _, n := range []string{"tabs_context", "tabs_create", "navigate", "screenshot", "read_page", "get_page_text", "click", "type", "key", "scroll",
+		"tabs_close", "tabs_select", "hover", "drag", "select_option", "fill_form", "wait_for", "find", "resize", "handle_dialog",
+		"console_messages", "network_requests", "evaluate", "file_upload", "downloads", "pdf_save", "cookies", "storage", "emulate", "batch"} {
 		want["browser_"+n] = true
 	}
 	for _, tl := range mcpToolList() {
@@ -305,15 +307,15 @@ func TestPageWordsAreMarked(t *testing.T) {
 // is an error the agent reads.
 func TestBrowserAnswersAsBlocks(t *testing.T) {
 	enc := func(v string) string { return base64.StdEncoding.EncodeToString([]byte(v)) }
-	b, err := browserBlocks(enc(`{"ok":true,"result":{"image":"AAA","mimeType":"image/png","note":"800x600"}}`))
+	b, err := browserBlocks(enc(`{"ok":true,"result":{"image":"AAA","mimeType":"image/png","note":"800x600"}}`), nil)
 	if err != nil || len(b) != 2 || b[0].(map[string]any)["type"] != "image" || b[0].(map[string]any)["data"] != "AAA" {
 		t.Fatalf("%v, %v", b, err)
 	}
-	b, err = browserBlocks(enc(`{"ok":true,"result":"Clicked."}`))
+	b, err = browserBlocks(enc(`{"ok":true,"result":"Clicked."}`), nil)
 	if err != nil || b[0].(map[string]any)["text"] != "Clicked." {
 		t.Fatalf("%v, %v", b, err)
 	}
-	if _, err := browserBlocks(enc(`{"ok":false,"error":"The person did not allow browser use for this session."}`)); err == nil || !strings.Contains(err.Error(), "did not allow") {
+	if _, err := browserBlocks(enc(`{"ok":false,"error":"The person did not allow browser use for this session."}`), nil); err == nil || !strings.Contains(err.Error(), "did not allow") {
 		t.Fatalf("%v", err)
 	}
 }

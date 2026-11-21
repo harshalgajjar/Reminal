@@ -126,3 +126,117 @@ export function indicator(show, name) {
   root.querySelector('.l').textContent = `reminal: ${name} is using this tab`;
   (document.documentElement || document.body).appendChild(host);
 }
+
+// rect: where an element is drawn, for a screenshot of it alone.
+export function rect(ref) {
+  const R = globalThis.__reminal;
+  const w = R.refs.get(ref);
+  const el = w && w.deref();
+  if (!el || !el.isConnected) return { error: `${ref} is not on the page any more: read it again with browser_read_page.` };
+  el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+  const r = el.getBoundingClientRect();
+  return { x: r.left, y: r.top, w: r.width, h: r.height, what: R.what(el) };
+}
+
+// fieldKind: what kind of field ref is, for browser_fill_form.
+export function fieldKind(ref) {
+  const R = globalThis.__reminal;
+  const w = R.refs.get(ref);
+  const el = w && w.deref();
+  if (!el || !el.isConnected) return { error: `${ref} is not on the page any more: read it again with browser_read_page.` };
+  const type = (el.type || '').toLowerCase();
+  const kind = el.tagName === 'SELECT' ? 'select' : el.tagName === 'INPUT' && (type === 'checkbox' || type === 'radio') ? 'check' : R.textField(el) ? 'text' : 'other';
+  return { kind, checked: !!el.checked, what: R.what(el), secret: R.secret(el) ? R.NEVER : '' };
+}
+
+// selectAll: everything in a text field selected, so what is typed next
+// takes its place.
+export function selectAll(ref) {
+  const R = globalThis.__reminal;
+  const w = R.refs.get(ref);
+  const el = w && w.deref();
+  if (!el || !el.isConnected) return false;
+  if (typeof el.select === 'function') { el.select(); return true; }
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return true;
+}
+
+// selectOption: options of a dropdown chosen by their text or value, as a
+// person picking them does (the page hears input and change).
+export function selectOption(ref, values) {
+  const R = globalThis.__reminal;
+  const w = R.refs.get(ref);
+  const el = w && w.deref();
+  if (!el || !el.isConnected) return { error: `${ref} is not on the page any more: read it again with browser_read_page.` };
+  if (el.tagName !== 'SELECT') return { error: `${R.what(el)} is not a dropdown (a select): click it and its options instead.` };
+  const paused = R.paused(el);
+  if (paused) return { error: paused };
+  if (el.disabled) return { error: `${R.what(el)} is disabled.` };
+  const norm = (s) => String(s).trim().replace(/\s+/g, ' ').toLowerCase();
+  const picked = [];
+  for (const v of el.multiple ? values : values.slice(0, 1)) {
+    const o = [...el.options].find((o) => o.value === v) || [...el.options].find((o) => norm(o.text) === norm(v));
+    if (!o) return { error: `No option "${v}" in ${R.what(el)}. Its options: ${[...el.options].map((o) => `"${o.text.trim()}"`).slice(0, 40).join(', ')}.` };
+    picked.push(o);
+  }
+  if (el.multiple) for (const o of el.options) o.selected = picked.includes(o);
+  else el.value = picked[0].value;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return { done: `Selected ${picked.map((o) => `"${o.text.trim()}"`).join(', ')}.` };
+}
+
+// waitCheck: whether what browser_wait_for waits for is so now.
+export function waitCheck(text, gone, ref) {
+  const R = globalThis.__reminal;
+  const body = (document.body && document.body.innerText) || '';
+  if (text != null && !body.includes(text)) return { ok: false, why: `"${text}" is not on the page` };
+  if (gone != null && body.includes(gone)) return { ok: false, why: `"${gone}" is still on the page` };
+  if (ref) {
+    const w = R.refs.get(ref);
+    const el = w && w.deref();
+    if (!el || !el.isConnected || !R.visible(el)) return { ok: false, why: `${ref} cannot be seen` };
+  }
+  return { ok: true, why: text != null ? `"${text}" is on the page` : gone != null ? `"${gone}" is gone from the page` : `${ref} can be seen` };
+}
+
+// markFile: a file field marked for the debugger to find (it cannot be
+// given files from here), after the rules. unmarkFile takes the mark off.
+export function markFile(ref, mark) {
+  const R = globalThis.__reminal;
+  const w = R.refs.get(ref);
+  let el = w && w.deref();
+  if (!el || !el.isConnected) return { error: `${ref} is not on the page any more: read it again with browser_read_page.` };
+  // A label or button wrapping the real field counts as the field.
+  if (!(el.tagName === 'INPUT' && el.type === 'file')) el = el.querySelector('input[type=file]') || (el.control && el.control.type === 'file' ? el.control : null);
+  if (!el) return { error: `${ref} is not a file field. Click the page's upload button, then call browser_file_upload with no ref.` };
+  const paused = R.paused(el);
+  if (paused) return { error: paused };
+  if (el.disabled) return { error: 'That file field is disabled.' };
+  el.setAttribute('data-reminal-upload', mark);
+  return { what: R.what(el) === 'input' ? 'the file field' : R.what(el), multiple: el.multiple };
+}
+export function unmarkFile(mark) {
+  const R = globalThis.__reminal;
+  for (const el of R.deepAll(document, `[data-reminal-upload="${mark}"]`)) el.removeAttribute('data-reminal-upload');
+  return true;
+}
+
+// storage: the page's local or session storage (shared with the page's own
+// scripts): its keys, one value, or a change.
+export function storage(kind, action, key, value) {
+  const s = kind === 'session' ? sessionStorage : localStorage;
+  const cut = (v) => (v.length > 5000 ? v.slice(0, 5000) + ` (cut: ${v.length} characters)` : v);
+  if (action === 'list') {
+    const keys = Object.keys(s);
+    return keys.length ? keys.slice(0, 200).map((k) => `${k} = ${cut(String(s.getItem(k))).slice(0, 300)}`).join('\n') : `The ${kind} storage is empty.`;
+  }
+  if (action === 'get') { const v = s.getItem(key); return v == null ? `No "${key}" in the ${kind} storage.` : cut(v); }
+  if (action === 'set') { s.setItem(key, value); return `Set "${key}".`; }
+  if (action === 'delete') { s.removeItem(key); return `Deleted "${key}".`; }
+  const n = s.length; s.clear(); return `Cleared the ${kind} storage (${n} keys).`;
+}

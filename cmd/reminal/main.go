@@ -278,6 +278,13 @@ func main() {
 			}
 			_ = client.RequestPermission(which)
 			return
+		case "browser":
+			// The browser_* tools from a session's shell (browser_cli.go).
+			if err := runBrowserCLI(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "mcp":
 			// Stdio MCP server. Speaks JSON-RPC on stdout, so nothing else may
 			// print there — errors go to stderr and a non-zero exit.
