@@ -21,6 +21,11 @@ export const CLIPS = { ack: ['Okay.', 'Sure.', 'Got it.', 'Right.', 'Mm, okay.']
 const CLIPS_AFTER_VOICE_MS = 1500, CLIPS_RETRY_MS = 1000;
 // How much is made ahead at most: seconds of sound waiting, and replies.
 const AHEAD_MAX_S = 30, AHEAD_MAX_REPLIES = 4;
+// A waiting reply's first words are made early only when the reply being
+// said has this much sound made and not yet heard: the first words' own
+// length (about two seconds of speech) over how fast the voice makes speech
+// here, half as much again, and never under two seconds.
+const FIRST_WORDS_S = 2, FIRST_MARGIN = 1.5, FIRST_MIN_S = 2;
 
 let nextGen = 0;
 export function newReply(fields) {
@@ -231,9 +236,23 @@ export class Speaker {
   }
 
   // What has been heard of the current reply, and whether all of it has.
+  // A reply made ahead may have its first words made before the rest of the
+  // reply being said, once there is sound enough of that one already made
+  // to cover the time they take (else the one being said would run dry
+  // mid-sentence). Asked of the voice once a reply.
+  hurry(p) {
+    const r = this.current;
+    if (p.hurried || !r || r === p || r.synthDone) return; // (all of it made: the voice is free for p as it is)
+    const unplayed = r.playHead - this.ctx.currentTime;
+    const need = Math.max(FIRST_MIN_S, FIRST_MARGIN * (FIRST_WORDS_S / Math.max(this.speed || 1, 0.1)));
+    if (unplayed < need) return;
+    p.hurried = true;
+    this.tts.postMessage({ type: 'first', gen: p.gen });
+  }
   track() {
     const r = this.current;
     if (!r || !this.natural) return;
+    for (const p of this.ahead.values()) this.hurry(p);
     const t = this.ctx.currentTime;
     const heard = r.segs.filter((s) => !s.ack && s.start <= t).map((s) => s.text + ' ').join('');
     if (heard.trim() !== r.heard.trim()) { r.heard = heard; this.on.heard(r); }

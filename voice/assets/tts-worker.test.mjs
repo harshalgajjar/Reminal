@@ -19,6 +19,7 @@ export const made = [];
 export async function load() {}
 export async function generate(phonemes, { voice = 'af_heart', speed = 1 } = {}) {
   if (!['af_heart', 'af_bella'].includes(voice)) throw new Error('voice ' + voice + ': HTTP 404');
+  await new Promise((r) => setTimeout(r, 8)); // making takes a moment, as it does
   made.push({ text: phonemes, voice, speed });
   return { audio: new Float32Array(240).fill(0.1), sampling_rate: 24000 };
 }
@@ -32,7 +33,7 @@ globalThis.onmessage = null;
 await import(pathToFileURL(path.join(tmp, 'tts-worker.mjs')));
 const { made } = await import(pathToFileURL(path.join(tmp, 'kokoro.mjs')));
 const tell = (m) => globalThis.onmessage({ data: m });
-const settle = () => new Promise((r) => setTimeout(r, 60));
+const settle = () => new Promise((r) => setTimeout(r, 300));
 async function reply(gen, text, own = {}) {
   made.length = 0; out.length = 0;
   for (const w of text.match(/\s*\S+/g)) await tell({ type: 'push', gen, text: w, ...own });
@@ -72,4 +73,88 @@ test('a clip is made in the voice it was asked for and answered under that name'
   await settle();
   assert.deepEqual(made.map((m) => [m.text, m.voice]), [['Okay.', 'af_bella'], ['Sure.', 'af_heart']]);
   assert.deepEqual(out.filter((m) => m.type === 'clip').map((m) => [m.text, m.v]), [['Okay.', 'af_bella'], ['Sure.', '']]);
+});
+
+// ---------- the order of work ----------
+// The control for any change to how the worker takes its turns: an ordinary
+// session's work comes out in the order it does today. A reply is made to
+// its end before the next reply starts, and a clip is made only when no
+// reply is open.
+test('control: a reply is made to its end, then the next reply, then a clip asked for meanwhile', async () => {
+  made.length = 0; out.length = 0;
+  await tell({ type: 'push', gen: 20, text: 'One one. Two two. ' });
+  await new Promise((r) => setTimeout(r, 3));
+  await tell({ type: 'push', gen: 21, text: 'Next reply first. Next reply second. ' });  // the next reply's words arrive early
+  await tell({ type: 'clip', text: 'Sure.', v: '' });                                    // and a clip is asked for
+  await tell({ type: 'push', gen: 20, text: 'Three three. ' });
+  await new Promise((r) => setTimeout(r, 40));
+  await tell({ type: 'end', gen: 20 });
+  await tell({ type: 'end', gen: 21 });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.deepEqual(made.map((m) => m.text), ['One one.', 'Two two.', 'Three three.', 'Next reply first.', 'Next reply second.', 'Sure.']);
+  assert.deepEqual(out.filter((m) => m.type === 'audio').map((m) => m.gen), [20, 20, 20, 21, 21], 'each piece goes back under its own reply');
+  assert.deepEqual(out.filter((m) => m.type === 'done').map((m) => m.gen), [20, 21]);
+});
+
+// ---------- a waiting reply's first words, asked for early ----------
+const order = () => made.map((m) => m.text);
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('first: the waiting reply\'s first piece is made between two of the reply before it, and only that one', async () => {
+  made.length = 0; out.length = 0;
+  await tell({ type: 'push', gen: 30, text: 'A one. A two. A three. A four. ' });
+  await pause(2);
+  await tell({ type: 'push', gen: 31, text: 'B first. B second. B third. ', voice: 'af_bella' });
+  await tell({ type: 'first', gen: 31 });
+  await tell({ type: 'first', gen: 31 });   // asked twice: still one piece
+  await pause(120);
+  await tell({ type: 'end', gen: 30 });
+  await tell({ type: 'end', gen: 31 });
+  await pause(300);
+  assert.deepEqual(order(), ['A one.', 'B first.', 'A two.', 'A three.', 'A four.', 'B second.', 'B third.']);
+  assert.deepEqual(made.filter((m) => m.text.startsWith('B')).map((m) => m.voice), ['af_bella', 'af_bella', 'af_bella'], 'in its own voice, early and after');
+  assert.deepEqual(out.filter((m) => m.type === 'audio').map((m) => m.gen), [30, 31, 30, 30, 30, 31, 31], 'each piece under its own reply');
+  assert.deepEqual(out.filter((m) => m.type === 'done').map((m) => m.gen), [30, 31]);
+});
+
+test('first: asked before its first words are ready, it is made as soon as they are', async () => {
+  made.length = 0; out.length = 0;
+  await tell({ type: 'push', gen: 40, text: 'A one. A two. ' });
+  await pause(2);
+  await tell({ type: 'push', gen: 41, text: 'B fir' });       // not a sentence yet
+  await tell({ type: 'first', gen: 41 });
+  await pause(60);                                            // the reply before it waits for words
+  assert.deepEqual(order(), ['A one.'], 'nothing of it is made from half a word');
+  await tell({ type: 'push', gen: 41, text: 'st. B second. ' });
+  await pause(60);
+  assert.deepEqual(order(), ['A one.', 'B first.'], 'made while the reply before it is still open and waiting');
+  await tell({ type: 'end', gen: 40 });
+  await tell({ type: 'end', gen: 41 });
+  await pause(300);
+  assert.deepEqual(order(), ['A one.', 'B first.', 'A two.', 'B second.']);
+});
+
+test('first: a waiting reply given up is not made', async () => {
+  made.length = 0; out.length = 0;
+  await tell({ type: 'push', gen: 50, text: 'A one. A two. A three. ' });
+  await pause(2);
+  await tell({ type: 'push', gen: 51, text: 'B first. B second. ' });
+  await tell({ type: 'first', gen: 51 });
+  await tell({ type: 'cancel', gen: 51 });
+  await pause(80);
+  await tell({ type: 'end', gen: 50 });
+  await pause(300);
+  assert.deepEqual(order(), ['A one.', 'A two.', 'A three.']);
+  assert.deepEqual(out.filter((m) => m.type === 'audio').map((m) => m.gen), [50, 50, 50]);
+});
+
+test('first for the reply that has the turn, or one not started, changes nothing', async () => {
+  made.length = 0; out.length = 0;
+  await tell({ type: 'first', gen: 99 });                     // no such reply
+  await tell({ type: 'push', gen: 60, text: 'A one. A two. ' });
+  await tell({ type: 'first', gen: 60 });                     // the one being made
+  await tell({ type: 'end', gen: 60 });
+  await pause(300);
+  assert.deepEqual(order(), ['A one.', 'A two.']);
+  assert.deepEqual(out.filter((m) => m.type === 'done').map((m) => m.gen), [60]);
 });
