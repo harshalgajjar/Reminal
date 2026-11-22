@@ -1,0 +1,33 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Accounts</title>
+<style>body{font:16px system-ui,sans-serif;margin:0;padding:24px 40px}button{font:inherit;padding:6px}
+.shade{position:fixed;inset:0;background:rgba(0,0,0,.4)}.panel{position:fixed;top:120px;left:120px;width:360px;background:#fff;border:1px solid #888;padding:16px}</style></head>
+<body>
+<main>
+  <h1>Accounts</h1>
+  <p>Three accounts are listed here.</p>
+  <table><tr><th>Name</th><th>Plan</th></tr><tr><td>Ada</td><td>Free</td></tr><tr><td>Grace</td><td>Plus</td></tr></table>
+  <button onclick="openPanel()">Open panel</button>
+  <button onclick="document.getElementById('native').showModal()">Open native</button>
+  <button onclick="document.getElementById('inside').hidden = false">Open inside</button>
+  <div id="inside" role="dialog" aria-label="Rename" hidden>
+    <h2>Rename account</h2><p>Pick a new name for Grace.</p><button onclick="document.getElementById('inside').hidden = true">Close inside</button>
+  </div>
+</main>
+<!-- Closed, and still in the page: never part of the text. -->
+<div role="dialog" aria-modal="true" style="display:none"><h2>Old notice</h2><p>This notice was closed long ago.</p></div>
+<dialog id="native">
+  <h2>Invite a member</h2><p>An invite is sent by email.</p><button onclick="document.getElementById('native').close()">Close native</button>
+</dialog>
+<script>
+// A dialog as most sites make one: built when it opens, added to the end of
+// the body (outside the main content), and taken away when it closes.
+function openPanel() {
+  const d = document.createElement('div');
+  d.id = 'panel';
+  d.setAttribute('role', 'dialog'); d.setAttribute('aria-modal', 'true'); d.setAttribute('aria-label', 'Delete');
+  d.innerHTML = '<div class="shade"></div><div class="panel"><h2>Delete account</h2><p>Deleting Ada cannot be undone.</p><button>Close panel</button></div>';
+  d.querySelector('button').onclick = () => d.remove();
+  document.body.appendChild(d);
+}
+</script>
+</body></html>
