@@ -299,7 +299,11 @@ func applyChromeTo(o integrateOut, home, exe string, browsers []chromeBrowser, r
 			noApp = append(noApp, b.Name)
 			continue
 		}
-		o.row("✓", b.Name, "browser", cDim)
+		state := "ready"
+		if remove {
+			state = "removed"
+		}
+		o.row("✓", b.Name, state, cDim)
 	}
 	if len(noApp) > 0 {
 		o.para("  ", "    ", chromeNoAppLine(noApp), cDim)

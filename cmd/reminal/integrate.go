@@ -788,10 +788,10 @@ func runIntegrate(args []string) error {
 	// each whose application is here. Every one in browsers is set up, shown
 	// as a row or not. On --remove every browser taken away is a row.
 	rows := browsers
-	var noApp []chromeBrowser
 	var absent []string
 	if !remove && len(browsers) > 0 {
-		rows, noApp, absent = chromeFound(home, browsers)
+		// Those set up from a data folder alone are named with the result.
+		rows, _, absent = chromeFound(home, browsers)
 	}
 
 	var names []string
@@ -840,11 +840,10 @@ func runIntegrate(args []string) error {
 		if !remove {
 			o.row("", "the extension", noBreak(tildePath(home, chromeExtensionDir(home))), cDim)
 		}
-		if len(noApp) > 0 || len(absent) > 0 {
+		// Browsers set up from their data folder alone are named once, with
+		// the result below, not here as well.
+		if len(absent) > 0 {
 			fmt.Println()
-		}
-		if len(noApp) > 0 {
-			o.para("  ", "    ", chromeNoAppLine(chromeNames(noApp)), cDim)
 		}
 		if len(absent) > 0 {
 			o.para("  ", "    ", "not installed: "+joinNames(absent), cDim)

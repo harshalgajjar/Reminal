@@ -162,15 +162,14 @@ extension's button):
   Microsoft Edge  ready
   the extension   ~/reminal-extension
 
-  also set up, app not found: Brave
   not installed: Google Chrome Beta, Arc
 
   ✓ Claude Code     via claude mcp add + attention hooks + speak allowed
   ✓ Codex CLI       via codex mcp add
   ✓ Gemini CLI      ~/.gemini/settings.json + attention hooks + speak allowed
-  ✓ Google Chrome   browser
-  ✓ Chromium        browser
-  ✓ Microsoft Edge  browser
+  ✓ Google Chrome   ready
+  ✓ Chromium        ready
+  ✓ Microsoft Edge  ready
   also set up, app not found: Brave
 
 Restart a running Claude Code to pick up new tools: claude --continue
@@ -209,7 +208,6 @@ extension's button):
   Microsoft Edge  ready
   the extension   ~/reminal-extension
 
-  also set up, app not found: Brave
   not installed: Google Chrome Beta, Arc
 
   ✓ Claude Code     via claude mcp add +
@@ -219,9 +217,9 @@ extension's button):
   ✓ Gemini CLI
       ~/.gemini/settings.json +
       attention hooks + speak allowed
-  ✓ Google Chrome   browser
-  ✓ Chromium        browser
-  ✓ Microsoft Edge  browser
+  ✓ Google Chrome   ready
+  ✓ Chromium        ready
+  ✓ Microsoft Edge  ready
   also set up, app not found: Brave
 
 Restart a running Claude Code to pick up
