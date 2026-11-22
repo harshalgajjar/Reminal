@@ -15,7 +15,8 @@ package main
 // or source says is not enough (two such readings were wrong when
 // measured), so an agent not measured yet is false: saying "restart it" to
 // someone who did not need to costs less than leaving them without the
-// tools.
+// tools. Where only part of that could be measured, the case says which
+// part.
 func agentReloadsTools(name string) bool {
 	switch name {
 	case "Claude Code":
@@ -26,13 +27,46 @@ func agentReloadsTools(name string) bool {
 		// Measured, 1.19.6: asks again at once, and the new tool is in
 		// its next request.
 		return true
+	case "Kilo Code CLI":
+		// Measured, 7.8.32: asks again at once, and the new tool is in
+		// its next request.
+		return true
+	case "Gemini CLI":
+		// Measured, 0.70.0: asks again at once, and the new tool is in
+		// its next request.
+		return true
+	case "Antigravity CLI":
+		// Measured, 1.5.14, at its sign-in screen: asks again at once.
+		// Signed out it makes no request to a model, so the new tool
+		// being offered to its model could not be measured.
+		return true
+	case "Codex CLI":
+		// Measured, 0.171.0: does not ask again within 60 s, and a
+		// request after that still offers only the old tools.
+		return false
+	case "Qwen Code":
+		// Measured, 0.28.4: does not ask again within 60 s, and its
+		// requests after the change offer only the old tool.
+		return false
+	case "Copilot CLI":
+		// Measured, 1.0.114, but only signed out: does not ask again
+		// within 60 s. Signed in it may differ; that was not measured.
+		return false
+	case "Cursor CLI":
+		// Not run: it needs a key to start. From source: it takes the
+		// notification in, and nothing found there lists the tools again.
+		return false
+	case "Amp":
+		// Could not be run (it needs a key to start), and its source
+		// could not be read well enough to say. Not known.
+		return false
+	case "pi":
+		// Measured, 1.6.0: pi's own MCP client does ask again at once.
+		// But reminal joins pi through an extension, not MCP, and pi
+		// loads that as it starts, so for reminal a running pi still
+		// needs a restart.
+		return false
 	}
-	// Measured not to: Codex CLI 0.171.0 (does not ask again within a
-	// minute; a prompt after that still offers only the old tools).
-	// Not measured yet, and so false whatever is written of them: Gemini
-	// CLI, Kilo Code CLI and Copilot CLI (their source or changelog says
-	// they do), Qwen Code (its source has no handler), Cursor CLI, Amp and
-	// Antigravity CLI (nothing found either way). pi has no MCP client:
-	// reminal reaches it through an extension, which it loads as it starts.
+	// An agent nobody has measured.
 	return false
 }

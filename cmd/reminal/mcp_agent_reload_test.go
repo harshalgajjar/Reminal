@@ -12,15 +12,15 @@ func TestAgentReloadsTools(t *testing.T) {
 	want := map[string]bool{
 		"Claude Code":     true,
 		"OpenCode":        true,
-		"Gemini CLI":      false,
-		"Kilo Code CLI":   false,
+		"Gemini CLI":      true,
+		"Kilo Code CLI":   true,
+		"Antigravity CLI": true,
 		"Copilot CLI":     false,
 		"pi":              false,
 		"Codex CLI":       false,
 		"Qwen Code":       false,
 		"Cursor CLI":      false,
 		"Amp":             false,
-		"Antigravity CLI": false,
 	}
 	known := map[string]bool{}
 	for _, a := range agentTargets() {
