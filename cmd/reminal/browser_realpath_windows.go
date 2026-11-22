@@ -54,7 +54,7 @@ func browserRealPath(p string) (string, error) {
 // computer (Z: mapped to \\server\share). Asked of Windows' own table of
 // drives: the other computer is not reached to answer.
 func browserNetworkDrive(p string) bool {
-	p = strings.TrimPrefix(strings.TrimPrefix(p, `\\?\`), `\\.\`)
+	p = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(p, `\\?\`), `\\.\`), `\??\`)
 	if len(p) < 2 || p[1] != ':' {
 		return false
 	}
