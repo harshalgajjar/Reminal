@@ -10,6 +10,8 @@ package client
 //
 //	not set up        no browser here has reminal's host manifest
 //	no daemon         the hub is not there to ask
+//	no answer         the hub is there and does not know the question: a
+//	                  daemon from before this, still running after an upgrade
 //	never connected   set up, and no extension has connected yet
 //	was connected     one connected before, and none is now
 //	connected
@@ -42,12 +44,16 @@ const (
 	BrowserNeverConnected
 	BrowserWasConnected
 	BrowserConnected
+	// BrowserNoAnswer: a daemon is running and its hub did not answer, so
+	// whether an extension is connected is not known.
+	BrowserNoAnswer
 )
 
 // BrowserStatus is what the hub and the marker say. The zero value is a hub
 // that is not there.
 type BrowserStatus struct {
-	Daemon    bool      // the hub answered
+	Daemon    bool      // the hub's socket took the connection
+	NoAnswer  bool      // and the hub did not answer the question: Connected is not known
 	Connected bool      // an extension is connected now
 	Family    string    // of the browser connected now, or last: "chrome", "edge", ...
 	Last      time.Time // when a bridge last registered; zero when none has
@@ -67,6 +73,8 @@ func (s BrowserStatus) State(setUp bool) BrowserState {
 		return BrowserNotSetUp
 	case !s.Daemon:
 		return BrowserNoDaemon
+	case s.NoAnswer:
+		return BrowserNoAnswer
 	case s.Connected:
 		return BrowserConnected
 	case !s.Last.IsZero():
@@ -81,7 +89,15 @@ func (s BrowserStatus) Sentence(setUp bool) string {
 	case BrowserNotSetUp:
 		return "The browser is not set up for reminal on this computer: run `reminal integrate`, then load reminal's extension in your browser."
 	case BrowserNoDaemon:
-		return "reminal's daemon is not running on this computer, so the browser cannot be reached: start it with `reminal daemon --install`, then try again."
+		// A session starting is what starts the daemon (Agent.Run:
+		// EnsureDaemonInstalled where its service is not installed; on
+		// Windows runDirectoryHost too, where it is and the daemon is gone).
+		return "reminal's daemon is not running on this computer, so the browser cannot be reached: starting a reminal session starts it (run `reminal new`); if it still is not running, run `reminal daemon --install`. Then try again."
+	case BrowserNoAnswer:
+		// No command to give: the older daemon sees its program replaced
+		// within binaryWatchInterval and the new one takes its place by
+		// itself on every system (watchBinaryAndExit).
+		return "The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: it is replaced by the new one within a minute of an upgrade, then run this again."
 	case BrowserConnected:
 		return BrowserFamilyName(s.Family) + " is connected: agents in your reminal sessions on this computer can use it."
 	case BrowserWasConnected:
@@ -226,9 +242,11 @@ func (s BrowserStatus) wire() browserStateWire {
 const browserStateWait = 2 * time.Second
 
 // QueryBrowserStatus asks the daemon's hub for the browser's state. With no
-// hub to ask, Daemon is false. A hub that is there and does not answer is a
-// daemon from before it knew the question: no extension counts as connected,
-// and the marker is read from here.
+// hub to ask (its socket takes no connection), Daemon is false. A hub that
+// takes the connection and gives no answer to the question (it closes, as a
+// hub does on a message it does not know, or says nothing in time) is a
+// daemon from before it knew the question: NoAnswer is set, whether an
+// extension is connected is not known, and the marker is read from here.
 func QueryBrowserStatus() BrowserStatus {
 	sock, err := BrowserSockPath()
 	if err != nil {
@@ -248,6 +266,7 @@ func QueryBrowserStatus() BrowserStatus {
 		asked = err == nil && json.Unmarshal(line, &w) == nil && w.T == "state"
 	}
 	if !asked {
+		s.NoAnswer = true
 		if m, ok := readBrowserMarker(); ok {
 			s.Last, s.Family = m.Time, m.Family
 		}
