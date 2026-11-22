@@ -187,7 +187,7 @@ func TestIntegrateSetsUpTheBrowserToo(t *testing.T) {
 		t.Errorf("its icons were not written: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if last := lines[len(lines)-1]; !strings.HasPrefix(last, "Your browser: load reminal's extension once") || !strings.Contains(last, "~/.reminal/chrome-extension") {
+	if last := lines[len(lines)-1]; !strings.HasPrefix(last, "Your browser: load reminal's extension once") || !strings.Contains(last, "~/reminal-extension)") || strings.Contains(last, "/.") {
 		t.Errorf("it does not end on how to load the extension: %q", last)
 	}
 	if strings.Contains(out, "integrate chrome") {
@@ -212,6 +212,110 @@ func TestIntegrateSetsUpTheBrowserToo(t *testing.T) {
 	}
 	if _, err := os.Stat(chromeExtensionDir(home)); !os.IsNotExist(err) {
 		t.Errorf("the extension's files are still there")
+	}
+	if _, err := os.Stat(chromeExtensionOldDir(home)); !os.IsNotExist(err) {
+		t.Errorf("a setup made the folder of before, or --remove left it")
+	}
+}
+
+// Only `reminal integrate` makes the extension's folder. What runs after an
+// upgrade (the host, as the extension connects) leaves a home folder without
+// it as it found it, and where only the folder of before is there, brings
+// that one up to date without making the new one.
+func TestOnlyIntegrateMakesTheExtensionFolder(t *testing.T) {
+	home := t.TempDir()
+	refreshChromeExtensions(home)
+	if left, _ := os.ReadDir(home); len(left) != 0 {
+		t.Errorf("a home folder with no extension set up got %d entries: %v", len(left), left)
+	}
+	// An empty folder of that name is not a setup's either.
+	if err := os.Mkdir(chromeExtensionDir(home), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	refreshChromeExtensions(home)
+	if left, _ := os.ReadDir(chromeExtensionDir(home)); len(left) != 0 {
+		t.Errorf("an empty folder was filled outside a setup: %v", left)
+	}
+	if err := os.Remove(chromeExtensionDir(home)); err != nil {
+		t.Fatal(err)
+	}
+
+	old := chromeExtensionOldDir(home)
+	if err := writeChromeExtension(old); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(old, "manifest.json"))
+	var m struct {
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal(raw, &m)
+	if err := os.WriteFile(filepath.Join(old, "manifest.json"), []byte(`{"version": "0.1.1.1", "key": "`+m.Key+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refreshChromeExtensions(home)
+	if again, _ := os.ReadFile(filepath.Join(old, "manifest.json")); string(again) != string(raw) {
+		t.Error("the folder of before, there from an earlier setup, was not brought up to date")
+	}
+	if _, err := os.Stat(chromeExtensionDir(home)); !os.IsNotExist(err) {
+		t.Error("bringing the old folder up to date made the new one")
+	}
+}
+
+// The folder of before 3.22.3: kept up to date where it is, never made anew,
+// and taken away with the rest. A folder of the person's own under the new
+// name is never written over or removed.
+func TestTheExtensionFolderOfBeforeIsKeptAndTheirsIsLeftAlone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("on Windows the home folder cannot be stood in for by HOME: this would set up the person's own browser")
+	}
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, chromeBrowserTable()[0].Dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := chromeExtensionOldDir(home)
+	if err := writeChromeExtension(old); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(old, "background.js")
+	if err := os.WriteFile(stale, []byte("// an older reminal's\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runIntegrateIn(t, home, "-y")
+	want, _ := chromeext.File("background.js")
+	if got, _ := os.ReadFile(stale); string(got) != string(want) {
+		t.Error("the folder a browser already loads from was not brought up to date")
+	}
+	if got, _ := os.ReadFile(filepath.Join(chromeExtensionDir(home), "background.js")); string(got) != string(want) {
+		t.Error("the new folder was not written")
+	}
+	runIntegrateIn(t, home, "--remove", "-y")
+	for _, dir := range []string{old, chromeExtensionDir(home)} {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Errorf("%s is still there after --remove", dir)
+		}
+	}
+
+	// The person's own folder with the new name.
+	mine := filepath.Join(chromeExtensionDir(home), "notes.txt")
+	if err := os.MkdirAll(filepath.Dir(mine), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mine, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := writeChromeExtension(chromeExtensionDir(home))
+	if err == nil || !strings.Contains(err.Error(), "is not reminal's extension") {
+		t.Errorf("writing over their folder: %v, want a refusal that says why", err)
+	}
+	if got, _ := os.ReadFile(mine); string(got) != "mine" {
+		t.Error("their folder was written over")
+	}
+	if err := refreshChromeExtension(chromeExtensionDir(home)); err != nil {
+		t.Errorf("the host's refresh of a folder that is not reminal's: %v, want it left alone quietly", err)
+	}
+	runIntegrateIn(t, home, "--remove", "-y")
+	if got, _ := os.ReadFile(mine); string(got) != "mine" {
+		t.Error("their folder was removed")
 	}
 }
 

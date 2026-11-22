@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import { execSync } from 'node:child_process';
 
 const ID = process.env.ID, HOME = process.env.HOME;
-const EXT = `${HOME}/.reminal/chrome-extension`;
+const EXT = `${HOME}/reminal-extension`;
 const PAGES = 'http://127.0.0.1:8088';
 const EXT_ID = 'igahbbfpoepnabdbgndnheeieimlhpjh';
 const GIF = !!process.env.GIF;

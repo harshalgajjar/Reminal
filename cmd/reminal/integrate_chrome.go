@@ -11,8 +11,10 @@ package main
 //     (NativeMessagingHosts/app.reminal.browser.json) for each browser of
 //     Chrome's family whose user data folder is here: Chrome, Chromium,
 //     Edge, Brave (and Arc on macOS);
-//   - writes the extension's files to ~/.reminal/chrome-extension, to load
-//     with "Load unpacked" (it is not in the Chrome Web Store yet).
+//   - writes the extension's files to ~/reminal-extension, to load with
+//     "Load unpacked" (it is not in the Chrome Web Store yet). A folder the
+//     file picker shows: it was ~/.reminal/chrome-extension, which is kept
+//     up to date where a browser already loads the extension from it.
 // The browser_* tools are in reminal's MCP server, which integrate registers
 // with each agent anyway. --remove takes these away with the rest; --check
 // reads them back. On Windows the manifest is one file under ~/.reminal and
@@ -153,9 +155,46 @@ func chromeHostManifest(exe string) []byte {
 }
 
 // chromeExtensionDir is where the extension's files are written, to load
-// with "Load unpacked".
+// with "Load unpacked": a folder in the home folder that a file picker
+// shows (one whose name starts with a dot is hidden there).
 func chromeExtensionDir(home string) string {
+	return filepath.Join(home, "reminal-extension")
+}
+
+// chromeExtensionOldDir is where they were written until 3.22.2. A browser
+// that loaded the extension from there goes on reading that folder, so it is
+// kept up to date for as long as it is there; no setup makes it anew.
+func chromeExtensionOldDir(home string) string {
 	return filepath.Join(home, ".reminal", "chrome-extension")
+}
+
+// chromeExtensionOurs reports whether dir is reminal's to write over or take
+// away: not there, empty, or holding reminal's extension (its manifest
+// carries reminal's key). A folder of the person's own that happens to have
+// the name is never touched.
+func chromeExtensionOurs(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return true
+	}
+	if err != nil {
+		return false
+	}
+	if len(entries) == 0 {
+		return true
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return false
+	}
+	var theirs, ours struct {
+		Key string `json:"key"`
+	}
+	mine, err := chromeext.File("manifest.json")
+	if err != nil || json.Unmarshal(mine, &ours) != nil || ours.Key == "" {
+		return false
+	}
+	return json.Unmarshal(raw, &theirs) == nil && theirs.Key == ours.Key
 }
 
 // chromeLoadLine is said at the end of a setup, until the extension is in
@@ -172,6 +211,10 @@ func applyChrome(home, exe string, browsers []chromeBrowser, remove bool) (failu
 		if err := writeChromeExtension(chromeExtensionDir(home)); err != nil {
 			fmt.Printf("  ✗ %-18s %v\n", "the extension", err)
 			return 1
+		}
+		// Where a browser may still load it from the folder of before.
+		if _, err := os.Stat(chromeExtensionOldDir(home)); err == nil {
+			_ = writeChromeExtension(chromeExtensionOldDir(home))
 		}
 	}
 	for _, b := range browsers {
@@ -200,9 +243,14 @@ func applyChrome(home, exe string, browsers []chromeBrowser, remove bool) (failu
 		fmt.Printf("  ✓ %-18s %s\n", b.Name, cDim("browser"))
 	}
 	if remove {
-		if err := os.RemoveAll(chromeExtensionDir(home)); err != nil {
-			failures++
-			fmt.Printf("  ✗ %-18s %v\n", "the extension", err)
+		for _, dir := range []string{chromeExtensionDir(home), chromeExtensionOldDir(home)} {
+			if !chromeExtensionOurs(dir) {
+				continue
+			}
+			if err := os.RemoveAll(dir); err != nil {
+				failures++
+				fmt.Printf("  ✗ %-18s %v\n", "the extension", err)
+			}
 		}
 	}
 	return failures
@@ -222,9 +270,23 @@ func printChromeCheck(home, exe string) {
 	}
 }
 
+// refreshChromeExtensions is what happens to the extension's files outside
+// `reminal integrate` (the browser's host runs it as the extension
+// connects, so after an upgrade the loaded extension finds this reminal's
+// files and reloads itself): a folder a setup wrote is brought up to date,
+// the new one and the one of before alike. It never makes a folder: only
+// `reminal integrate` puts one in the person's home folder.
+func refreshChromeExtensions(home string) {
+	_ = refreshChromeExtension(chromeExtensionDir(home))
+	_ = refreshChromeExtension(chromeExtensionOldDir(home))
+}
+
 // writeChromeExtension writes the extension's files (embedded in this
 // binary) to dir, replacing what an earlier reminal wrote there.
 func writeChromeExtension(dir string) error {
+	if !chromeExtensionOurs(dir) {
+		return fmt.Errorf("%s is there and is not reminal's extension: move it away and run this again", dir)
+	}
 	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}

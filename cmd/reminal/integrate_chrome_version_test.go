@@ -53,7 +53,7 @@ func TestChromeExtensionIsWrittenWithItsFilesVersion(t *testing.T) {
 	}
 	// An older reminal's files there are brought up to this one's; a folder
 	// no setup wrote is left alone.
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"version": "0.1.1.1"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"version": "0.1.1.1", "key": "`+m.Key+`"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := refreshChromeExtension(dir); err != nil {
