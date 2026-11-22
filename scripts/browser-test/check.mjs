@@ -461,7 +461,9 @@ let tabId;
   check(png && png.readUInt32BE(16) === 24 && png.readUInt32BE(20) === 24, `screenshot: one element (${png ? png.readUInt32BE(16) + 'x' + png.readUInt32BE(20) : 'none'})`);
 
   // Behind another tab (the person is in theirs, the session's is not the one
-  // shown): the mouse and screenshots are as quick as in front.
+  // shown): the mouse and screenshots are as quick as in front. (On Windows a
+  // hidden tab stops drawing and the extension keeps it going; here it draws
+  // anyway, so this guards the Linux side only.)
   const inFront = await inSW(() => chrome.tabs.create({ url: 'about:blank', active: true }).then((t) => t.id));
   let began = Date.now();
   r = await call('browser_drag', { startRef: refs.card, endRef: refs.bin });

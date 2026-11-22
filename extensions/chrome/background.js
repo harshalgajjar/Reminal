@@ -503,6 +503,7 @@ async function cdp(c, method, params = {}) {
     return sendOrDialog(c.tabId, method, params);
   }
 }
+const onWindows = chrome.runtime.getPlatformInfo().then((p) => p.os === 'win').catch(() => false);
 // attach: the debugger on a tab, with what it tells of the page switched on:
 // its dialogs, its console and its requests (kept while attached, see
 // "what the page says" below).
@@ -517,11 +518,15 @@ async function attach(tabId) {
   // A session's tab is mostly not the one in front (the person is in another,
   // or in another program). A tab that is not shown stops drawing, and on
   // Windows each mouse action then waits seconds for it (a drag over a
-  // minute, a wheel scroll never comes back). So while a session holds the
-  // tab it is kept as a shown one: taking input, and drawing (a screencast of
-  // 8 pixels that nothing reads is what keeps it drawing).
-  await chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
-  await chrome.debugger.sendCommand({ tabId }, 'Page.startScreencast', { format: 'jpeg', quality: 1, maxWidth: 8, maxHeight: 8, everyNthFrame: 1000 }).catch(() => {});
+  // minute, a wheel scroll never comes back). So there, while a session holds
+  // the tab, it is kept as a shown one: taking input, and drawing (a
+  // screencast of 8 pixels that nothing reads is what keeps it drawing). Only
+  // on Windows: it costs what a tab in front costs, and the slowness was
+  // measured nowhere else.
+  if (await onWindows) {
+    await chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+    await chrome.debugger.sendCommand({ tabId }, 'Page.startScreencast', { format: 'jpeg', quality: 1, maxWidth: 8, maxHeight: 8, everyNthFrame: 1000 }).catch(() => {});
+  }
 }
 // sendOrDialog: a command, given up when the page opens a dialog under it
 // (a click whose handler calls alert() does not come back until the dialog
