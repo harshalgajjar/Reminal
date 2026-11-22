@@ -874,6 +874,9 @@ func runIntegrate(args []string) error {
 
 	var failures int
 	var done []agentTarget // set up in this run
+	// Which agents an earlier run had already set up: a running one of
+	// those has reminal's server, and may find new tools by itself.
+	before := setUpAt(home)
 	for _, p := range plan {
 		var mcpErr error
 		switch {
@@ -949,7 +952,7 @@ func runIntegrate(args []string) error {
 		fmt.Printf("\nRemoved.\n")
 		return nil
 	}
-	printRestartLines(o, done)
+	printRestartLines(o, done, before)
 	// Last, so the one thing left for the person to do is what they read
 	// when it stops.
 	if len(browsers) > 0 {
@@ -962,10 +965,12 @@ func runIntegrate(args []string) error {
 }
 
 // agentNeedsRestart says whether a running agent of this name has to be
-// started again to find what this run set up. Every one loads its tools only
-// as it starts.
-func agentNeedsRestart(name string) bool {
-	return true
+// started again to find what this run set up. One that reminal was not set
+// up with before has no reminal server to hear from, so it does. One that
+// was, and that asks for the tool list again when told it changed
+// (agentReloadsTools), finds new tools by itself.
+func agentNeedsRestart(name string, setUpBefore bool) bool {
+	return !(setUpBefore && agentReloadsTools(name))
 }
 
 // restartLine is what a setup says of one agent it set up: a running one
@@ -981,10 +986,10 @@ func restartLine(t agentTarget) string {
 
 // printRestartLines says, for each agent set up in this run that needs it,
 // how to start it again: a line each.
-func printRestartLines(o integrateOut, done []agentTarget) {
+func printRestartLines(o integrateOut, done []agentTarget, before map[string]int64) {
 	said := false
 	for _, t := range done {
-		if !agentNeedsRestart(t.Name) {
+		if !agentNeedsRestart(t.Name, before[t.Bin] != 0) {
 			continue
 		}
 		if !said {

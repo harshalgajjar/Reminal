@@ -366,6 +366,29 @@ func TestTheStepsNameTheFirstBrowsersExtensionsPage(t *testing.T) {
 	}
 }
 
+// An agent reminal was already set up with, and that asks for the tool list
+// again when told it changed, is not told to restart on a later run: a
+// running one finds new tools by itself. One that does not ask again still
+// is, and so is every agent on its first setup.
+func TestNoRestartLineForAnAgentThatFindsNewToolsItself(t *testing.T) {
+	integrateRig(t, 80)
+	first := runIntegrateRig(t, "claude", "-y")
+	if !strings.Contains(first, "Restart a running Claude Code") {
+		t.Fatalf("a first setup of Claude Code has no restart line:\n%s", first)
+	}
+	again := runIntegrateRig(t, "claude", "-y")
+	if strings.Contains(again, "Restart a running ") {
+		t.Errorf("a second run tells a running Claude Code to restart:\n%s", again)
+	}
+	runIntegrateRig(t, "codex", "-y")
+	if again := runIntegrateRig(t, "codex", "-y"); !strings.Contains(again, "Restart a running Codex CLI") {
+		t.Errorf("a second run does not tell a running Codex CLI to restart:\n%s", again)
+	}
+	if agentNeedsRestart("Claude Code", false) != true || agentNeedsRestart("Claude Code", true) != false || agentNeedsRestart("Codex CLI", true) != true {
+		t.Error("agentNeedsRestart: first setup always; later only for an agent that does not ask again")
+	}
+}
+
 // One restart line for each agent set up in this run, and none for an agent
 // that was not; an agent with no resume command is still told to restart.
 func TestRestartLinesAreForThisRunsAgents(t *testing.T) {
@@ -379,7 +402,7 @@ func TestRestartLinesAreForThisRunsAgents(t *testing.T) {
 	}
 	for _, tg := range agentTargets() {
 		line := restartLine(tg)
-		if !agentNeedsRestart(tg.Name) || !strings.HasPrefix(line, "Restart a running ") {
+		if !agentNeedsRestart(tg.Name, false) || !strings.HasPrefix(line, "Restart a running ") {
 			t.Errorf("%s: %q", tg.Name, line)
 		}
 		if resume := tg.resumeHint(); resume != "" && !strings.HasSuffix(line, ": "+noBreak(resume)) {
