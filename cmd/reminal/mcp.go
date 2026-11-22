@@ -929,10 +929,27 @@ func serveMCP(in *os.File, w io.Writer) error {
 	ticks, stopTicks := mcpToolsTicks()
 	defer stopTicks()
 	watchDone := mcpToolsWatchDone
+	stopTools, toolsStopped := make(chan struct{}), make(chan struct{})
 	go func() {
-		watch.run(stopWatch, ticks)
+		defer close(toolsStopped)
+		watch.run(stopTools, ticks)
 		if watchDone != nil {
 			watchDone()
+		}
+	}()
+	// This function does not return with the watch still running: a look in
+	// flight would otherwise read the tool list after the caller has gone on
+	// (a test putting toolsHere back raced exactly that). Nothing here holds
+	// the output lock or the watch's own lock by now, so a look in flight
+	// finishes in a few file stats and one short line out. The one thing
+	// that could hold it is a client that closed stdin and then stopped
+	// reading a full stdout, and exit is not worth waiting on that client
+	// for, so the wait is bounded.
+	defer func() {
+		close(stopTools)
+		select {
+		case <-toolsStopped:
+		case <-time.After(mcpToolsStopWait):
 		}
 	}()
 

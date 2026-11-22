@@ -56,6 +56,11 @@ var mcpToolsTicks = func() (<-chan time.Time, func()) {
 	return t.C, t.Stop
 }
 
+// mcpToolsStopWait is the longest the server waits, as it returns, for a look
+// already under way to finish. A look takes far less; only a write to a
+// client that has stopped reading could take longer.
+const mcpToolsStopWait = 2 * time.Second
+
 // mcpToolsWatchDone, when set, is called once the watch has stopped. Only a
 // test sets it.
 var mcpToolsWatchDone func()
