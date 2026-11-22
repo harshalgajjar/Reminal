@@ -626,7 +626,9 @@ func mcpToolList() []map[string]any {
 			}),
 		},
 	}
-	if browserToolsHere() {
+	// The one part of the list that can change while the server runs. A
+	// client that already has a list is told when it does (toolsWatch).
+	if toolsHere() {
 		tools = append(tools, browserTools(obj, str)...)
 	}
 	return tools
@@ -878,7 +880,11 @@ type rpcMessage struct {
 	Params  json.RawMessage `json:"params,omitempty"`
 }
 
-func runMCP(_ []string) error {
+func runMCP(_ []string) error { return serveMCP(os.Stdin, os.Stdout) }
+
+// serveMCP answers one client's requests from in until it closes its end,
+// writing every message to w.
+func serveMCP(in *os.File, w io.Writer) error {
 	srv := newMCPServer()
 	// Ask once, at startup, who owns the notes. Reachable daemon (the normal
 	// case) => this process is stateless and every tool call is forwarded.
@@ -895,9 +901,10 @@ func runMCP(_ []string) error {
 	defer close(stopWatch)
 	go mcpWatchBinary(stopWatch)
 
-	out := json.NewEncoder(os.Stdout)
-	// Every message out goes through send: one path to stdout.
-	send := func(m map[string]any) { _ = out.Encode(m) }
+	out := newMCPOut(w)
+	// Every message out goes through send: one path to stdout, safe to use
+	// from the tool list watch as well as from this loop.
+	send := out.send
 	reply := func(id json.RawMessage, result any) {
 		send(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
 	}
@@ -908,8 +915,43 @@ func runMCP(_ []string) error {
 		if !srv.daemonOwned && srv.hasNotes() {
 			return
 		}
+		// Held across the swap so the tool list watch is never part way
+		// through a line when this image is replaced.
+		out.mu.Lock()
+		defer out.mu.Unlock()
 		maybeReexec()
 	}
+
+	// Tell the client when the tools it would be listed now are not the ones
+	// it has (mcp_toolschanged.go). Stops with this function, which returns
+	// when the client closes stdin.
+	watch := &toolsWatch{send: send, key: func() string { return toolsKey(mcpToolList()) }}
+	ticks, stopTicks := mcpToolsTicks()
+	defer stopTicks()
+	watchDone := mcpToolsWatchDone
+	stopTools, toolsStopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(toolsStopped)
+		watch.run(stopTools, ticks)
+		if watchDone != nil {
+			watchDone()
+		}
+	}()
+	// This function does not return with the watch still running: a look in
+	// flight would otherwise read the tool list after the caller has gone on
+	// (a test putting toolsHere back raced exactly that). Nothing here holds
+	// the output lock or the watch's own lock by now, so a look in flight
+	// finishes in a few file stats and one short line out. The one thing
+	// that could hold it is a client that closed stdin and then stopped
+	// reading a full stdout, and exit is not worth waiting on that client
+	// for, so the wait is bounded.
+	defer func() {
+		close(stopTools)
+		select {
+		case <-toolsStopped:
+		case <-time.After(mcpToolsStopWait):
+		}
+	}()
 
 	// We just re-exec'd onto a new binary, keeping the client's pipes: the tools
 	// it listed came from the previous image and may be out of date. Tell it, the
@@ -918,11 +960,15 @@ func runMCP(_ []string) error {
 	if os.Getenv(reloadedEnv) != "" {
 		_ = os.Unsetenv(reloadedEnv)
 		send(map[string]any{"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+		// The client did its initialize with the previous image and will not
+		// do it again. It has now been told to fetch the list as it stands,
+		// so later changes count from here.
+		watch.clientReady()
 	}
 
 	// One request per line. Between lines, and only then, the process may
 	// swap itself onto a newly installed binary (mcpReadLines).
-	mcpReadLines(os.Stdin, func(line string) {
+	mcpReadLines(in, func(line string) {
 		msg, ok := mcpParseLine(line, send)
 		if !ok {
 			return
@@ -946,13 +992,21 @@ func runMCP(_ []string) error {
 				"serverInfo":      map[string]any{"name": "reminal", "version": version},
 				"instructions":    mcpInstructions,
 			})
+		case "notifications/initialized":
+			// The handshake is done: from here the client may be told that
+			// the tool list changed.
+			watch.clientReady()
 		case "ping":
 			reply(msg.ID, map[string]any{})
 		case "tools/list":
 			// The client's list is now one we produced, so a later tool call is
 			// not cache reuse (see cacheReuseWarning).
 			noteToolsListServed()
-			reply(msg.ID, map[string]any{"tools": mcpToolList()})
+			tools := mcpToolList()
+			// Remembered before it is sent, so a change after this point is
+			// one the client is told about.
+			watch.listed(toolsKey(tools))
+			reply(msg.ID, map[string]any{"tools": tools})
 		case "tools/call":
 			var p struct {
 				Name      string         `json:"name"`
