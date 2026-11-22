@@ -459,6 +459,22 @@ let tabId;
   check(jpg && jpg[0] === 0xff && jpg[1] === 0xd8, `screenshot: as a JPEG when asked (${jpg ? jpg.length + ' bytes' : 'none'})`);
   png = pngOf(await call('browser_screenshot', { ref: refs.knob }));
   check(png && png.readUInt32BE(16) === 24 && png.readUInt32BE(20) === 24, `screenshot: one element (${png ? png.readUInt32BE(16) + 'x' + png.readUInt32BE(20) : 'none'})`);
+
+  // Behind another tab (the person is in theirs, the session's is not the one
+  // shown): the mouse and screenshots are as quick as in front. (On Windows a
+  // hidden tab stops drawing and the extension keeps it going; here it draws
+  // anyway, so this guards the Linux side only.)
+  const inFront = await inSW(() => chrome.tabs.create({ url: 'about:blank', active: true }).then((t) => t.id));
+  let began = Date.now();
+  r = await call('browser_drag', { startRef: refs.card, endRef: refs.bin });
+  const dragMs = Date.now() - began; began = Date.now();
+  const wheel = await call('browser_scroll', { direction: 'down', amount: 1 });
+  png = pngOf(await call('browser_screenshot'));
+  const restMs = Date.now() - began;
+  const stillBehind = await inSW((id) => chrome.tabs.get(id).then((t) => t.active), inFront);
+  await inSW((id) => chrome.tabs.remove(id), inFront);
+  check(stillBehind && !r.err && !wheel.err && png && dragMs < 4000 && restMs < 4000, `behind another tab: a drag (${dragMs} ms), a scroll and a screenshot (${restMs} ms) take no longer than in front (${r.err || wheel.err || 'ok'})`);
+
   r = await call('browser_navigate', { url: 'reload' });
   check(!r.err && (await txt('after')) === '', `navigate: reload (${r.err || r.text})`);
 
