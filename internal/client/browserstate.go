@@ -92,7 +92,7 @@ func (s BrowserStatus) Sentence(setUp bool) string {
 		// A session starting is what starts the daemon (Agent.Run:
 		// EnsureDaemonInstalled where its service is not installed; on
 		// Windows runDirectoryHost too, where it is and the daemon is gone).
-		return "reminal's daemon is not running on this computer, so the browser cannot be reached: starting a reminal session starts it (run `reminal new`), then try again."
+		return "reminal's daemon is not running on this computer, so the browser cannot be reached: starting a reminal session starts it (run `reminal new`); if it still is not running, run `reminal daemon --install`. Then try again."
 	case BrowserNoAnswer:
 		// No command to give: the older daemon sees its program replaced
 		// within binaryWatchInterval and the new one takes its place by

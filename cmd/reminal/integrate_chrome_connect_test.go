@@ -366,7 +366,7 @@ func TestBrowserConnectDoesNotWaitWithNoDaemon(t *testing.T) {
 	r.typeLine("n")
 	r.finish(bc)
 	out := r.out.String()
-	if !strings.Contains(out, "reminal's daemon is not running on this computer. Starting a reminal session starts it (run `reminal new`); the extension connects by itself once it is loaded and the daemon is running.\n") || strings.Contains(out, "Waiting") || strings.Contains(out, "daemon --install") {
+	if !strings.Contains(out, "reminal's daemon is not running on this computer. Starting a reminal session starts it (run `reminal new`); if it still is not running, run `reminal daemon --install`. The extension connects by itself once it is loaded and the daemon is running.\n") || strings.Contains(out, "Waiting") {
 		t.Errorf("with no daemon:\n%s", out)
 	}
 }
@@ -525,7 +525,7 @@ func TestBrowserCheckLineSaysTheState(t *testing.T) {
 		want  string
 	}{
 		{"not set up", false, hubNever, "  · The browser is not set up for reminal on this computer: run `reminal integrate`"},
-		{"no daemon", true, hubDown, "  ! reminal's daemon is not running on this computer, so the browser cannot be reached: starting a reminal session starts it (run `reminal new`), then try again."},
+		{"no daemon", true, hubDown, "  ! reminal's daemon is not running on this computer, so the browser cannot be reached: starting a reminal session starts it (run `reminal new`); if it still is not running, run `reminal daemon --install`. Then try again."},
 		{"no answer", true, hubOld, "  ! The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: it is replaced by the new one within a minute of an upgrade, then run this again."},
 		{"never connected", true, hubNever, "  ! reminal's browser extension is not connected, and has not connected before: load it in your browser"},
 		{"was connected", true, hubWas, "  ! reminal's browser extension is not connected now, though Google Chrome was connected before: the browser is closed or has no window open, so open a browser window"},

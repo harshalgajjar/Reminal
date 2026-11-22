@@ -326,7 +326,7 @@ func (c *browserConnect) finish() {
 	}
 	if !last.Daemon {
 		fmt.Fprintln(out)
-		sayWrapped(out, "", "", "Not waiting for the extension: reminal's daemon is not running on this computer. Starting a reminal session starts it (run "+noBreak("`reminal new`")+"); the extension connects by itself once it is loaded and the daemon is running.")
+		sayWrapped(out, "", "", "Not waiting for the extension: reminal's daemon is not running on this computer. Starting a reminal session starts it (run "+noBreak("`reminal new`")+"); if it still is not running, run "+noBreak("`reminal daemon --install`")+". The extension connects by itself once it is loaded and the daemon is running.")
 		return
 	}
 	if last.NoAnswer {
