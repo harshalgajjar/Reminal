@@ -170,11 +170,17 @@ func TestBrowserUploadOnlyFromThisComputer(t *testing.T) {
 	t.Cleanup(func() { chromeOS = old })
 	chromeOS = "windows"
 	for p, want := range map[string]bool{
-		`\\server\share\a.txt`:         true,
-		`//server/share/a.txt`:         true,
-		`\\?\UNC\server\share\a.txt`:   true,
-		`\\?\unc\server\share\a.txt`:   true,
-		`\\10.0.0.5\c$\Users\a.txt`:    true,
+		`\\server\share\a.txt`:                                   true,
+		`//server/share/a.txt`:                                   true,
+		`\\?\UNC\server\share\a.txt`:                             true,
+		`\\?\unc\server\share\a.txt`:                             true,
+		`\\10.0.0.5\c$\Users\a.txt`:                              true,
+		`\\.\UNC\server\share\a.txt`:                             true,
+		`\\?\GLOBALROOT\Device\Mup\server\share\a.txt`:           true,
+		`\\.\GLOBALROOT\Device\Mup\server\share\a.txt`:           true,
+		`\\.\pipe\x`:                                             true,
+		`\\?\Volume{4c1b02c1-d990-11dc-99ae-806e6f6e6963}\a.txt`: true,
+		`\\?\C:`:                       true,
 		`C:\Users\me\a.txt`:            false,
 		`\\?\C:\Users\me\a.txt`:        false,
 		`\\.\C:\Users\me\a.txt`:        false,

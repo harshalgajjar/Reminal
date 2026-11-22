@@ -87,11 +87,12 @@ func namesAnotherComputer(p string) bool {
 		return false
 	}
 	p = strings.ReplaceAll(p, `\`, "/")
-	if len(p) >= 8 && strings.EqualFold(p[:8], "//?/UNC/") {
-		return true
-	}
 	if strings.HasPrefix(p, "//?/") || strings.HasPrefix(p, "//./") {
-		return false
+		// A device name: only a drive letter is surely this computer (UNC,
+		// GLOBALROOT, Volume{...}, pipe and the rest are not taken).
+		p = p[4:]
+		letter := len(p) >= 3 && p[1] == ':' && p[2] == '/' && (p[0]|0x20) >= 'a' && (p[0]|0x20) <= 'z'
+		return !letter
 	}
 	return strings.HasPrefix(p, "//")
 }
