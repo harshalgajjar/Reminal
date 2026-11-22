@@ -38,8 +38,9 @@ func agentReloadsTools(name string) bool {
 	case "Antigravity CLI":
 		// Measured, 1.5.14, at its sign-in screen: asks again at once.
 		// Signed out it makes no request to a model, so the new tool
-		// being offered to its model could not be measured.
-		return true
+		// being offered to its model could not be measured. Half a
+		// measurement is not enough to tell someone no restart is needed.
+		return false
 	case "Codex CLI":
 		// Measured, 0.171.0: does not ask again within 60 s, and a
 		// request after that still offers only the old tools.

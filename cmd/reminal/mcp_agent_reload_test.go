@@ -14,7 +14,7 @@ func TestAgentReloadsTools(t *testing.T) {
 		"OpenCode":        true,
 		"Gemini CLI":      true,
 		"Kilo Code CLI":   true,
-		"Antigravity CLI": true,
+		"Antigravity CLI": false,
 		"Copilot CLI":     false,
 		"pi":              false,
 		"Codex CLI":       false,
