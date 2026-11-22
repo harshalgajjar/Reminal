@@ -1,0 +1,19 @@
+
+     ▄▀▀▄
+    ▀▀▀▀▀▀
+   ▀▀▀▀▀▀▀▀
+  ▄▀▀    ▀▀▄
+ ▄▀▀      ▀▀▄
+
+ Open the URL below in your browser:
+ ─────────────────────────────────────────────────────
+ https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=0000000000-example.apps.googleusercontent.com&code
+ _challenge=EXAMPLE&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fexample.invalid%2Foauth&response_
+ type=code&scope=openid&state=EXAMPLE
+ ─────────────────────────────────────────────────────
+
+ After authenticating, copy the code displayed in the browser and paste it below:
+
+ authorization code...
+
+  shift+up/down Navigate
