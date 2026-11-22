@@ -11,12 +11,12 @@ import "testing"
 func TestAgentReloadsTools(t *testing.T) {
 	want := map[string]bool{
 		"Claude Code":     true,
-		"Gemini CLI":      true,
-		"Kilo Code CLI":   true,
-		"Copilot CLI":     true,
-		"pi":              true,
+		"OpenCode":        true,
+		"Gemini CLI":      false,
+		"Kilo Code CLI":   false,
+		"Copilot CLI":     false,
+		"pi":              false,
 		"Codex CLI":       false,
-		"OpenCode":        false,
 		"Qwen Code":       false,
 		"Cursor CLI":      false,
 		"Amp":             false,
