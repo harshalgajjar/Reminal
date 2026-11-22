@@ -594,16 +594,36 @@ async function firstFrame(c) {
 // page, which has to name a scroll position. At one to one it is given as
 // it is, untouched. If it cannot be scaled, it is given as it is and note
 // says by how much it is larger.
-async function cssSized(c, data, mimeType, w, h) {
-  let ratio = 1;
+// imageWidth: how wide a PNG or JPEG is, read from its first bytes (its
+// header), without drawing it. 0 if it cannot be told.
+function imageWidth(data) {
   try {
-    const r = await cdp(c, 'Runtime.evaluate', { expression: 'devicePixelRatio', returnByValue: true });
-    ratio = Number(r && r.result && r.result.value) || 1;
+    const head = atob(data.slice(0, 8192));
+    const at = (i) => head.charCodeAt(i);
+    if (head.startsWith('\x89PNG')) return ((at(16) << 24) | (at(17) << 16) | (at(18) << 8) | at(19)) >>> 0;
+    if (at(0) === 0xff && at(1) === 0xd8) {
+      for (let i = 2; i + 9 < head.length;) {
+        if (at(i) !== 0xff) return 0;
+        const m = at(i + 1);
+        if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return (at(i + 7) << 8) | at(i + 8);
+        i += 2 + ((at(i + 2) << 8) | at(i + 3));
+      }
+    }
   } catch (_) {}
-  if (Math.abs(ratio - 1) < 0.01) return { data, note: '' };
+  return 0;
+}
+
+async function cssSized(c, data, mimeType, w, h) {
+  // How much larger the capture is than the page, from the capture itself:
+  // what the browser made, not what the page says its pixel ratio is (a
+  // page can say anything, and asking it would run script in it).
+  w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
+  const wide = imageWidth(data);
+  if (wide && wide <= w + 1) return { data, note: '' };
+  let ratio = wide ? wide / w : 0;
   try {
     const bmp = await createImageBitmap(await (await fetch(`data:${mimeType};base64,${data}`)).blob());
-    w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
+    ratio = bmp.width / w;
     if (bmp.width <= w + 1 && bmp.height <= h + 1) { bmp.close(); return { data, note: '' }; }
     const canvas = new OffscreenCanvas(w, h);
     const ctx = canvas.getContext('2d');
@@ -616,6 +636,7 @@ async function cssSized(c, data, mimeType, w, h) {
     return { data: btoa(s), note: '' };
   } catch (_) {
     const by = Math.round(ratio * 100) / 100;
+    if (!by) return { data, note: ' The image may be larger than these pixels: its size could not be read.' };
     return { data, note: ` The image is ${by} times these pixels each way: divide a position read off it by ${by}.` };
   }
 }
