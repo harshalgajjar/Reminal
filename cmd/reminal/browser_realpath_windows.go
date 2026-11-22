@@ -49,3 +49,18 @@ func browserRealPath(p string) (string, error) {
 	}
 	return real, nil
 }
+
+// browserNetworkDrive: p is on a drive letter that is a share on another
+// computer (Z: mapped to \\server\share). Asked of Windows' own table of
+// drives: the other computer is not reached to answer.
+func browserNetworkDrive(p string) bool {
+	p = strings.TrimPrefix(strings.TrimPrefix(p, `\\?\`), `\\.\`)
+	if len(p) < 2 || p[1] != ':' {
+		return false
+	}
+	root, err := windows.UTF16PtrFromString(p[:2] + `\`)
+	if err != nil {
+		return false
+	}
+	return windows.GetDriveType(root) == windows.DRIVE_REMOTE
+}

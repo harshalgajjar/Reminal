@@ -118,4 +118,6 @@ test('a checked copy is kept, a refused one is not, and a copy under another pin
   PINNED[FILE] = old;
 });
 
-test.after(() => { server.close(); fs.rmSync(tmp, { recursive: true, force: true }); });
+// Connections first: one may still be busy (the last test refused a body
+// the server is still sending), and close() alone waits for it to end.
+test.after(() => { server.closeAllConnections(); server.close(); fs.rmSync(tmp, { recursive: true, force: true }); });

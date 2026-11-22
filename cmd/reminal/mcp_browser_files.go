@@ -78,6 +78,24 @@ func namesAStream(p string) bool {
 	return strings.Contains(p, ":")
 }
 
+// namesAnotherComputer: on Windows, a name that is a share on another
+// computer (\\server\share\a.txt, \\?\UNC\server\share\a.txt). Only files on this
+// computer are given to pages, and such a name is turned down as written,
+// before anything is asked of the other computer.
+func namesAnotherComputer(p string) bool {
+	if chromeOS != "windows" {
+		return false
+	}
+	p = strings.ReplaceAll(p, `\`, "/")
+	if len(p) >= 8 && strings.EqualFold(p[:8], "//?/UNC/") {
+		return true
+	}
+	if strings.HasPrefix(p, "//?/") || strings.HasPrefix(p, "//./") {
+		return false
+	}
+	return strings.HasPrefix(p, "//")
+}
+
 // browserSecretFile reports whether a file's name marks it as a secret: a
 // private key, a credentials or environment file, a password store, a
 // browser's own store of cookies and sign-ins.
@@ -110,12 +128,19 @@ func browserUploadPath(p string) (string, error) {
 		return "", err
 	}
 	const refused = "%s looks like a key, a password or a sign-in file: reminal does not upload those. Ask the person to upload it."
+	const elsewhere = "%s is on another computer: reminal gives pages only files on this one. Ask the person to upload it."
 	if namesAStream(abs) {
 		return "", fmt.Errorf(refused, p)
+	}
+	if namesAnotherComputer(abs) || browserNetworkDrive(abs) {
+		return "", fmt.Errorf(elsewhere, p)
 	}
 	real, err := browserRealPath(abs)
 	if err != nil {
 		return "", fmt.Errorf("%s: no such file", p)
+	}
+	if namesAnotherComputer(real) || browserNetworkDrive(real) {
+		return "", fmt.Errorf(elsewhere, p)
 	}
 	st, err := os.Stat(real)
 	if err != nil {

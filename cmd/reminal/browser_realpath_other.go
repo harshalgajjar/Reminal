@@ -9,3 +9,6 @@ import "path/filepath"
 
 // browserRealPath is p with every link on the way followed.
 func browserRealPath(p string) (string, error) { return filepath.EvalSymlinks(p) }
+
+// browserNetworkDrive: drive letters are a Windows matter.
+func browserNetworkDrive(string) bool { return false }
