@@ -43,7 +43,7 @@ var chromeApps = map[string]chromeApp{
 	"Chromium": {
 		mac:     "Chromium.app",
 		bins:    []string{"chromium", "chromium-browser"},
-		desktop: []string{"chromium", "chromium-browser", "chromium_chromium", "org.chromium.Chromium"},
+		desktop: []string{"chromium", "chromium-browser", "chromium_chromium"},
 		winDir:  `Chromium\Application`, winExe: "chrome.exe",
 	},
 	"Microsoft Edge": {
