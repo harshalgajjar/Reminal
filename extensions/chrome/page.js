@@ -109,10 +109,22 @@ export function readTree(interactiveOnly) {
   return `${document.title} (${location.href})\n` + lines.join('\n');
 }
 
-// pageText: the readable text, its main part when it has one.
+// pageText: the readable text, its main part when it has one. An open
+// dialog comes first, under a label: sites put one outside the main part
+// (at the end of the body), and it is what the person is looking at.
 export function pageText() {
-  const main = document.querySelector('main, article, [role=main]') || document.body;
-  const t = (main.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+  const R = globalThis.__reminal;
+  const tidy = (el) => (el.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+  // Open: a dialog element that is open, or a dialog role, that shows (one
+  // closed is often left in the page, hidden). Not one inside another.
+  const shows = (el) => el.getAttribute('aria-hidden') !== 'true' && el.checkVisibility({ visibilityProperty: true, opacityProperty: true });
+  const open = R.deepAll(document, 'dialog[open], [role=dialog], [role=alertdialog]').filter(shows);
+  const within = (el, outer) => { for (let p = R.up(el); p; p = R.up(p)) if (p === outer) return true; return false; };
+  // The main part is not looked for inside a dialog (an article in one).
+  const main = [...document.querySelectorAll('main, article, [role=main]')].find((m) => !open.some((d) => within(m, d))) || document.body;
+  // A dialog inside the main part is in its text already, where it is.
+  const first = open.filter((d) => !main.contains(d) && !open.some((o) => within(d, o))).map(tidy).filter(Boolean);
+  const t = first.map((d) => `Open dialog:\n${d}\n\n`).join('') + tidy(main);
   return `${document.title} (${location.href})\n\n` + (t.length > 100000 ? t.slice(0, 100000) + '\n(cut at 100000 characters)' : t);
 }
 

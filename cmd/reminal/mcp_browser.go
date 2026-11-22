@@ -107,7 +107,7 @@ func browserTools(obj func(map[string]any, ...string) map[string]any, str func(s
 		},
 		{
 			"name":        "browser_get_page_text",
-			"description": "The page's readable text (its main content when it has one). " + common + pageWords,
+			"description": "The page's readable text (an open dialog first, then its main content when it has one). " + common + pageWords,
 			"inputSchema": obj(map[string]any{"tabId": tab}),
 		},
 		{
