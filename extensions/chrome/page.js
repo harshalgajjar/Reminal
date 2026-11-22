@@ -276,6 +276,12 @@ export function focusField(ref) {
 
 // drawn: resolves when the page has drawn a frame (at once in a tab that is
 // not showing, and after 200 ms at the latest).
+// painted: whether this page has drawn its first frame (false only when the
+// browser says it has not: a page it keeps no record for counts as drawn).
+export function painted() {
+  try { return performance.getEntriesByType('paint').length > 0; } catch (_) { return true; }
+}
+
 export function drawn() {
   if (document.visibilityState === 'hidden') return true;
   return new Promise((resolve) => {

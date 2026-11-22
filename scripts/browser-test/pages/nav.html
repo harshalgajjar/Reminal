@@ -1,0 +1,7 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Nav</title>
+<style>body{font:16px system-ui,sans-serif;margin:0;padding:24px 40px;background:#fff}</style></head>
+<body><h1>Nav</h1>
+<p><a id="go" href="/heavy.html#part">Open the long page</a></p>
+<p><a id="moving" href="/anchor.html#part">Open the part of the moving page</a></p>
+<p><a id="late" href="/heavy.html#part" onclick="event.preventDefault(); setTimeout(() => { location.href = this.href; }, 40)">Open it a moment later</a></p>
+</body></html>

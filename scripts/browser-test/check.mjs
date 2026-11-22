@@ -5,6 +5,7 @@
 // what each tool did, and each rule.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
+import zlib from 'node:zlib';
 import { execSync } from 'node:child_process';
 
 const ID = process.env.ID, HOME = process.env.HOME;
@@ -477,6 +478,66 @@ let tabId;
 
   r = await call('browser_navigate', { url: 'reload' });
   check(!r.err && (await txt('after')) === '', `navigate: reload (${r.err || r.text})`);
+
+  // A screenshot asked for straight after a click that took the tab to
+  // another page shows that page drawn, not a blank one caught before its
+  // first frame (a page slow to draw: thousands of boxes made as it loads).
+  {
+    const made = JSON.parse((await call('browser_tabs_create', { url: `${PAGES}/nav.html` })).text || '{}');
+    const sizes = [];
+    for (let i = 0; i < 6; i++) {
+      if (i) await call('browser_navigate', { url: `${PAGES}/nav.html`, tabId: made.tabId });
+      // Every other time by a link whose page starts loading a moment after
+      // the click (a site that handles its own links): the click has
+      // returned by then.
+      const link = (((await call('browser_find', { query: i % 2 ? 'link moment later' : 'link long page', tabId: made.tabId })).text || '').match(/\[(ref_\d+)\]/) || [])[1];
+      const went = await call('browser_click', { ref: link, tabId: made.tabId });
+      const first = pngOf(await call('browser_screenshot', { format: 'jpeg', tabId: made.tabId }));
+      await new Promise((r) => setTimeout(r, 1200));
+      const later = pngOf(await call('browser_screenshot', { format: 'jpeg', tabId: made.tabId }));
+      sizes.push(`${first ? first.length : 0}/${later ? later.length : 0}${went.err ? ' ' + went.err : ''}`);
+    }
+    const drawn = sizes.every((s) => { const [a, b] = s.split(' ')[0].split('/').map(Number); return b > 20000 && a > b * 0.7; });
+    check(drawn, `screenshot: straight after a click that changed the page, the new page is drawn (jpeg bytes at once/1.2 s later: ${sizes.join(', ')})`);
+    // A page that is drawn but still moving (it opens at a part far down,
+    // and rows go on arriving above that part): the picture is what shows,
+    // with the page's fixed bar at its top, not the page a moment before
+    // drawn at an offset (white above the bar).
+    const topPixel = (png) => { // the first pixel of a PNG's first row (any filter leaves it as it is)
+      if (!png || png.readUInt32BE(0) !== 0x89504e47) return null;
+      const idat = []; let at = 8;
+      while (at < png.length) { const len = png.readUInt32BE(at), type = png.toString('latin1', at + 4, at + 8); if (type === 'IDAT') idat.push(png.subarray(at + 8, at + 8 + len)); at += 12 + len; }
+      const raw = zlib.inflateSync(Buffer.concat(idat));
+      return [raw[1], raw[2], raw[3]];
+    };
+    const tops = [];
+    for (let i = 0; i < 4; i++) {
+      await call('browser_navigate', { url: `${PAGES}/nav.html`, tabId: made.tabId });
+      const link = (((await call('browser_find', { query: 'link moving page', tabId: made.tabId })).text || '').match(/\[(ref_\d+)\]/) || [])[1];
+      await call('browser_click', { ref: link, tabId: made.tabId });
+      const px = topPixel(pngOf(await call('browser_screenshot', { tabId: made.tabId })));
+      tops.push(px ? px.join(',') : 'no image');
+    }
+    check(tops.every((p) => p === '194,24,91'), `screenshot: of a page still moving, what shows, its fixed bar at the top (top-left pixel each time: ${tops.join(' | ')}; the bar is 194,24,91)`);
+
+    // The same with the session's tab behind another (the person is in
+    // theirs): the page it went to has drawn nothing yet when it is asked.
+    const over = await inSW(() => chrome.tabs.create({ url: 'about:blank', active: true }).then((t) => t.id));
+    const hid = [];
+    for (let i = 0; i < 4; i++) {
+      await call('browser_navigate', { url: `${PAGES}/nav.html`, tabId: made.tabId });
+      const link = (((await call('browser_find', { query: i % 2 ? 'link moment later' : 'link long page', tabId: made.tabId })).text || '').match(/\[(ref_\d+)\]/) || [])[1];
+      await call('browser_click', { ref: link, tabId: made.tabId });
+      const first = pngOf(await call('browser_screenshot', { format: 'jpeg', tabId: made.tabId }));
+      await new Promise((r) => setTimeout(r, 1200));
+      const later = pngOf(await call('browser_screenshot', { format: 'jpeg', tabId: made.tabId }));
+      hid.push(`${first ? first.length : 0}/${later ? later.length : 0}`);
+    }
+    const behind = await inSW((id) => chrome.tabs.get(id).then((t) => t.active), over);
+    await inSW((id) => chrome.tabs.remove(id), over);
+    check(behind && hid.every((s) => { const [a, b] = s.split('/').map(Number); return b > 20000 && a > b * 0.7; }), `screenshot: the same with the tab behind another (${hid.join(', ')})`);
+    await call('browser_tabs_close', { tabId: made.tabId });
+  }
 
   // Its tabs: select one, close one; never the person's.
   r = await call('browser_tabs_select', { tabId });

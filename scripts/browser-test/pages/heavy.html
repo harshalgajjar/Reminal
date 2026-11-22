@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Heavy</title>
+<style>body{font:16px system-ui,sans-serif;margin:0;padding:24px 40px;background:#123a6b;color:#fff}.c{display:inline-block;width:46px;height:46px;margin:3px;border-radius:8px;background:linear-gradient(135deg,#f6a,#fc3 50%,#3cf);box-shadow:0 2px 6px #0008}</style></head>
+<body><h1 id="part">A long page</h1>
+<div id="grid"></div>
+<script>
+// A page that is slow to draw its first frame: many boxes, made as it loads.
+const g = document.getElementById("grid"); let h = "";
+for (let i = 0; i < 9000; i++) h += "<span class=c></span>";
+g.innerHTML = h;
+const until = performance.now() + 250; while (performance.now() < until) {}
+</script>
+</body></html>

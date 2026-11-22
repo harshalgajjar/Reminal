@@ -561,19 +561,52 @@ chrome.debugger.onDetach.addListener((src, reason) => {
 chrome.tabs.onRemoved.addListener((tabId) => { attached.delete(tabId); canceled.delete(tabId); forget(tabId); });
 
 const FULL_PAGE_MAX = 12000;
+// firstFrame: a page that has drawn nothing yet gives a blank image, with
+// nothing to say so (a screenshot asked for straight after a click took the
+// tab elsewhere; a page that loaded while its tab or window was not showing).
+// So once for each page the tab goes to: a page still loading is waited for,
+// and one that has not drawn its first frame is made to draw one (a small
+// capture, thrown away) before the picture that is given.
+const framed = new Map();
+async function firstFrame(c) {
+  const at = navAt.get(c.tabId) || 0;
+  if (framed.get(c.tabId) === at) return;
+  const t = await chrome.tabs.get(c.tabId).catch(() => null);
+  if (t && (t.status === 'loading' || t.pendingUrl)) await Promise.race([loaded(c.tabId), new Promise((r) => setTimeout(r, 10_000))]);
+  let painted = true;
+  try {
+    const [r] = await chrome.scripting.executeScript({ target: { tabId: c.tabId }, func: page.painted });
+    painted = !r || r.result !== false;
+  } catch (_) {}
+  if (!painted) {
+    await cdp(c, 'Page.captureScreenshot', { format: 'jpeg', quality: 1, clip: { x: 0, y: 0, width: 16, height: 16, scale: 1 } }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  framed.set(c.tabId, navAt.get(c.tabId) || 0);
+}
+
 async function screenshot(c, a = {}) {
   // JPEG when asked: smaller, and quicker for the browser to make.
   const jpeg = String(a.format || '').toLowerCase() === 'jpeg' || String(a.format || '').toLowerCase() === 'jpg';
   const fmt = jpeg ? { format: 'jpeg', quality: 80 } : { format: 'png' };
   const mimeType = jpeg ? 'image/jpeg' : 'image/png';
+  await firstFrame(c);
   const m = await cdp(c, 'Page.getLayoutMetrics');
   const vp = m.cssVisualViewport || m.visualViewport;
   const w = Math.round(vp.clientWidth), h = Math.round(vp.clientHeight);
   if (a.ref) {
     // One element, as it is drawn.
-    const r = await inPage(c, page.rect, a.ref);
-    if (r.error) throw new Error(r.error);
-    const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, clip: { x: vp.pageX + r.x, y: vp.pageY + r.y, width: Math.max(1, r.w), height: Math.max(1, r.h), scale: 1 } });
+    // Cut out of the page by where it is scrolled to: read again and taken
+    // again if the page scrolled on meanwhile (a few times at most).
+    let r, shot;
+    for (let i = 0, at = vp; i < 4; i++) {
+      r = await inPage(c, page.rect, a.ref);
+      if (r.error) throw new Error(r.error);
+      shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, clip: { x: at.pageX + r.x, y: at.pageY + r.y, width: Math.max(1, r.w), height: Math.max(1, r.h), scale: 1 } });
+      const now = await cdp(c, 'Page.getLayoutMetrics');
+      const then = at; at = now.cssVisualViewport || now.visualViewport;
+      if (at.pageX === then.pageX && at.pageY === then.pageY) break;
+    }
     return { image: shot.data, mimeType, note: `${r.what}, ${Math.round(r.w)}x${Math.round(r.h)} pixels. Not for click coordinates: those are in a screenshot of the visible part.` };
   }
   if (a.fullPage) {
@@ -583,8 +616,12 @@ async function screenshot(c, a = {}) {
     const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, captureBeyondViewport: true, clip: { x: 0, y: 0, width: fw, height: fh, scale: 1 } });
     return { image: shot.data, mimeType, note: `The whole page, ${fw}x${fh} pixels${fh < Math.round(cs.height) ? ' (cut: the page is ' + Math.round(cs.height) + ' high)' : ''}. Not for click coordinates: those are in a screenshot of the visible part.` };
   }
-  // The visible part, at CSS pixels: the coordinates browser_click takes.
-  const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, clip: { x: vp.pageX, y: vp.pageY, width: w, height: h, scale: 1 } });
+  // The visible part: what shows, as the browser has it at the moment of the
+  // capture. Not cut out of the page by where it was scrolled to a moment
+  // before: a page still moving (opened at a part far down, its pictures
+  // still coming in) has scrolled on by then, and the cut comes out as the
+  // page drawn at an offset, white above it, or all white.
+  const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt });
   return { image: shot.data, mimeType, note: `${w}x${h} pixels; click at x, y in these pixels.` };
 }
 
@@ -832,7 +869,7 @@ async function loadedCheck(tabId) {
 }
 const kept = (map, tabId) => { if (!map.has(tabId)) map.set(tabId, []); return map.get(tabId); };
 const push = (map, tabId, v) => { const l = kept(map, tabId); l.push(v); if (l.length > KEPT) l.splice(0, l.length - KEPT); };
-function forget(tabId) { for (const m of [logs, reqs, drags, dialogs, dialogWaiters, choosers, dls, guards, navAt, mainFrame]) m.delete(tabId); }
+function forget(tabId) { for (const m of [logs, reqs, drags, dialogs, dialogWaiters, choosers, dls, guards, navAt, mainFrame, framed]) m.delete(tabId); }
 const argText = (o) => (o.value !== undefined ? (typeof o.value === 'string' ? o.value : JSON.stringify(o.value)) : (o.description || o.unserializableValue || o.type || ''));
 chrome.debugger.onEvent.addListener((src, method, p) => {
   const tabId = src.tabId;
