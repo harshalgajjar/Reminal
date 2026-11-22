@@ -39,7 +39,12 @@ var (
 	hubConnected = client.BrowserStatus{Daemon: true, Connected: true, Family: "chrome", Last: time.Unix(1700000000, 0)}
 	hubWas       = client.BrowserStatus{Daemon: true, Family: "chrome", Last: time.Unix(1700000000, 0)}
 	hubDown      = client.BrowserStatus{}
+	// hubOld: a daemon from before it could be asked, which did not answer.
+	hubOld = client.BrowserStatus{Daemon: true, NoAnswer: true, Family: "chrome", Last: time.Unix(1700000000, 0)}
 )
+
+// oldDaemonLine is what integrate ends on with such a daemon.
+const oldDaemonLine = "Not waiting for the extension: the reminal running in the background on this computer is an older one that cannot say whether the browser is connected. Run `reminal restart --all` to bring the new one (your sessions restart too, and their viewers reconnect in a moment); the extension connects by itself once it is loaded.\n"
 
 // wideTerminal: the lines these tests read are compared whole, so they are
 // printed to a terminal wide enough to hold each on one line. That they wrap
@@ -58,7 +63,7 @@ func TestBrowserConnectLinesFitANarrowTerminal(t *testing.T) {
 	r.finish(bc)
 	// And the state sentences of --check, the longest lines there are.
 	var states bytes.Buffer
-	for _, s := range []client.BrowserStatus{{}, {Daemon: true}, hubConnected} {
+	for _, s := range []client.BrowserStatus{{}, {Daemon: true}, hubConnected, hubOld} {
 		sayWrapped(&states, "", "    ", browserCheckLine(true, s))
 		sayWrapped(&states, "", "    ", browserCheckLine(false, s))
 	}
@@ -521,6 +526,7 @@ func TestBrowserCheckLineSaysTheState(t *testing.T) {
 	}{
 		{"not set up", false, hubNever, "  · The browser is not set up for reminal on this computer: run `reminal integrate`"},
 		{"no daemon", true, hubDown, "  ! reminal's daemon is not running on this computer"},
+		{"no answer", true, hubOld, "  ! The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: run `reminal restart --all` to bring the new one, then try again."},
 		{"never connected", true, hubNever, "  ! reminal's browser extension is not connected, and has not connected before: load it in your browser"},
 		{"was connected", true, hubWas, "  ! reminal's browser extension is not connected now, though Google Chrome was connected before: the browser is closed or has no window open, so open a browser window"},
 		{"connected", true, hubConnected, "  ✓ Google Chrome is connected: agents in your reminal sessions on this computer can use it."},

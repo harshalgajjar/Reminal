@@ -9,6 +9,8 @@ package main
 // the browser at its extensions page (and, on a Mac, shows the extension's
 // folder in Finder), then waits for the extension to connect and says so.
 // With an extension already connected it says that and gives no steps.
+// With a daemon from before it could be asked (still running just after an
+// upgrade) it gives the steps, does not wait, and says to restart reminal.
 //
 // A scripted run (-y, or stdin or stdout not a terminal) is asked nothing,
 // opens nothing and waits for nothing.
@@ -326,6 +328,11 @@ func (c *browserConnect) finish() {
 		sayWrapped(out, "", "", "Not waiting for the extension: reminal's daemon is not running on this computer. Start it with "+noBreak("`reminal daemon --install`")+"; the extension connects by itself once it is loaded and the daemon is running.")
 		return
 	}
+	if last.NoAnswer {
+		fmt.Fprintln(out)
+		c.sayOldDaemon()
+		return
+	}
 	fmt.Fprintln(out)
 	sayWrapped(out, "", "", "Waiting for the extension to connect, for up to 2 minutes. Press Enter to stop waiting.")
 	timeout := time.NewTimer(c.d.wait)
@@ -337,6 +344,10 @@ func (c *browserConnect) finish() {
 		case <-tick.C:
 			if last = c.d.status(); last.Connected {
 				c.sayConnected(last)
+				return
+			}
+			if last.NoAnswer {
+				c.sayOldDaemon()
 				return
 			}
 		case _, ok := <-lines:
@@ -363,6 +374,13 @@ func sayWrapped(w io.Writer, first, rest, text string) {
 
 func (c *browserConnect) sayConnected(s client.BrowserStatus) {
 	sayWrapped(c.d.out, "", "", client.BrowserFamilyName(s.Family)+" connected. Agents in your reminal sessions can use it now.")
+}
+
+// sayOldDaemon is the line for a daemon from before it could be asked the
+// browser's state (the one still running just after an upgrade): there is
+// nothing to wait on, and no reason is given, since none is known.
+func (c *browserConnect) sayOldDaemon() {
+	sayWrapped(c.d.out, "", "", "Not waiting for the extension: the reminal running in the background on this computer is an older one that cannot say whether the browser is connected. Run "+noBreak(client.BrowserRestartCommand)+" to bring the new one (your sessions restart too, and their viewers reconnect in a moment); the extension connects by itself once it is loaded.")
 }
 
 // sayNotYet is the line for a wait that ended without a connection: the

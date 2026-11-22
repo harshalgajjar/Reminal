@@ -6,6 +6,7 @@
 package client
 
 import (
+	"bufio"
 	"encoding/json"
 	"net"
 	"os"
@@ -59,6 +60,8 @@ func TestBrowserStateSentences(t *testing.T) {
 	}{
 		{"not set up", BrowserStatus{Daemon: true}, false, BrowserNotSetUp, []string{"not set up", "`reminal integrate`"}},
 		{"no daemon", BrowserStatus{}, true, BrowserNoDaemon, []string{"daemon is not running", "`reminal daemon --install`"}},
+		{"no answer", BrowserStatus{Daemon: true, NoAnswer: true, Last: then, Family: "edge"}, true, BrowserNoAnswer, []string{"an older one that cannot say whether the browser is connected", "`reminal restart --all`"}},
+		{"no answer, nothing set up", BrowserStatus{Daemon: true, NoAnswer: true}, false, BrowserNotSetUp, []string{"not set up"}},
 		{"never connected", BrowserStatus{Daemon: true}, true, BrowserNeverConnected, []string{"has not connected before", "Load unpacked", "`reminal integrate`", "window open"}},
 		{"was connected", BrowserStatus{Daemon: true, Last: then, Family: "edge"}, true, BrowserWasConnected, []string{"not connected now", "Microsoft Edge was connected before", "open a browser window", "no window does not start"}},
 		{"was connected, family not known", BrowserStatus{Daemon: true, Last: then}, true, BrowserWasConnected, []string{"though it was connected before"}},
@@ -170,34 +173,82 @@ func TestBrowserStatusWithNoDaemon(t *testing.T) {
 	}
 }
 
-// A daemon from before it knew the question hangs up on it: it is there,
-// no browser counts as connected, and the marker is read from the file.
+// A daemon from before it knew the question hangs up on it, as a hub does
+// on a message it does not know: it is there, it did not answer, so the
+// state is that and not a guess that no browser is connected. The marker is
+// read from the file. The same for a hub that hangs up before reading.
 func TestBrowserStatusFromADaemonThatDoesNotAnswer(t *testing.T) {
-	dir, err := os.MkdirTemp("/tmp", "rb")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(dir) })
-	sock := filepath.Join(dir, "b.sock")
-	t.Setenv("REMINAL_BROWSER_SOCK", sock)
-	ln, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ln.Close() })
-	go func() {
-		for {
-			c, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			c.Close()
+	for _, reads := range []bool{true, false} {
+		dir, err := os.MkdirTemp("/tmp", "rb")
+		if err != nil {
+			t.Fatal(err)
 		}
-	}()
-	writeBrowserMarker("arc", time.Now())
-	s := QueryBrowserStatus()
-	if !s.Daemon || s.Connected || s.Family != "arc" || s.State(true) != BrowserWasConnected {
-		t.Fatalf("from a daemon that hangs up: %+v", s)
+		t.Cleanup(func() { os.RemoveAll(dir) })
+		sock := filepath.Join(dir, "b.sock")
+		t.Setenv("REMINAL_BROWSER_SOCK", sock)
+		ln, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { ln.Close() })
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				if reads {
+					_, _ = bufio.NewReader(c).ReadBytes('\n')
+				}
+				c.Close()
+			}
+		}()
+		writeBrowserMarker("arc", time.Now())
+		s := QueryBrowserStatus()
+		if !s.Daemon || !s.NoAnswer || s.Connected || s.Family != "arc" || s.State(true) != BrowserNoAnswer {
+			t.Fatalf("from a daemon that hangs up (after reading: %v): %+v", reads, s)
+		}
+		said := s.Sentence(true)
+		if !strings.Contains(said, "an older one that cannot say whether the browser is connected") || strings.Contains(said, "not connected") {
+			t.Fatalf("its sentence: %q", said)
+		}
+	}
+}
+
+// A hub that answers is never taken for one that does not.
+func TestBrowserStatusFromAHubThatAnswersIsNotNoAnswer(t *testing.T) {
+	startHub(t, func(int, string) bool { return true })
+	if s := QueryBrowserStatus(); !s.Daemon || s.NoAnswer {
+		t.Fatalf("from a hub that answers: %+v", s)
+	}
+}
+
+// The marker is written by a rename over its path: a symlink already there
+// is replaced, and the file it pointed to is left as it was.
+func TestBrowserMarkerReplacesASymlinkAtItsPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("REMINAL_BROWSER_SOCK", filepath.Join(dir, "b.sock"))
+	other := filepath.Join(dir, "other.txt")
+	if err := os.WriteFile(other, []byte("not the marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path, err := browserMarkerPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, path); err != nil {
+		t.Fatal(err)
+	}
+	writeBrowserMarker("chrome", time.Now())
+	st, err := os.Lstat(path)
+	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0o600 {
+		t.Fatalf("the marker's path after a write: %v %v", st, err)
+	}
+	if raw, err := os.ReadFile(other); err != nil || string(raw) != "not the marker\n" {
+		t.Fatalf("the file the symlink pointed to: %q %v", raw, err)
+	}
+	if m, ok := readBrowserMarker(); !ok || m.Family != "chrome" {
+		t.Fatalf("the marker: %+v %v", m, ok)
 	}
 }
 
