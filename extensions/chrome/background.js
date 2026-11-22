@@ -585,6 +585,41 @@ async function firstFrame(c) {
   framed.set(c.tabId, navAt.get(c.tabId) || 0);
 }
 
+// cssSized: a capture brought to the size it has in the page's own (CSS)
+// pixels. On a screen with more than one device pixel to a CSS pixel (2 on
+// a Retina Mac) the browser's capture is that many times larger each way,
+// and coordinates read off it would be that many times too far for
+// browser_click, which takes CSS pixels. Scaled here, in the worker, from
+// the capture as taken: not by asking the browser for a scaled cut of the
+// page, which has to name a scroll position. At one to one it is given as
+// it is, untouched. If it cannot be scaled, it is given as it is and note
+// says by how much it is larger.
+async function cssSized(c, data, mimeType, w, h) {
+  let ratio = 1;
+  try {
+    const r = await cdp(c, 'Runtime.evaluate', { expression: 'devicePixelRatio', returnByValue: true });
+    ratio = Number(r && r.result && r.result.value) || 1;
+  } catch (_) {}
+  if (Math.abs(ratio - 1) < 0.01) return { data, note: '' };
+  try {
+    const bmp = await createImageBitmap(await (await fetch(`data:${mimeType};base64,${data}`)).blob());
+    w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
+    if (bmp.width <= w + 1 && bmp.height <= h + 1) { bmp.close(); return { data, note: '' }; }
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bmp, 0, 0, w, h);
+    bmp.close();
+    const out = new Uint8Array(await (await canvas.convertToBlob({ type: mimeType, quality: 0.8 })).arrayBuffer());
+    let s = '';
+    for (let i = 0; i < out.length; i += 0x8000) s += String.fromCharCode.apply(null, out.subarray(i, i + 0x8000));
+    return { data: btoa(s), note: '' };
+  } catch (_) {
+    const by = Math.round(ratio * 100) / 100;
+    return { data, note: ` The image is ${by} times these pixels each way: divide a position read off it by ${by}.` };
+  }
+}
+
 async function screenshot(c, a = {}) {
   // JPEG when asked: smaller, and quicker for the browser to make.
   const jpeg = String(a.format || '').toLowerCase() === 'jpeg' || String(a.format || '').toLowerCase() === 'jpg';
@@ -607,14 +642,16 @@ async function screenshot(c, a = {}) {
       const then = at; at = now.cssVisualViewport || now.visualViewport;
       if (at.pageX === then.pageX && at.pageY === then.pageY) break;
     }
-    return { image: shot.data, mimeType, note: `${r.what}, ${Math.round(r.w)}x${Math.round(r.h)} pixels. Not for click coordinates: those are in a screenshot of the visible part.` };
+    const el = await cssSized(c, shot.data, mimeType, Math.max(1, r.w), Math.max(1, r.h));
+    return { image: el.data, mimeType, note: `${r.what}, ${Math.round(r.w)}x${Math.round(r.h)} pixels. Not for click coordinates: those are in a screenshot of the visible part.${el.note}` };
   }
   if (a.fullPage) {
     // The whole page, top to bottom (cut at FULL_PAGE_MAX pixels high).
     const cs = m.cssContentSize || m.contentSize;
     const fw = Math.round(cs.width), fh = Math.min(Math.round(cs.height), FULL_PAGE_MAX);
     const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, captureBeyondViewport: true, clip: { x: 0, y: 0, width: fw, height: fh, scale: 1 } });
-    return { image: shot.data, mimeType, note: `The whole page, ${fw}x${fh} pixels${fh < Math.round(cs.height) ? ' (cut: the page is ' + Math.round(cs.height) + ' high)' : ''}. Not for click coordinates: those are in a screenshot of the visible part.` };
+    const full = await cssSized(c, shot.data, mimeType, fw, fh);
+    return { image: full.data, mimeType, note: `The whole page, ${fw}x${fh} pixels${fh < Math.round(cs.height) ? ' (cut: the page is ' + Math.round(cs.height) + ' high)' : ''}. Not for click coordinates: those are in a screenshot of the visible part.${full.note}` };
   }
   // The visible part: what shows, as the browser has it at the moment of the
   // capture. Not cut out of the page by where it was scrolled to a moment
@@ -622,7 +659,8 @@ async function screenshot(c, a = {}) {
   // still coming in) has scrolled on by then, and the cut comes out as the
   // page drawn at an offset, white above it, or all white.
   const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt });
-  return { image: shot.data, mimeType, note: `${w}x${h} pixels; click at x, y in these pixels.` };
+  const seen = await cssSized(c, shot.data, mimeType, w, h);
+  return { image: seen.data, mimeType, note: `${w}x${h} pixels; click at x, y in these pixels.${seen.note}` };
 }
 
 // inPage: fn in the page's top frame, after the rules. inFrames: in every
