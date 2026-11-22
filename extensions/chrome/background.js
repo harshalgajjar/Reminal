@@ -596,9 +596,17 @@ async function screenshot(c, a = {}) {
   const w = Math.round(vp.clientWidth), h = Math.round(vp.clientHeight);
   if (a.ref) {
     // One element, as it is drawn.
-    const r = await inPage(c, page.rect, a.ref);
-    if (r.error) throw new Error(r.error);
-    const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, clip: { x: vp.pageX + r.x, y: vp.pageY + r.y, width: Math.max(1, r.w), height: Math.max(1, r.h), scale: 1 } });
+    // Cut out of the page by where it is scrolled to: read again and taken
+    // again if the page scrolled on meanwhile (a few times at most).
+    let r, shot;
+    for (let i = 0, at = vp; i < 4; i++) {
+      r = await inPage(c, page.rect, a.ref);
+      if (r.error) throw new Error(r.error);
+      shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, clip: { x: at.pageX + r.x, y: at.pageY + r.y, width: Math.max(1, r.w), height: Math.max(1, r.h), scale: 1 } });
+      const now = await cdp(c, 'Page.getLayoutMetrics');
+      const then = at; at = now.cssVisualViewport || now.visualViewport;
+      if (at.pageX === then.pageX && at.pageY === then.pageY) break;
+    }
     return { image: shot.data, mimeType, note: `${r.what}, ${Math.round(r.w)}x${Math.round(r.h)} pixels. Not for click coordinates: those are in a screenshot of the visible part.` };
   }
   if (a.fullPage) {
@@ -608,8 +616,12 @@ async function screenshot(c, a = {}) {
     const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, captureBeyondViewport: true, clip: { x: 0, y: 0, width: fw, height: fh, scale: 1 } });
     return { image: shot.data, mimeType, note: `The whole page, ${fw}x${fh} pixels${fh < Math.round(cs.height) ? ' (cut: the page is ' + Math.round(cs.height) + ' high)' : ''}. Not for click coordinates: those are in a screenshot of the visible part.` };
   }
-  // The visible part, at CSS pixels: the coordinates browser_click takes.
-  const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, clip: { x: vp.pageX, y: vp.pageY, width: w, height: h, scale: 1 } });
+  // The visible part: what shows, as the browser has it at the moment of the
+  // capture. Not cut out of the page by where it was scrolled to a moment
+  // before: a page still moving (opened at a part far down, its pictures
+  // still coming in) has scrolled on by then, and the cut comes out as the
+  // page drawn at an offset, white above it, or all white.
+  const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt });
   return { image: shot.data, mimeType, note: `${w}x${h} pixels; click at x, y in these pixels.` };
 }
 

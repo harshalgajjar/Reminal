@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Anchor</title>
+<style>html,body{margin:0;background:#fff;font:16px system-ui,sans-serif}
+#bar{position:fixed;left:0;top:0;right:0;height:48px;background:#c2185b;z-index:5}
+.row{height:30px;margin:0 40px;border-bottom:1px solid #ddd}
+#fill{height:4000px}</style></head>
+<body><div id="bar"></div>
+<div id="grow"><div class="row"></div></div>
+<h2 id="part" style="margin:60px 40px">The part the link names</h2>
+<div id="fill"></div>
+<script>
+// A page that is drawn but still moving: it opens at its #part, far down, and
+// for a few seconds more rows arrive above that part, so the browser keeps
+// the part in place by scrolling (as a long page does while its pictures and
+// fonts come in). The bar at the top is fixed: it is at the top of what shows.
+const grow = document.getElementById('grow'); let n = 0;
+for (let i = 0; i < 60; i++) grow.insertAdjacentHTML('beforeend', '<div class="row"></div>');
+const t = setInterval(() => { grow.insertAdjacentHTML('afterbegin', '<div class="row"></div>'); if (++n > 400) clearInterval(t); }, 8);
+</script></body></html>
