@@ -81,7 +81,7 @@ type BrowserResp struct {
 }
 
 // errNoBrowser is what a request gets while no extension is connected.
-var errNoBrowser = errors.New("reminal's browser extension is not connected: run `reminal integrate`, load the extension in your browser, and open it")
+var errNoBrowser = errors.New("reminal's browser extension is not connected: run `reminal integrate`, load the extension in your browser, and have a browser window open (a browser left running with no window does not start it)")
 
 type browserHub struct {
 	mu      sync.Mutex

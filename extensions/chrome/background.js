@@ -561,11 +561,36 @@ chrome.debugger.onDetach.addListener((src, reason) => {
 chrome.tabs.onRemoved.addListener((tabId) => { attached.delete(tabId); canceled.delete(tabId); forget(tabId); });
 
 const FULL_PAGE_MAX = 12000;
+// firstFrame: a page that has drawn nothing yet gives a blank image, with
+// nothing to say so (a screenshot asked for straight after a click took the
+// tab elsewhere; a page that loaded while its tab or window was not showing).
+// So once for each page the tab goes to: a page still loading is waited for,
+// and one that has not drawn its first frame is made to draw one (a small
+// capture, thrown away) before the picture that is given.
+const framed = new Map();
+async function firstFrame(c) {
+  const at = navAt.get(c.tabId) || 0;
+  if (framed.get(c.tabId) === at) return;
+  const t = await chrome.tabs.get(c.tabId).catch(() => null);
+  if (t && (t.status === 'loading' || t.pendingUrl)) await Promise.race([loaded(c.tabId), new Promise((r) => setTimeout(r, 10_000))]);
+  let painted = true;
+  try {
+    const [r] = await chrome.scripting.executeScript({ target: { tabId: c.tabId }, func: page.painted });
+    painted = !r || r.result !== false;
+  } catch (_) {}
+  if (!painted) {
+    await cdp(c, 'Page.captureScreenshot', { format: 'jpeg', quality: 1, clip: { x: 0, y: 0, width: 16, height: 16, scale: 1 } }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  framed.set(c.tabId, navAt.get(c.tabId) || 0);
+}
+
 async function screenshot(c, a = {}) {
   // JPEG when asked: smaller, and quicker for the browser to make.
   const jpeg = String(a.format || '').toLowerCase() === 'jpeg' || String(a.format || '').toLowerCase() === 'jpg';
   const fmt = jpeg ? { format: 'jpeg', quality: 80 } : { format: 'png' };
   const mimeType = jpeg ? 'image/jpeg' : 'image/png';
+  await firstFrame(c);
   const m = await cdp(c, 'Page.getLayoutMetrics');
   const vp = m.cssVisualViewport || m.visualViewport;
   const w = Math.round(vp.clientWidth), h = Math.round(vp.clientHeight);
@@ -832,7 +857,7 @@ async function loadedCheck(tabId) {
 }
 const kept = (map, tabId) => { if (!map.has(tabId)) map.set(tabId, []); return map.get(tabId); };
 const push = (map, tabId, v) => { const l = kept(map, tabId); l.push(v); if (l.length > KEPT) l.splice(0, l.length - KEPT); };
-function forget(tabId) { for (const m of [logs, reqs, drags, dialogs, dialogWaiters, choosers, dls, guards, navAt, mainFrame]) m.delete(tabId); }
+function forget(tabId) { for (const m of [logs, reqs, drags, dialogs, dialogWaiters, choosers, dls, guards, navAt, mainFrame, framed]) m.delete(tabId); }
 const argText = (o) => (o.value !== undefined ? (typeof o.value === 'string' ? o.value : JSON.stringify(o.value)) : (o.description || o.unserializableValue || o.type || ''));
 chrome.debugger.onEvent.addListener((src, method, p) => {
   const tabId = src.tabId;
