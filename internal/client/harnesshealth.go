@@ -159,6 +159,14 @@ var harnessLoginScreens = map[string][]loginRow{
 		// session is still signed out. Each row alone is a sentence an agent
 		// could write.
 		loginThen(`ifyouaren.?tautomaticallyredirected,pastetheauthorizationcodebelow:`, `authorizationcode`),
+		// 1.5.14: the same ask once something is typed into its field (the
+		// typed text takes the place of "authorization code...": a message
+		// sent to a signed-out session lands there), by the page's own
+		// footer under it; and the page a shell reached over SSH gets
+		// instead ("Open the URL below in your browser:", the link, then
+		// this ask).
+		loginThen(`ifyouaren.?tautomaticallyredirected,pastetheauthorizationcodebelow:`, `shift\+up/downnavigate`),
+		loginThen(`afterauthenticating,copythecodedisplayedinthebrowserandpasteitbelow:`, `authorizationcode|shift\+up/downnavigate`),
 		loginThen(`gotanerror:tokenexchangefailed:.+`, `pressanykeytogoback`),
 	),
 	// Kiro CLI 3.4.0 with no login (`kiro-cli chat`): its question, with its
@@ -252,7 +260,20 @@ var harnessLoginScreens = map[string][]loginRow{
 	// enter its device code, wrapped at the terminal's width, then "Waiting
 	// for authentication to complete..." below it; either alone is not it.
 	"droid": loginAll(loginThen(`pleaseloginwithyourfactoryaccounttocontinue`, `signintoafactorycustomdeployment`),
-		loginThen(`ifthelinkdoesnotopenautomatically,pleasevisithttps?://[^·]+?andentercode[a-z0-9-]+tocompleteauthentication`, `waitingforauthenticationtocomplete`)),
+		loginThen(`ifthelinkdoesnotopenautomatically,pleasevisithttps?://[^·]+?andentercode[a-z0-9-]+tocompleteauthentication`, `waitingforauthenticationtocomplete`),
+		// 1.17.1 draws these two screens in the language of LANG: Italian,
+		// Japanese, Chinese and Korean beside English (recorded, droid-it.txt
+		// and the like). The same pairs: the sentence with the menu's second
+		// row under it; where to enter the device code, wrapped, with the
+		// waiting row under it.
+		loginThen(`accediconiltuoaccountfactorypercontinuare`, `accedaaun.istanzafactorycustomdeployment`),
+		loginThen(`seilcollegamentononsiapreautomaticamente,visitarehttps?://[^·]+?einserisciilcodice[a-z0-9-]+percompletarel.autenticazione`, `inattesadelcompletamentodell.autenticazione`),
+		loginThen(`factoryアカウントでログインしてください。?`, `factorycustomdeploymentにサインイン`),
+		loginThen(`リンクが自動的に開かない場合は、以下にアクセスしてくださいhttps?://[^·]+?コードを入力してください[a-z0-9-]+認証を完了してください。?`, `認証の完了を待機中`),
+		loginThen(`请使用您的factory账户登录以继续。?`, `登录factorycustomdeployment`),
+		loginThen(`如果链接未自动打开，请访问https?://[^·]+?并输入代码[a-z0-9-]+以完成认证。?`, `等待认证完成`),
+		loginThen(`계속하려면factory계정으로로그인하세요`, `factorycustomdeployment에로그인`),
+		loginThen(`링크가자동으로열리지않으면다음을방문하세요https?://[^·]+?그리고코드를입력하세요[a-z0-9-]+인증을완료합니다`, `인증완료대기중`)),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), the steps of
 	// setting one up, and a login that lapsed.

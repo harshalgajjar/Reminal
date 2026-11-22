@@ -1,0 +1,40 @@
+
+
+                                 █████████    █████████     ████████    ███   █████████
+                                 ███    ███   ███    ███   ███    ███   ███   ███    ███
+                                 ███    ███   ███    ███   ███    ███   ███   ███    ███
+                                 ███    ███   █████████    ███    ███   ███   ███    ███
+                                 ███    ███   ███    ███   ███    ███   ███   ███    ███
+                                 ███    ███   ███    ███   ███    ███   ███   ███    ███
+                                 █████████    ███    ███    ████████    ███   █████████
+
+                                                        v1.17.1
+
+                         SUGGERIMENTO: Use /context to see your context window usage breakdown
+
+                          Maiusc+tab per scorrere le modalità · ctrl+N per scorrere i modelli
+                                      ctrl+L per autonomia · tab per ragionamento
+
+                                        Competenze (…)  MCP (0)  Connettori (…)
+
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                                                      │
+│ Benvenuti nella CLI di fabbrica                                                                                      │
+│ Factory è un assistente allo sviluppo software basato sull'intelligenza artificiale che ti aiuta a creare,           │
+│ comprendere e migliorare il tuo codice.                                                                              │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+Se il collegamento non si apre automaticamente, visitare https://auth.factory.ai/device?user_code=ABCD-EFGH e inserisci
+il codice ABCD-EFGH per completare l'autenticazione.
+
+In attesa del completamento dell'autenticazione...
+
+
+
+
+
+
+
+
+

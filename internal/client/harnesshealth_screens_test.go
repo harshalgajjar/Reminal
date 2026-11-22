@@ -68,12 +68,27 @@ func TestAgentsLoginScreensAsTheyDrawThem(t *testing.T) {
 		// device code to be entered after "> Login".
 		{"droid", "droid", true},
 		{"droid-device", "droid", true},
+		// Droid 1.17.1 in the languages it ships beside English (it draws
+		// its screens in the language of LANG): the same two screens.
+		{"droid-it", "droid", true},
+		{"droid-it-device", "droid", true},
+		{"droid-ja", "droid", true},
+		{"droid-ja-device", "droid", true},
+		{"droid-zh", "droid", true},
+		{"droid-zh-device", "droid", true},
+		{"droid-ko", "droid", true},
+		{"droid-ko-device", "droid", true},
 		// Antigravity CLI 1.5.10 signing in from a machine with no browser:
 		// its step waiting for the authorization code, and a code it could
 		// not use ("Press any key to go back" — not a question for the
 		// agent: it is still signed out).
 		{"agy-code", "agy", true},
 		{"agy-badcode", "agy", true},
+		// Antigravity CLI 1.5.14: the same step with a message typed into
+		// its field (the typed text takes the place of "authorization
+		// code..."), and its page for a shell reached over SSH.
+		{"agy-code-typed", "agy", true},
+		{"agy-ssh-code", "agy", true},
 		// Kiro CLI 3.4.0 with no login: its question, its login methods,
 		// and its device code waiting to be confirmed.
 		{"kiro-login", "kiro", true},
