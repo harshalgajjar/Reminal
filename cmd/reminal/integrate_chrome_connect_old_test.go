@@ -69,7 +69,7 @@ func TestBrowserConnectDoesNotWaitOnADaemonThatCannotSay(t *testing.T) {
 	if !strings.HasSuffix(out, "\n"+oldDaemonLine) {
 		t.Errorf("did not end on the line for an older daemon:\n%s", out)
 	}
-	for _, not := range []string{"Waiting", "Not connected yet", "most likely", "already connected", "daemon is not running"} {
+	for _, not := range []string{"Waiting", "Not connected yet", "most likely", "already connected", "daemon is not running", "restart", "daemon --install"} {
 		if strings.Contains(out, not) {
 			t.Errorf("said %q:\n%s", not, out)
 		}
@@ -129,7 +129,7 @@ func TestIntegrateWithADaemonThatCannotSay(t *testing.T) {
 	}
 
 	check := runIntegrateIn(t, home, "--check")
-	want := "The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: run `reminal restart --all` to bring the new one, then try again."
+	want := "The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: it is replaced by the new one within a minute of an upgrade, then run this again."
 	if !strings.Contains(check, want) || strings.Contains(check, "extension is not connected") {
 		t.Errorf("--check with an older daemon:\n%s", check)
 	}

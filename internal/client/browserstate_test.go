@@ -59,8 +59,8 @@ func TestBrowserStateSentences(t *testing.T) {
 		want  []string
 	}{
 		{"not set up", BrowserStatus{Daemon: true}, false, BrowserNotSetUp, []string{"not set up", "`reminal integrate`"}},
-		{"no daemon", BrowserStatus{}, true, BrowserNoDaemon, []string{"daemon is not running", "`reminal daemon --install`"}},
-		{"no answer", BrowserStatus{Daemon: true, NoAnswer: true, Last: then, Family: "edge"}, true, BrowserNoAnswer, []string{"an older one that cannot say whether the browser is connected", "`reminal restart --all`"}},
+		{"no daemon", BrowserStatus{}, true, BrowserNoDaemon, []string{"daemon is not running", "starting a reminal session starts it (run `reminal new`)"}},
+		{"no answer", BrowserStatus{Daemon: true, NoAnswer: true, Last: then, Family: "edge"}, true, BrowserNoAnswer, []string{"an older one that cannot say whether the browser is connected", "replaced by the new one within a minute of an upgrade"}},
 		{"no answer, nothing set up", BrowserStatus{Daemon: true, NoAnswer: true}, false, BrowserNotSetUp, []string{"not set up"}},
 		{"never connected", BrowserStatus{Daemon: true}, true, BrowserNeverConnected, []string{"has not connected before", "Load unpacked", "`reminal integrate`", "window open"}},
 		{"was connected", BrowserStatus{Daemon: true, Last: then, Family: "edge"}, true, BrowserWasConnected, []string{"not connected now", "Microsoft Edge was connected before", "open a browser window", "no window does not start"}},

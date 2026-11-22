@@ -49,11 +49,6 @@ const (
 	BrowserNoAnswer
 )
 
-// BrowserRestartCommand is what a person runs to put the daemon (and the
-// sessions) on the reminal that is installed now. `reminal daemon --install`
-// is not it: on Linux and Windows that leaves a running daemon as it is.
-const BrowserRestartCommand = "`reminal restart --all`"
-
 // BrowserStatus is what the hub and the marker say. The zero value is a hub
 // that is not there.
 type BrowserStatus struct {
@@ -94,9 +89,15 @@ func (s BrowserStatus) Sentence(setUp bool) string {
 	case BrowserNotSetUp:
 		return "The browser is not set up for reminal on this computer: run `reminal integrate`, then load reminal's extension in your browser."
 	case BrowserNoDaemon:
-		return "reminal's daemon is not running on this computer, so the browser cannot be reached: start it with `reminal daemon --install`, then try again."
+		// A session starting is what starts the daemon (Agent.Run:
+		// EnsureDaemonInstalled where its service is not installed; on
+		// Windows runDirectoryHost too, where it is and the daemon is gone).
+		return "reminal's daemon is not running on this computer, so the browser cannot be reached: starting a reminal session starts it (run `reminal new`), then try again."
 	case BrowserNoAnswer:
-		return "The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: run " + BrowserRestartCommand + " to bring the new one, then try again."
+		// No command to give: the older daemon sees its program replaced
+		// within binaryWatchInterval and the new one takes its place by
+		// itself on every system (watchBinaryAndExit).
+		return "The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: it is replaced by the new one within a minute of an upgrade, then run this again."
 	case BrowserConnected:
 		return BrowserFamilyName(s.Family) + " is connected: agents in your reminal sessions on this computer can use it."
 	case BrowserWasConnected:
