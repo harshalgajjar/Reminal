@@ -585,6 +585,62 @@ async function firstFrame(c) {
   framed.set(c.tabId, navAt.get(c.tabId) || 0);
 }
 
+// cssSized: a capture brought to the size it has in the page's own (CSS)
+// pixels. On a screen with more than one device pixel to a CSS pixel (2 on
+// a Retina Mac) the browser's capture is that many times larger each way,
+// and coordinates read off it would be that many times too far for
+// browser_click, which takes CSS pixels. Scaled here, in the worker, from
+// the capture as taken: not by asking the browser for a scaled cut of the
+// page, which has to name a scroll position. At one to one it is given as
+// it is, untouched. If it cannot be scaled, it is given as it is and note
+// says by how much it is larger.
+// imageWidth: how wide a PNG or JPEG is, read from its first bytes (its
+// header), without drawing it. 0 if it cannot be told.
+function imageWidth(data) {
+  try {
+    const head = atob(data.slice(0, 8192));
+    const at = (i) => head.charCodeAt(i);
+    if (head.startsWith('\x89PNG')) return ((at(16) << 24) | (at(17) << 16) | (at(18) << 8) | at(19)) >>> 0;
+    if (at(0) === 0xff && at(1) === 0xd8) {
+      for (let i = 2; i + 9 < head.length;) {
+        if (at(i) !== 0xff) return 0;
+        const m = at(i + 1);
+        if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return (at(i + 7) << 8) | at(i + 8);
+        i += 2 + ((at(i + 2) << 8) | at(i + 3));
+      }
+    }
+  } catch (_) {}
+  return 0;
+}
+
+async function cssSized(c, data, mimeType, w, h) {
+  // How much larger the capture is than the page, from the capture itself:
+  // what the browser made, not what the page says its pixel ratio is (a
+  // page can say anything, and asking it would run script in it).
+  w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
+  const wide = imageWidth(data);
+  if (wide && wide <= w + 1) return { data, note: '' };
+  let ratio = wide ? wide / w : 0;
+  try {
+    const bmp = await createImageBitmap(await (await fetch(`data:${mimeType};base64,${data}`)).blob());
+    ratio = bmp.width / w;
+    if (bmp.width <= w + 1 && bmp.height <= h + 1) { bmp.close(); return { data, note: '' }; }
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bmp, 0, 0, w, h);
+    bmp.close();
+    const out = new Uint8Array(await (await canvas.convertToBlob({ type: mimeType, quality: 0.8 })).arrayBuffer());
+    let s = '';
+    for (let i = 0; i < out.length; i += 0x8000) s += String.fromCharCode.apply(null, out.subarray(i, i + 0x8000));
+    return { data: btoa(s), note: '' };
+  } catch (_) {
+    const by = Math.round(ratio * 100) / 100;
+    if (!by) return { data, note: ' The image may be larger than these pixels: its size could not be read.' };
+    return { data, note: ` The image is ${by} times these pixels each way: divide a position read off it by ${by}.` };
+  }
+}
+
 async function screenshot(c, a = {}) {
   // JPEG when asked: smaller, and quicker for the browser to make.
   const jpeg = String(a.format || '').toLowerCase() === 'jpeg' || String(a.format || '').toLowerCase() === 'jpg';
@@ -607,14 +663,16 @@ async function screenshot(c, a = {}) {
       const then = at; at = now.cssVisualViewport || now.visualViewport;
       if (at.pageX === then.pageX && at.pageY === then.pageY) break;
     }
-    return { image: shot.data, mimeType, note: `${r.what}, ${Math.round(r.w)}x${Math.round(r.h)} pixels. Not for click coordinates: those are in a screenshot of the visible part.` };
+    const el = await cssSized(c, shot.data, mimeType, Math.max(1, r.w), Math.max(1, r.h));
+    return { image: el.data, mimeType, note: `${r.what}, ${Math.round(r.w)}x${Math.round(r.h)} pixels. Not for click coordinates: those are in a screenshot of the visible part.${el.note}` };
   }
   if (a.fullPage) {
     // The whole page, top to bottom (cut at FULL_PAGE_MAX pixels high).
     const cs = m.cssContentSize || m.contentSize;
     const fw = Math.round(cs.width), fh = Math.min(Math.round(cs.height), FULL_PAGE_MAX);
     const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt, captureBeyondViewport: true, clip: { x: 0, y: 0, width: fw, height: fh, scale: 1 } });
-    return { image: shot.data, mimeType, note: `The whole page, ${fw}x${fh} pixels${fh < Math.round(cs.height) ? ' (cut: the page is ' + Math.round(cs.height) + ' high)' : ''}. Not for click coordinates: those are in a screenshot of the visible part.` };
+    const full = await cssSized(c, shot.data, mimeType, fw, fh);
+    return { image: full.data, mimeType, note: `The whole page, ${fw}x${fh} pixels${fh < Math.round(cs.height) ? ' (cut: the page is ' + Math.round(cs.height) + ' high)' : ''}. Not for click coordinates: those are in a screenshot of the visible part.${full.note}` };
   }
   // The visible part: what shows, as the browser has it at the moment of the
   // capture. Not cut out of the page by where it was scrolled to a moment
@@ -622,7 +680,8 @@ async function screenshot(c, a = {}) {
   // still coming in) has scrolled on by then, and the cut comes out as the
   // page drawn at an offset, white above it, or all white.
   const shot = await cdp(c, 'Page.captureScreenshot', { ...fmt });
-  return { image: shot.data, mimeType, note: `${w}x${h} pixels; click at x, y in these pixels.` };
+  const seen = await cssSized(c, shot.data, mimeType, w, h);
+  return { image: seen.data, mimeType, note: `${w}x${h} pixels; click at x, y in these pixels.${seen.note}` };
 }
 
 // inPage: fn in the page's top frame, after the rules. inFrames: in every

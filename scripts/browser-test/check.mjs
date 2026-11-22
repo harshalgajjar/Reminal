@@ -45,7 +45,8 @@ fs.mkdirSync(`${HOME}/.config/chromium/Default`, { recursive: true });
 fs.writeFileSync(`${HOME}/.config/chromium/Default/Preferences`, JSON.stringify({ extensions: { ui: { developer_mode: true } } }));
 const launch = () => chromium.launchPersistentContext(`${HOME}/.config/chromium`, {
   headless: false, viewport: null, ignoreDefaultArgs: ['--enable-automation'],
-  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--no-first-run', '--no-default-browser-check'],
+  // RATIO=2: as on a screen with two device pixels to a CSS pixel.
+  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--no-first-run', '--no-default-browser-check', ...(process.env.RATIO ? [`--force-device-scale-factor=${process.env.RATIO}`] : [])],
 });
 const ctx = await launch();
 // The browser's window fills the screen; the consent window keeps its own size
@@ -519,6 +520,39 @@ let tabId;
       tops.push(px ? px.join(',') : 'no image');
     }
     check(tops.every((p) => p === '194,24,91'), `screenshot: of a page still moving, what shows, its fixed bar at the top (top-left pixel each time: ${tops.join(' | ')}; the bar is 194,24,91)`);
+
+    // The picture and browser_click share one set of coordinates, whatever
+    // the screen's pixel ratio (RATIO=2 runs this as on a Retina screen): the
+    // image is the size its note says, and a click at the middle of a button
+    // as found in the image itself lands on the button.
+    const pixels = (png) => { // a PNG's pixels (8 bits a channel, RGB or RGBA, not interlaced)
+      const wd = png.readUInt32BE(16), ht = png.readUInt32BE(20), bpp = png[25] === 6 ? 4 : 3;
+      const idat = []; let at = 8;
+      while (at < png.length) { const len = png.readUInt32BE(at), type = png.toString('latin1', at + 4, at + 8); if (type === 'IDAT') idat.push(png.subarray(at + 8, at + 8 + len)); at += 12 + len; }
+      const raw = zlib.inflateSync(Buffer.concat(idat)), stride = wd * bpp, out = Buffer.alloc(stride * ht);
+      for (let y = 0; y < ht; y++) {
+        const f = raw[y * (stride + 1)], row = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+        for (let x = 0; x < stride; x++) {
+          const a = x >= bpp ? out[y * stride + x - bpp] : 0, b = y ? out[(y - 1) * stride + x] : 0, c2 = x >= bpp && y ? out[(y - 1) * stride + x - bpp] : 0;
+          const p = a + b - c2, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c2);
+          out[y * stride + x] = (row[x] + (f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : f === 4 ? (pa <= pb && pa <= pc ? a : pb <= pc ? b : c2) : 0)) & 255;
+        }
+      }
+      return { wd, ht, at: (x, y) => [out[y * stride + x * bpp], out[y * stride + x * bpp + 1], out[y * stride + x * bpp + 2]] };
+    };
+    await call('browser_navigate', { url: `${PAGES}/pixel.html`, tabId: made.tabId });
+    const shown = await call('browser_screenshot', { tabId: made.tabId });
+    const said = ((shown.text || '').match(/(\d+)x(\d+) pixels/) || []).slice(1).map(Number);
+    const im = pixels(pngOf(shown));
+    let x0 = 1e9, x1 = -1, y0 = 1e9, y1 = -1;
+    for (let y = 0; y < im.ht; y++) for (let x = 0; x < im.wd; x++) { const [r1, g1, b1] = im.at(x, y); if (Math.abs(r1 - 10) < 14 && Math.abs(g1 - 127) < 14 && Math.abs(b1 - 63) < 14) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); } }
+    const cx = Math.round((x0 + x1) / 2), cy = Math.round((y0 + y1) / 2);
+    const hit = await call('browser_click', { x: cx, y: cy, tabId: made.tabId });
+    const heard = (await call('browser_get_page_text', { tabId: made.tabId })).text || '';
+    check(im.wd === said[0] && im.ht === said[1] && /\bhit\b/.test(heard), `screenshot: the image is the size its note says (${im.wd}x${im.ht}, note ${said.join('x')}) and a click at the button's middle as found in the image (${cx}, ${cy}; it is at 457, 290 in the page) lands on it (${hit.err || (/\bhit\b/.test(heard) ? 'hit' : 'missed')})`);
+    const whole = pngOf(await call('browser_screenshot', { fullPage: true, tabId: made.tabId }));
+    const one = pngOf(await call('browser_screenshot', { ref: (((await call('browser_find', { query: 'button green', tabId: made.tabId })).text || '').match(/\[(ref_\d+)\]/) || [])[1], tabId: made.tabId }));
+    check(whole && whole.readUInt32BE(16) === im.wd && one && one.readUInt32BE(16) === 90 && one.readUInt32BE(20) === 44, `screenshot: the whole page and one element in the same pixels (whole ${whole ? whole.readUInt32BE(16) : 0} wide, the visible part ${im.wd}; the 90x44 button ${one ? one.readUInt32BE(16) + 'x' + one.readUInt32BE(20) : 'none'})`);
 
     // The same with the session's tab behind another (the person is in
     // theirs): the page it went to has drawn nothing yet when it is asked.
