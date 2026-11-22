@@ -514,6 +514,14 @@ async function attach(tabId) {
   }
   attached.add(tabId);
   for (const d of ['Page', 'Runtime', 'Log', 'Network']) await chrome.debugger.sendCommand({ tabId }, d + '.enable', {}).catch(() => {});
+  // A session's tab is mostly not the one in front (the person is in another,
+  // or in another program). A tab that is not shown stops drawing, and on
+  // Windows each mouse action then waits seconds for it (a drag over a
+  // minute, a wheel scroll never comes back). So while a session holds the
+  // tab it is kept as a shown one: taking input, and drawing (a screencast of
+  // 8 pixels that nothing reads is what keeps it drawing).
+  await chrome.debugger.sendCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+  await chrome.debugger.sendCommand({ tabId }, 'Page.startScreencast', { format: 'jpeg', quality: 1, maxWidth: 8, maxHeight: 8, everyNthFrame: 1000 }).catch(() => {});
 }
 // sendOrDialog: a command, given up when the page opens a dialog under it
 // (a click whose handler calls alert() does not come back until the dialog
@@ -1129,7 +1137,10 @@ async function fileUpload(c, a) {
   await switchedOn('uploads');
   const paths = (Array.isArray(a.paths) ? a.paths : []).map(String);
   if (!paths.length) throw new Error('paths is required: the files to give.');
-  if (paths.some((p) => !p.startsWith('/'))) throw new Error('paths must be absolute.');
+  // Absolute on this computer: /home/a.txt, C:\Users\a.txt, \\server\share\a.txt.
+  const absolute = (p) => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\');
+  const leaf = (p) => p.split(/[\\/]/).pop();
+  if (paths.some((p) => !absolute(p))) throw new Error('paths must be absolute.');
   let node, what = 'the file chooser', multiple;
   if (a.ref) {
     const mark = 'u' + Math.random().toString(36).slice(2);
@@ -1158,8 +1169,8 @@ async function fileUpload(c, a) {
   if (paths.length > 1 && !multiple) throw new Error(`${what} takes one file.`);
   await cdp(c, 'DOM.setFileInputFiles', { files: paths, ...node });
   choosers.delete(c.tabId);
-  await note(c, `gave ${paths.map((p) => p.split('/').pop()).join(', ')}`);
-  return `Gave ${paths.length} file${paths.length === 1 ? '' : 's'} to ${what}: ${paths.map((p) => p.split('/').pop()).join(', ')}.`;
+  await note(c, `gave ${paths.map(leaf).join(', ')}`);
+  return `Gave ${paths.length} file${paths.length === 1 ? '' : 's'} to ${what}: ${paths.map(leaf).join(', ')}.`;
 }
 
 // downloads: what this tab started downloading since the session's first
