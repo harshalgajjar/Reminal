@@ -163,3 +163,39 @@ func TestBrowserBatchStepsAreCheckedAsSent(t *testing.T) {
 		t.Errorf("an ordinary request was refused by the host: %s", b)
 	}
 }
+
+// A file on another computer is turned down by its name alone.
+func TestBrowserUploadOnlyFromThisComputer(t *testing.T) {
+	old := chromeOS
+	t.Cleanup(func() { chromeOS = old })
+	chromeOS = "windows"
+	for p, want := range map[string]bool{
+		`\\server\share\a.txt`:                                   true,
+		`//server/share/a.txt`:                                   true,
+		`\\?\UNC\server\share\a.txt`:                             true,
+		`\\?\unc\server\share\a.txt`:                             true,
+		`\\10.0.0.5\c$\Users\a.txt`:                              true,
+		`\\.\UNC\server\share\a.txt`:                             true,
+		`\\?\GLOBALROOT\Device\Mup\server\share\a.txt`:           true,
+		`\\.\GLOBALROOT\Device\Mup\server\share\a.txt`:           true,
+		`\\.\pipe\x`:                                             true,
+		`\??\UNC\server\share\a.txt`:                             true,
+		`\??\GLOBALROOT\Device\Mup\server\share\a.txt`:           true,
+		`\??\C:\Users\me\a.txt`:                                  false,
+		`\\?\Volume{4c1b02c1-d990-11dc-99ae-806e6f6e6963}\a.txt`: true,
+		`\\?\C:`:                       true,
+		`C:\Users\me\a.txt`:            false,
+		`\\?\C:\Users\me\a.txt`:        false,
+		`\\.\C:\Users\me\a.txt`:        false,
+		`C:/Users/me/a.txt`:            false,
+		`C:\Users\me\server\share.txt`: false,
+	} {
+		if got := namesAnotherComputer(p); got != want {
+			t.Errorf("namesAnotherComputer(%q) = %v, want %v", p, got, want)
+		}
+	}
+	chromeOS = "linux"
+	if namesAnotherComputer("//server/share/a.txt") {
+		t.Error("off Windows, a path with two slashes is an ordinary path")
+	}
+}
