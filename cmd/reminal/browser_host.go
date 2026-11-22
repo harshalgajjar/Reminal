@@ -63,8 +63,7 @@ func runBrowserHost(args []string) error {
 	// The files a setup wrote, brought up to this reminal's first (it may
 	// have been upgraded since).
 	if home, err := os.UserHomeDir(); err == nil {
-		_ = refreshChromeExtension(chromeExtensionDir(home))
-		_ = refreshChromeExtension(chromeExtensionOldDir(home))
+		refreshChromeExtensions(home)
 	}
 	// With the version of the extension this reminal carries: an extension
 	// running other files reloads itself (chromeext.Version).

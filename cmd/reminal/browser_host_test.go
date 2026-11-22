@@ -218,6 +218,49 @@ func TestIntegrateSetsUpTheBrowserToo(t *testing.T) {
 	}
 }
 
+// Only `reminal integrate` makes the extension's folder. What runs after an
+// upgrade (the host, as the extension connects) leaves a home folder without
+// it as it found it, and where only the folder of before is there, brings
+// that one up to date without making the new one.
+func TestOnlyIntegrateMakesTheExtensionFolder(t *testing.T) {
+	home := t.TempDir()
+	refreshChromeExtensions(home)
+	if left, _ := os.ReadDir(home); len(left) != 0 {
+		t.Errorf("a home folder with no extension set up got %d entries: %v", len(left), left)
+	}
+	// An empty folder of that name is not a setup's either.
+	if err := os.Mkdir(chromeExtensionDir(home), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	refreshChromeExtensions(home)
+	if left, _ := os.ReadDir(chromeExtensionDir(home)); len(left) != 0 {
+		t.Errorf("an empty folder was filled outside a setup: %v", left)
+	}
+	if err := os.Remove(chromeExtensionDir(home)); err != nil {
+		t.Fatal(err)
+	}
+
+	old := chromeExtensionOldDir(home)
+	if err := writeChromeExtension(old); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(old, "manifest.json"))
+	var m struct {
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal(raw, &m)
+	if err := os.WriteFile(filepath.Join(old, "manifest.json"), []byte(`{"version": "0.1.1.1", "key": "`+m.Key+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	refreshChromeExtensions(home)
+	if again, _ := os.ReadFile(filepath.Join(old, "manifest.json")); string(again) != string(raw) {
+		t.Error("the folder of before, there from an earlier setup, was not brought up to date")
+	}
+	if _, err := os.Stat(chromeExtensionDir(home)); !os.IsNotExist(err) {
+		t.Error("bringing the old folder up to date made the new one")
+	}
+}
+
 // The folder of before 3.22.3: kept up to date where it is, never made anew,
 // and taken away with the rest. A folder of the person's own under the new
 // name is never written over or removed.

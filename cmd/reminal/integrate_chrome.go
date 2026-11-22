@@ -270,6 +270,17 @@ func printChromeCheck(home, exe string) {
 	}
 }
 
+// refreshChromeExtensions is what happens to the extension's files outside
+// `reminal integrate` (the browser's host runs it as the extension
+// connects, so after an upgrade the loaded extension finds this reminal's
+// files and reloads itself): a folder a setup wrote is brought up to date,
+// the new one and the one of before alike. It never makes a folder: only
+// `reminal integrate` puts one in the person's home folder.
+func refreshChromeExtensions(home string) {
+	_ = refreshChromeExtension(chromeExtensionDir(home))
+	_ = refreshChromeExtension(chromeExtensionOldDir(home))
+}
+
 // writeChromeExtension writes the extension's files (embedded in this
 // binary) to dir, replacing what an earlier reminal wrote there.
 func writeChromeExtension(dir string) error {
