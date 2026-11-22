@@ -573,6 +573,49 @@ let tabId;
     await call('browser_tabs_close', { tabId: made.tabId });
   }
 
+  // An open dialog is part of the page's text, first and labelled, though
+  // it sits outside the main content (added to the end of the body, or a
+  // dialog element shown over the page). One that is closed is not.
+  {
+    const made = JSON.parse((await call('browser_tabs_create', { url: `${PAGES}/dialog.html` })).text || '{}');
+    const at = { tabId: made.tabId };
+    const press = async (name) => {
+      const tree = (await call('browser_read_page', { filter: 'interactive', ...at })).text || '';
+      const ref = (tree.match(new RegExp(`button "${name}" \\[(ref_\\d+)\\]`)) || [])[1];
+      const r = ref ? await call('browser_click', { ref, ...at }) : { err: `no button "${name}"` };
+      return r.err || '';
+    };
+    const textNow = async () => (await call('browser_get_page_text', at)).text || '';
+    const LABEL = 'Open dialog:';
+    const brief = (t) => JSON.stringify(t.replace(/\s+/g, ' ').slice(0, 260));
+    const count = (t, s) => t.split(s).length - 1;
+
+    let t = await textNow();
+    check(t.includes('Three accounts are listed here.') && !t.includes(LABEL) && !/Delete account|Invite a member|Rename account|Old notice/.test(t),
+      `get_page_text: with no dialog open, the main content alone, with no dialog label (${brief(t)})`);
+
+    let e = await press('Open panel');
+    t = await textNow();
+    check(!e && t.includes('Deleting Ada cannot be undone.') && t.includes('Close panel') && t.includes(LABEL) && t.indexOf(LABEL) < t.indexOf('Delete account') && t.indexOf('Delete account') < t.indexOf('Three accounts are listed here.') && !t.includes('Old notice'),
+      `get_page_text: an open dialog added to the end of the body is in the text, labelled, before the main content (${e || brief(t)})`);
+    e = await press('Close panel');
+    t = await textNow();
+    check(!e && !t.includes(LABEL) && !t.includes('Delete account'), `get_page_text: closed again, the dialog is gone from the text (${e || brief(t)})`);
+
+    e = await press('Open native');
+    t = await textNow();
+    check(!e && t.includes('An invite is sent by email.') && t.includes('Close native') && t.includes(LABEL) && t.indexOf(LABEL) < t.indexOf('Invite a member') && t.indexOf('Invite a member') < t.indexOf('Three accounts are listed here.'),
+      `get_page_text: an open dialog element outside the main content is in the text, labelled, before the main content (${e || brief(t)})`);
+    e = await press('Close native');
+    t = await textNow();
+    check(!e && !t.includes(LABEL) && !t.includes('Invite a member'), `get_page_text: the dialog element closed, it is gone from the text (${e || brief(t)})`);
+
+    e = await press('Open inside');
+    t = await textNow();
+    check(!e && count(t, 'Pick a new name for Grace.') === 1 && !t.includes(LABEL), `get_page_text: a dialog inside the main content is in the text once, where it is (${e || brief(t)})`);
+    await call('browser_tabs_close', at);
+  }
+
   // Its tabs: select one, close one; never the person's.
   r = await call('browser_tabs_select', { tabId });
   const active = await inSW((id) => chrome.tabs.get(id).then((t) => t.active), tabId);
