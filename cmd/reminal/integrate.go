@@ -1018,7 +1018,7 @@ otherwise a merge into its JSON config, backed up first):
 
 And your browser (Chrome, Chromium, Edge, Brave, Arc; macOS and Linux): agents in
 your reminal sessions may use it through reminal's extension, each session
-only once you allow it there. Load the extension once from ~/.reminal/chrome-extension.
+only once you allow it there. Load the extension once from ~/reminal-extension.
 
 Where an agent asks before each tool call (Claude Code, Gemini CLI, Qwen Code),
 its settings also allow reminal's speak tool, and only that one, so an answer

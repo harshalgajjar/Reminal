@@ -2,7 +2,7 @@
 // developer mode on, kept open until /tmp/bench.done is there.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
-const HOME = process.env.HOME, EXT = `${HOME}/.reminal/chrome-extension`;
+const HOME = process.env.HOME, EXT = `${HOME}/reminal-extension`;
 fs.mkdirSync(`${HOME}/.config/chromium/Default`, { recursive: true });
 fs.writeFileSync(`${HOME}/.config/chromium/Default/Preferences`, JSON.stringify({ extensions: { ui: { developer_mode: true } } }));
 const ctx = await chromium.launchPersistentContext(`${HOME}/.config/chromium`, { headless: false, viewport: null, ignoreDefaultArgs: ['--enable-automation'],

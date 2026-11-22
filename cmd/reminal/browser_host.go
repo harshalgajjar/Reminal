@@ -64,6 +64,7 @@ func runBrowserHost(args []string) error {
 	// have been upgraded since).
 	if home, err := os.UserHomeDir(); err == nil {
 		_ = refreshChromeExtension(chromeExtensionDir(home))
+		_ = refreshChromeExtension(chromeExtensionOldDir(home))
 	}
 	// With the version of the extension this reminal carries: an extension
 	// running other files reloads itself (chromeext.Version).
