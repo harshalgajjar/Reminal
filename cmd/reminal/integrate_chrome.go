@@ -9,8 +9,10 @@ package main
 // in the browser, that makes this safe to set up by default). Integrate:
 //   - registers `reminal` as the extension's native messaging host
 //     (NativeMessagingHosts/app.reminal.browser.json) for each browser of
-//     Chrome's family whose user data folder is here: Chrome, Chromium,
-//     Edge, Brave (and Arc on macOS);
+//     Chrome's family that is here, by its user data folder or its
+//     application: Chrome, Chromium, Edge, Brave (and Arc on macOS). What
+//     it prints names, as rows, those of them whose application is here
+//     (integrate_chrome_app.go);
 //   - writes the extension's files to ~/reminal-extension, to load with
 //     "Load unpacked" (it is not in the Chrome Web Store yet). A folder the
 //     file picker shows: it was ~/.reminal/chrome-extension, which is kept
@@ -91,11 +93,22 @@ func chromeBrowserTable() []chromeBrowser {
 	}
 }
 
-// chromeBrowsers are the ones installed here: their user data folder is.
+// chromeHere says a browser is on this machine: its user data folder is, or
+// its application (integrate_chrome_app.go). The second is a browser just
+// installed and never opened, which has no folder yet: set up all the same,
+// it works from its first start.
+func chromeHere(home string, b chromeBrowser) bool {
+	if st, err := os.Stat(filepath.Join(home, b.Dir)); err == nil && st.IsDir() {
+		return true
+	}
+	return chromeAppFound(home, b)
+}
+
+// chromeBrowsers are the ones here (chromeHere): those integrate sets up.
 func chromeBrowsers(home string) []chromeBrowser {
 	var out []chromeBrowser
 	for _, b := range chromeBrowserTable() {
-		if st, err := os.Stat(filepath.Join(home, b.Dir)); err == nil && st.IsDir() {
+		if chromeHere(home, b) {
 			out = append(out, b)
 		}
 	}
@@ -108,7 +121,7 @@ func chromeOurs(home string) []chromeBrowser {
 	for _, b := range chromeBrowserTable() {
 		if b.Reg != "" {
 			// Several browsers read one key: only those that are here.
-			if st, err := os.Stat(filepath.Join(home, b.Dir)); err != nil || !st.IsDir() {
+			if !chromeHere(home, b) {
 				continue
 			}
 		}
@@ -197,19 +210,59 @@ func chromeExtensionOurs(dir string) bool {
 	return json.Unmarshal(raw, &theirs) == nil && theirs.Key == ours.Key
 }
 
-// chromeLoadLine is said at the end of a setup, until the extension is in
-// the Chrome Web Store.
-func chromeLoadLine(home string) string {
-	return fmt.Sprintf("Your browser: load reminal's extension once (chrome://extensions, Developer mode, Load unpacked: %s). After that, agents in your reminal sessions on this computer can use this browser without asking; switch it off in the extension's button.", tildePath(home, chromeExtensionDir(home)))
+// chromeExtensionsPage is the page the extension is loaded on, in the first
+// of browsers whose application is here (the first of them all when none
+// was found): Edge has its own name for it.
+func chromeExtensionsPage(home string, browsers []chromeBrowser) string {
+	first := ""
+	for _, b := range browsers {
+		if first == "" {
+			first = b.Name
+		}
+		if chromeAppFound(home, b) {
+			first = b.Name
+			break
+		}
+	}
+	if first == "Microsoft Edge" {
+		return "edge://extensions"
+	}
+	return "chrome://extensions"
+}
+
+// printChromeSteps is said last in a setup, until the extension is in the
+// Chrome Web Store: the one thing left for the person to do, as steps short
+// enough to read on a phone, ending on the folder to pick.
+func printChromeSteps(home string, browsers []chromeBrowser) {
+	o := newIntegrateOut()
+	fmt.Println()
+	o.para("", "", "Next, in your browser:", plain)
+	fmt.Println()
+	for i, step := range []string{
+		"Open " + chromeExtensionsPage(home, browsers),
+		"Turn on Developer mode",
+		"Load unpacked: " + noBreak(tildePath(home, chromeExtensionDir(home))),
+	} {
+		o.para(fmt.Sprintf("  %d. ", i+1), "     ", step, plain)
+	}
+	fmt.Println()
+	o.para("", "", "Agents in reminal sessions on this computer can then use the browser. Switch it off in the extension's button.", plain)
 }
 
 // applyChrome sets the browser up (or, on remove, takes it away): the host
 // manifest for each browser in browsers, and the extension's files. One line
 // a browser, as the agents get.
 func applyChrome(home, exe string, browsers []chromeBrowser, remove bool) (failures int) {
+	return applyChromeTo(newIntegrateOut(chromeNames(browsers)...), home, exe, browsers, remove)
+}
+
+// applyChromeTo is applyChrome printing to o, so its rows line up with the
+// agents'. A browser whose application was not found is set up like the
+// rest, and named in one line under the rows in place of a tick of its own.
+func applyChromeTo(o integrateOut, home, exe string, browsers []chromeBrowser, remove bool) (failures int) {
 	if !remove {
 		if err := writeChromeExtension(chromeExtensionDir(home)); err != nil {
-			fmt.Printf("  ✗ %-18s %v\n", "the extension", err)
+			o.row("✗", "the extension", err.Error(), plain)
 			return 1
 		}
 		// Where a browser may still load it from the folder of before.
@@ -217,6 +270,7 @@ func applyChrome(home, exe string, browsers []chromeBrowser, remove bool) (failu
 			_ = writeChromeExtension(chromeExtensionOldDir(home))
 		}
 	}
+	var noApp []string
 	for _, b := range browsers {
 		path := chromeHostManifestPath(home, b)
 		var err error
@@ -237,10 +291,18 @@ func applyChrome(home, exe string, browsers []chromeBrowser, remove bool) (failu
 		}
 		if err != nil {
 			failures++
-			fmt.Printf("  ✗ %-18s %v\n", b.Name, err)
+			o.row("✗", b.Name, err.Error(), plain)
 			continue
 		}
-		fmt.Printf("  ✓ %-18s %s\n", b.Name, cDim("browser"))
+		// What is taken away is said by name, its application here or not.
+		if !remove && !chromeAppFound(home, b) {
+			noApp = append(noApp, b.Name)
+			continue
+		}
+		o.row("✓", b.Name, "browser", cDim)
+	}
+	if len(noApp) > 0 {
+		o.para("  ", "    ", chromeNoAppLine(noApp), cDim)
 	}
 	if remove {
 		for _, dir := range []string{chromeExtensionDir(home), chromeExtensionOldDir(home)} {
@@ -249,24 +311,44 @@ func applyChrome(home, exe string, browsers []chromeBrowser, remove bool) (failu
 			}
 			if err := os.RemoveAll(dir); err != nil {
 				failures++
-				fmt.Printf("  ✗ %-18s %v\n", "the extension", err)
+				o.row("✗", "the extension", err.Error(), plain)
 			}
 		}
 	}
 	return failures
 }
 
-// printChromeCheck is --check's lines for the browsers here.
-func printChromeCheck(home, exe string) {
+// chromeNoAppLine names the browsers set up from their user data folder
+// alone: no application of theirs was found, so they get no row.
+func chromeNoAppLine(names []string) string {
+	return "also set up, app not found: " + joinNames(names)
+}
+
+// joinNames lists names, each kept whole where the list is wrapped.
+func joinNames(names []string) string {
+	kept := make([]string, 0, len(names))
+	for _, n := range names {
+		kept = append(kept, noBreak(n))
+	}
+	return strings.Join(kept, ", ")
+}
+
+// printChromeCheck is --check's lines for the browsers here. The manifest's
+// path is said where it is the point: one set up for a different reminal,
+// and for every browser with -v.
+func printChromeCheck(o integrateOut, home, exe string, verbose bool) {
 	for _, b := range chromeBrowsers(home) {
-		mark, what := "·", "not set up"
+		mark, what, where := "·", "not set up", verbose
 		if raw, err := os.ReadFile(chromeHostManifestPath(home, b)); err == nil {
-			mark, what = "!", "set up for a different reminal (re-run integrate)"
+			mark, what, where = "!", "set up for a different reminal (re-run integrate)", true
 			if string(raw) == string(chromeHostManifest(exe)) && chromePointed(home, b) {
-				mark, what = "✓", "set up (browser)"
+				mark, what, where = "✓", "set up (browser)", verbose
 			}
 		}
-		fmt.Printf("  %s %-18s %s\n", mark, b.Name, what)
+		o.row(mark, b.Name, what, plain)
+		if where {
+			o.para("      ", "      ", noBreak(tildePath(home, chromeHostManifestPath(home, b))), cDim)
+		}
 	}
 }
 

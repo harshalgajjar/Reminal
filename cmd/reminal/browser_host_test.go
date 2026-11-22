@@ -109,12 +109,16 @@ func TestTheExtensionIDIsItsKeys(t *testing.T) {
 	}
 }
 
-// runIntegrateIn runs `reminal integrate args...` with home as $HOME and
-// no agent on PATH, and returns what it printed.
+// runIntegrateIn runs `reminal integrate args...` with home as $HOME, no
+// agent on PATH and no browser's application on the machine (one the test
+// machine has would be set up in home too), and returns what it printed.
 func runIntegrateIn(t *testing.T, home string, args ...string) string {
 	t.Helper()
 	t.Setenv("HOME", home)
 	t.Setenv("PATH", filepath.Join(home, "no-bin"))
+	found := chromeAppFound
+	chromeAppFound = func(string, chromeBrowser) bool { return false }
+	defer func() { chromeAppFound = found }()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -129,6 +133,37 @@ func runIntegrateIn(t *testing.T, home string, args ...string) string {
 		t.Fatalf("integrate %v: %v\n%s", args, runErr, out)
 	}
 	return string(out)
+}
+
+// browserStepsAtTheEnd checks that a setup's output ends on what is left for
+// the person to do in their browser: the label, three numbered steps of a
+// line each, and after them only the one sentence saying what that gives
+// (and where it is switched off). It returns the last step, the one that
+// names the folder to load.
+func browserStepsAtTheEnd(t *testing.T, out string) string {
+	t.Helper()
+	_, steps, ok := strings.Cut(out, "\nNext, in your browser:\n\n")
+	if !ok {
+		t.Fatalf("no browser steps:\n%s", out)
+	}
+	list, after, _ := strings.Cut(steps, "\n\n")
+	lines := strings.Split(list, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("the browser steps are not three lines: %q", lines)
+	}
+	for i, want := range []string{"  1. Open ", "  2. Turn on Developer mode", "  3. Load unpacked: "} {
+		if !strings.HasPrefix(lines[i], want) {
+			t.Errorf("step %d is %q, want it to start %q", i+1, lines[i], want)
+		}
+	}
+	if !strings.HasSuffix(lines[0], "://extensions") {
+		t.Errorf("step 1 does not name the extensions page: %q", lines[0])
+	}
+	said := strings.Join(strings.Fields(after), " ")
+	if said != "Agents in reminal sessions on this computer can then use the browser. Switch it off in the extension's button." {
+		t.Errorf("after the steps: %q", said)
+	}
+	return lines[2]
 }
 
 // Plain `reminal integrate` sets the browser up too: the host manifest for
@@ -186,9 +221,11 @@ func TestIntegrateSetsUpTheBrowserToo(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(chromeExtensionDir(home), "icons", "128.png")); err != nil {
 		t.Errorf("its icons were not written: %v", err)
 	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if last := lines[len(lines)-1]; !strings.HasPrefix(last, "Your browser: load reminal's extension once") || !strings.Contains(last, "~/reminal-extension)") || strings.Contains(last, "/.") {
+	if last := browserStepsAtTheEnd(t, out); !strings.HasSuffix(last, " ~/reminal-extension") || strings.Contains(last, "/.") {
 		t.Errorf("it does not end on how to load the extension: %q", last)
+	}
+	if strings.Contains(out, "NativeMessagingHosts") {
+		t.Errorf("it prints where each browser's host manifest is:\n%s", out)
 	}
 	if strings.Contains(out, "integrate chrome") {
 		t.Errorf("it sends the person to a second command:\n%s", out)
@@ -329,7 +366,7 @@ func TestIntegrateWithNoBrowserWritesNoneOfIt(t *testing.T) {
 	if _, err := os.Stat(chromeExtensionDir(home)); !os.IsNotExist(err) {
 		t.Error("wrote the extension anyway")
 	}
-	if strings.Contains(out, "Your browser") {
+	if strings.Contains(out, "your browser") || strings.Contains(out, "extension") {
 		t.Errorf("it talks of a browser that is not here:\n%s", out)
 	}
 }

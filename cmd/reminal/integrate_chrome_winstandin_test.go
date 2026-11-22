@@ -14,12 +14,15 @@ import (
 func asWindows(t *testing.T) map[string]string {
 	t.Helper()
 	reg := map[string]string{}
-	oldOS, oldSet, oldGet, oldDel := chromeOS, regSet, regGet, regDel
+	oldOS, oldSet, oldGet, oldDel, oldFound := chromeOS, regSet, regGet, regDel, chromeAppFound
 	chromeOS = "windows"
+	// No browser's application on the machine: one the test machine has
+	// would count as here.
+	chromeAppFound = func(string, chromeBrowser) bool { return false }
 	regSet = func(key, manifest string) error { reg[key] = manifest; return nil }
 	regGet = func(key string) string { return reg[key] }
 	regDel = func(key string) error { delete(reg, key); return nil }
-	t.Cleanup(func() { chromeOS, regSet, regGet, regDel = oldOS, oldSet, oldGet, oldDel })
+	t.Cleanup(func() { chromeOS, regSet, regGet, regDel, chromeAppFound = oldOS, oldSet, oldGet, oldDel, oldFound })
 	return reg
 }
 

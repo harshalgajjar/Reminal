@@ -625,8 +625,13 @@ type planStep struct {
 	how     string // human description of what will change
 }
 
+// integrateExe is the reminal that integrate registers: this one. A var so a
+// test's output does not carry the path of the test's own binary.
+var integrateExe = os.Executable
+
 func runIntegrate(args []string) error {
 	remove, assumeYes, dryRun, check, asJSON, heal, healPlugin := false, false, false, false, false, false, false
+	verbose := false
 	agentVersions := map[string]string{}
 	var only []string
 	for _, a := range args {
@@ -637,6 +642,9 @@ func runIntegrate(args []string) error {
 			check = true
 		case "--json":
 			asJSON = true
+		case "-v", "--verbose":
+			// With --check: where each browser's host manifest is.
+			verbose = true
 		case "--heal-hooks":
 			// Run by a session as its claude leaves for its shell
 			// (hooks_heal.go): an entry the agent is too old for taken
@@ -669,7 +677,7 @@ func runIntegrate(args []string) error {
 		}
 	}
 
-	exe, err := os.Executable()
+	exe, err := integrateExe()
 	if err != nil {
 		return fmt.Errorf("locating reminal: %w", err)
 	}
@@ -687,12 +695,24 @@ func runIntegrate(args []string) error {
 	// the browser for each session, is its gate.
 	wantBrowser := len(only) == 0 || slices.Contains(only, "chrome")
 
+	if verbose && !check {
+		return fmt.Errorf("-v goes with --check (reminal integrate --check -v)")
+	}
 	if check {
-		if err := printIntegrationReport(integrationReport(home, exe, only), asJSON); err != nil {
+		report := integrationReport(home, exe, only)
+		var names []string
+		for _, st := range report {
+			names = append(names, st.Name)
+		}
+		if wantBrowser && !asJSON {
+			names = append(names, chromeNames(chromeBrowsers(home))...)
+		}
+		o := newIntegrateOut(names...)
+		if err := printIntegrationReport(o, report, asJSON); err != nil {
 			return err
 		}
 		if wantBrowser && !asJSON {
-			printChromeCheck(home, exe)
+			printChromeCheck(o, home, exe, verbose)
 		}
 		return nil
 	}
@@ -756,20 +776,46 @@ func runIntegrate(args []string) error {
 	if len(plan) == 0 && len(browsers) == 0 {
 		fmt.Println("No supported agents found on PATH.")
 		if len(skipped) > 0 {
-			fmt.Printf("Looked for: %s\n", strings.Join(agentNames(), ", "))
+			newIntegrateOut().para("", "  ", "Looked for: "+strings.Join(agentNames(), ", "), plain)
 		}
 		return nil
 	}
+
+	// The browsers as they are shown (integrate_chrome_app.go): a row for
+	// each whose application is here. Every one in browsers is set up, shown
+	// as a row or not. On --remove every browser taken away is a row.
+	rows := browsers
+	var noApp []chromeBrowser
+	var absent []string
+	if !remove && len(browsers) > 0 {
+		rows, noApp, absent = chromeFound(home, browsers)
+	}
+
+	var names []string
+	for _, p := range plan {
+		names = append(names, p.target.Name)
+	}
+	names = append(names, chromeNames(rows)...)
+	if len(browsers) > 0 && !remove {
+		names = append(names, "the extension")
+	}
+	o := newIntegrateOut(names...)
 
 	action := "Register"
 	if remove {
 		action = "Remove"
 	}
+	sort.Strings(skipped)
 	if len(plan) > 0 {
-		fmt.Printf("%s reminal's MCP server (%s mcp) with:\n\n", action, exe)
-	}
-	for _, p := range plan {
-		fmt.Printf("  %-18s %s\n", p.target.Name, cDim(p.how))
+		o.para("", "", fmt.Sprintf("%s reminal's MCP server (%s mcp) with:", action, noBreak(exe)), plain)
+		fmt.Println()
+		for _, p := range plan {
+			o.row("", p.target.Name, p.how, cDim)
+		}
+		if len(skipped) > 0 {
+			fmt.Println()
+			o.para("  ", "    ", "not installed: "+joinNames(skipped), cDim)
+		}
 	}
 	if len(browsers) > 0 {
 		what := "Let agents in your reminal sessions use your browser (switch it off in the extension's button):"
@@ -779,15 +825,33 @@ func runIntegrate(args []string) error {
 		if len(plan) > 0 {
 			fmt.Println()
 		}
-		fmt.Printf("%s\n\n", what)
-		for _, b := range browsers {
-			fmt.Printf("  %-18s %s\n", b.Name, cDim(tildePath(home, chromeHostManifestPath(home, b))))
+		o.para("", "", what, plain)
+		fmt.Println()
+		state := "ready"
+		if remove {
+			state = "remove"
 		}
-		fmt.Printf("  %-18s %s\n", "the extension", cDim(tildePath(home, chromeExtensionDir(home))))
+		for _, b := range rows {
+			o.row("", b.Name, state, cDim)
+		}
+		if !remove {
+			o.row("", "the extension", noBreak(tildePath(home, chromeExtensionDir(home))), cDim)
+		}
+		if len(noApp) > 0 || len(absent) > 0 {
+			fmt.Println()
+		}
+		if len(noApp) > 0 {
+			o.para("  ", "    ", chromeNoAppLine(chromeNames(noApp)), cDim)
+		}
+		if len(absent) > 0 {
+			o.para("  ", "    ", "not installed: "+joinNames(absent), cDim)
+		}
 	}
-	if len(skipped) > 0 {
-		sort.Strings(skipped)
-		fmt.Printf("\n  not installed: %s\n", cDim(strings.Join(skipped, ", ")))
+	if len(plan) == 0 && len(skipped) > 0 {
+		// No agent rows above for the line to sit under: it says what it
+		// is about.
+		fmt.Println()
+		o.para("  ", "    ", "agents not installed: "+joinNames(skipped), cDim)
 	}
 
 	if dryRun {
@@ -806,6 +870,7 @@ func runIntegrate(args []string) error {
 	fmt.Println()
 
 	var failures int
+	var done []agentTarget // set up in this run
 	for _, p := range plan {
 		var mcpErr error
 		switch {
@@ -849,44 +914,69 @@ func runIntegrate(args []string) error {
 		}
 		if err := errors.Join(mcpErr, hookErr, speakErr); err != nil {
 			failures++
-			fmt.Printf("  ✗ %-18s %v\n", p.target.Name, err)
+			o.row("✗", p.target.Name, err.Error(), plain)
 			continue
 		}
 		noteSetUp(home, p.target.Bin, !remove)
-		fmt.Printf("  ✓ %-18s %s\n", p.target.Name, cDim(p.how))
+		done = append(done, p.target)
+		o.row("✓", p.target.Name, p.how, cDim)
 		if speakNote != "" {
-			fmt.Printf("    %-18s %s\n", "", speakNote)
+			o.row(" ", "", speakNote, plain)
 		}
 	}
 
 	if len(browsers) > 0 {
-		failures += applyChrome(home, exe, browsers, remove)
+		failures += applyChromeTo(o, home, exe, browsers, remove)
 	}
 
 	if failures > 0 {
 		return fmt.Errorf("%d of %d failed", failures, len(plan)+len(browsers))
 	}
-	if !remove && len(plan) == 0 {
-		fmt.Printf("\n%s\n", chromeLoadLine(home))
-	} else if !remove {
-		fmt.Printf("\nDone. Restart any running agent to pick it up. It can now leave\n" +
-			"notes on your windows (MCP), and its live state — working / needs you /\n" +
-			"done — shows in `reminal list` and the Machines view (attention hooks).\n" +
-			"\nAn agent loads its tools only when it starts: quit a running one from its\n" +
-			"own prompt and start it again with its resume option, so the same\n" +
-			"conversation continues:\n")
-		for _, p := range plan {
-			if p.target.resumeHint() != "" {
-				fmt.Printf("  %-18s %s\n", p.target.Name, cDim(p.target.resumeHint()))
-			}
-		}
-		if len(browsers) > 0 {
-			fmt.Printf("\n%s\n", chromeLoadLine(home))
-		}
-	} else {
+	if remove {
 		fmt.Printf("\nRemoved.\n")
+		return nil
+	}
+	printRestartLines(o, done)
+	// Last, so the one thing left for the person to do is what they read
+	// when it stops.
+	if len(browsers) > 0 {
+		printChromeSteps(home, browsers)
 	}
 	return nil
+}
+
+// agentNeedsRestart says whether a running agent of this name has to be
+// started again to find what this run set up. Every one loads its tools only
+// as it starts.
+func agentNeedsRestart(name string) bool {
+	return true
+}
+
+// restartLine is what a setup says of one agent it set up: a running one
+// loads its tools only when it starts, and its resume command is how it is
+// started again on the same conversation.
+func restartLine(t agentTarget) string {
+	line := "Restart a running " + noBreak(t.Name) + " to pick up new tools"
+	if resume := t.resumeHint(); resume != "" {
+		return line + ": " + noBreak(resume)
+	}
+	return line + "."
+}
+
+// printRestartLines says, for each agent set up in this run that needs it,
+// how to start it again: a line each.
+func printRestartLines(o integrateOut, done []agentTarget) {
+	said := false
+	for _, t := range done {
+		if !agentNeedsRestart(t.Name) {
+			continue
+		}
+		if !said {
+			fmt.Println()
+			said = true
+		}
+		o.para("", "  ", restartLine(t), plain)
+	}
 }
 
 func applyViaCLI(p planStep, exe string, remove bool) error {
@@ -997,43 +1087,48 @@ func firstLine(s string) string {
 }
 
 func printIntegrateHelp() {
-	fmt.Print(`reminal integrate — wire reminal into your coding agents
-
-  reminal integrate                 set up every agent found on PATH
-  reminal integrate claude codex    only these
-  reminal integrate --dry-run       show the plan, change nothing
-  reminal integrate --remove        undo
-  reminal integrate -y              skip the confirmation
-  reminal integrate --check         what is set up, without changing anything
-                                    (--json for machines)
-
-Two things get installed, in each agent's own native format (an ` + "`mcp add`" + `
-subcommand where one exists, a native extension for an agent that prefers one,
-otherwise a merge into its JSON config, backed up first):
-
-  • the reminal MCP server — so the agent can leave notes on your windows;
-  • attention hooks — so the agent reports its live state (working / needs you /
-    done) to ` + "`reminal list`" + ` and the Machines view. Agents without hook support
-    fall back to reminal's screen-based detection automatically.
-
-And your browser (Chrome, Chromium, Edge, Brave, Arc; macOS, Linux, Windows): agents in
-your reminal sessions may use it through reminal's extension, each session
-only once you allow it there. Load the extension once from ~/reminal-extension.
-
-Where an agent asks before each tool call (Claude Code, Gemini CLI, Qwen Code),
-its settings also allow reminal's speak tool, and only that one, so an answer
-to you talking by voice is said without waiting on the screen.
-`)
+	// Wrapped to the terminal like the rest: written for 80 columns, it was
+	// cut mid-word on a narrower one.
+	usage := [][2]string{
+		{"reminal integrate", "set up every agent found on PATH, and your browser"},
+		{"reminal integrate claude codex", "only these"},
+		{"reminal integrate --dry-run", "show the plan, change nothing"},
+		{"reminal integrate --remove", "undo"},
+		{"reminal integrate -y", "skip the confirmation"},
+		{"reminal integrate --check", "what is set up, without changing anything (--json for machines, -v for where each browser's file is)"},
+	}
+	var names []string
+	for _, u := range usage {
+		names = append(names, u[0])
+	}
+	o := newIntegrateOut(names...)
+	o.para("", "", "reminal integrate — wire reminal into your coding agents", plain)
+	fmt.Println()
+	for _, u := range usage {
+		o.row("", u[0], u[1], plain)
+	}
+	fmt.Println()
+	o.para("", "", "Two things get installed, in each agent's own native format (an `mcp add` subcommand where one exists, a native extension for an agent that prefers one, otherwise a merge into its JSON config, backed up first):", plain)
+	fmt.Println()
+	o.para("  • ", "    ", "the reminal MCP server — so the agent can leave notes on your windows;", plain)
+	o.para("  • ", "    ", "attention hooks — so the agent reports its live state (working / needs you / done) to `reminal list` and the Machines view. Agents without hook support fall back to reminal's screen-based detection automatically.", plain)
+	fmt.Println()
+	o.para("", "", "And your browser (Chrome, Chromium, Edge, Brave, Arc; macOS, Linux, Windows): agents in your reminal sessions may use it through reminal's extension, each session only once you allow it there. The browsers found on this computer are listed, and the last thing printed is how to load the extension, once, from ~/reminal-extension.", plain)
+	fmt.Println()
+	o.para("", "", "After a setup, each agent it set up is named with the command that starts it again on the same conversation: a running agent loads its tools only when it starts.", plain)
+	fmt.Println()
+	o.para("", "", "Where an agent asks before each tool call (Claude Code, Gemini CLI, Qwen Code), its settings also allow reminal's speak tool, and only that one, so an answer to you talking by voice is said without waiting on the screen.", plain)
 }
 
 // printIntegrationReport renders `--check`: one line per agent for a person,
 // or the JSON the Machines view consumes.
-func printIntegrationReport(report []protocol.IntegrationStatus, asJSON bool) error {
+func printIntegrationReport(o integrateOut, report []protocol.IntegrationStatus, asJSON bool) error {
 	if asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(report)
 	}
+	const notOnPath = "— not on PATH"
 	for _, st := range report {
 		mark, what := "·", "not set up"
 		switch {
@@ -1053,9 +1148,15 @@ func printIntegrationReport(report []protocol.IntegrationStatus, asJSON bool) er
 			mark, what = "!", "set up for a different reminal (re-run integrate)"
 		}
 		if !st.Installed {
-			what += cDim(" — not on PATH")
+			what += " " + noBreak(notOnPath)
 		}
-		fmt.Printf("  %s %-18s %s\n", mark, st.Name, what)
+		// The note is kept whole where the row is wrapped, and dimmed.
+		o.row(mark, st.Name, what, func(ln string) string {
+			if before, ok := strings.CutSuffix(ln, notOnPath); ok {
+				return before + cDim(notOnPath)
+			}
+			return ln
+		})
 	}
 	return nil
 }
