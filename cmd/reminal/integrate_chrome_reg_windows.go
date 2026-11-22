@@ -53,3 +53,21 @@ func chromeRegDel(key string) error {
 	}
 	return err
 }
+
+// chromeRegAppPath is the program Windows starts for exe ("chrome.exe"): the
+// default value of its App Paths key, the person's own first and then the
+// machine's, or "". Only read.
+func chromeRegAppPath(exe string) string {
+	for _, root := range []registry.Key{registry.CURRENT_USER, registry.LOCAL_MACHINE} {
+		k, err := registry.OpenKey(root, `Software\Microsoft\Windows\CurrentVersion\App Paths\`+exe, registry.QUERY_VALUE)
+		if err != nil {
+			continue
+		}
+		v, _, err := k.GetStringValue("")
+		k.Close()
+		if err == nil && v != "" {
+			return v
+		}
+	}
+	return ""
+}

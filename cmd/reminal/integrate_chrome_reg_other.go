@@ -10,3 +10,4 @@ package main
 func chromeRegSet(key, manifest string) error { return nil }
 func chromeRegGet(key string) string          { return "" }
 func chromeRegDel(key string) error           { return nil }
+func chromeRegAppPath(exe string) string      { return "" }
