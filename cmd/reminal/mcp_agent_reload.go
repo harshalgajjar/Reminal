@@ -28,7 +28,7 @@ func agentReloadsTools(name string) bool {
 		return true
 	case "Kilo Code CLI":
 		// Source: the handler lists the tools again and replaces the ones
-		// it held. packages/opencode/src/mcp/index.ts in Kilo-Org/kilocode
+		// it held. packages/opencode/src/mcp/index.ts in its repository.
 		return true
 	case "Copilot CLI":
 		// Changelog: 0.0.354 "Support for MCP server tool notifications",
