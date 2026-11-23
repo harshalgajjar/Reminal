@@ -232,7 +232,7 @@ func TestBrowserStatusWithTheExtensionsFilesGone(t *testing.T) {
 	if !s.FilesGone || s.Last.IsZero() || s.State(true) != BrowserFilesGone {
 		t.Fatalf("connected before, the files gone: %+v", s)
 	}
-	if said := refused(); !strings.HasPrefix(said, gone) || strings.Contains(said, "the browser is closed or has no window open") {
+	if said := refused(); !strings.HasPrefix(said, gone) || strings.Contains(said, "open a browser window if none is open") {
 		t.Fatalf("refused, connected before, the files gone: %q", said)
 	}
 	if said := refused(); !strings.HasSuffix(said, "reload it on Chromium's extensions page (chrome://extensions).") {

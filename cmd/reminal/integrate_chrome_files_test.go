@@ -84,7 +84,7 @@ func TestIntegrateCheckSaysTheExtensionsFilesAreGone(t *testing.T) {
 		saysGone  = "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on "
 		saysTaken = "A folder named reminal-extension in your home folder is on this computer and is not reminal's, so the files of reminal's browser extension cannot be put there: move it away, then run `reminal integrate`."
 		saysNever = "is not connected, and has not connected before"
-		saysWas   = "is not connected now, though Chromium was connected before: the browser is closed or has no window open"
+		saysWas   = "is not connected now, though Chromium was connected before: open a browser window if none is open"
 	)
 	hub := startAnsweringHub(t, never)
 	runIntegrateIn(t, home, "-y")
