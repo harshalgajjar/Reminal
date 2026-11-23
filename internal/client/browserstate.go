@@ -195,7 +195,7 @@ func (s BrowserStatus) Sentence(setUp bool) string {
 		if browserFamilies[s.Family] != "" {
 			who = browserFamilies[s.Family]
 		}
-		return "reminal's browser extension is not connected now, though " + who + " was connected before: open a browser window if none is open (a browser left running with no window does not start the connection); if one is open, the extension may be switched off: on " + BrowserExtensionsPage(s.Family) + ", turn Developer mode on and switch reminal's extension on."
+		return "reminal's browser extension is not connected now, though " + who + " was connected before: open a browser window if none is open (a browser left running with no window does not start the connection); if one is open, the extension may be switched off: on " + BrowserExtensionsPage(s.Family) + ", turn Developer mode on and switch reminal's extension on, or press its reload button."
 	}
 	return "reminal's browser extension is not connected, and has not connected before: load it in your browser (chrome://extensions, Developer mode, Load unpacked, then the reminal-extension folder that `reminal integrate` put in your home folder) and keep a browser window open."
 }

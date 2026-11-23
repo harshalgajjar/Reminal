@@ -287,7 +287,7 @@ func TestBrowserConnectWaitEndsAtItsTime(t *testing.T) {
 	bc = newBrowserConnectWith(r.d, "/home/u", chromeOnly, false, false)
 	r.typeLine("n")
 	r.finish(bc)
-	if out := r.out.String(); !strings.Contains(out, "Not connected yet: most likely no browser window is open, or the extension is switched off (on chrome://extensions, turn Developer mode on and switch reminal's extension on).") {
+	if out := r.out.String(); !strings.Contains(out, "Not connected yet: most likely no browser window is open, or the extension is switched off (on chrome://extensions, turn Developer mode on and switch reminal's extension on, or press its reload button).") {
 		t.Errorf("for a browser that connected before:\n%s", out)
 	}
 }
@@ -644,7 +644,7 @@ func TestBrowserCheckLineSaysTheState(t *testing.T) {
 		{"files gone, nothing set up", false, hubFilesGone, "  · The browser is not set up for reminal on this computer"},
 		{"no answer", true, hubOld, "  ! The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: it is replaced by the new one within a minute of an upgrade, then run this again."},
 		{"never connected", true, hubNever, "  ! reminal's browser extension is not connected, and has not connected before: load it in your browser"},
-		{"was connected", true, hubWas, "  ! reminal's browser extension is not connected now, though Google Chrome was connected before: open a browser window if none is open (a browser left running with no window does not start the connection); if one is open, the extension may be switched off: on chrome://extensions, turn Developer mode on and switch reminal's extension on."},
+		{"was connected", true, hubWas, "  ! reminal's browser extension is not connected now, though Google Chrome was connected before: open a browser window if none is open (a browser left running with no window does not start the connection); if one is open, the extension may be switched off: on chrome://extensions, turn Developer mode on and switch reminal's extension on, or press its reload button."},
 		{"connected", true, hubConnected, "  ✓ Google Chrome is connected: agents in your reminal sessions on this computer can use it."},
 	} {
 		if got := browserCheckLine(c.setUp, c.s); !strings.HasPrefix(got, c.want) || strings.Contains(got, "\n") {
