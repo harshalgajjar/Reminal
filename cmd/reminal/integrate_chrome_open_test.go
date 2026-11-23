@@ -55,7 +55,17 @@ func TestBrowserConnectSaysWhereTheExtensionsPageIs(t *testing.T) {
 			if goos != "darwin" && b.name == "Arc" {
 				continue // Arc is opened on a Mac only
 			}
+			// On a Mac the page is what opens; on Linux and Windows only
+			// the browser does, with no address given to it, and the line
+			// says where to go in its window.
+			offer := "\nOpen the extensions page in " + b.name + " now? [Y/n] "
 			line := "If the extensions page did not open, go to " + b.page + " in " + b.name + "."
+			other := "window that opened"
+			if goos != "darwin" {
+				offer = "\nOpen " + b.name + " now? [Y/n] "
+				line = "In the " + b.name + " window that opened, go to " + b.page + " (type it in the address bar)."
+				other = "If the extensions page did not open"
+			}
 			for _, answer := range []string{"", "y", "yes", "n"} {
 				r := newConnectRig(t, goos, hubNever)
 				r.d.wait = 20 * time.Millisecond
@@ -63,14 +73,23 @@ func TestBrowserConnectSaysWhereTheExtensionsPageIs(t *testing.T) {
 				r.typeLine(answer)
 				r.finish(bc)
 				out := r.out.String()
-				if !strings.Contains(out, "Open the extensions page in "+b.name+" now? [Y/n] ") {
-					t.Fatalf("%s, %s: no offer:\n%s", goos, b.name, out)
+				if !strings.HasPrefix(out, offer) || strings.Count(out, "now? [Y/n]") != 1 {
+					t.Fatalf("%s, %s: the offer:\n%s", goos, b.name, out)
 				}
-				if said := strings.Contains(out, line+"\n"); said != (answer != "n") {
+				if said := strings.Contains(out, offer+line+"\n"); said != (answer != "n") {
 					t.Errorf("%s, %s, answer %q: the line said: %v\n%s", goos, b.name, answer, said, out)
 				}
-				if answer == "n" && len(r.commands()) != 0 {
-					t.Errorf("%s, %s: ran %v after a no", goos, b.name, r.commands())
+				if strings.Contains(out, other) || strings.Contains(out, "Could not open") {
+					t.Errorf("%s, %s, answer %q: said another system's line:\n%s", goos, b.name, answer, out)
+				}
+				if answer == "n" && (len(r.commands()) != 0 || strings.Contains(out, "go to ")) {
+					t.Errorf("%s, %s: after a no, ran %v:\n%s", goos, b.name, r.commands(), out)
+				}
+				if answer != "n" && goos != "darwin" {
+					// The browser's own program and nothing after it.
+					if len(r.ran) != 1 || len(r.ran[0]) != 1 || strings.Contains(r.ran[0][0], "://") {
+						t.Errorf("%s, %s: started %q", goos, b.name, r.ran)
+					}
 				}
 			}
 		}
@@ -106,7 +125,7 @@ func TestBrowserConnectSaysNoPageWhereNothingIsOffered(t *testing.T) {
 			bc := newBrowserConnectWith(r.d, "/home/u", chromeOnly, false, c.assumeYes)
 			r.typeLine("y")
 			r.finish(bc)
-			if out := r.out.String(); strings.Contains(out, "If the extensions page did not open") || len(r.commands()) != 0 {
+			if out := r.out.String(); strings.Contains(out, "now? [Y/n]") || strings.Contains(out, "If the extensions page did not open") || strings.Contains(out, "window that opened") || len(r.commands()) != 0 {
 				t.Errorf("%s, %s: said %q, ran %v", c.name, goos, out, r.commands())
 			}
 		}
@@ -149,26 +168,53 @@ func TestBrowserConnectSaysOneLineWhenTheBrowserDidNotOpen(t *testing.T) {
 	}
 }
 
-// The line fits a narrow terminal.
+// The line fits a narrow terminal, a Mac's and the one of Linux and Windows.
 func TestBrowserConnectPageLineFitsANarrowTerminal(t *testing.T) {
-	r := newConnectRig(t, "darwin", hubNever)
-	r.d.wait = 20 * time.Millisecond
-	integrateWidth = func() int { return 40 }
-	bc := newBrowserConnectWith(r.d, "/home/u", []chromeBrowser{{Name: "Google Chrome Beta"}}, false, false)
-	r.typeLine("y")
-	r.finish(bc)
-	out := r.out.String()
-	if !strings.Contains(out, "If the extensions page did not open,") || !strings.Contains(out, "chrome://extensions") {
-		t.Fatalf("the line was not said:\n%s", out)
-	}
-	for _, ln := range strings.Split(out, "\n") {
-		if strings.HasPrefix(ln, "Open the extensions page") {
-			// The question's own line ends where the answer is typed, and
-			// what follows it on that line is this test's, not a terminal's.
-			_, ln, _ = strings.Cut(ln, "? [Y/n] ")
+	for goos, starts := range map[string]string{
+		"darwin":  "If the extensions page did not open,",
+		"linux":   "In the Google Chrome Beta window that",
+		"windows": "In the Google Chrome Beta window that",
+	} {
+		r := newConnectRig(t, goos, hubNever)
+		r.d.wait = 20 * time.Millisecond
+		integrateWidth = func() int { return 40 }
+		bc := newBrowserConnectWith(r.d, "/home/u", []chromeBrowser{{Name: "Google Chrome Beta"}}, false, false)
+		r.typeLine("y")
+		r.finish(bc)
+		out := r.out.String()
+		if !strings.Contains(out, starts) || !strings.Contains(out, "chrome://extensions") {
+			t.Fatalf("%s: the line was not said:\n%s", goos, out)
 		}
-		if len([]rune(ln)) > 40 {
-			t.Errorf("wider than 40 columns: %q", ln)
+		if goos != "darwin" && !strings.Contains(strings.Join(strings.Fields(out), " "), "In the Google Chrome Beta window that opened, go to chrome://extensions (type it in the address bar).") {
+			t.Errorf("%s: the line, wrapped:\n%s", goos, out)
+		}
+		for _, ln := range strings.Split(out, "\n") {
+			if strings.HasPrefix(ln, "Open ") {
+				// The question's own line ends where the answer is typed,
+				// and what follows it on that line is this test's, not a
+				// terminal's.
+				_, ln, _ = strings.Cut(ln, "? [Y/n] ")
+			}
+			if len([]rune(ln)) > 40 {
+				t.Errorf("%s: wider than 40 columns: %q", goos, ln)
+			}
+		}
+	}
+}
+
+// A browser that could not be started, on Linux and on Windows: that line
+// alone says where to go.
+func TestBrowserConnectSaysOneLineWhenTheBrowserDidNotStart(t *testing.T) {
+	for _, goos := range []string{"linux", "windows"} {
+		r := newConnectRig(t, goos, hubNever)
+		r.d.wait = 20 * time.Millisecond
+		r.runErr = errors.New("no such program")
+		bc := newBrowserConnectWith(r.d, "/home/u", []chromeBrowser{{Name: "Brave"}}, false, false)
+		r.typeLine("y")
+		r.finish(bc)
+		out := r.out.String()
+		if !strings.HasPrefix(out, "\nOpen Brave now? [Y/n] Could not open Brave (no such program): open it yourself and go to brave://extensions.\n") || strings.Contains(out, "window that opened") || strings.Contains(out, "If the extensions page did not open") {
+			t.Errorf("%s: the browser did not start:\n%s", goos, out)
 		}
 	}
 }

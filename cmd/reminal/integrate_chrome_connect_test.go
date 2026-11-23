@@ -490,14 +490,15 @@ func TestBrowserConnectSaysWhenTheBrowserDidNotOpen(t *testing.T) {
 	r.typeLine("y")
 	r.finish(bc)
 	out := r.out.String()
-	if !strings.Contains(out, "Could not open Microsoft Edge (no such program): open it yourself and go to edge://extensions.\n") || !strings.Contains(out, "Waiting for the extension") || strings.Contains(out, "If the extensions page did not open") {
+	if !strings.Contains(out, "Could not open Microsoft Edge (no such program): open it yourself and go to edge://extensions.\n") || !strings.Contains(out, "Waiting for the extension") || strings.Contains(out, "If the extensions page did not open") || strings.Contains(out, "window that opened") {
 		t.Errorf("a browser that did not open:\n%s", out)
 	}
 }
 
-// The program started is the browser's own, with its extensions page as an
-// argument, on each system; where it is not found, or there is no desktop,
-// nothing is offered.
+// The program started is the browser's own: on a Mac handed its extensions
+// page, on Linux and Windows with no address at all (one given there is
+// ignored); where it is not found, or there is no desktop, nothing is
+// offered.
 func TestBrowserOpenCommands(t *testing.T) {
 	ext := chromeExtensionDir("/home/u")
 	for _, c := range []struct {
@@ -510,16 +511,16 @@ func TestBrowserOpenCommands(t *testing.T) {
 		{"darwin", "Brave", []string{"open -R " + ext, "open -a Brave Browser brave://extensions"}},
 		{"darwin", "Chromium", []string{"open -R " + ext, "open -a Chromium chrome://extensions"}},
 		{"darwin", "Arc", []string{"open -R " + ext, "open -a Arc chrome://extensions"}},
-		{"linux", "Google Chrome", []string{"/usr/bin/google-chrome chrome://extensions"}},
-		{"linux", "Google Chrome Beta", []string{"/usr/bin/google-chrome-beta chrome://extensions"}},
-		{"linux", "Chromium", []string{"/usr/bin/chromium chrome://extensions"}},
-		{"linux", "Microsoft Edge", []string{"/usr/bin/microsoft-edge edge://extensions"}},
-		{"linux", "Brave", []string{"/usr/bin/brave-browser brave://extensions"}},
-		{"windows", "Google Chrome", []string{`C:\Program Files\Google\Chrome\Application\chrome.exe chrome://extensions`}},
-		{"windows", "Google Chrome Beta", []string{`C:\Program Files\Google\Chrome Beta\Application\chrome.exe chrome://extensions`}},
-		{"windows", "Chromium", []string{`C:\Program Files\Chromium\Application\chrome.exe chrome://extensions`}},
-		{"windows", "Microsoft Edge", []string{`C:\Program Files\Microsoft\Edge\Application\msedge.exe edge://extensions`}},
-		{"windows", "Brave", []string{`C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe brave://extensions`}},
+		{"linux", "Google Chrome", []string{"/usr/bin/google-chrome"}},
+		{"linux", "Google Chrome Beta", []string{"/usr/bin/google-chrome-beta"}},
+		{"linux", "Chromium", []string{"/usr/bin/chromium"}},
+		{"linux", "Microsoft Edge", []string{"/usr/bin/microsoft-edge"}},
+		{"linux", "Brave", []string{"/usr/bin/brave-browser"}},
+		{"windows", "Google Chrome", []string{`C:\Program Files\Google\Chrome\Application\chrome.exe`}},
+		{"windows", "Google Chrome Beta", []string{`C:\Program Files\Google\Chrome Beta\Application\chrome.exe`}},
+		{"windows", "Chromium", []string{`C:\Program Files\Chromium\Application\chrome.exe`}},
+		{"windows", "Microsoft Edge", []string{`C:\Program Files\Microsoft\Edge\Application\msedge.exe`}},
+		{"windows", "Brave", []string{`C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe`}},
 	} {
 		r := newConnectRig(t, c.goos, hubNever)
 		bc := newBrowserConnectWith(r.d, "/home/u", []chromeBrowser{{Name: c.browser}}, false, false)
@@ -570,7 +571,7 @@ func TestBrowserOpenCommands(t *testing.T) {
 		r.d.wait = 30 * time.Millisecond
 		bc = newBrowserConnectWith(r.d, "/home/u", chromeOnly, false, false)
 		r.finish(bc)
-		if out := r.out.String(); strings.Contains(out, "Open the extensions page") || !strings.Contains(out, "Waiting for the extension") || len(r.commands()) != 0 {
+		if out := r.out.String(); strings.Contains(out, "now? [Y/n]") || !strings.Contains(out, "Waiting for the extension") || len(r.commands()) != 0 {
 			t.Errorf("%s: said %q, ran %v", why, out, r.commands())
 		}
 	}
@@ -597,7 +598,7 @@ func TestBrowserConnectOffersNothingOverSSH(t *testing.T) {
 			}()
 			r.finish(bc)
 			out := r.out.String()
-			if strings.Contains(out, "Open the extensions page") || len(r.commands()) != 0 {
+			if strings.Contains(out, "now? [Y/n]") || strings.Contains(out, "window that opened") || len(r.commands()) != 0 {
 				t.Errorf("%s, %s: said %q, ran %v", goos, key, out, r.commands())
 			}
 			if !strings.Contains(out, "Waiting for the extension") || !strings.HasSuffix(out, "Google Chrome connected. Agents in your reminal sessions can use it now.\n") {

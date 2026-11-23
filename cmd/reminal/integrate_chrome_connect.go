@@ -6,8 +6,9 @@ package main
 // The end of `reminal integrate` for the browser, when a person runs it at a
 // terminal: setting up ends with the extension connected, or with a line
 // saying why it is not yet. After the steps are printed it offers to open
-// the browser at its extensions page (and, on a Mac, shows the extension's
-// folder in Finder), then waits for the extension to connect and says so.
+// the browser (on a Mac at its extensions page, with the extension's folder
+// shown in Finder; elsewhere the browser alone, with a line saying where to
+// go in it), then waits for the extension to connect and says so.
 // With an extension already connected it says that and gives no steps.
 // With a daemon from before it could be asked (still running just after an
 // upgrade) it gives the steps, does not wait, and says that the new one
@@ -103,9 +104,10 @@ func printBrowserConnectCheck(home string) {
 	sayWrapped(os.Stdout, "", "    ", browserCheckLine(len(chromeOurs(home)) > 0, browserStatusNow()))
 }
 
-// browserProgram is how one browser of chromeBrowserTable is opened at its
-// extensions page: by starting its own program with the page as an argument
-// (the system's URL opener does not take chrome:// links).
+// browserProgram is how one browser of chromeBrowserTable is opened: on a
+// Mac at its extensions page, elsewhere by starting its own program, where
+// the person goes to the page (openCmds). The system's URL opener does not
+// take chrome:// links.
 type browserProgram struct {
 	family string   // as the hub's marker names it
 	macApp string   // the application's name, for `open -a`
@@ -245,7 +247,14 @@ func (c *browserConnect) openCmds(b chromeBrowser) []browserOpenCmd {
 			// and Chrome 156 on macOS 13.6).
 			{argv: []string{"open", "-a", p.macApp, p.url()}, wait: true},
 		}
-	case "windows":
+	}
+	// On Windows and Linux the browser is started with no address: a
+	// chrome:// address on the command line is ignored there and the browser
+	// opens a new-tab page, with a blank tab beside it when it was already
+	// running (seen with Chrome 158 on Windows 11). On macOS, handing it to
+	// the app as the address to open does land. So here the person is told
+	// where to go in the window that opens (finish).
+	if c.d.goos == "windows" {
 		if p.win == "" {
 			return nil
 		}
@@ -255,7 +264,7 @@ func (c *browserConnect) openCmds(b chromeBrowser) []browserOpenCmd {
 				continue
 			}
 			if exe := strings.TrimRight(dir, `\`) + `\` + p.win; c.d.exists(exe) {
-				return []browserOpenCmd{{argv: []string{exe, p.url()}}}
+				return []browserOpenCmd{{argv: []string{exe}}}
 			}
 		}
 		return nil
@@ -265,7 +274,7 @@ func (c *browserConnect) openCmds(b chromeBrowser) []browserOpenCmd {
 	}
 	for _, name := range p.linux {
 		if exe, err := c.d.lookPath(name); err == nil {
-			return []browserOpenCmd{{argv: []string{exe, p.url()}}}
+			return []browserOpenCmd{{argv: []string{exe}}}
 		}
 	}
 	return nil
@@ -338,7 +347,14 @@ func (c *browserConnect) finish() {
 
 	b, cmds := c.pick()
 	if len(cmds) > 0 {
-		fmt.Fprintf(out, "\nOpen the extensions page in %s now? [Y/n] ", b.Name)
+		// Only a Mac's open lands on the extensions page (openCmds), so
+		// only there is the page what is offered.
+		pageOpens := c.d.goos == "darwin"
+		if pageOpens {
+			fmt.Fprintf(out, "\nOpen the extensions page in %s now? [Y/n] ", b.Name)
+		} else {
+			fmt.Fprintf(out, "\nOpen %s now? [Y/n] ", b.Name)
+		}
 		select {
 		case line, ok := <-lines:
 			if !ok {
@@ -354,9 +370,14 @@ func (c *browserConnect) finish() {
 					}
 				}
 				// Whether the page really opened cannot be seen from
-				// here, so where to go is always said.
-				if !failed {
+				// here, so where to go is always said; where only the
+				// browser was opened, it is the next thing to do.
+				switch {
+				case failed:
+				case pageOpens:
 					sayWrapped(out, "", "", fmt.Sprintf("If the extensions page did not open, go to %s in %s.", browserPrograms[b.Name].url(), b.Name))
+				default:
+					sayWrapped(out, "", "", fmt.Sprintf("In the %s window that opened, go to %s (type it in the address bar).", b.Name, browserPrograms[b.Name].url()))
 				}
 			}
 		case <-hup:
