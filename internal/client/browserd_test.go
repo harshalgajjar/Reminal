@@ -51,6 +51,16 @@ func startHub(t *testing.T, allow func(peer int, session string) bool) *browserH
 	return nil
 }
 
+// hostTaken waits until the hub has taken a connection in as the browser's
+// host. Asked of the hub, not waited for a fixed moment: the hub writes its
+// note of the connection before it takes the host in, and on a busy machine
+// that is not done in 50 ms (a request then met a hub with no browser).
+func hostTaken() {
+	for i := 0; i < 300 && !QueryBrowserStatus().Connected; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // fakeHost joins the hub as the browser and answers every request with
 // answer(req).
 func fakeHost(t *testing.T, answer func(BrowserReq) BrowserResp) {
@@ -80,7 +90,7 @@ func fakeHost(t *testing.T, answer func(BrowserReq) BrowserResp) {
 			_ = (&browserConn{c: c}).send(resp)
 		}
 	}()
-	time.Sleep(50 * time.Millisecond) // the hub has taken it as the host
+	hostTaken()
 }
 
 // A session's request reaches the browser with the session's name and the
@@ -186,7 +196,7 @@ func TestBrowserHubAnswersWhenTheBrowserGoes(t *testing.T) {
 		_, _ = bufio.NewReader(c).ReadString('\n')
 		c.Close()
 	}()
-	time.Sleep(50 * time.Millisecond)
+	hostTaken()
 	start := time.Now()
 	resp, err := AskBrowser(BrowserReq{Session: "S1", Tool: "navigate"})
 	if err != nil {
@@ -318,7 +328,7 @@ func TestAHandoverFailsOnlyTheOlderBridgesRequests(t *testing.T) {
 		_ = json.Unmarshal([]byte(line), &r)
 		took <- r.ID
 	}()
-	time.Sleep(50 * time.Millisecond)
+	hostTaken()
 	held := make(chan BrowserResp, 1)
 	go func() { r, _ := AskBrowser(BrowserReq{Session: "S1", Tool: "navigate"}); held <- r }()
 	oldID := <-took
@@ -363,7 +373,7 @@ func TestAnEndIsToldOnlyToABrowser(t *testing.T) {
 	}
 	defer c.Close()
 	_, _ = c.Write([]byte(`{"t":"host"}` + "\n"))
-	time.Sleep(50 * time.Millisecond)
+	hostTaken()
 	h.tellEnded()
 	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
 	line, _ := bufio.NewReader(c).ReadString('\n')
@@ -400,7 +410,7 @@ func TestALiveSessionWithoutItsRecordIsNotEnded(t *testing.T) {
 	}
 	defer c.Close()
 	_, _ = c.Write([]byte(`{"t":"host"}` + "\n"))
-	time.Sleep(50 * time.Millisecond)
+	hostTaken()
 	h.tellEnded()
 	_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	if line, _ := bufio.NewReader(c).ReadString('\n'); line != "" {
