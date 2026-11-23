@@ -10,71 +10,38 @@ import (
 	"time"
 )
 
-// exitOf stands in for a program that ran and ended with this exit status.
-type exitOf int
-
-func (e exitOf) Error() string { return "exit status" }
-func (e exitOf) ExitCode() int { return int(e) }
-
-// macBrowsers: each browser of the table, its application's name, and the
-// name its main process is asked for by.
-var macBrowsers = []struct{ name, app, proc, page string }{
-	{"Google Chrome", "Google Chrome", "Google Chrome", "chrome://extensions"},
-	{"Google Chrome Beta", "Google Chrome Beta", "Google Chrome Be(ta)?", "chrome://extensions"},
-	{"Chromium", "Chromium", "Chromium", "chrome://extensions"},
-	{"Microsoft Edge", "Microsoft Edge", "Microsoft Edge", "edge://extensions"},
-	{"Brave", "Brave Browser", "Brave Browser", "brave://extensions"},
-	{"Arc", "Arc", "Arc", "chrome://extensions"},
+// macBrowsers: each browser of the table, its application's name, and its
+// extensions page.
+var macBrowsers = []struct{ name, app, page string }{
+	{"Google Chrome", "Google Chrome", "chrome://extensions"},
+	{"Google Chrome Beta", "Google Chrome Beta", "chrome://extensions"},
+	{"Chromium", "Chromium", "chrome://extensions"},
+	{"Microsoft Edge", "Microsoft Edge", "edge://extensions"},
+	{"Brave", "Brave Browser", "brave://extensions"},
+	{"Arc", "Arc", "chrome://extensions"},
 }
 
-// On a Mac the browser is opened by whether it is running: one that is
-// takes the page from `open -a App page`; one that is not is started with
-// the page as its own argument. pgrep that could not be run, or that ended
-// some other way, counts as running. The folder is shown in Finder first
-// either way, and nothing goes through a shell.
-func TestBrowserOpenOnAMacByWhetherItIsRunning(t *testing.T) {
+// On a Mac, after a yes, the folder is shown in Finder and then the browser
+// is handed its page as the address to open, and nothing else is started:
+// that form reaches the page whether or not the browser is running.
+func TestBrowserOpenOnAMacIsTheFolderThenThePage(t *testing.T) {
 	ext := chromeExtensionDir("/home/u")
 	if len(macBrowsers) != len(browserPrograms) {
 		t.Fatalf("%d browsers here, %d in the table", len(macBrowsers), len(browserPrograms))
 	}
 	for _, b := range macBrowsers {
-		probe := "pgrep -x " + b.proc
-		running := "open -a " + b.app + " " + b.page
-		cold := "open -a " + b.app + " --args " + b.page
-		for _, c := range []struct {
-			name  string
-			pgrep error
-			want  string
-		}{
-			{"running", nil, running},
-			{"not running", exitOf(1), cold},
-			{"pgrep not there", errors.New("executable file not found"), running},
-			{"pgrep ended some other way", exitOf(2), running},
-		} {
-			r := newConnectRig(t, "darwin", hubNever)
-			r.d.wait = 20 * time.Millisecond
-			r.runFn = func(argv []string) error {
-				if argv[0] == "pgrep" {
-					return c.pgrep
-				}
-				return nil
-			}
-			bc := newBrowserConnectWith(r.d, "/home/u", []chromeBrowser{{Name: b.name}}, false, false)
-			r.typeLine("y")
-			r.finish(bc)
-			want := []string{"open -R " + ext, probe, c.want}
-			if got := r.commands(); strings.Join(got, "|") != strings.Join(want, "|") {
-				t.Errorf("%s, %s: ran %q, want %q", b.name, c.name, got, want)
-			}
-			for _, argv := range r.ran {
-				if argv[0] != "open" && argv[0] != "pgrep" {
-					t.Errorf("%s, %s: started %q", b.name, c.name, argv)
-				}
-			}
-			line := "If the extensions page did not open, go to " + b.page + " in " + b.name + ".\n"
-			if out := r.out.String(); !strings.Contains(out, "? [Y/n] "+line) || strings.Contains(out, "Could not open") {
-				t.Errorf("%s, %s: after a yes:\n%s", b.name, c.name, out)
-			}
+		r := newConnectRig(t, "darwin", hubNever)
+		r.d.wait = 20 * time.Millisecond
+		bc := newBrowserConnectWith(r.d, "/home/u", []chromeBrowser{{Name: b.name}}, false, false)
+		r.typeLine("y")
+		r.finish(bc)
+		want := []string{"open -R " + ext, "open -a " + b.app + " " + b.page}
+		if got := r.commands(); strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Errorf("%s: ran %q, want %q", b.name, got, want)
+		}
+		line := "If the extensions page did not open, go to " + b.page + " in " + b.name + ".\n"
+		if out := r.out.String(); !strings.Contains(out, "? [Y/n] "+line) || strings.Contains(out, "Could not open") {
+			t.Errorf("%s: after a yes:\n%s", b.name, out)
 		}
 	}
 }

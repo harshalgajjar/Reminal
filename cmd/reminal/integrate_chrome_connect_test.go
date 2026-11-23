@@ -255,7 +255,7 @@ func TestBrowserConnectOpensThenWaitsForTheConnection(t *testing.T) {
 	if !strings.HasSuffix(out, "Google Chrome connected. Agents in your reminal sessions can use it now.\n") {
 		t.Errorf("did not end on the connection:\n%s", out)
 	}
-	want := []string{"open -R " + chromeExtensionDir("/home/u"), "pgrep -x Google Chrome", "open -a Google Chrome chrome://extensions"}
+	want := []string{"open -R " + chromeExtensionDir("/home/u"), "open -a Google Chrome chrome://extensions"}
 	if got := r.commands(); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("ran %q, want %q", got, want)
 	}
