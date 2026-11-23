@@ -40,6 +40,18 @@ func init() {
 	// The hub's refusal tells "not set up" apart by this: only the command
 	// knows where each browser keeps its host manifests.
 	client.BrowserSetUp = browserToolsHere
+	// And "the extension's files are gone" by this: only the command knows
+	// the folders they are written to. Set here, in the program's own
+	// start, so the daemon's hub has it as every other reminal process does.
+	client.BrowserExtensionFiles = browserExtensionFilesHere
+}
+
+// browserExtensionFilesHere: reminal's extension is in a folder a browser
+// loads it from, the one of now or the one of before. With no home folder to
+// look in they count as here, so nothing is said that was not seen.
+func browserExtensionFilesHere() bool {
+	home, err := os.UserHomeDir()
+	return err != nil || chromeExtensionHere(home)
 }
 
 // browserConnectWait is how long integrate waits for the extension to
@@ -392,6 +404,8 @@ func (c *browserConnect) sayNotYet(b chromeBrowser, s client.BrowserStatus) {
 	switch {
 	case !s.Daemon:
 		sayWrapped(c.d.out, "", "", "Not connected yet: reminal's daemon stopped running on this computer. The extension connects by itself once it is loaded and the daemon is running, so nothing is lost by not waiting.")
+	case s.FilesGone:
+		sayWrapped(c.d.out, "", "", "Not connected yet: the files of reminal's browser extension are no longer on this computer. Run "+noBreak("`reminal integrate`")+" again to put them back; nothing is lost by not waiting.")
 	case !s.Last.IsZero():
 		sayWrapped(c.d.out, "", "", "Not connected yet: most likely no browser window is open. The extension connects by itself once one is, so nothing is lost by not waiting.")
 	default:

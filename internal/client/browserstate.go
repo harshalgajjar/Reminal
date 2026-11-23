@@ -12,6 +12,8 @@ package client
 //	no daemon         the hub is not there to ask
 //	no answer         the hub is there and does not know the question: a
 //	                  daemon from before this, still running after an upgrade
+//	files gone        none is connected, and the extension's files are in
+//	                  no folder a browser loads them from
 //	never connected   set up, and no extension has connected yet
 //	was connected     one connected before, and none is now
 //	connected
@@ -47,6 +49,9 @@ const (
 	// BrowserNoAnswer: a daemon is running and its hub did not answer, so
 	// whether an extension is connected is not known.
 	BrowserNoAnswer
+	// BrowserFilesGone: no extension is connected, and the extension's
+	// files are in neither of the folders a browser loads them from.
+	BrowserFilesGone
 )
 
 // BrowserStatus is what the hub and the marker say. The zero value is a hub
@@ -55,6 +60,7 @@ type BrowserStatus struct {
 	Daemon    bool      // the hub's socket took the connection
 	NoAnswer  bool      // and the hub did not answer the question: Connected is not known
 	Connected bool      // an extension is connected now
+	FilesGone bool      // the extension's files are not on this computer (looked at here, not asked of the hub)
 	Family    string    // of the browser connected now, or last: "chrome", "edge", ...
 	Last      time.Time // when a bridge last registered; zero when none has
 }
@@ -65,6 +71,15 @@ type BrowserStatus struct {
 var BrowserSetUp func() bool
 
 func browserSetUpHere() bool { return BrowserSetUp == nil || BrowserSetUp() }
+
+// BrowserExtensionFiles reports whether the extension's files are on this
+// computer, in a folder a browser loads them from. The command sets it (it
+// knows the folders, and what makes one reminal's); left nil, they count as
+// here. With them gone, a browser that is open cannot connect, and opening a
+// window is not what puts that right.
+var BrowserExtensionFiles func() bool
+
+func browserFilesHere() bool { return BrowserExtensionFiles == nil || BrowserExtensionFiles() }
 
 // State is the state, given whether a browser here is set up.
 func (s BrowserStatus) State(setUp bool) BrowserState {
@@ -77,6 +92,8 @@ func (s BrowserStatus) State(setUp bool) BrowserState {
 		return BrowserNoAnswer
 	case s.Connected:
 		return BrowserConnected
+	case s.FilesGone:
+		return BrowserFilesGone
 	case !s.Last.IsZero():
 		return BrowserWasConnected
 	}
@@ -100,6 +117,11 @@ func (s BrowserStatus) Sentence(setUp bool) string {
 		return "The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: it is replaced by the new one within a minute of an upgrade, then run this again."
 	case BrowserConnected:
 		return BrowserFamilyName(s.Family) + " is connected: agents in your reminal sessions on this computer can use it."
+	case BrowserFilesGone:
+		// What the browser does with an extension whose folder went and
+		// came back is the browser's own, so nothing is promised of it: the
+		// reload is said for when it is needed.
+		return "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on the browser's extensions page (chrome://extensions)."
 	case BrowserWasConnected:
 		who := "it"
 		if browserFamilies[s.Family] != "" {
@@ -212,7 +234,7 @@ func (h *browserHub) status() BrowserStatus {
 	h.mu.Lock()
 	connected, family := h.host != nil, h.family
 	h.mu.Unlock()
-	s := BrowserStatus{Daemon: true, Connected: connected}
+	s := BrowserStatus{Daemon: true, Connected: connected, FilesGone: !connected && !browserFilesHere()}
 	if m, ok := readBrowserMarker(); ok {
 		s.Last, s.Family = m.Time, m.Family
 	}
@@ -273,6 +295,9 @@ func QueryBrowserStatus() BrowserStatus {
 		return s
 	}
 	s.Connected = w.Connected
+	// The folders are looked at by the process that asks: the answer of a
+	// hub from before it looked says nothing of them.
+	s.FilesGone = !s.Connected && !browserFilesHere()
 	if browserFamilies[w.Family] != "" {
 		s.Family = w.Family
 	}

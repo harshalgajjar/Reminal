@@ -196,6 +196,20 @@ func chromeExtensionOurs(dir string) bool {
 	if len(entries) == 0 {
 		return true
 	}
+	return chromeExtensionIn(dir)
+}
+
+// chromeExtensionHere reports whether reminal's extension is on this
+// computer for a browser to load: in the folder it is written to now, or in
+// the one of before (a browser that loaded it from there reads that one).
+func chromeExtensionHere(home string) bool {
+	return chromeExtensionIn(chromeExtensionDir(home)) || chromeExtensionIn(chromeExtensionOldDir(home))
+}
+
+// chromeExtensionIn reports whether dir holds reminal's extension: its
+// manifest is there and carries reminal's key. A folder that is missing or
+// empty holds nothing, and neither does someone else's of the same name.
+func chromeExtensionIn(dir string) bool {
 	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
 	if err != nil {
 		return false

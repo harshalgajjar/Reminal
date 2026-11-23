@@ -61,6 +61,12 @@ func TestBrowserStateSentences(t *testing.T) {
 		{"not set up", BrowserStatus{Daemon: true}, false, BrowserNotSetUp, []string{"not set up", "`reminal integrate`"}},
 		{"no daemon", BrowserStatus{}, true, BrowserNoDaemon, []string{"daemon is not running", "starting a reminal session starts it (run `reminal new`)"}},
 		{"no answer", BrowserStatus{Daemon: true, NoAnswer: true, Last: then, Family: "edge"}, true, BrowserNoAnswer, []string{"an older one that cannot say whether the browser is connected", "replaced by the new one within a minute of an upgrade"}},
+		{"files gone, connected before", BrowserStatus{Daemon: true, FilesGone: true, Last: then, Family: "chromium"}, true, BrowserFilesGone, []string{"The files of reminal's browser extension are no longer on this computer", "run `reminal integrate` to put them back", "reload it on the browser's extensions page"}},
+		{"files gone, never connected", BrowserStatus{Daemon: true, FilesGone: true}, true, BrowserFilesGone, []string{"no longer on this computer"}},
+		{"files gone and connected", BrowserStatus{Daemon: true, Connected: true, FilesGone: true, Family: "chromium"}, true, BrowserConnected, []string{"Chromium is connected"}},
+		{"files gone, an older daemon", BrowserStatus{Daemon: true, NoAnswer: true, FilesGone: true}, true, BrowserNoAnswer, []string{"an older one"}},
+		{"files gone, no daemon", BrowserStatus{FilesGone: true}, true, BrowserNoDaemon, []string{"daemon is not running"}},
+		{"files gone, nothing set up", BrowserStatus{Daemon: true, FilesGone: true}, false, BrowserNotSetUp, []string{"not set up"}},
 		{"no answer, nothing set up", BrowserStatus{Daemon: true, NoAnswer: true}, false, BrowserNotSetUp, []string{"not set up"}},
 		{"never connected", BrowserStatus{Daemon: true}, true, BrowserNeverConnected, []string{"has not connected before", "Load unpacked", "`reminal integrate`", "window open"}},
 		{"was connected", BrowserStatus{Daemon: true, Last: then, Family: "edge"}, true, BrowserWasConnected, []string{"not connected now", "Microsoft Edge was connected before", "open a browser window", "no window does not start"}},
@@ -157,6 +163,59 @@ func TestBrowserStatusFollowsTheBridge(t *testing.T) {
 	resp, err = AskBrowser(BrowserReq{Session: "S1", Tool: "tabs_context"})
 	if err != nil || resp.OK || !strings.Contains(resp.Error, "not set up") {
 		t.Fatalf("refused with nothing set up: %+v %v", resp, err)
+	}
+}
+
+// With the extension's files gone from this computer, that is the state and
+// what a refused request says, whether or not a browser connected before:
+// opening a window would not put it right. A connected extension is never
+// called that, and with the files back the sentences of before apply.
+func TestBrowserStatusWithTheExtensionsFilesGone(t *testing.T) {
+	h := startHub(t, func(int, string) bool { return true })
+	h.testFamily = "chromium"
+	here := false
+	BrowserExtensionFiles = func() bool { return here }
+	t.Cleanup(func() { BrowserExtensionFiles = nil })
+	refused := func() string {
+		t.Helper()
+		resp, err := AskBrowser(BrowserReq{Session: "S1", Tool: "tabs_context"})
+		if err != nil || resp.OK {
+			t.Fatalf("a request with no browser: %+v %v", resp, err)
+		}
+		return resp.Error
+	}
+	const gone = "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back"
+
+	if s := QueryBrowserStatus(); !s.FilesGone || s.State(true) != BrowserFilesGone {
+		t.Fatalf("never connected, the files gone: %+v", s)
+	}
+	if said := refused(); !strings.HasPrefix(said, gone) || strings.Contains(said, "has not connected before") {
+		t.Fatalf("refused, never connected, the files gone: %q", said)
+	}
+	here = true
+	if said := refused(); !strings.Contains(said, "has not connected before") {
+		t.Fatalf("refused, never connected, the files here: %q", said)
+	}
+
+	// Connected with the files gone (a browser that loaded them goes on
+	// running): connected is what it is.
+	here = false
+	c := joinAsHost(t)
+	if s := QueryBrowserStatus(); !s.Connected || s.FilesGone || s.State(true) != BrowserConnected {
+		t.Fatalf("connected, the files gone: %+v", s)
+	}
+
+	c.Close()
+	s := waitBrowserStatus(t, func(s BrowserStatus) bool { return !s.Connected })
+	if !s.FilesGone || s.Last.IsZero() || s.State(true) != BrowserFilesGone {
+		t.Fatalf("connected before, the files gone: %+v", s)
+	}
+	if said := refused(); !strings.HasPrefix(said, gone) || strings.Contains(said, "the browser is closed or has no window open") {
+		t.Fatalf("refused, connected before, the files gone: %q", said)
+	}
+	here = true
+	if said := refused(); !strings.Contains(said, "Chromium was connected before") {
+		t.Fatalf("refused, connected before, the files here: %q", said)
 	}
 }
 
