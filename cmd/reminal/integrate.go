@@ -713,6 +713,9 @@ func runIntegrate(args []string) error {
 		}
 		if wantBrowser && !asJSON {
 			printChromeCheck(o, home, exe, verbose)
+			// Browser connect (integrate_chrome_connect.go): whether the
+			// extension is connected.
+			printBrowserConnectCheck(home)
 		}
 		return nil
 	}
@@ -932,6 +935,16 @@ func runIntegrate(args []string) error {
 	if failures > 0 {
 		return fmt.Errorf("%d of %d failed", failures, len(plan)+len(browsers))
 	}
+	// Browser connect (integrate_chrome_connect.go): with the extension
+	// already connected there are no steps to give, only a line saying so.
+	connect := newBrowserConnect(home, browsers, remove, assumeYes)
+	if connect.already() {
+		browsers = nil
+		if len(plan) == 0 {
+			connect.finish()
+			return nil
+		}
+	}
 	if remove {
 		fmt.Printf("\nRemoved.\n")
 		return nil
@@ -942,6 +955,9 @@ func runIntegrate(args []string) error {
 	if len(browsers) > 0 {
 		printChromeSteps(home, browsers)
 	}
+	// Browser connect (integrate_chrome_connect.go): at a terminal, offer to
+	// open the extensions page, then wait for the extension to connect.
+	connect.finish()
 	return nil
 }
 

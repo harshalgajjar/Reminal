@@ -349,7 +349,9 @@ func main() {
 			client.CompleteMachines()
 			return
 		case "daemon":
-			// Hidden. The always-on directory host: keeps an owned machine
+			// `daemon --install` is in the help (messages tell a person to
+			// run it when the background service is not running); the rest
+			// is not. The always-on directory host: keeps an owned machine
 			// reachable (listable + "+"-spawnable) even with no live session.
 			// Installed as a login service when an owner is enrolled (see
 			// runAddOwner); not a user-facing command. `--install`/`--uninstall`
@@ -987,6 +989,7 @@ func printHelp() {
 		{"reminal completion <bash|zsh|fish|powershell>", "Print a shell completion script"},
 		{"reminal upgrade [--machine <id|name>|--all-owned-machines]", "Upgrade to the latest release, here or on machines you own"},
 		{"reminal restart [--all] [--machine <id|name>|--all-owned-machines]", "Hot-swap the running agent(s) onto the latest binary"},
+		{"reminal daemon --install", "Install and start reminal's background service for this user"},
 		{"reminal repin [id|name] [--all]", "Give session(s) a new PIN; the old PIN and links stop working"},
 		{"reminal version [--verbose]", "Print version (--verbose adds build date / commit)"},
 		{"reminal help", "Show this help"},

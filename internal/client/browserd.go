@@ -18,7 +18,9 @@ package client
 // session: its peer pid (SO_PEERCRED, LOCAL_PEERPID, SIO_AF_UNIX_GETPEERPID) must be the session's
 // own, so another program of the same user cannot use a consent the person
 // gave a session. A bridge is taken only from reminal's own browser-host,
-// started by a browser of Chrome's family.
+// started by a browser of Chrome's family. {"t":"state"} is answered to any
+// process of the person's (the socket is theirs alone): whether a browser is
+// connected, and nothing a consent guards (browserstate.go).
 
 import (
 	"bufio"
@@ -80,12 +82,16 @@ type BrowserResp struct {
 	Error  string          `json:"error,omitempty"`
 }
 
-// errNoBrowser is what a request gets while no extension is connected.
-var errNoBrowser = errors.New("reminal's browser extension is not connected: run `reminal integrate`, load the extension in your browser, and have a browser window open (a browser left running with no window does not start it)")
+// errNoBrowser is what a request gets while no extension is connected: which
+// of the states it is (browserstate.go), and what to do next.
+func (h *browserHub) errNoBrowser() error {
+	return errors.New(h.status().Sentence(browserSetUpHere()))
+}
 
 type browserHub struct {
 	mu      sync.Mutex
 	host    *browserConn
+	family  string // the browser family of host, for the state (browserstate.go)
 	nextID  uint64
 	waiting map[uint64]waiter
 	// seen: the sessions that have asked, by the pid of their process (the
@@ -100,7 +106,8 @@ type browserHub struct {
 	// bridge (nil: reminal's browser-host under a browser).
 	allow       func(peer int, session string) bool
 	allowBridge func(peer int) bool
-	noWait      bool // tests: no wait for a bridge
+	noWait      bool   // tests: no wait for a bridge
+	testFamily  string // tests: the family of a bridge allowBridge lets in
 }
 
 // waiter is a request waiting for its answer, and the bridge it went to.
@@ -196,6 +203,11 @@ func (h *browserHub) handle(conn net.Conn) {
 		defer conn.Close()
 		resp := h.request(conn, m)
 		_ = (&browserConn{c: conn}).send(resp)
+	case "state":
+		// Whether a browser is connected (browserstate.go): asked by
+		// `reminal integrate`, which is no session.
+		defer conn.Close()
+		_ = (&browserConn{c: conn}).send(h.status().wire())
 	default:
 		conn.Close()
 	}
@@ -225,11 +237,16 @@ func readBrowserLine(r *bufio.Reader) ([]byte, error) {
 // requests the older one held are failed, the newer one's are not.
 func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 	peer, err := peerPID(conn)
-	ok := h.allowBridge
-	if ok == nil {
-		ok = browserBridgeOK
+	// The browser above the host says which family it is, kept for the
+	// state (browserstate.go).
+	okay, family := false, ""
+	if err == nil && h.allowBridge != nil {
+		okay, family = h.allowBridge(peer), h.testFamily
+	} else if err == nil {
+		name := browserBridgeBrowser(peer)
+		okay, family = name != "", browserFamily(name)
 	}
-	if err != nil || !ok(peer) {
+	if err != nil || !okay {
 		if err != nil {
 			log.Printf("browser: refused a bridge: cannot tell which process it is: %v", err)
 		} else {
@@ -240,9 +257,13 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 		return
 	}
 	bc := &browserConn{c: conn, pid: peer}
+	// What a later "not connected" is told apart by: one connected before.
+	// Written first, so the state never says connected with no time for it.
+	writeBrowserMarker(family, time.Now())
 	h.mu.Lock()
 	old := h.host
 	h.host = bc
+	h.family = family
 	h.mu.Unlock()
 	if old != nil {
 		log.Printf("browser: the bridge from pid %d replaces the one from pid %d", peer, old.pid)
@@ -281,6 +302,7 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 	h.mu.Lock()
 	if h.host == bc {
 		h.host = nil
+		h.family = ""
 	}
 	// The requests this bridge held: answered now, not at their deadline.
 	for id, w := range h.waiting {
@@ -296,7 +318,11 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 // browserBridgeOK: pid is reminal (this daemon's own binary, or one named
 // reminal) run as the browser host, with a browser of Chrome's family above
 // it (the one that started it for its extension).
-func browserBridgeOK(pid int) bool {
+func browserBridgeOK(pid int) bool { return browserBridgeBrowser(pid) != "" }
+
+// browserBridgeBrowser is that check, answering with the program name of the
+// browser found above the host ("" when pid is not the host under one).
+func browserBridgeBrowser(pid int) string {
 	args := processArgs(pid)
 	exe := browserExecPath(pid)
 	if exe == "" && len(args) > 0 {
@@ -310,7 +336,7 @@ func browserBridgeOK(pid int) bool {
 		exe = r
 	}
 	if exe == "" || (exe != self && !strings.HasPrefix(strings.ToLower(filepath.Base(exe)), "reminal")) {
-		return false
+		return ""
 	}
 	asHost := false
 	for _, a := range args {
@@ -319,18 +345,20 @@ func browserBridgeOK(pid int) bool {
 		}
 	}
 	if !asHost {
-		return false
+		return ""
 	}
 	p := pid
 	for i := 0; i < 8; i++ {
 		p = session.ParentPID(p)
 		if p <= 1 {
-			return false
+			return ""
 		}
-		name := filepath.Base(browserExecPath(p))
+		path := browserExecPath(p)
+		name := filepath.Base(path)
 		if name == "." || name == "" || name == "/" {
 			if a := processArgs(p); len(a) > 0 {
-				name = filepath.Base(a[0])
+				path = a[0]
+				name = filepath.Base(path)
 			}
 		}
 		// (Windows names its programs chrome.exe, msedge.exe.)
@@ -338,10 +366,10 @@ func browserBridgeOK(pid int) bool {
 			name = name[:len(name)-4]
 		}
 		if browserProcessName.MatchString(name) {
-			return true
+			return path
 		}
 	}
-	return false
+	return ""
 }
 
 // browserProcessName matches the program names of Chrome's family.
@@ -373,7 +401,7 @@ func (h *browserHub) request(conn net.Conn, m BrowserReq) BrowserResp {
 	}
 	if host == nil {
 		h.mu.Unlock()
-		return BrowserResp{Error: errNoBrowser.Error()}
+		return BrowserResp{Error: h.errNoBrowser().Error()}
 	}
 	h.nextID++
 	id := h.nextID
@@ -456,7 +484,7 @@ func AskBrowser(req BrowserReq) (BrowserResp, error) {
 	}
 	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
 	if err != nil {
-		return BrowserResp{}, errors.New("reminal's daemon is not serving the browser (is `reminal daemon` running?)")
+		return BrowserResp{}, errors.New(BrowserStatus{}.Sentence(browserSetUpHere()))
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(BrowserTotalWait + 5*time.Second))
