@@ -10,9 +10,14 @@
   <label class="switch"><span>Run scripts in pages (a script can act as you on sites you are signed in to)</span><input type="checkbox" class="more" id="scripts"></label>
   <label class="switch"><span>Give files from this computer to pages</span><input type="checkbox" class="more" id="uploads"></label>
   <label class="switch"><span>Read and change cookies and site storage</span><input type="checkbox" class="more" id="cookies"></label>
+  <h2>Sessions using this browser</h2>
   <ul id="list"></ul>
   <p id="none" class="dim" hidden>No reminal session is using this browser now.</p>
+  <h2>Recent activity</h2>
+  <p class="dim">Pages agents opened, and what they did with scripts, files, cookies and site storage. Kept for 30 days, in this browser only.</p>
   <ul id="notes" class="dim"></ul>
+  <p id="nonotes" class="dim" hidden>Nothing to show yet.</p>
+  <div class="row"><button id="history">View all history</button></div>
 </main>
 <script src="popup.js"></script>
 </body>

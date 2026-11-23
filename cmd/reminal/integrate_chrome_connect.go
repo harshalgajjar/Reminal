@@ -463,7 +463,7 @@ func (c *browserConnect) sayNotYet(b chromeBrowser, s client.BrowserStatus) {
 	case s.FilesGone:
 		sayWrapped(c.d.out, "", "", "Not connected yet: the files of reminal's browser extension are no longer on this computer. Run "+noBreak("`reminal integrate`")+" again to put them back; nothing is lost by not waiting.")
 	case !s.Last.IsZero():
-		sayWrapped(c.d.out, "", "", "Not connected yet: most likely no browser window is open, or the extension is switched off (on "+client.BrowserExtensionsPage(s.Family)+", turn Developer mode on and switch reminal's extension on). It connects by itself once that is put right, so nothing is lost by not waiting.")
+		sayWrapped(c.d.out, "", "", "Not connected yet: most likely no browser window is open, or the extension is switched off or no longer loaded (on "+client.BrowserExtensionsPage(s.Family)+": turn Developer mode on and switch reminal's extension on, press its reload button, or if it is not listed, Load unpacked the reminal-extension folder again). It connects by itself once that is put right, so nothing is lost by not waiting.")
 	default:
 		sayWrapped(c.d.out, "", "", fmt.Sprintf("Not connected yet: most likely the extension is not loaded in %s yet. It connects by itself once it is loaded, so nothing is lost by not waiting.", b.Name))
 	}

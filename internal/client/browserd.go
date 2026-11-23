@@ -436,7 +436,8 @@ func sessionOwnsPID(peer int, id string) bool {
 }
 
 // watchEnded tells the extension when a session that used the browser is
-// gone: its consent and its tab group go with it.
+// gone: its consent goes with it, and its tab group is shown as an ended
+// session's for the person to close.
 func (h *browserHub) watchEnded(stop <-chan struct{}) {
 	t := time.NewTicker(10 * time.Second)
 	defer t.Stop()
@@ -558,10 +559,11 @@ var browserHaveRecheck = 15 * time.Second
 var browserSessionID = regexp.MustCompile(`^[A-Z0-9]{4,32}$`)
 
 // haveSessions takes the sessions the extension says it holds tabs for (as
-// it connects). The hub knows the sessions that asked it since it started;
-// a session that ended while the hub was not running (reminal was being
-// updated), or before this hub's time, it never knew, and the extension
-// would keep its tab group for ever. Each one named is taken up again if it
+// it connects, and again every half minute and when its panel opens, less
+// the ones already told as ended). The hub knows the sessions that asked it
+// since it started; a session that ended while the hub was not running
+// (reminal was being updated), or before this hub's time, it never knew, and
+// the extension would go on showing it as running. Each one named is taken up again if it
 // is running (to be told of when it ends), and told as ended if, looked at
 // twice, it is not.
 func (h *browserHub) haveSessions(ids []string) {

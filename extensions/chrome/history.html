@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>reminal history</title><link rel="stylesheet" href="style.css"></head>
+<body class="history">
+<main>
+  <h1>reminal: what agents did in this browser</h1>
+  <p class="dim">Kept here: the pages an agent opened (their address without the part after ? or #), scripts run in pages, files given to pages, and cookies and site storage read or changed. Clicks, typing and what a page says are not kept.</p>
+  <p id="rule" class="dim"></p>
+  <div class="filters">
+    <input type="search" id="q" placeholder="Search" aria-label="Search">
+    <select id="session" aria-label="Session"></select>
+    <select id="kind" aria-label="Kind of action"></select>
+    <select id="when" aria-label="Time">
+      <option value="all">Any time</option>
+      <option value="today">Today</option>
+      <option value="week">Last 7 days</option>
+    </select>
+  </div>
+  <div class="filters">
+    <select id="range" aria-label="What to clear">
+      <option value="hour">The last hour</option>
+      <option value="day">The last day</option>
+      <option value="week">The last 7 days</option>
+      <option value="all">All time</option>
+    </select>
+    <button id="clear">Clear history</button>
+    <span id="sure" hidden><span id="ask"></span> <button id="yes">Clear</button> <button id="no">Cancel</button></span>
+    <span id="cleared" class="dim"></span>
+  </div>
+  <p id="count" class="dim"></p>
+  <table>
+    <thead><tr><th>Time</th><th>Session</th><th>What it did</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<script src="history.js"></script>
+</body>
+</html>
