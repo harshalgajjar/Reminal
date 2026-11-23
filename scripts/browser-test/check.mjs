@@ -93,7 +93,34 @@ const ID2 = process.env.ID2;
 // extension window opened within ms.
 const noPrompt = (ms) => ctx.waitForEvent('page', { predicate: (pg) => pg.url().startsWith(`chrome-extension://${EXT_ID}/`) && !pg.url().includes('popup.html'), timeout: ms }).then(() => false, () => true);
 const page = (re) => ctx.pages().find((pg) => re.test(pg.url()));
-const popupDo = async (fn) => { const pop = await ctx.newPage(); await pop.goto(`chrome-extension://${EXT_ID}/popup.html`); const r = await fn(pop); await pop.close(); return r; };
+// The button's panel, opened as a page; fn runs once its switches are drawn
+// (it draws them from storage, a moment after it loads).
+const popupDo = async (fn) => {
+  const pop = await ctx.newPage();
+  await pop.goto(`chrome-extension://${EXT_ID}/popup.html`);
+  await pop.waitForFunction(() => document.getElementById('state').textContent !== '', null, { timeout: 5000 }).catch(() => {});
+  const r = await fn(pop);
+  await pop.close();
+  return r;
+};
+// A page of the extension's opened and timed from inside it: ms from the
+// page's own start until done() is first true of it (looked at each time the
+// page changes). The page is left open for the caller.
+const timedOpen = async (file, done) => {
+  const pg = await ctx.newPage();
+  await pg.addInitScript(`{
+    const done = ${done.toString()};
+    const look = () => { if (window.__filled == null && document.body && done()) window.__filled = performance.now(); };
+    new MutationObserver(look).observe(document, { subtree: true, childList: true, characterData: true, attributes: true });
+  }`);
+  await pg.goto(`chrome-extension://${EXT_ID}/${file}`).catch(() => {});
+  let ms = null;
+  for (let i = 0; i < 200 && ms == null; i++) { ms = await pg.evaluate(() => window.__filled ?? null).catch(() => null); if (ms == null) await pause(50); }
+  return { pg, ms: ms == null ? null : Math.round(ms) };
+};
+// The sessions' rows in the button's panel, as a person reads them.
+const panelRows = () => popupDo(async (p) => { await p.waitForFunction(() => document.querySelector('#list li') || !document.getElementById('none').hidden, null, { timeout: 5000 }).catch(() => {}); return p.locator('#list li').allTextContents(); });
+const tabsOfGroup = (title) => inSW((title) => chrome.tabGroups.query({ title }).then((gs) => chrome.tabs.query({}).then((ts) => ts.filter((t) => gs.some((g) => g.id === t.groupId)).map((t) => t.id))), title);
 
 // 1. The control: the switch in the button off. Every request is refused,
 // saying so, and nothing is done.
@@ -632,6 +659,98 @@ let tabId;
   await slow(800);
 }
 
+// 3c. The log: its newest lines in the button's panel under a heading; all
+// of it on a page of its own, with a search and filters; kept short in
+// storage itself, not only where it is shown.
+{
+  const KEPT = 500, SHOWN = 8, BOUND = 3000;
+  const stored = () => inSW(() => chrome.storage.local.get('notes').then((o) => o.notes || []));
+  const put = (notes) => inSW((notes) => chrome.storage.local.set({ notes }), notes);
+  const made = (count, who = 'ABCD1234 - reminal') => Array.from({ length: count }, (_, i) => ({ at: Date.now() - (count - i) * 1000, who, kind: 'upload', text: `gave report-${i}.pdf, notes-${i}.txt on jobs.example-${i % 7}.com` }));
+  const real = await stored();
+  const newest = (real[real.length - 1] || { text: '(the log is empty)' }).text;
+  check(real.length > SHOWN &&real.every((x) => ['script', 'upload', 'cookies', 'storage'].includes(x.kind)), `the log so far: ${real.length} entries, each with its kind (${[...new Set(real.map((x) => x.kind))].join(', ')})`);
+
+  const pop = await ctx.newPage();
+  await pop.goto(`chrome-extension://${EXT_ID}/popup.html`);
+  await pop.waitForSelector('#notes li', { timeout: 5000 }).catch(() => {});
+  const heads = await pop.locator('h2').allTextContents();
+  check(heads.join(' | ') === 'Sessions using this browser | Recent activity', `the panel has a heading for the sessions and one for the log (${heads.join(' | ') || 'none'})`);
+  const lines = await pop.locator('#notes li').allTextContents();
+  check(lines.length === SHOWN && lines[0].includes(newest),`the panel shows the newest ${SHOWN} lines of the log, newest first (${lines.length} of ${real.length})`);
+
+  // The whole log: opened by the panel's button, in a tab.
+  const coming = ctx.waitForEvent('page', { timeout: 8000 }).catch(() => null);
+  await pop.click('#history', { timeout: 3000 }).catch(() => {});
+  const hist = await coming;
+  if (hist) await hist.waitForURL(/history\.html/, { timeout: 5000 }).catch(() => {});
+  check(!!hist && /\/history\.html$/.test(hist.url()), `"View all history" opens the extension's own page (${hist ? hist.url() : 'no page opened'})`);
+  await pop.close();
+  if (hist && /\/history\.html$/.test(hist.url())) {
+    const rows = () => hist.locator('#rows tr').count();
+    const settle = async (want) => { for (let i = 0; i < 40 && (await rows()) !== want; i++) await pause(50); return rows(); };
+    check(await settle(real.length) === real.length && (await hist.locator('#rows tr').first().textContent()).includes(newest),`the page lists every kept entry, newest first (${await rows()} of ${real.length})`);
+    const rule = await hist.textContent('#rule');
+    check(rule === `reminal keeps the last ${KEPT} entries, and none older than 30 days, in this browser only.`, `and says the rule the log is kept by (${rule})`);
+    check(!/helper/.test(await hist.textContent('body')) && (await hist.locator('#rows tr').first().textContent()).includes(`${ID} - reminal`), 'a session is called by its id there too, never by the name it was given');
+    // An older entry of another session, written before entries had a kind.
+    await put([{ at: Date.now() - 10 * 86_400_000, who: 'ZZZZ0000 - reminal', text: 'ran a script on old.example' }, ...real]);
+    const all = real.length + 1;
+    await settle(all);
+    const want = (f) => real.filter(f).length;
+    await hist.fill('#q', 'cookie');
+    check(await settle(want((x) => /cookie/.test(x.text))) === want((x) => /cookie/.test(x.text)) && want((x) => /cookie/.test(x.text)) > 0, `search narrows it to the entries with those words (${await rows()} of ${all} for "cookie")`);
+    await hist.fill('#q', 'old.example');
+    check(await settle(1) === 1, `search matches the site too (${await rows()} for "old.example")`);
+    await hist.fill('#q', '');
+    const sessions = await hist.locator('#session option').allTextContents();
+    check(sessions.join(' | ') === ['All sessions', ...[`${ID} - reminal`, 'ZZZZ0000 - reminal'].sort()].join(' | '), `the session filter offers the sessions in the log (${sessions.join(' | ')})`);
+    await hist.selectOption('#session', 'ZZZZ0000');
+    check(await settle(1) === 1, `the session filter narrows it (${await rows()} of ${all})`);
+    await hist.selectOption('#session', '');
+    const kinds = await hist.locator('#kind option').allTextContents();
+    check(kinds.join(' | ') === 'All kinds of action | Scripts run in pages | Files given to pages | Cookies | Site storage', `the kind filter offers the kinds in the log (${kinds.join(' | ')})`);
+    await hist.selectOption('#kind', 'upload');
+    check(await settle(want((x) => x.kind === 'upload')) === want((x) => x.kind === 'upload') && want((x) => x.kind === 'upload') > 0, `the kind filter narrows it (${await rows()} of ${all} are files given)`);
+    await hist.selectOption('#kind', 'script');
+    check(await settle(want((x) => x.kind === 'script') + 1) === want((x) => x.kind === 'script') + 1, `an entry from before entries had a kind is told by its words (${await rows()} scripts)`);
+    await hist.selectOption('#kind', '');
+    await hist.selectOption('#when', 'week');
+    check(await settle(real.length) === real.length, `the time filter narrows it (${await rows()} of ${all} in the last 7 days)`);
+    await hist.selectOption('#when', 'all');
+    await hist.fill('#q', 'no such words anywhere');
+    check(await settle(0) === 0 && /^Nothing matches/.test(await hist.textContent('#count')), `and says so when nothing matches (${await hist.textContent('#count')})`);
+    await hist.close();
+  }
+
+  // The most the log can hold: the page is filled within BOUND, and with far
+  // more than that in storage (as nothing should leave it) the panel still
+  // shows its switches within BOUND.
+  await put(made(KEPT));
+  const full = await timedOpen('history.html', () => document.querySelectorAll('#rows tr').length >= 500);
+  check(full.ms != null && full.ms < BOUND, `with ${KEPT} entries the history page is filled in ${full.ms} ms (bound ${BOUND})`);
+  await full.pg.close();
+  await put(made(3000));
+  const panel = await timedOpen('popup.html', () => document.getElementById('state').textContent !== '');
+  const drawn = await panel.pg.locator('#notes li').count();
+  check(panel.ms != null && panel.ms < BOUND, `with 3000 entries in storage the panel shows its switches in ${panel.ms} ms (bound ${BOUND})`);
+  check(drawn <= SHOWN, `and still no more than ${SHOWN} lines of the log (${drawn})`);
+  await panel.pg.close();
+
+  // Written to again, the log is cut down in storage: the newest KEPT, and
+  // nothing past its age.
+  await put([{ at: Date.now() - 40 * 86_400_000, who: `${ID} - reminal`, kind: 'script', text: 'ran a script on long.ago' }, ...made(3000)]);
+  const T = JSON.parse((await call('browser_tabs_create', { url: `${PAGES}/tools.html?log` })).text).tabId;
+  await popupDo(async (p) => { await p.check('#scripts'); });
+  const r = await call('browser_evaluate', { tabId: T, expression: '1 + 1' });
+  await popupDo(async (p) => { await p.uncheck('#scripts'); });
+  const after = await stored();
+  check(!r.err && after.length === KEPT && after[after.length - 1].text === 'ran a script on 127.0.0.1:8088' && !after.some((x) => /long\.ago/.test(x.text)), `after one more entry, storage holds the newest ${KEPT} and nothing older than its age (${r.err || after.length})`);
+  await call('browser_tabs_close', { tabId: T });
+  await call('browser_tabs_select', { tabId });
+  await put(real);
+}
+
 // 4. The rules: sign-in forms, passwords and payment fields, CAPTCHAs.
 {
   let r = await call('browser_navigate', { url: `${PAGES}/login.html` });
@@ -780,11 +899,14 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
 {
   const pop = await ctx.newPage();
   await pop.goto(`chrome-extension://${EXT_ID}/popup.html`);
+  await pop.waitForSelector('#list li', { timeout: 5000 }).catch(() => {});
   check(/on/.test(await pop.textContent('#state')) && (await pop.textContent("#list")).includes(`${ID} - reminal`) && (await pop.textContent("#list")).includes(`${ID2} - reminal`) && !/helper/.test(await pop.textContent("#list")), "the button shows the switch on and both sessions, each by its id and never by the name it was given");
+  const buttons = await pop.locator('#list li button').allTextContents();
+  check(buttons.length === 2 && buttons.every((b) => b === 'Stop'), `each running session has its Stop (${buttons.join(', ')})`);
   await slow(1000);
   const going = call('browser_navigate', { url: `${PAGES}/slow.html` });
   await pause(1500); // the page is loading
-  await pop.locator('li', { hasText: `${ID} - reminal` }).locator('button').click();
+  await pop.locator('#list li', { hasText: `${ID} - reminal` }).locator('button').click();
   await pop.close();
   await going;
   const recs = await recOf(ID);
@@ -832,18 +954,28 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   check(recs2.length > 0 && recs2.every((s) => s.stopped), 'and it shows as stopped');
 }
 
-// 7. A session ends: its records and its group go with it.
+// 7. A session ends with no tab group left (its Stop undid it): everything
+// kept for it goes, and the button's panel no longer lists it.
+const keptFor = (id) => inSW((id) => Promise.all([chrome.storage.session.get(null), chrome.storage.local.get('stopped')]).then(([all, l]) => [...Object.keys(all), ...Object.keys(l.stopped || {})].filter((k) => k.includes(id))), id);
 {
+  const was = await panelRows();
+  check(was.some((t) => t.includes(`${ID2} - reminal (stopped)`)) && (await keptFor(ID2)).length > 0, `before it ends, the stopped session is listed and kept (${JSON.stringify(was)}; ${JSON.stringify(await keptFor(ID2))})`);
   execSync(`reminal kill -y ${ID2}`, { stdio: 'pipe' });
   let left = [];
   for (let i = 0; i < 40; i++) { left = await recOf(ID2); if (!left.length) break; await pause(500); }
   check(left.length === 0, 'the session ended: its record is gone');
   check(!(await groups()).includes(`${ID2} - reminal`), 'and its tab group');
+  const kept = await keptFor(ID2), now = await panelRows();
+  check(kept.length === 0, `nothing is kept for it any more, its Stop neither (${JSON.stringify(kept)})`);
+  check(!now.some((t) => t.includes(ID2)) && now.some((t) => t.includes(`${ID} - reminal`)), `the panel no longer lists it, and still lists the session that is running (${JSON.stringify(now)})`);
 }
 
 // 7b. A session that ends while reminal is not looking (its daemon being
-// replaced by an update): the extension says which sessions it holds tabs
-// for as it connects again, and that one's group is let go.
+// replaced by an update), with its tab group still open: the extension says
+// which sessions it holds tabs for as it connects again, and is told that
+// one has ended. Its record goes; its group stays, shown as ended in the
+// button's panel with "Close its tabs", which closes that group's tabs and
+// no other. While reminal is away nothing is removed.
 {
   const ID3 = (execSync('reminal new "third helper"').toString().match(/Session:\s*([A-Z0-9]+)/) || [])[1];
   await pause(2000);
@@ -859,21 +991,48 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   const orphan = await inSW(() => chrome.tabs.create({ url: 'about:blank', active: false }).then((t) => chrome.tabs.group({ tabIds: [t.id] }).then((g) => chrome.tabGroups.update(g, { title: 'ZZZZ9999 - reminal' }).then(() => t.id))));
   const daemon = Number(fs.readFileSync(`${HOME}/.reminal/daemon.pid`, 'utf8'));
   process.kill(daemon);
-  await pause(1000);
+  let away = null;
+  for (let i = 0; i < 20; i++) { away = await store('host'); if (away && !away.connected) break; await pause(250); }
   execSync(`reminal kill -y ${ID3} >/dev/null 2>&1 || true`, { shell: '/bin/bash' });
   await pause(1000);
+  // reminal is away: nothing can say which sessions are running. The panel
+  // lists what has a tab group, and nothing kept is removed.
+  const offRows = await panelRows();
+  const offStatus = await popupDo((p) => p.textContent('#status'));
+  check(away && !away.connected && /^Not connected to reminal/.test(offStatus), `with reminal away the panel says it is not connected (${offStatus.slice(0, 60)})`);
+  check(offRows.some((t) => t.includes(`${ID3} - reminal`)) && offRows.some((t) => t.includes('ZZZZ9999 - reminal')) && !offRows.some((t) => t.includes(ID)), `and lists the sessions with a tab group only (${JSON.stringify(offRows)})`);
+  check((await recOf(ID)).length > 0 && (await recOf(ID3)).length > 0, 'and no record is removed meanwhile');
   execSync('nohup reminal daemon > /tmp/daemon2.log 2>&1 &', { shell: '/bin/bash' });
   await pause(2500);
-  let rec3 = [], g3 = [];
+  const endedKeys = () => inSW(() => chrome.storage.session.get(null).then((all) => Object.keys(all).filter((k) => k.startsWith('e:')).sort()));
+  let rec3 = [], g3 = [], rows3 = [], ended = [];
   for (let i = 0; i < 30; i++) {
-    await popupDo(async () => {}); // the button's panel asks it to connect, as a person opening it would
-    rec3 = await recOf(ID3); g3 = await groups();
-    if (!rec3.length && !g3.includes(`${ID3} - reminal`) && !g3.includes('ZZZZ9999 - reminal')) break;
+    rows3 = await panelRows(); // the button's panel asks it to connect, as a person opening it would
+    rec3 = await recOf(ID3); g3 = await groups(); ended = await endedKeys().catch(() => []);
+    if (!rec3.length && ended.length === 2) break;
     await pause(2000);
   }
-  check(!rec3.length && !g3.includes(`${ID3} - reminal`), `a session that ended while reminal was not looking: its record and tab group are let go (${JSON.stringify(g3)})`);
-  const orphanOpen = await inSW((id) => chrome.tabs.get(id).then((t) => t.groupId === -1, () => false), orphan);
-  check(!g3.includes('ZZZZ9999 - reminal') && orphanOpen, `a group left under the name of a session long gone is undone, its tab stays (${JSON.stringify(g3)})`);
+  check(!rec3.length && g3.includes(`${ID3} - reminal`), `a session that ended while reminal was not looking: its record is gone, its tab group is left open (${JSON.stringify(g3)})`);
+  const rowOf = (rows, id) => rows.find((t) => t.includes(id)) || '';
+  check(rowOf(rows3, ID3) === `${ID3} - reminal (ended)Close its tabs`, `the panel shows it as ended, with a button that closes its tabs and no Stop (${JSON.stringify(rows3)})`);
+  check(rowOf(rows3, 'ZZZZ9999') === 'ZZZZ9999 - reminal (ended)Close its tabs', 'and the same for a group left under the name of a session long gone');
+  check(rowOf(rows3, ID) === `${ID} - reminal (stopped)`, `the session still running is listed as it was (${rowOf(rows3, ID)})`);
+  // "Close its tabs": that group's tabs, and no other tab.
+  const tabIds = () => inSW(() => chrome.tabs.query({}).then((ts) => ts.map((t) => t.id).sort((a, b) => a - b)));
+  const pop = await ctx.newPage();
+  await pop.goto(`chrome-extension://${EXT_ID}/popup.html`);
+  await pop.waitForSelector('#list li button', { timeout: 5000 }).catch(() => {});
+  const its = await tabsOfGroup(`${ID3} - reminal`), before = await tabIds();
+  await pop.locator('#list li', { hasText: `${ID3} - reminal` }).locator('button').click({ timeout: 3000 }).catch(() => {});
+  for (let i = 0; i < 40 && (await pop.locator('#list li', { hasText: ID3 }).count()) > 0; i++) await pause(100);
+  const after = await tabIds(), closed = before.filter((t) => !after.includes(t));
+  check(its.length > 0 && JSON.stringify(closed) === JSON.stringify(its.sort((a, b) => a - b)) && after.includes(orphan), `"Close its tabs" closes the tabs of that session's group and no other (its tabs ${JSON.stringify(its)}, closed ${JSON.stringify(closed)})`);
+  check((await pop.locator('#list li', { hasText: ID3 }).count()) === 0 && !(await endedKeys()).includes(`e:${ID3}`) && !(await groups()).includes(`${ID3} - reminal`), `and its row goes, with what was kept for it (${JSON.stringify(await pop.locator('#list li').allTextContents())})`);
+  await pop.locator('#list li', { hasText: 'ZZZZ9999' }).locator('button').click({ timeout: 3000 }).catch(() => {});
+  for (let i = 0; i < 40 && (await pop.locator('#list li', { hasText: 'ZZZZ9999' }).count()) > 0; i++) await pause(100);
+  await pop.close();
+  const orphanGone = await inSW((id) => chrome.tabs.get(id).then(() => false, () => true), orphan);
+  check(orphanGone && (await keptFor('ZZZZ9999')).length === 0, 'the long gone session\'s tabs close with its own button, and nothing is kept for it');
   r = await call('browser_tabs_context');
   check(r.err && /stopped/.test(r.err), `and the sessions still running are as they were (${r.err || r.text})`);
 }

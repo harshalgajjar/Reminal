@@ -7,7 +7,11 @@
 //   reminal (native messaging host, `reminal browser-host`)
 //     -> {t:"req", id, session, run, name, machine, tool, args}
 //     <- {id, ok, result | error}
-//     -> {t:"ended", session}      the session is gone: its tab group goes
+//     -> {t:"ended", session}      the session is gone: its records go, its
+//                                  tab group stays for the person to close
+//     <- {t:"have", sessions}      the sessions this browser holds tabs or
+//                                  records for: reminal answers "ended" for
+//                                  each that is not running
 //
 // Installing the extension (`reminal integrate`, then loading it) is the
 // person's consent: no prompt. A session's first use is shown (its tab group,
@@ -82,8 +86,8 @@ async function onHostMessage(m) {
     if (m.ok && m.ext) await newerFiles(String(m.ext));
     // The sessions this browser holds tabs for: reminal says which of them
     // ended while it was not looking (it was being updated, or this browser
-    // was closed), and their groups are let go.
-    if (m.ok) send({ t: 'have', sessions: [...new Set([...(await allS()).map(([, s]) => s.session).filter(Boolean), ...(await groupsOfSessions()).keys()])] });
+    // was closed).
+    if (m.ok) await sayHave();
     return;
   }
   if (m.t === 'refused') { setStatus({ connected: false, error: m.error || 'refused' }); return; }
@@ -104,13 +108,44 @@ async function onHostMessage(m) {
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
 chrome.alarms.create('reminal-connect', { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'reminal-connect') connect(); });
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'reminal-connect') { connect(); tidy(); } });
 connect();
+
+// sayHave: reminal is told the sessions this browser holds a record or a tab
+// group for, and answers "ended" for each that is not running (it says
+// nothing of the ones that are). Not the ones it has already said ended.
+async function sayHave() {
+  const all = await chrome.storage.session.get(null);
+  const ids = new Set((await groupsOfSessions()).keys());
+  for (const [k, s] of Object.entries(all)) if (k.startsWith('s:') && s.session) ids.add(s.session);
+  send({ t: 'have', sessions: [...ids].filter((id) => !(('e:' + id) in all)) });
+}
+
+// tidy: what is kept by session is kept only while it is of use. Run when
+// the button's panel opens and on the alarm above (no timer of its own).
+// reminal is asked again about every session held, so one that ended with
+// its "ended" lost on the way is still let go; an ended session whose tab
+// group is closed now is forgotten; the log loses what is past its age.
+// With reminal not connected nothing can say which sessions are running, and
+// nothing kept by session is removed.
+async function tidy() {
+  await pruneNotes();
+  const { host } = await chrome.storage.session.get('host');
+  if (!port || !host || !host.connected) return;
+  const groups = await groupsOfSessions();
+  const all = await chrome.storage.session.get(null);
+  const gone = Object.keys(all).filter((k) => k.startsWith('e:') && !groups.has(k.slice(2)));
+  if (gone.length) await chrome.storage.session.remove(gone);
+  await sayHave();
+}
 
 // ---------------------------------------------------------------- sessions
 // One storage key per run of a session: "s:<id>:<run>" ->
 // {session, run, name, machine, groupId, tabs, lastTab, stopped}. Each read
-// is fresh; a write merges into what is stored now.
+// is fresh; a write merges into what is stored now. And one key for a
+// session reminal said has ended while its tab group is still open:
+// "e:<id>" -> {at}, there until the group is closed (the button's panel
+// shows it as ended, with a button that closes its tabs).
 const keyOf = (m) => `s:${m.session}:${m.run || ''}`;
 async function getS(k) { return (await chrome.storage.session.get(k))[k] || null; }
 async function putS(k, patch) {
@@ -165,25 +200,51 @@ async function stop(k, why = "stopped by the person") {
   const s = await putS(k, { stopped: true });
   await letGo(s, why);
 }
-// endSession: the session is gone; its runs' records and groups go too.
-async function endSession(id) {
+// forgetRuns: the records of a session's runs, and their Stops, removed
+// (all of them, or all but the run named by except).
+async function forgetRuns(id, except) {
   const kept = await stoppedRuns();
-  const mine = Object.keys(kept).filter((k) => k.startsWith(`s:${id}:`));
+  const mine = Object.keys(kept).filter((k) => k.startsWith(`s:${id}:`) && k !== except);
   if (mine.length) { for (const k of mine) delete kept[k]; await chrome.storage.local.set({ stopped: kept }); }
+  const out = [];
   for (const [k, s] of await allS()) {
-    if (!k.startsWith(`s:${id}:`)) continue;
+    if (!k.startsWith(`s:${id}:`) || k === except) continue;
     bump(k);
     await chrome.storage.session.remove(k);
-    await letGo(s, "the session ended");
+    out.push(s);
   }
-  // And a group under its name that no record holds any more (the records
-  // went when the extension reloaded itself): its tabs stay, ungrouped.
+  return out;
+}
+// endSession: the session is gone; its runs' records go, and the debugger
+// lets go of its tabs. Its tab group stays as it is, with what is in it, for
+// the person to look at and close: while it is open the session is kept as
+// ended ("e:<id>"), so the button's panel can show it with "Close its tabs".
+// With no group left there is nothing more to keep.
+async function endSession(id) {
+  if (!id) return;
+  for (const s of await forgetRuns(id)) {
+    console.log('[reminal] ended', `s:${s.session}:${s.run || ''}`);
+    for (const tab of await sessionTabs(s, false)) await detach(tab.id);
+  }
+  // A group under its name that no record holds (the records went when the
+  // extension reloaded itself) is the session's all the same.
+  const groups = (await groupsOfSessions()).get(id) || [];
+  for (const g of groups) for (const t of await chrome.tabs.query({ groupId: g }).catch(() => [])) await detach(t.id);
+  if (groups.length) await chrome.storage.session.set({ ['e:' + id]: { at: Date.now() } });
+  else await chrome.storage.session.remove('e:' + id);
+}
+// closeEnded: the person's "Close its tabs" for a session that has ended:
+// the tabs in the group under its name are closed, and no other tab. Only
+// for a session reminal said has ended.
+async function closeEnded(id) {
+  const key = 'e:' + id;
+  if (!(await chrome.storage.session.get(key))[key]) return;
   for (const g of (await groupsOfSessions()).get(id) || []) {
-    for (const t of await chrome.tabs.query({ groupId: g }).catch(() => [])) {
-      await detach(t.id);
-      try { await chrome.tabs.ungroup(t.id); } catch (_) {}
-    }
+    const tabs = await chrome.tabs.query({ groupId: g }).catch(() => []);
+    for (const t of tabs) await detach(t.id);
+    await chrome.tabs.remove(tabs.map((t) => t.id)).catch(() => {});
   }
+  await chrome.storage.session.remove(key);
 }
 // groupsOfSessions: the tab groups in the browser named as a session's are
 // ("<id> - reminal"), by session id.
@@ -234,6 +295,10 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.t === 'stop') stop(String(msg.key || '')).then(() => reply(true));
   else if (msg.t === 'switch') (msg.on ? chrome.storage.local.set({ agents: 'on' }) : switchOff()).then(() => reply(true));
   else if (msg.t === 'reconnect') { backoff = 1000; connect(); reply(true); }
+  // The panel opened: it has drawn itself from what is stored and waits for
+  // nothing here.
+  else if (msg.t === 'opened') { backoff = 1000; connect(); tidy(); reply(true); }
+  else if (msg.t === 'close') closeEnded(String(msg.session || '')).then(() => reply(true));
   else return;
   return true;
 });
@@ -261,6 +326,13 @@ async function handle(m) {
   if (await isStopped(k, s)) throw new Error(STOPPED);
   const before = s;
   s = await putS(k, { session: m.session, run: m.run || "", name, machine: m.machine || "" });
+  // A run's first request: the session is running, whatever was said of it
+  // before (one brought back under its id), and the records of its earlier
+  // runs are of no use any more (a session has one process at a time).
+  if (!before && m.session) {
+    await chrome.storage.session.remove('e:' + m.session);
+    await forgetRuns(m.session, k);
+  }
   await announce(k, before, name);
   const alive = guardFor(k);
   await alive();
@@ -1056,15 +1128,37 @@ const SWITCHES = {
 async function switchedOn(name) {
   if ((await chrome.storage.local.get(name))[name] !== 'on') throw new Error(SWITCHES[name]);
 }
-// note: a line in the button's panel for what the person should be able to
-// see afterwards (a script ran, a file was given), the newest NOTES.
-const NOTES = 30;
-async function note(c, text) {
-  let site = '';
-  try { site = new URL((await chrome.tabs.get(c.tabId)).url).host; } catch (_) {}
-  const { notes = [] } = await chrome.storage.session.get('notes');
-  notes.push({ at: Date.now(), who: c.name || '', text: site ? `${text} on ${site}` : text });
-  await chrome.storage.session.set({ notes: notes.slice(-NOTES) });
+// note: a line of the log for what the person should be able to see
+// afterwards (a script ran, a file was given, cookies or site storage were
+// used; nothing else is logged). The button's panel shows the newest few and
+// history.html all of them, with a search. Kept in the profile's own
+// storage, so it is still there after the browser restarts, and cut down as
+// it is written: the newest NOTES, none older than NOTES_DAYS (the same
+// numbers history.js tells the person). kind is which of the four it was,
+// for the history page's filter. One write at a time: two sessions noting
+// at once would each write the list without the other's line.
+const NOTES = 500, NOTES_DAYS = 30;
+const keptNotes = (notes) => notes.filter((n) => n && n.at > Date.now() - NOTES_DAYS * 86_400_000).slice(-NOTES);
+let noting = Promise.resolve();
+function note(c, kind, text) {
+  noting = noting.then(async () => {
+    let site = '';
+    try { site = new URL((await chrome.tabs.get(c.tabId)).url).host; } catch (_) {}
+    const { notes = [] } = await chrome.storage.local.get('notes');
+    notes.push({ at: Date.now(), who: c.name || '', kind, text: site ? `${text} on ${site}` : text });
+    await chrome.storage.local.set({ notes: keptNotes(notes) });
+  }).catch(() => {});
+  return noting;
+}
+// pruneNotes: the log's age limit, when nothing has been written for a while.
+function pruneNotes() {
+  noting = noting.then(async () => {
+    const { notes } = await chrome.storage.local.get('notes');
+    if (!notes) return;
+    const kept = keptNotes(notes);
+    if (kept.length !== notes.length) await chrome.storage.local.set({ notes: kept });
+  }).catch(() => {});
+  return noting;
 }
 
 // evaluate: an expression, or a function's result, run in the page as the
@@ -1083,7 +1177,7 @@ async function evaluate(c, a) {
   if (frames.some((r) => r.result.personOnly)) throw new Error('Paused: this page has a sign-in or payment field, so scripts are not run in it. Ask the person to do that part, then continue.');
   // A function ("() => ...", "async function ...") is called; anything else is an expression.
   const expr = /^\s*(async\s+)?(\(|function\b|[A-Za-z_$][\w$]*\s*=>)/.test(code) ? `(${code})()` : code;
-  await note(c, 'ran a script');
+  await note(c, 'script', 'ran a script');
   const r = await cdp(c, 'Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true, userGesture: false, timeout: 30000 });
   if (r.exceptionDetails) {
     const d = r.exceptionDetails;
@@ -1270,7 +1364,7 @@ async function fileUpload(c, a) {
   if (paths.length > 1 && !multiple) throw new Error(`${what} takes one file.`);
   await cdp(c, 'DOM.setFileInputFiles', { files: paths, ...node });
   choosers.delete(c.tabId);
-  await note(c, `gave ${paths.map(leaf).join(', ')}`);
+  await note(c, 'upload', `gave ${paths.map(leaf).join(', ')}`);
   return `Gave ${paths.length} file${paths.length === 1 ? '' : 's'} to ${what}: ${paths.map(leaf).join(', ')}.`;
 }
 
@@ -1323,7 +1417,7 @@ async function cookies(c, a) {
   const action = String(a.action || 'list');
   if (action === 'list') {
     const r = await cdp(c, 'Network.getCookies', { urls: [url] });
-    await note(c, 'read the cookies');
+    await note(c, 'cookies', 'read the cookies');
     const l = (r.cookies || []).filter((k) => !a.name || k.name === String(a.name));
     if (!l.length) return 'No cookies for this page.';
     return l.map((k) => `${k.name}=${String(k.value).slice(0, 500)} (${k.domain}${k.path}${k.httpOnly ? '; httpOnly' : ''}${k.secure ? '; secure' : ''}${k.session ? '; session' : '; expires ' + new Date(k.expires * 1000).toISOString()})`).join('\n');
@@ -1337,7 +1431,7 @@ async function cookies(c, a) {
     if (a.expires != null) p.expires = Number(a.expires);
     const r = await cdp(c, 'Network.setCookie', p);
     if (r && r.success === false) throw new Error('The browser did not take that cookie.');
-    await note(c, `set the cookie ${p.name}`);
+    await note(c, 'cookies', `set the cookie ${p.name}`);
     return `Set the cookie ${p.name}.`;
   }
   if (action === 'delete' || action === 'clear') {
@@ -1345,7 +1439,7 @@ async function cookies(c, a) {
     const r = await cdp(c, 'Network.getCookies', { urls: [url] });
     const l = (r.cookies || []).filter((k) => action === 'clear' || k.name === String(a.name));
     for (const k of l) await cdp(c, 'Network.deleteCookies', { name: k.name, domain: k.domain, path: k.path });
-    await note(c, action === 'clear' ? 'cleared the cookies' : `deleted the cookie ${a.name}`);
+    await note(c, 'cookies', action === 'clear' ? 'cleared the cookies' : `deleted the cookie ${a.name}`);
     return `Deleted ${l.length} cookie${l.length === 1 ? '' : 's'}.`;
   }
   throw new Error('action is list, set, delete or clear');
@@ -1358,7 +1452,7 @@ async function storage(c, a) {
   if (!['list', 'get', 'set', 'delete', 'clear'].includes(action)) throw new Error('action is list, get, set, delete or clear');
   if (['get', 'set', 'delete'].includes(action) && a.key == null) throw new Error('key is required');
   const r = await inPage(c, page.storage, kind, action, a.key == null ? null : String(a.key), a.value == null ? '' : String(a.value));
-  await note(c, `${action === 'list' || action === 'get' ? 'read' : 'changed'} the ${kind} storage`);
+  await note(c, 'storage', `${action === 'list' || action === 'get' ? 'read' : 'changed'} the ${kind} storage`);
   return r;
 }
 

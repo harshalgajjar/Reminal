@@ -4,6 +4,7 @@
 body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { padding: 20px 22px; }
 h1 { font-size: 16px; margin: 0 0 10px; }
+h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--dim); margin: 18px 0 2px; padding-top: 12px; border-top: 1px solid var(--line); }
 p { margin: 0 0 12px; }
 .dim { color: var(--dim); font-size: 13px; }
 .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
@@ -14,3 +15,13 @@ ul { list-style: none; padding: 0; margin: 0; }
 li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
 li:first-child { border-top: 0; }
 .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The whole log, on a page of its own (history.html). */
+.history main { max-width: 900px; margin: 0 auto; padding: 28px 22px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 10px; }
+.filters input, .filters select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+.filters input { flex: 1 1 220px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; vertical-align: top; padding: 8px 12px 8px 0; border-top: 1px solid var(--line); }
+th { border-top: 0; color: var(--dim); font-size: 13px; font-weight: 600; }
+td:first-child, td:nth-child(2) { white-space: nowrap; }
+td:last-child { overflow-wrap: anywhere; }

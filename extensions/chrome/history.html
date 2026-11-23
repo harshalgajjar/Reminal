@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>reminal history</title><link rel="stylesheet" href="style.css"></head>
+<body class="history">
+<main>
+  <h1>reminal: what agents did in this browser</h1>
+  <p class="dim">Kept here: scripts run in pages, files given to pages, and cookies and site storage read or changed. Opening pages, clicks and typing are not kept.</p>
+  <p id="rule" class="dim"></p>
+  <div class="filters">
+    <input type="search" id="q" placeholder="Search" aria-label="Search">
+    <select id="session" aria-label="Session"></select>
+    <select id="kind" aria-label="Kind of action"></select>
+    <select id="when" aria-label="Time">
+      <option value="all">Any time</option>
+      <option value="today">Today</option>
+      <option value="week">Last 7 days</option>
+    </select>
+  </div>
+  <p id="count" class="dim"></p>
+  <table>
+    <thead><tr><th>Time</th><th>Session</th><th>What it did</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<script src="history.js"></script>
+</body>
+</html>
