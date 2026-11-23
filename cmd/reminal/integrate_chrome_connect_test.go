@@ -32,6 +32,8 @@ type connectRig struct {
 	asked  int
 	ran    [][]string
 	runErr error
+	// runFn, when set, is what each program started returns, by its argv.
+	runFn func(argv []string) error
 }
 
 var (
@@ -41,6 +43,12 @@ var (
 	hubDown      = client.BrowserStatus{}
 	// hubOld: a daemon from before it could be asked, which did not answer.
 	hubOld = client.BrowserStatus{Daemon: true, NoAnswer: true, Family: "chrome", Last: time.Unix(1700000000, 0)}
+	// hubFilesGone: one connected before, and the extension's files are no
+	// longer on this computer.
+	hubFilesGone = client.BrowserStatus{Daemon: true, FilesGone: true, Family: "chromium", Last: time.Unix(1700000000, 0)}
+	// hubFolderTaken: the same, and the folder they are written to is
+	// someone else's.
+	hubFolderTaken = client.BrowserStatus{Daemon: true, FolderTaken: true, Family: "chromium", Last: time.Unix(1700000000, 0)}
 )
 
 // oldDaemonLine is what integrate ends on with such a daemon.
@@ -63,7 +71,7 @@ func TestBrowserConnectLinesFitANarrowTerminal(t *testing.T) {
 	r.finish(bc)
 	// And the state sentences of --check, the longest lines there are.
 	var states bytes.Buffer
-	for _, s := range []client.BrowserStatus{{}, {Daemon: true}, hubConnected, hubOld} {
+	for _, s := range []client.BrowserStatus{{}, {Daemon: true}, hubConnected, hubOld, hubFilesGone, hubFolderTaken, {Daemon: true, FilesGone: true, Family: "edge"}} {
 		sayWrapped(&states, "", "    ", browserCheckLine(true, s))
 		sayWrapped(&states, "", "    ", browserCheckLine(false, s))
 	}
@@ -99,6 +107,9 @@ func newConnectRig(t *testing.T, goos string, state client.BrowserStatus) *conne
 			r.mu.Lock()
 			defer r.mu.Unlock()
 			r.ran = append(r.ran, c.argv)
+			if r.runFn != nil {
+				return r.runFn(c.argv)
+			}
 			return r.runErr
 		},
 		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
@@ -276,8 +287,106 @@ func TestBrowserConnectWaitEndsAtItsTime(t *testing.T) {
 	bc = newBrowserConnectWith(r.d, "/home/u", chromeOnly, false, false)
 	r.typeLine("n")
 	r.finish(bc)
-	if out := r.out.String(); !strings.Contains(out, "Not connected yet: most likely no browser window is open.") {
+	if out := r.out.String(); !strings.Contains(out, "Not connected yet: most likely no browser window is open, or the extension is switched off (on chrome://extensions, turn Developer mode on and switch reminal's extension on).") {
 		t.Errorf("for a browser that connected before:\n%s", out)
+	}
+}
+
+// With the extension's files gone, the wait ends on that and on what puts
+// them back, not on a guess about a window.
+func TestBrowserConnectWaitEndsOnTheFilesBeingGone(t *testing.T) {
+	r := newConnectRig(t, "linux", hubFilesGone)
+	r.d.wait = 30 * time.Millisecond
+	bc := newBrowserConnectWith(r.d, "/home/u", chromeOnly, false, false)
+	r.typeLine("n")
+	r.finish(bc)
+	out := r.out.String()
+	if !strings.HasSuffix(out, "Not connected yet: the files of reminal's browser extension are no longer on this computer. Run `reminal integrate` again to put them back; nothing is lost by not waiting.\n") || strings.Contains(out, "most likely") {
+		t.Errorf("with the files gone:\n%s", out)
+	}
+
+	// The folder is someone else's: moving it away comes first.
+	r = newConnectRig(t, "linux", hubFolderTaken)
+	r.d.wait = 30 * time.Millisecond
+	bc = newBrowserConnectWith(r.d, "/home/u", chromeOnly, false, false)
+	r.typeLine("n")
+	r.finish(bc)
+	out = r.out.String()
+	if !strings.HasSuffix(out, "Not connected yet: a folder named reminal-extension in your home folder is on this computer and is not reminal's. Move it away, then run `reminal integrate` again; nothing is lost by not waiting.\n") || strings.Contains(out, "most likely") || strings.Contains(out, "no longer on this computer") {
+		t.Errorf("with the folder taken:\n%s", out)
+	}
+}
+
+// The page a browser's program is opened at is the one the state sentences
+// name for its family.
+func TestBrowserProgramsOpenAtTheirFamilysPage(t *testing.T) {
+	for name, want := range map[string]string{
+		"Google Chrome": "chrome://extensions", "Google Chrome Beta": "chrome://extensions", "Chromium": "chrome://extensions",
+		"Microsoft Edge": "edge://extensions", "Brave": "brave://extensions", "Arc": "chrome://extensions",
+	} {
+		p, ok := browserPrograms[name]
+		if !ok || p.url() != want || client.BrowserExtensionsPage(p.family) != want {
+			t.Errorf("%s: %q, want %q", name, p.url(), want)
+		}
+	}
+	if got := client.BrowserExtensionsPage(""); got != "chrome://extensions" {
+		t.Errorf("a family not known: %q", got)
+	}
+}
+
+// The extension's files count as here only in a folder that holds reminal's
+// extension: the one of now or the one of before. A folder that is missing,
+// empty, or someone else's holds nothing.
+func TestChromeExtensionHere(t *testing.T) {
+	home := t.TempDir()
+	now, before := chromeExtensionDir(home), chromeExtensionOldDir(home)
+	is := func(name string, want client.ExtensionFiles) {
+		t.Helper()
+		if got := chromeExtensionFiles(home); got != want || chromeExtensionHere(home) != (want == client.ExtensionFilesHere) {
+			t.Errorf("%s: %d, want %d", name, got, want)
+		}
+	}
+	is("no folder", client.ExtensionFilesGone)
+	if err := os.MkdirAll(now, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	is("an empty folder", client.ExtensionFilesGone)
+	if err := os.WriteFile(filepath.Join(now, "notes.txt"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	is("someone else's folder", client.ExtensionFilesTaken)
+	if err := os.WriteFile(filepath.Join(now, "manifest.json"), []byte(`{"name":"other","key":"not reminal's"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	is("another extension in the folder", client.ExtensionFilesTaken)
+	if err := writeChromeExtension(before); err != nil {
+		t.Fatal(err)
+	}
+	is("the folder of before intact, someone else's of now", client.ExtensionFilesHere)
+	if err := os.RemoveAll(before); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeChromeExtension(now); err != nil {
+		t.Fatal(err)
+	}
+	is("the folder intact", client.ExtensionFilesHere)
+
+	// The hook the hub and the commands look through reads the same, in
+	// the home folder of the process.
+	if runtime.GOOS != "windows" {
+		t.Setenv("HOME", home)
+		if got := client.BrowserExtensionFiles(); got != client.ExtensionFilesHere {
+			t.Errorf("the hook, the folder intact: %d", got)
+		}
+		if err := os.RemoveAll(now); err != nil {
+			t.Fatal(err)
+		}
+		if got := client.BrowserExtensionFiles(); got != client.ExtensionFilesGone {
+			t.Errorf("the hook, no folder: %d", got)
+		}
 	}
 }
 
@@ -381,14 +490,15 @@ func TestBrowserConnectSaysWhenTheBrowserDidNotOpen(t *testing.T) {
 	r.typeLine("y")
 	r.finish(bc)
 	out := r.out.String()
-	if !strings.Contains(out, "Could not open Microsoft Edge (no such program): open it yourself and go to edge://extensions.\n") || !strings.Contains(out, "Waiting for the extension") {
+	if !strings.Contains(out, "Could not open Microsoft Edge (no such program): open it yourself and go to edge://extensions.\n") || !strings.Contains(out, "Waiting for the extension") || strings.Contains(out, "If the extensions page did not open") || strings.Contains(out, "window that opened") {
 		t.Errorf("a browser that did not open:\n%s", out)
 	}
 }
 
-// The program started is the browser's own, with its extensions page as an
-// argument, on each system; where it is not found, or there is no desktop,
-// nothing is offered.
+// The program started is the browser's own: on a Mac handed its extensions
+// page, on Linux and Windows with no address at all (one given there is
+// ignored); where it is not found, or there is no desktop, nothing is
+// offered.
 func TestBrowserOpenCommands(t *testing.T) {
 	ext := chromeExtensionDir("/home/u")
 	for _, c := range []struct {
@@ -401,16 +511,16 @@ func TestBrowserOpenCommands(t *testing.T) {
 		{"darwin", "Brave", []string{"open -R " + ext, "open -a Brave Browser brave://extensions"}},
 		{"darwin", "Chromium", []string{"open -R " + ext, "open -a Chromium chrome://extensions"}},
 		{"darwin", "Arc", []string{"open -R " + ext, "open -a Arc chrome://extensions"}},
-		{"linux", "Google Chrome", []string{"/usr/bin/google-chrome chrome://extensions"}},
-		{"linux", "Google Chrome Beta", []string{"/usr/bin/google-chrome-beta chrome://extensions"}},
-		{"linux", "Chromium", []string{"/usr/bin/chromium chrome://extensions"}},
-		{"linux", "Microsoft Edge", []string{"/usr/bin/microsoft-edge edge://extensions"}},
-		{"linux", "Brave", []string{"/usr/bin/brave-browser brave://extensions"}},
-		{"windows", "Google Chrome", []string{`C:\Program Files\Google\Chrome\Application\chrome.exe chrome://extensions`}},
-		{"windows", "Google Chrome Beta", []string{`C:\Program Files\Google\Chrome Beta\Application\chrome.exe chrome://extensions`}},
-		{"windows", "Chromium", []string{`C:\Program Files\Chromium\Application\chrome.exe chrome://extensions`}},
-		{"windows", "Microsoft Edge", []string{`C:\Program Files\Microsoft\Edge\Application\msedge.exe edge://extensions`}},
-		{"windows", "Brave", []string{`C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe brave://extensions`}},
+		{"linux", "Google Chrome", []string{"/usr/bin/google-chrome"}},
+		{"linux", "Google Chrome Beta", []string{"/usr/bin/google-chrome-beta"}},
+		{"linux", "Chromium", []string{"/usr/bin/chromium"}},
+		{"linux", "Microsoft Edge", []string{"/usr/bin/microsoft-edge"}},
+		{"linux", "Brave", []string{"/usr/bin/brave-browser"}},
+		{"windows", "Google Chrome", []string{`C:\Program Files\Google\Chrome\Application\chrome.exe`}},
+		{"windows", "Google Chrome Beta", []string{`C:\Program Files\Google\Chrome Beta\Application\chrome.exe`}},
+		{"windows", "Chromium", []string{`C:\Program Files\Chromium\Application\chrome.exe`}},
+		{"windows", "Microsoft Edge", []string{`C:\Program Files\Microsoft\Edge\Application\msedge.exe`}},
+		{"windows", "Brave", []string{`C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe`}},
 	} {
 		r := newConnectRig(t, c.goos, hubNever)
 		bc := newBrowserConnectWith(r.d, "/home/u", []chromeBrowser{{Name: c.browser}}, false, false)
@@ -461,7 +571,7 @@ func TestBrowserOpenCommands(t *testing.T) {
 		r.d.wait = 30 * time.Millisecond
 		bc = newBrowserConnectWith(r.d, "/home/u", chromeOnly, false, false)
 		r.finish(bc)
-		if out := r.out.String(); strings.Contains(out, "Open the extensions page") || !strings.Contains(out, "Waiting for the extension") || len(r.commands()) != 0 {
+		if out := r.out.String(); strings.Contains(out, "now? [Y/n]") || !strings.Contains(out, "Waiting for the extension") || len(r.commands()) != 0 {
 			t.Errorf("%s: said %q, ran %v", why, out, r.commands())
 		}
 	}
@@ -488,7 +598,7 @@ func TestBrowserConnectOffersNothingOverSSH(t *testing.T) {
 			}()
 			r.finish(bc)
 			out := r.out.String()
-			if strings.Contains(out, "Open the extensions page") || len(r.commands()) != 0 {
+			if strings.Contains(out, "now? [Y/n]") || strings.Contains(out, "window that opened") || len(r.commands()) != 0 {
 				t.Errorf("%s, %s: said %q, ran %v", goos, key, out, r.commands())
 			}
 			if !strings.Contains(out, "Waiting for the extension") || !strings.HasSuffix(out, "Google Chrome connected. Agents in your reminal sessions can use it now.\n") {
@@ -526,9 +636,15 @@ func TestBrowserCheckLineSaysTheState(t *testing.T) {
 	}{
 		{"not set up", false, hubNever, "  · The browser is not set up for reminal on this computer: run `reminal integrate`"},
 		{"no daemon", true, hubDown, "  ! reminal's daemon is not running on this computer, so the browser cannot be reached: starting a reminal session starts it (run `reminal new`); if it still is not running, run `reminal daemon --install`. Then try again."},
+		{"files gone", true, hubFilesGone, "  ! The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on Chromium's extensions page (chrome://extensions)."},
+		{"files gone, edge", true, client.BrowserStatus{Daemon: true, FilesGone: true, Family: "edge"}, "  ! The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on Microsoft Edge's extensions page (edge://extensions)."},
+		{"files gone, brave", true, client.BrowserStatus{Daemon: true, FilesGone: true, Family: "brave"}, "  ! The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on Brave's extensions page (brave://extensions)."},
+		{"files gone, no family", true, client.BrowserStatus{Daemon: true, FilesGone: true}, "  ! The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on the browser's extensions page (chrome://extensions)."},
+		{"folder taken", true, hubFolderTaken, "  ! A folder named reminal-extension in your home folder is on this computer and is not reminal's, so the files of reminal's browser extension cannot be put there: move it away, then run `reminal integrate`."},
+		{"files gone, nothing set up", false, hubFilesGone, "  · The browser is not set up for reminal on this computer"},
 		{"no answer", true, hubOld, "  ! The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: it is replaced by the new one within a minute of an upgrade, then run this again."},
 		{"never connected", true, hubNever, "  ! reminal's browser extension is not connected, and has not connected before: load it in your browser"},
-		{"was connected", true, hubWas, "  ! reminal's browser extension is not connected now, though Google Chrome was connected before: the browser is closed or has no window open, so open a browser window"},
+		{"was connected", true, hubWas, "  ! reminal's browser extension is not connected now, though Google Chrome was connected before: open a browser window if none is open (a browser left running with no window does not start the connection); if one is open, the extension may be switched off: on chrome://extensions, turn Developer mode on and switch reminal's extension on."},
 		{"connected", true, hubConnected, "  ✓ Google Chrome is connected: agents in your reminal sessions on this computer can use it."},
 	} {
 		if got := browserCheckLine(c.setUp, c.s); !strings.HasPrefix(got, c.want) || strings.Contains(got, "\n") {

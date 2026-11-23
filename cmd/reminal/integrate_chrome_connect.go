@@ -6,8 +6,9 @@ package main
 // The end of `reminal integrate` for the browser, when a person runs it at a
 // terminal: setting up ends with the extension connected, or with a line
 // saying why it is not yet. After the steps are printed it offers to open
-// the browser at its extensions page (and, on a Mac, shows the extension's
-// folder in Finder), then waits for the extension to connect and says so.
+// the browser (on a Mac at its extensions page, with the extension's folder
+// shown in Finder; elsewhere the browser alone, with a line saying where to
+// go in it), then waits for the extension to connect and says so.
 // With an extension already connected it says that and gives no steps.
 // With a daemon from before it could be asked (still running just after an
 // upgrade) it gives the steps, does not wait, and says that the new one
@@ -40,6 +41,36 @@ func init() {
 	// The hub's refusal tells "not set up" apart by this: only the command
 	// knows where each browser keeps its host manifests.
 	client.BrowserSetUp = browserToolsHere
+	// And "the extension's files are gone" by this: only the command knows
+	// the folders they are written to. Set here, in the program's own
+	// start, so the daemon's hub has it as every other reminal process does.
+	client.BrowserExtensionFiles = browserExtensionFilesNow
+}
+
+// browserExtensionFilesNow is what is found where the extension's files
+// live. With no home folder to look in they count as here, so nothing is
+// said that was not seen.
+func browserExtensionFilesNow() client.ExtensionFiles {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return client.ExtensionFilesHere
+	}
+	return chromeExtensionFiles(home)
+}
+
+// chromeExtensionFiles: here when reminal's extension is in a folder a
+// browser loads it from, the one of now or the one of before. Else taken
+// when the folder of now is one a setup would not write over (it is there,
+// not empty, and not reminal's: chromeExtensionOurs), and gone when a setup
+// would write it again.
+func chromeExtensionFiles(home string) client.ExtensionFiles {
+	switch {
+	case chromeExtensionHere(home):
+		return client.ExtensionFilesHere
+	case !chromeExtensionOurs(chromeExtensionDir(home)):
+		return client.ExtensionFilesTaken
+	}
+	return client.ExtensionFilesGone
 }
 
 // browserConnectWait is how long integrate waits for the extension to
@@ -73,24 +104,28 @@ func printBrowserConnectCheck(home string) {
 	sayWrapped(os.Stdout, "", "    ", browserCheckLine(len(chromeOurs(home)) > 0, browserStatusNow()))
 }
 
-// browserProgram is how one browser of chromeBrowserTable is opened at its
-// extensions page: by starting its own program with the page as an argument
-// (the system's URL opener does not take chrome:// links).
+// browserProgram is how one browser of chromeBrowserTable is opened: on a
+// Mac at its extensions page, elsewhere by starting its own program, where
+// the person goes to the page (openCmds). The system's URL opener does not
+// take chrome:// links.
 type browserProgram struct {
 	family string   // as the hub's marker names it
-	url    string   // its extensions page
 	macApp string   // the application's name, for `open -a`
 	linux  []string // its program's names on PATH
 	win    string   // its program under Program Files or the local app data
 }
 
+// url is its extensions page: the one the state sentences name for its
+// family, so the two cannot differ.
+func (p browserProgram) url() string { return client.BrowserExtensionsPage(p.family) }
+
 var browserPrograms = map[string]browserProgram{
-	"Google Chrome":      {"chrome", "chrome://extensions", "Google Chrome", []string{"google-chrome", "google-chrome-stable"}, `Google\Chrome\Application\chrome.exe`},
-	"Google Chrome Beta": {"chrome", "chrome://extensions", "Google Chrome Beta", []string{"google-chrome-beta"}, `Google\Chrome Beta\Application\chrome.exe`},
-	"Chromium":           {"chromium", "chrome://extensions", "Chromium", []string{"chromium", "chromium-browser"}, `Chromium\Application\chrome.exe`},
-	"Microsoft Edge":     {"edge", "edge://extensions", "Microsoft Edge", []string{"microsoft-edge", "microsoft-edge-stable"}, `Microsoft\Edge\Application\msedge.exe`},
-	"Brave":              {"brave", "brave://extensions", "Brave Browser", []string{"brave-browser", "brave"}, `BraveSoftware\Brave-Browser\Application\brave.exe`},
-	"Arc":                {"arc", "chrome://extensions", "Arc", nil, ""},
+	"Google Chrome":      {"chrome", "Google Chrome", []string{"google-chrome", "google-chrome-stable"}, `Google\Chrome\Application\chrome.exe`},
+	"Google Chrome Beta": {"chrome", "Google Chrome Beta", []string{"google-chrome-beta"}, `Google\Chrome Beta\Application\chrome.exe`},
+	"Chromium":           {"chromium", "Chromium", []string{"chromium", "chromium-browser"}, `Chromium\Application\chrome.exe`},
+	"Microsoft Edge":     {"edge", "Microsoft Edge", []string{"microsoft-edge", "microsoft-edge-stable"}, `Microsoft\Edge\Application\msedge.exe`},
+	"Brave":              {"brave", "Brave Browser", []string{"brave-browser", "brave"}, `BraveSoftware\Brave-Browser\Application\brave.exe`},
+	"Arc":                {"arc", "Arc", nil, ""},
 }
 
 // browserOpenCmd is one program to start. wait: it returns at once and its
@@ -205,9 +240,21 @@ func (c *browserConnect) openCmds(b chromeBrowser) []browserOpenCmd {
 		// The folder first, so the browser ends up in front of it.
 		return []browserOpenCmd{
 			{argv: []string{"open", "-R", chromeExtensionDir(c.home)}, wait: true, optional: true},
-			{argv: []string{"open", "-a", p.macApp, p.url}, wait: true},
+			// The page is handed to the app as the address to open: that
+			// reaches the extensions page whether or not the browser is
+			// running. Passed as a program argument (`--args`) it opens
+			// only a new-tab page on a cold start (seen with Chromium 160
+			// and Chrome 156 on macOS 13.6).
+			{argv: []string{"open", "-a", p.macApp, p.url()}, wait: true},
 		}
-	case "windows":
+	}
+	// On Windows and Linux the browser is started with no address: a
+	// chrome:// address on the command line is ignored there and the browser
+	// opens a new-tab page, with a blank tab beside it when it was already
+	// running (seen with Chrome 158 on Windows 11). On macOS, handing it to
+	// the app as the address to open does land. So here the person is told
+	// where to go in the window that opens (finish).
+	if c.d.goos == "windows" {
 		if p.win == "" {
 			return nil
 		}
@@ -217,7 +264,7 @@ func (c *browserConnect) openCmds(b chromeBrowser) []browserOpenCmd {
 				continue
 			}
 			if exe := strings.TrimRight(dir, `\`) + `\` + p.win; c.d.exists(exe) {
-				return []browserOpenCmd{{argv: []string{exe, p.url}}}
+				return []browserOpenCmd{{argv: []string{exe}}}
 			}
 		}
 		return nil
@@ -227,7 +274,7 @@ func (c *browserConnect) openCmds(b chromeBrowser) []browserOpenCmd {
 	}
 	for _, name := range p.linux {
 		if exe, err := c.d.lookPath(name); err == nil {
-			return []browserOpenCmd{{argv: []string{exe, p.url}}}
+			return []browserOpenCmd{{argv: []string{exe}}}
 		}
 	}
 	return nil
@@ -300,7 +347,14 @@ func (c *browserConnect) finish() {
 
 	b, cmds := c.pick()
 	if len(cmds) > 0 {
-		fmt.Fprintf(out, "\nOpen the extensions page in %s now? [Y/n] ", b.Name)
+		// Only a Mac's open lands on the extensions page (openCmds), so
+		// only there is the page what is offered.
+		pageOpens := c.d.goos == "darwin"
+		if pageOpens {
+			fmt.Fprintf(out, "\nOpen the extensions page in %s now? [Y/n] ", b.Name)
+		} else {
+			fmt.Fprintf(out, "\nOpen %s now? [Y/n] ", b.Name)
+		}
 		select {
 		case line, ok := <-lines:
 			if !ok {
@@ -308,10 +362,22 @@ func (c *browserConnect) finish() {
 				return // the terminal closed
 			}
 			if a := strings.ToLower(strings.TrimSpace(line)); a == "" || a == "y" || a == "yes" {
+				failed := false
 				for _, cmd := range cmds {
 					if err := c.d.run(cmd); err != nil && !cmd.optional {
-						sayWrapped(out, "", "", fmt.Sprintf("Could not open %s (%v): open it yourself and go to %s.", b.Name, err, browserPrograms[b.Name].url))
+						failed = true
+						sayWrapped(out, "", "", fmt.Sprintf("Could not open %s (%v): open it yourself and go to %s.", b.Name, err, browserPrograms[b.Name].url()))
 					}
+				}
+				// Whether the page really opened cannot be seen from
+				// here, so where to go is always said; where only the
+				// browser was opened, it is the next thing to do.
+				switch {
+				case failed:
+				case pageOpens:
+					sayWrapped(out, "", "", fmt.Sprintf("If the extensions page did not open, go to %s in %s.", browserPrograms[b.Name].url(), b.Name))
+				default:
+					sayWrapped(out, "", "", fmt.Sprintf("In the %s window that opened, go to %s (type it in the address bar).", b.Name, browserPrograms[b.Name].url()))
 				}
 			}
 		case <-hup:
@@ -392,8 +458,12 @@ func (c *browserConnect) sayNotYet(b chromeBrowser, s client.BrowserStatus) {
 	switch {
 	case !s.Daemon:
 		sayWrapped(c.d.out, "", "", "Not connected yet: reminal's daemon stopped running on this computer. The extension connects by itself once it is loaded and the daemon is running, so nothing is lost by not waiting.")
+	case s.FolderTaken:
+		sayWrapped(c.d.out, "", "", "Not connected yet: a folder named reminal-extension in your home folder is on this computer and is not reminal's. Move it away, then run "+noBreak("`reminal integrate`")+" again; nothing is lost by not waiting.")
+	case s.FilesGone:
+		sayWrapped(c.d.out, "", "", "Not connected yet: the files of reminal's browser extension are no longer on this computer. Run "+noBreak("`reminal integrate`")+" again to put them back; nothing is lost by not waiting.")
 	case !s.Last.IsZero():
-		sayWrapped(c.d.out, "", "", "Not connected yet: most likely no browser window is open. The extension connects by itself once one is, so nothing is lost by not waiting.")
+		sayWrapped(c.d.out, "", "", "Not connected yet: most likely no browser window is open, or the extension is switched off (on "+client.BrowserExtensionsPage(s.Family)+", turn Developer mode on and switch reminal's extension on). It connects by itself once that is put right, so nothing is lost by not waiting.")
 	default:
 		sayWrapped(c.d.out, "", "", fmt.Sprintf("Not connected yet: most likely the extension is not loaded in %s yet. It connects by itself once it is loaded, so nothing is lost by not waiting.", b.Name))
 	}
