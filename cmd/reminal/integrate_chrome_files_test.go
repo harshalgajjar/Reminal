@@ -60,10 +60,11 @@ func startAnsweringHub(t *testing.T, answer string) *answeringHub {
 	return h
 }
 
-// `reminal integrate --check` with the extension's folder gone, empty, or
-// someone else's says the files are gone and that `reminal integrate` puts
-// them back, whether or not a browser connected before, and never that a
-// window is to be opened as the one thing to do. With either folder intact
+// `reminal integrate --check` with the extension's folder gone or empty
+// says the files are gone and that `reminal integrate` puts them back,
+// whether or not a browser connected before, and never that a window is to
+// be opened as the one thing to do; the page it names is the browser's own.
+// With someone else's folder of that name it says to move that away first. With either folder intact
 // it says what it said before; a connected extension is said as connected
 // with no folder at all.
 func TestIntegrateCheckSaysTheExtensionsFilesAreGone(t *testing.T) {
@@ -77,8 +78,11 @@ func TestIntegrateCheckSaysTheExtensionsFilesAreGone(t *testing.T) {
 		never     = `{"t":"state","connected":false}`
 		was       = `{"t":"state","connected":false,"family":"chromium","last":"2026-11-22T10:00:00Z"}`
 		connected = `{"t":"state","connected":true,"family":"chromium","last":"2026-11-22T10:00:00Z"}`
+		wasEdge   = `{"t":"state","connected":false,"family":"edge","last":"2026-11-22T10:00:00Z"}`
+		wasBrave  = `{"t":"state","connected":false,"family":"brave","last":"2026-11-22T10:00:00Z"}`
 
-		saysGone  = "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on the browser's extensions page (chrome://extensions)."
+		saysGone  = "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on "
+		saysTaken = "A folder named reminal-extension in your home folder is on this computer and is not reminal's, so the files of reminal's browser extension cannot be put there: move it away, then run `reminal integrate`."
 		saysNever = "is not connected, and has not connected before"
 		saysWas   = "is not connected now, though Chromium was connected before: the browser is closed or has no window open"
 	)
@@ -95,8 +99,8 @@ func TestIntegrateCheckSaysTheExtensionsFilesAreGone(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("%s: --check does not say %q:\n%s", name, want, out)
 		}
-		for _, other := range []string{saysGone, saysNever, saysWas} {
-			if other != want && strings.Contains(out, other) {
+		for _, other := range []string{saysGone, saysTaken, saysNever, saysWas} {
+			if !strings.HasPrefix(want, other) && strings.Contains(out, other) {
 				t.Errorf("%s: --check also says %q:\n%s", name, other, out)
 			}
 		}
@@ -113,25 +117,34 @@ func TestIntegrateCheckSaysTheExtensionsFilesAreGone(t *testing.T) {
 
 	// The folder deleted by hand.
 	empty(now)
-	check("the folder deleted, connected before", was, saysGone)
-	check("the folder deleted, never connected", never, saysGone)
+	check("the folder deleted, connected before", was, saysGone+"Chromium's extensions page (chrome://extensions).")
+	check("the folder deleted, Edge connected before", wasEdge, saysGone+"Microsoft Edge's extensions page (edge://extensions).")
+	check("the folder deleted, Brave connected before", wasBrave, saysGone+"Brave's extensions page (brave://extensions).")
+	check("the folder deleted, never connected", never, saysGone+"the browser's extensions page (chrome://extensions).")
 	check("the folder deleted, connected", connected, "Chromium is connected: agents in your reminal sessions")
 
 	// There and empty.
 	if err := os.MkdirAll(now, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	check("the folder empty, connected before", was, saysGone)
+	check("the folder empty, connected before", was, saysGone+"Chromium's")
 
 	// Someone else's folder of that name.
 	if err := os.WriteFile(filepath.Join(now, "notes.txt"), []byte("mine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	check("someone else's folder, connected before", was, saysGone)
-	check("someone else's folder, never connected", never, saysGone)
+	check("someone else's folder, connected before", was, saysTaken)
+	check("someone else's folder, never connected", never, saysTaken)
+	check("someone else's folder, connected", connected, "Chromium is connected: agents in your reminal sessions")
 
-	// The folder of before intact, the one of now missing: the files are
-	// here for the browser that loaded them from there.
+	// The folder of before intact: the files are here for the browser that
+	// loaded them from there, with the folder of now someone else's or
+	// missing.
+	if err := writeChromeExtension(before); err != nil {
+		t.Fatal(err)
+	}
+	check("the folder of before intact, someone else's folder of now", was, saysWas)
+	empty(before)
 	empty(now)
 	if err := writeChromeExtension(before); err != nil {
 		t.Fatal(err)
@@ -141,7 +154,7 @@ func TestIntegrateCheckSaysTheExtensionsFilesAreGone(t *testing.T) {
 
 	// And `reminal integrate` is what puts them back.
 	empty(before)
-	check("both gone", was, saysGone)
+	check("both gone", was, saysGone+"Chromium's")
 	runIntegrateIn(t, home, "-y")
 	check("after integrate again", was, saysWas)
 }

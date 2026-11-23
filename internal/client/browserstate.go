@@ -14,6 +14,8 @@ package client
 //	                  daemon from before this, still running after an upgrade
 //	files gone        none is connected, and the extension's files are in
 //	                  no folder a browser loads them from
+//	folder taken      the same, and the folder they are written to is
+//	                  there and is someone else's
 //	never connected   set up, and no extension has connected yet
 //	was connected     one connected before, and none is now
 //	connected
@@ -52,6 +54,10 @@ const (
 	// BrowserFilesGone: no extension is connected, and the extension's
 	// files are in neither of the folders a browser loads them from.
 	BrowserFilesGone
+	// BrowserFolderTaken: no extension is connected, the extension's files
+	// are in no folder, and the folder they are written to is someone
+	// else's: `reminal integrate` would not write over it.
+	BrowserFolderTaken
 )
 
 // BrowserStatus is what the hub and the marker say. The zero value is a hub
@@ -63,6 +69,11 @@ type BrowserStatus struct {
 	FilesGone bool      // the extension's files are not on this computer (looked at here, not asked of the hub)
 	Family    string    // of the browser connected now, or last: "chrome", "edge", ...
 	Last      time.Time // when a bridge last registered; zero when none has
+
+	// FolderTaken: the extension's files are not here, and a folder that is
+	// not reminal's has the name of the one they are written to. Never set
+	// with FilesGone.
+	FolderTaken bool
 }
 
 // BrowserSetUp reports whether a browser here has reminal's host manifest.
@@ -72,14 +83,61 @@ var BrowserSetUp func() bool
 
 func browserSetUpHere() bool { return BrowserSetUp == nil || BrowserSetUp() }
 
-// BrowserExtensionFiles reports whether the extension's files are on this
-// computer, in a folder a browser loads them from. The command sets it (it
-// knows the folders, and what makes one reminal's); left nil, they count as
-// here. With them gone, a browser that is open cannot connect, and opening a
-// window is not what puts that right.
-var BrowserExtensionFiles func() bool
+// ExtensionFiles is what is found where the extension's files live.
+type ExtensionFiles int
 
-func browserFilesHere() bool { return BrowserExtensionFiles == nil || BrowserExtensionFiles() }
+const (
+	// ExtensionFilesHere: reminal's extension is in a folder a browser
+	// loads it from.
+	ExtensionFilesHere ExtensionFiles = iota
+	// ExtensionFilesGone: it is in none, and `reminal integrate` can write
+	// it again (the folder is missing, or empty).
+	ExtensionFilesGone
+	// ExtensionFilesTaken: it is in none, and the folder it is written to
+	// is there and is not reminal's, so it has to be moved away first.
+	ExtensionFilesTaken
+)
+
+// BrowserExtensionFiles reports which of those it is on this computer. The
+// command sets it (it knows the folders, and what makes one reminal's); left
+// nil, the files count as here. With them gone, a browser that is open
+// cannot connect, and opening a window is not what puts that right.
+var BrowserExtensionFiles func() ExtensionFiles
+
+func browserFilesNow() ExtensionFiles {
+	if BrowserExtensionFiles == nil {
+		return ExtensionFilesHere
+	}
+	return BrowserExtensionFiles()
+}
+
+// lookAtFiles notes where the extension's files are, for a status with no
+// extension connected: a connected one is never said to have lost them.
+func (s *BrowserStatus) lookAtFiles() {
+	s.FilesGone, s.FolderTaken = false, false
+	if s.Connected {
+		return
+	}
+	switch browserFilesNow() {
+	case ExtensionFilesGone:
+		s.FilesGone = true
+	case ExtensionFilesTaken:
+		s.FolderTaken = true
+	}
+}
+
+// BrowserExtensionsPage is the page a browser of family lists its extensions
+// on: its own for Edge and for Brave, Chrome's for the rest and for a family
+// not known.
+func BrowserExtensionsPage(family string) string {
+	switch family {
+	case "edge":
+		return "edge://extensions"
+	case "brave":
+		return "brave://extensions"
+	}
+	return "chrome://extensions"
+}
 
 // State is the state, given whether a browser here is set up.
 func (s BrowserStatus) State(setUp bool) BrowserState {
@@ -92,6 +150,8 @@ func (s BrowserStatus) State(setUp bool) BrowserState {
 		return BrowserNoAnswer
 	case s.Connected:
 		return BrowserConnected
+	case s.FolderTaken:
+		return BrowserFolderTaken
 	case s.FilesGone:
 		return BrowserFilesGone
 	case !s.Last.IsZero():
@@ -121,7 +181,15 @@ func (s BrowserStatus) Sentence(setUp bool) string {
 		// What the browser does with an extension whose folder went and
 		// came back is the browser's own, so nothing is promised of it: the
 		// reload is said for when it is needed.
-		return "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on the browser's extensions page (chrome://extensions)."
+		whose := "the browser's"
+		if n := browserFamilies[s.Family]; n != "" {
+			whose = n + "'s"
+		}
+		return "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on " + whose + " extensions page (" + BrowserExtensionsPage(s.Family) + ")."
+	case BrowserFolderTaken:
+		// `reminal integrate` does not write over a folder that is not
+		// reminal's, so the one thing to do comes before it.
+		return "A folder named reminal-extension in your home folder is on this computer and is not reminal's, so the files of reminal's browser extension cannot be put there: move it away, then run `reminal integrate`."
 	case BrowserWasConnected:
 		who := "it"
 		if browserFamilies[s.Family] != "" {
@@ -234,7 +302,8 @@ func (h *browserHub) status() BrowserStatus {
 	h.mu.Lock()
 	connected, family := h.host != nil, h.family
 	h.mu.Unlock()
-	s := BrowserStatus{Daemon: true, Connected: connected, FilesGone: !connected && !browserFilesHere()}
+	s := BrowserStatus{Daemon: true, Connected: connected}
+	s.lookAtFiles()
 	if m, ok := readBrowserMarker(); ok {
 		s.Last, s.Family = m.Time, m.Family
 	}
@@ -297,7 +366,7 @@ func QueryBrowserStatus() BrowserStatus {
 	s.Connected = w.Connected
 	// The folders are looked at by the process that asks: the answer of a
 	// hub from before it looked says nothing of them.
-	s.FilesGone = !s.Connected && !browserFilesHere()
+	s.lookAtFiles()
 	if browserFamilies[w.Family] != "" {
 		s.Family = w.Family
 	}

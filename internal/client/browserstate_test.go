@@ -61,8 +61,14 @@ func TestBrowserStateSentences(t *testing.T) {
 		{"not set up", BrowserStatus{Daemon: true}, false, BrowserNotSetUp, []string{"not set up", "`reminal integrate`"}},
 		{"no daemon", BrowserStatus{}, true, BrowserNoDaemon, []string{"daemon is not running", "starting a reminal session starts it (run `reminal new`)"}},
 		{"no answer", BrowserStatus{Daemon: true, NoAnswer: true, Last: then, Family: "edge"}, true, BrowserNoAnswer, []string{"an older one that cannot say whether the browser is connected", "replaced by the new one within a minute of an upgrade"}},
-		{"files gone, connected before", BrowserStatus{Daemon: true, FilesGone: true, Last: then, Family: "chromium"}, true, BrowserFilesGone, []string{"The files of reminal's browser extension are no longer on this computer", "run `reminal integrate` to put them back", "reload it on the browser's extensions page"}},
-		{"files gone, never connected", BrowserStatus{Daemon: true, FilesGone: true}, true, BrowserFilesGone, []string{"no longer on this computer"}},
+		{"files gone, connected before", BrowserStatus{Daemon: true, FilesGone: true, Last: then, Family: "chromium"}, true, BrowserFilesGone, []string{"The files of reminal's browser extension are no longer on this computer", "run `reminal integrate` to put them back", "reload it on Chromium's extensions page (chrome://extensions)."}},
+		{"files gone, edge", BrowserStatus{Daemon: true, FilesGone: true, Last: then, Family: "edge"}, true, BrowserFilesGone, []string{"reload it on Microsoft Edge's extensions page (edge://extensions)."}},
+		{"files gone, brave", BrowserStatus{Daemon: true, FilesGone: true, Last: then, Family: "brave"}, true, BrowserFilesGone, []string{"reload it on Brave's extensions page (brave://extensions)."}},
+		{"files gone, arc", BrowserStatus{Daemon: true, FilesGone: true, Last: then, Family: "arc"}, true, BrowserFilesGone, []string{"reload it on Arc's extensions page (chrome://extensions)."}},
+		{"files gone, family not known", BrowserStatus{Daemon: true, FilesGone: true, Last: then}, true, BrowserFilesGone, []string{"reload it on the browser's extensions page (chrome://extensions)."}},
+		{"folder taken", BrowserStatus{Daemon: true, FolderTaken: true, Last: then, Family: "edge"}, true, BrowserFolderTaken, []string{"A folder named reminal-extension in your home folder is on this computer and is not reminal's", "move it away, then run `reminal integrate`."}},
+		{"folder taken and connected", BrowserStatus{Daemon: true, Connected: true, FolderTaken: true, Family: "edge"}, true, BrowserConnected, []string{"Microsoft Edge is connected"}},
+		{"files gone, never connected", BrowserStatus{Daemon: true, FilesGone: true}, true, BrowserFilesGone, []string{"no longer on this computer", "the browser's extensions page (chrome://extensions)"}},
 		{"files gone and connected", BrowserStatus{Daemon: true, Connected: true, FilesGone: true, Family: "chromium"}, true, BrowserConnected, []string{"Chromium is connected"}},
 		{"files gone, an older daemon", BrowserStatus{Daemon: true, NoAnswer: true, FilesGone: true}, true, BrowserNoAnswer, []string{"an older one"}},
 		{"files gone, no daemon", BrowserStatus{FilesGone: true}, true, BrowserNoDaemon, []string{"daemon is not running"}},
@@ -173,8 +179,8 @@ func TestBrowserStatusFollowsTheBridge(t *testing.T) {
 func TestBrowserStatusWithTheExtensionsFilesGone(t *testing.T) {
 	h := startHub(t, func(int, string) bool { return true })
 	h.testFamily = "chromium"
-	here := false
-	BrowserExtensionFiles = func() bool { return here }
+	files := ExtensionFilesGone
+	BrowserExtensionFiles = func() ExtensionFiles { return files }
 	t.Cleanup(func() { BrowserExtensionFiles = nil })
 	refused := func() string {
 		t.Helper()
@@ -184,7 +190,10 @@ func TestBrowserStatusWithTheExtensionsFilesGone(t *testing.T) {
 		}
 		return resp.Error
 	}
-	const gone = "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back"
+	const (
+		gone  = "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back"
+		taken = "A folder named reminal-extension in your home folder is on this computer and is not reminal's, so the files of reminal's browser extension cannot be put there: move it away, then run `reminal integrate`."
+	)
 
 	if s := QueryBrowserStatus(); !s.FilesGone || s.State(true) != BrowserFilesGone {
 		t.Fatalf("never connected, the files gone: %+v", s)
@@ -192,18 +201,31 @@ func TestBrowserStatusWithTheExtensionsFilesGone(t *testing.T) {
 	if said := refused(); !strings.HasPrefix(said, gone) || strings.Contains(said, "has not connected before") {
 		t.Fatalf("refused, never connected, the files gone: %q", said)
 	}
-	here = true
+	// The folder is someone else's: that is said, and what to do with it.
+	files = ExtensionFilesTaken
+	if s := QueryBrowserStatus(); !s.FolderTaken || s.FilesGone || s.State(true) != BrowserFolderTaken {
+		t.Fatalf("never connected, the folder taken: %+v", s)
+	}
+	if said := refused(); said != taken {
+		t.Fatalf("refused, never connected, the folder taken: %q", said)
+	}
+	files = ExtensionFilesHere
 	if said := refused(); !strings.Contains(said, "has not connected before") {
 		t.Fatalf("refused, never connected, the files here: %q", said)
 	}
 
 	// Connected with the files gone (a browser that loaded them goes on
 	// running): connected is what it is.
-	here = false
+	files = ExtensionFilesGone
 	c := joinAsHost(t)
 	if s := QueryBrowserStatus(); !s.Connected || s.FilesGone || s.State(true) != BrowserConnected {
 		t.Fatalf("connected, the files gone: %+v", s)
 	}
+	files = ExtensionFilesTaken
+	if s := QueryBrowserStatus(); !s.Connected || s.FolderTaken || s.State(true) != BrowserConnected {
+		t.Fatalf("connected, the folder taken: %+v", s)
+	}
+	files = ExtensionFilesGone
 
 	c.Close()
 	s := waitBrowserStatus(t, func(s BrowserStatus) bool { return !s.Connected })
@@ -213,7 +235,14 @@ func TestBrowserStatusWithTheExtensionsFilesGone(t *testing.T) {
 	if said := refused(); !strings.HasPrefix(said, gone) || strings.Contains(said, "the browser is closed or has no window open") {
 		t.Fatalf("refused, connected before, the files gone: %q", said)
 	}
-	here = true
+	if said := refused(); !strings.HasSuffix(said, "reload it on Chromium's extensions page (chrome://extensions).") {
+		t.Fatalf("refused, connected before, the files gone, its page: %q", said)
+	}
+	files = ExtensionFilesTaken
+	if said := refused(); said != taken {
+		t.Fatalf("refused, connected before, the folder taken: %q", said)
+	}
+	files = ExtensionFilesHere
 	if said := refused(); !strings.Contains(said, "Chromium was connected before") {
 		t.Fatalf("refused, connected before, the files here: %q", said)
 	}

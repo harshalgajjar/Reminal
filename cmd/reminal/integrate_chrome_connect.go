@@ -43,15 +43,33 @@ func init() {
 	// And "the extension's files are gone" by this: only the command knows
 	// the folders they are written to. Set here, in the program's own
 	// start, so the daemon's hub has it as every other reminal process does.
-	client.BrowserExtensionFiles = browserExtensionFilesHere
+	client.BrowserExtensionFiles = browserExtensionFilesNow
 }
 
-// browserExtensionFilesHere: reminal's extension is in a folder a browser
-// loads it from, the one of now or the one of before. With no home folder to
-// look in they count as here, so nothing is said that was not seen.
-func browserExtensionFilesHere() bool {
+// browserExtensionFilesNow is what is found where the extension's files
+// live. With no home folder to look in they count as here, so nothing is
+// said that was not seen.
+func browserExtensionFilesNow() client.ExtensionFiles {
 	home, err := os.UserHomeDir()
-	return err != nil || chromeExtensionHere(home)
+	if err != nil {
+		return client.ExtensionFilesHere
+	}
+	return chromeExtensionFiles(home)
+}
+
+// chromeExtensionFiles: here when reminal's extension is in a folder a
+// browser loads it from, the one of now or the one of before. Else taken
+// when the folder of now is one a setup would not write over (it is there,
+// not empty, and not reminal's: chromeExtensionOurs), and gone when a setup
+// would write it again.
+func chromeExtensionFiles(home string) client.ExtensionFiles {
+	switch {
+	case chromeExtensionHere(home):
+		return client.ExtensionFilesHere
+	case !chromeExtensionOurs(chromeExtensionDir(home)):
+		return client.ExtensionFilesTaken
+	}
+	return client.ExtensionFilesGone
 }
 
 // browserConnectWait is how long integrate waits for the extension to
@@ -90,19 +108,22 @@ func printBrowserConnectCheck(home string) {
 // (the system's URL opener does not take chrome:// links).
 type browserProgram struct {
 	family string   // as the hub's marker names it
-	url    string   // its extensions page
 	macApp string   // the application's name, for `open -a`
 	linux  []string // its program's names on PATH
 	win    string   // its program under Program Files or the local app data
 }
 
+// url is its extensions page: the one the state sentences name for its
+// family, so the two cannot differ.
+func (p browserProgram) url() string { return client.BrowserExtensionsPage(p.family) }
+
 var browserPrograms = map[string]browserProgram{
-	"Google Chrome":      {"chrome", "chrome://extensions", "Google Chrome", []string{"google-chrome", "google-chrome-stable"}, `Google\Chrome\Application\chrome.exe`},
-	"Google Chrome Beta": {"chrome", "chrome://extensions", "Google Chrome Beta", []string{"google-chrome-beta"}, `Google\Chrome Beta\Application\chrome.exe`},
-	"Chromium":           {"chromium", "chrome://extensions", "Chromium", []string{"chromium", "chromium-browser"}, `Chromium\Application\chrome.exe`},
-	"Microsoft Edge":     {"edge", "edge://extensions", "Microsoft Edge", []string{"microsoft-edge", "microsoft-edge-stable"}, `Microsoft\Edge\Application\msedge.exe`},
-	"Brave":              {"brave", "brave://extensions", "Brave Browser", []string{"brave-browser", "brave"}, `BraveSoftware\Brave-Browser\Application\brave.exe`},
-	"Arc":                {"arc", "chrome://extensions", "Arc", nil, ""},
+	"Google Chrome":      {"chrome", "Google Chrome", []string{"google-chrome", "google-chrome-stable"}, `Google\Chrome\Application\chrome.exe`},
+	"Google Chrome Beta": {"chrome", "Google Chrome Beta", []string{"google-chrome-beta"}, `Google\Chrome Beta\Application\chrome.exe`},
+	"Chromium":           {"chromium", "Chromium", []string{"chromium", "chromium-browser"}, `Chromium\Application\chrome.exe`},
+	"Microsoft Edge":     {"edge", "Microsoft Edge", []string{"microsoft-edge", "microsoft-edge-stable"}, `Microsoft\Edge\Application\msedge.exe`},
+	"Brave":              {"brave", "Brave Browser", []string{"brave-browser", "brave"}, `BraveSoftware\Brave-Browser\Application\brave.exe`},
+	"Arc":                {"arc", "Arc", nil, ""},
 }
 
 // browserOpenCmd is one program to start. wait: it returns at once and its
@@ -217,7 +238,7 @@ func (c *browserConnect) openCmds(b chromeBrowser) []browserOpenCmd {
 		// The folder first, so the browser ends up in front of it.
 		return []browserOpenCmd{
 			{argv: []string{"open", "-R", chromeExtensionDir(c.home)}, wait: true, optional: true},
-			{argv: []string{"open", "-a", p.macApp, p.url}, wait: true},
+			{argv: []string{"open", "-a", p.macApp, p.url()}, wait: true},
 		}
 	case "windows":
 		if p.win == "" {
@@ -229,7 +250,7 @@ func (c *browserConnect) openCmds(b chromeBrowser) []browserOpenCmd {
 				continue
 			}
 			if exe := strings.TrimRight(dir, `\`) + `\` + p.win; c.d.exists(exe) {
-				return []browserOpenCmd{{argv: []string{exe, p.url}}}
+				return []browserOpenCmd{{argv: []string{exe, p.url()}}}
 			}
 		}
 		return nil
@@ -239,7 +260,7 @@ func (c *browserConnect) openCmds(b chromeBrowser) []browserOpenCmd {
 	}
 	for _, name := range p.linux {
 		if exe, err := c.d.lookPath(name); err == nil {
-			return []browserOpenCmd{{argv: []string{exe, p.url}}}
+			return []browserOpenCmd{{argv: []string{exe, p.url()}}}
 		}
 	}
 	return nil
@@ -322,7 +343,7 @@ func (c *browserConnect) finish() {
 			if a := strings.ToLower(strings.TrimSpace(line)); a == "" || a == "y" || a == "yes" {
 				for _, cmd := range cmds {
 					if err := c.d.run(cmd); err != nil && !cmd.optional {
-						sayWrapped(out, "", "", fmt.Sprintf("Could not open %s (%v): open it yourself and go to %s.", b.Name, err, browserPrograms[b.Name].url))
+						sayWrapped(out, "", "", fmt.Sprintf("Could not open %s (%v): open it yourself and go to %s.", b.Name, err, browserPrograms[b.Name].url()))
 					}
 				}
 			}
@@ -404,6 +425,8 @@ func (c *browserConnect) sayNotYet(b chromeBrowser, s client.BrowserStatus) {
 	switch {
 	case !s.Daemon:
 		sayWrapped(c.d.out, "", "", "Not connected yet: reminal's daemon stopped running on this computer. The extension connects by itself once it is loaded and the daemon is running, so nothing is lost by not waiting.")
+	case s.FolderTaken:
+		sayWrapped(c.d.out, "", "", "Not connected yet: a folder named reminal-extension in your home folder is on this computer and is not reminal's. Move it away, then run "+noBreak("`reminal integrate`")+" again; nothing is lost by not waiting.")
 	case s.FilesGone:
 		sayWrapped(c.d.out, "", "", "Not connected yet: the files of reminal's browser extension are no longer on this computer. Run "+noBreak("`reminal integrate`")+" again to put them back; nothing is lost by not waiting.")
 	case !s.Last.IsZero():

@@ -44,6 +44,9 @@ var (
 	// hubFilesGone: one connected before, and the extension's files are no
 	// longer on this computer.
 	hubFilesGone = client.BrowserStatus{Daemon: true, FilesGone: true, Family: "chromium", Last: time.Unix(1700000000, 0)}
+	// hubFolderTaken: the same, and the folder they are written to is
+	// someone else's.
+	hubFolderTaken = client.BrowserStatus{Daemon: true, FolderTaken: true, Family: "chromium", Last: time.Unix(1700000000, 0)}
 )
 
 // oldDaemonLine is what integrate ends on with such a daemon.
@@ -66,7 +69,7 @@ func TestBrowserConnectLinesFitANarrowTerminal(t *testing.T) {
 	r.finish(bc)
 	// And the state sentences of --check, the longest lines there are.
 	var states bytes.Buffer
-	for _, s := range []client.BrowserStatus{{}, {Daemon: true}, hubConnected, hubOld, hubFilesGone} {
+	for _, s := range []client.BrowserStatus{{}, {Daemon: true}, hubConnected, hubOld, hubFilesGone, hubFolderTaken, {Daemon: true, FilesGone: true, Family: "edge"}} {
 		sayWrapped(&states, "", "    ", browserCheckLine(true, s))
 		sayWrapped(&states, "", "    ", browserCheckLine(false, s))
 	}
@@ -296,6 +299,34 @@ func TestBrowserConnectWaitEndsOnTheFilesBeingGone(t *testing.T) {
 	if !strings.HasSuffix(out, "Not connected yet: the files of reminal's browser extension are no longer on this computer. Run `reminal integrate` again to put them back; nothing is lost by not waiting.\n") || strings.Contains(out, "most likely") {
 		t.Errorf("with the files gone:\n%s", out)
 	}
+
+	// The folder is someone else's: moving it away comes first.
+	r = newConnectRig(t, "linux", hubFolderTaken)
+	r.d.wait = 30 * time.Millisecond
+	bc = newBrowserConnectWith(r.d, "/home/u", chromeOnly, false, false)
+	r.typeLine("n")
+	r.finish(bc)
+	out = r.out.String()
+	if !strings.HasSuffix(out, "Not connected yet: a folder named reminal-extension in your home folder is on this computer and is not reminal's. Move it away, then run `reminal integrate` again; nothing is lost by not waiting.\n") || strings.Contains(out, "most likely") || strings.Contains(out, "no longer on this computer") {
+		t.Errorf("with the folder taken:\n%s", out)
+	}
+}
+
+// The page a browser's program is opened at is the one the state sentences
+// name for its family.
+func TestBrowserProgramsOpenAtTheirFamilysPage(t *testing.T) {
+	for name, want := range map[string]string{
+		"Google Chrome": "chrome://extensions", "Google Chrome Beta": "chrome://extensions", "Chromium": "chrome://extensions",
+		"Microsoft Edge": "edge://extensions", "Brave": "brave://extensions", "Arc": "chrome://extensions",
+	} {
+		p, ok := browserPrograms[name]
+		if !ok || p.url() != want || client.BrowserExtensionsPage(p.family) != want {
+			t.Errorf("%s: %q, want %q", name, p.url(), want)
+		}
+	}
+	if got := client.BrowserExtensionsPage(""); got != "chrome://extensions" {
+		t.Errorf("a family not known: %q", got)
+	}
 }
 
 // The extension's files count as here only in a folder that holds reminal's
@@ -304,33 +335,29 @@ func TestBrowserConnectWaitEndsOnTheFilesBeingGone(t *testing.T) {
 func TestChromeExtensionHere(t *testing.T) {
 	home := t.TempDir()
 	now, before := chromeExtensionDir(home), chromeExtensionOldDir(home)
-	if chromeExtensionHere(home) {
-		t.Error("here with no folder")
+	is := func(name string, want client.ExtensionFiles) {
+		t.Helper()
+		if got := chromeExtensionFiles(home); got != want || chromeExtensionHere(home) != (want == client.ExtensionFilesHere) {
+			t.Errorf("%s: %d, want %d", name, got, want)
+		}
 	}
+	is("no folder", client.ExtensionFilesGone)
 	if err := os.MkdirAll(now, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if chromeExtensionHere(home) {
-		t.Error("here with an empty folder")
-	}
+	is("an empty folder", client.ExtensionFilesGone)
 	if err := os.WriteFile(filepath.Join(now, "notes.txt"), []byte("mine\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if chromeExtensionHere(home) {
-		t.Error("here with someone else's folder")
-	}
+	is("someone else's folder", client.ExtensionFilesTaken)
 	if err := os.WriteFile(filepath.Join(now, "manifest.json"), []byte(`{"name":"other","key":"not reminal's"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if chromeExtensionHere(home) {
-		t.Error("here with another extension in the folder")
-	}
+	is("another extension in the folder", client.ExtensionFilesTaken)
 	if err := writeChromeExtension(before); err != nil {
 		t.Fatal(err)
 	}
-	if !chromeExtensionHere(home) {
-		t.Error("not here with the folder of before intact")
-	}
+	is("the folder of before intact, someone else's of now", client.ExtensionFilesHere)
 	if err := os.RemoveAll(before); err != nil {
 		t.Fatal(err)
 	}
@@ -340,8 +367,21 @@ func TestChromeExtensionHere(t *testing.T) {
 	if err := writeChromeExtension(now); err != nil {
 		t.Fatal(err)
 	}
-	if !chromeExtensionHere(home) {
-		t.Error("not here with the folder intact")
+	is("the folder intact", client.ExtensionFilesHere)
+
+	// The hook the hub and the commands look through reads the same, in
+	// the home folder of the process.
+	if runtime.GOOS != "windows" {
+		t.Setenv("HOME", home)
+		if got := client.BrowserExtensionFiles(); got != client.ExtensionFilesHere {
+			t.Errorf("the hook, the folder intact: %d", got)
+		}
+		if err := os.RemoveAll(now); err != nil {
+			t.Fatal(err)
+		}
+		if got := client.BrowserExtensionFiles(); got != client.ExtensionFilesGone {
+			t.Errorf("the hook, no folder: %d", got)
+		}
 	}
 }
 
@@ -590,7 +630,11 @@ func TestBrowserCheckLineSaysTheState(t *testing.T) {
 	}{
 		{"not set up", false, hubNever, "  · The browser is not set up for reminal on this computer: run `reminal integrate`"},
 		{"no daemon", true, hubDown, "  ! reminal's daemon is not running on this computer, so the browser cannot be reached: starting a reminal session starts it (run `reminal new`); if it still is not running, run `reminal daemon --install`. Then try again."},
-		{"files gone", true, hubFilesGone, "  ! The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on the browser's extensions page (chrome://extensions)."},
+		{"files gone", true, hubFilesGone, "  ! The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on Chromium's extensions page (chrome://extensions)."},
+		{"files gone, edge", true, client.BrowserStatus{Daemon: true, FilesGone: true, Family: "edge"}, "  ! The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on Microsoft Edge's extensions page (edge://extensions)."},
+		{"files gone, brave", true, client.BrowserStatus{Daemon: true, FilesGone: true, Family: "brave"}, "  ! The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on Brave's extensions page (brave://extensions)."},
+		{"files gone, no family", true, client.BrowserStatus{Daemon: true, FilesGone: true}, "  ! The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on the browser's extensions page (chrome://extensions)."},
+		{"folder taken", true, hubFolderTaken, "  ! A folder named reminal-extension in your home folder is on this computer and is not reminal's, so the files of reminal's browser extension cannot be put there: move it away, then run `reminal integrate`."},
 		{"files gone, nothing set up", false, hubFilesGone, "  · The browser is not set up for reminal on this computer"},
 		{"no answer", true, hubOld, "  ! The reminal running in the background on this computer is an older one that cannot say whether the browser is connected: it is replaced by the new one within a minute of an upgrade, then run this again."},
 		{"never connected", true, hubNever, "  ! reminal's browser extension is not connected, and has not connected before: load it in your browser"},
