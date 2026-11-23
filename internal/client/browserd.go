@@ -482,9 +482,21 @@ func AskBrowser(req BrowserReq) (BrowserResp, error) {
 	if err != nil {
 		return BrowserResp{}, err
 	}
-	conn, err := net.DialTimeout("unix", sock, 2*time.Second)
+	// Where the browser is set up, reminal's daemon not answering is most
+	// often it starting again (after an upgrade it is away for a few
+	// seconds): waited for, a little, before it is said to be not running.
+	// Refusing at once told a person to fix what was not broken, and the
+	// next request worked.
+	setUp := browserSetUpHere()
+	var conn net.Conn
+	for deadline := time.Now().Add(browserDialWait); ; {
+		if conn, err = net.DialTimeout("unix", sock, 2*time.Second); err == nil || !setUp || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 	if err != nil {
-		return BrowserResp{}, errors.New(BrowserStatus{}.Sentence(browserSetUpHere()))
+		return BrowserResp{}, errors.New(BrowserStatus{}.Sentence(setUp))
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(BrowserTotalWait + 5*time.Second))
@@ -502,6 +514,12 @@ func AskBrowser(req BrowserReq) (BrowserResp, error) {
 	}
 	return resp, nil
 }
+
+// browserDialWait is how long a request goes on trying to reach reminal's
+// daemon before saying it is not running: longer than the daemon is away
+// when it is started again (the service manager's own delay included). A
+// var for tests.
+var browserDialWait = 12 * time.Second
 
 // browserHostWait is how long a request waits for a bridge when there is
 // none: past the extension's alarm, which wakes a sleeping worker to connect.
