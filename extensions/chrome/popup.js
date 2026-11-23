@@ -14,7 +14,21 @@
 // and is only told the panel opened (it connects, and tidies what it keeps),
 // after which what it stores changes and the part it touches is drawn again.
 const $ = (id) => document.getElementById(id);
-const SHOWN = 8; // the newest lines of the log shown here
+
+// How long this opening took, said once in the panel's own console (right-
+// click the panel, Inspect, Console) and nowhere else: when the switches and
+// the lists were drawn, counted from the page's start, how long the log is,
+// and how long the worker took to answer that the panel opened. For the next
+// time the panel is slow to show on someone's computer.
+const took = {};
+let said = false;
+function drawn(part, value) {
+  if (took[part] !== undefined) return;
+  took[part] = value === undefined ? Math.round(performance.now()) : value;
+  if (said || ['switches', 'sessions', 'notes', 'worker', 'entries'].some((k) => took[k] === undefined)) return;
+  said = true;
+  console.log(`[reminal] panel: switches drawn in ${took.switches} ms, lists in ${Math.max(took.sessions, took.notes)} ms, ${took.entries} log entries (${took.worker == null ? 'worker did not answer in 5000 ms' : `worker answered in ${took.worker} ms`})`);
+}
 
 async function drawSwitches() {
   const { agents, ...more } = await chrome.storage.local.get(['agents', 'scripts', 'uploads', 'cookies']);
@@ -22,6 +36,7 @@ async function drawSwitches() {
   $('agents').checked = on;
   $('state').textContent = on ? 'on' : 'off';
   for (const box of document.querySelectorAll('input.more')) { box.checked = more[box.id] === 'on'; box.disabled = !on; }
+  drawn('switches');
 }
 
 async function drawStatus() {
@@ -30,17 +45,21 @@ async function drawStatus() {
   if (!host.connected) chrome.runtime.sendMessage({ t: 'reconnect' }).catch(() => {});
 }
 
-// What ran that the person should be able to see afterwards: the newest few.
+// What agents did that the person should be able to see afterwards: the
+// newest few lines, which the worker keeps beside the log itself ("recent"),
+// so the whole log is not read to show them.
 async function drawNotes() {
-  const { notes = [] } = await chrome.storage.local.get('notes');
+  const { recent = {} } = await chrome.storage.local.get('recent');
   const items = [];
-  for (const n of notes.slice(-SHOWN).reverse()) {
+  for (const n of (recent.last || []).slice().reverse()) {
     const li = document.createElement('li');
     li.textContent = `${new Date(n.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ${n.who}: ${n.text}`;
     items.push(li);
   }
   $('notes').replaceChildren(...items);
   $('nonotes').hidden = items.length > 0;
+  drawn('entries', recent.n || 0);
+  drawn('notes');
 }
 
 // The sessions shown: one whose tab group is open in this browser, or that
@@ -98,6 +117,7 @@ async function drawSessions() {
       const rows = await sessionRows();
       $('list').replaceChildren(...rows);
       $('none').hidden = rows.length > 0;
+      drawn('sessions');
     } while (again);
   } finally { drawing = false; }
 }
@@ -117,12 +137,13 @@ drawSwitches();
 drawStatus();
 drawSessions();
 drawNotes();
-chrome.runtime.sendMessage({ t: 'opened' }).catch(() => {});
+chrome.runtime.sendMessage({ t: 'opened' }).then(() => drawn('worker'), () => drawn('worker', null));
+setTimeout(() => drawn('worker', null), 5000);
 chrome.storage.onChanged.addListener((changes, area) => {
   const keys = Object.keys(changes);
   if (area === 'local') {
-    if (keys.some((k) => k !== 'notes')) drawSwitches();
-    if ('notes' in changes) drawNotes();
+    if (keys.some((k) => ['agents', 'scripts', 'uploads', 'cookies'].includes(k))) drawSwitches();
+    if ('recent' in changes) drawNotes();
   } else if (area === 'session') {
     if ('host' in changes) drawStatus();
     drawSessions();

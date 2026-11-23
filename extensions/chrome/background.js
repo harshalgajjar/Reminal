@@ -299,6 +299,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   // nothing here.
   else if (msg.t === 'opened') { backoff = 1000; connect(); tidy(); reply(true); }
   else if (msg.t === 'close') closeEnded(String(msg.session || '')).then(() => reply(true));
+  // The history page's clearing: the entries from a time on (0: all of
+  // them), or the one entry named, taken out of storage.
+  else if (msg.t === 'clear') { const since = Number(msg.since) || 0; changeLog((notes) => dropNotes(notes, (n) => n.at >= since)).then(() => reply(true)); }
+  else if (msg.t === 'remove') {
+    let done = false;
+    changeLog((notes) => dropNotes(notes, (n) => !done && n.at === msg.at && n.who === msg.who && n.text === msg.text && (done = true))).then(() => reply(true));
+  }
   else return;
   return true;
 });
@@ -396,7 +403,10 @@ async function handle(m) {
         await Promise.race([loaded(tabId), new Promise((r) => setTimeout(r, 10_000))]);
         t = await chrome.tabs.get(tabId).catch(() => null);
       }
-      if (t && t.url && t.url !== was) return `${out}\nThe tab is now at ${JSON.stringify(t.url.slice(0, 300))}`;
+      if (t && t.url && t.url !== was) {
+        visit(name, t.url);
+        return `${out}\nThe tab is now at ${JSON.stringify(t.url.slice(0, 300))}`;
+      }
     }
     return out;
   } finally {
@@ -477,7 +487,10 @@ async function tabsCreate(k, alive, name, url) {
     await chrome.tabs.group({ tabIds: [tab.id], groupId: group });
   }
   await putS(k, { groupId: group, color, opened: true, lastTab: tab.id, tabs: [...new Set([...(s.tabs || []), tab.id])] });
-  if (url) await loaded(tab.id);
+  if (url) {
+    await loaded(tab.id);
+    visit(name, ((await chrome.tabs.get(tab.id).catch(() => null)) || {}).url || href);
+  }
   return JSON.stringify({ tabId: tab.id, url: href });
 }
 
@@ -526,6 +539,7 @@ async function navigate(c, url) {
   else await chrome.tabs.update(c.tabId, { url: allowedURL(url) });
   await loaded(c.tabId);
   const t = await chrome.tabs.get(c.tabId);
+  visit(c.name, t.url);
   return JSON.stringify({ tabId: c.tabId, title: t.title, url: t.url });
 }
 
@@ -1128,38 +1142,77 @@ const SWITCHES = {
 async function switchedOn(name) {
   if ((await chrome.storage.local.get(name))[name] !== 'on') throw new Error(SWITCHES[name]);
 }
-// note: a line of the log for what the person should be able to see
-// afterwards (a script ran, a file was given, cookies or site storage were
-// used; nothing else is logged). The button's panel shows the newest few and
-// history.html all of them, with a search. Kept in the profile's own
-// storage, so it is still there after the browser restarts, and cut down as
-// it is written: the newest NOTES, none older than NOTES_DAYS (the same
-// numbers history.js tells the person). kind is which of the four it was,
-// for the history page's filter. One write at a time: two sessions noting
-// at once would each write the list without the other's line.
-const NOTES = 500, NOTES_DAYS = 30;
-const keptNotes = (notes) => notes.filter((n) => n && n.at > Date.now() - NOTES_DAYS * 86_400_000).slice(-NOTES);
-let noting = Promise.resolve();
-function note(c, kind, text) {
-  noting = noting.then(async () => {
-    let site = '';
-    try { site = new URL((await chrome.tabs.get(c.tabId)).url).host; } catch (_) {}
-    const { notes = [] } = await chrome.storage.local.get('notes');
-    notes.push({ at: Date.now(), who: c.name || '', kind, text: site ? `${text} on ${site}` : text });
-    await chrome.storage.local.set({ notes: keptNotes(notes) });
-  }).catch(() => {});
-  return noting;
+// The log: what agents did here that the person should be able to see
+// afterwards. A page a session opened in its tabs (kind "visit", with the
+// page's address), a script run, a file given, cookies or site storage used.
+// Nothing else: no clicks, no typing, no page titles, nothing a page says.
+// An entry is {at, who, kind, text, url (a visit's)}; who is the session as
+// the person sees it, "<ID> - reminal".
+//
+// Kept in the profile's own storage ("notes"), so it is still there after the
+// browser restarts, for NOTES_DAYS; and at most the newest NOTES, so it
+// cannot grow without end (a visit is under 500 bytes with its address cut
+// at 300 characters: 5,000 of them are under 2.5 MB of the 10 MB the browser
+// gives an extension). history.js says the same numbers to the person, who
+// can clear it there. "recent" is its newest few lines and its length, for
+// the button's panel, which then need not read all of it to show eight.
+//
+// One writer, here: every change (a line added, the age limit, a clearing
+// from the history page) goes through changeLog, which reads the log, makes
+// the changes waiting, and writes it once. Two sessions noting at once would
+// otherwise each write the list without the other's line.
+const NOTES = 5000, NOTES_DAYS = 30, RECENT = 8;
+let changes = [], writing = null;
+function changeLog(change) {
+  changes.push(change);
+  if (!writing) {
+    writing = (async () => {
+      try {
+        while (changes.length) {
+          const todo = changes;
+          changes = [];
+          const got = await chrome.storage.local.get(['notes', 'recent']);
+          const notes = got.notes || [];
+          let changed = false;
+          for (const f of todo) if (f(notes)) changed = true;
+          const kept = notes.filter((n) => n && n.at > Date.now() - NOTES_DAYS * 86_400_000).slice(-NOTES);
+          if (!changed && kept.length === notes.length && (got.recent || !got.notes)) continue;
+          await chrome.storage.local.set({ notes: kept, recent: { n: kept.length, last: kept.slice(-RECENT) } });
+        }
+      } catch (e) {
+        console.log('[reminal] the log was not written:', String((e && e.message) || e));
+      } finally { writing = null; }
+    })();
+  }
+  return writing;
+}
+// dropNotes: the entries drop() is true of, taken out of notes.
+function dropNotes(notes, drop) {
+  const kept = notes.filter((n) => !drop(n));
+  if (kept.length === notes.length) return false;
+  notes.splice(0, notes.length, ...kept);
+  return true;
+}
+// note: a line for something done on the page a tab is at.
+async function note(c, kind, text) {
+  let site = '';
+  try { site = new URL((await chrome.tabs.get(c.tabId)).url).host; } catch (_) {}
+  const at = Date.now();
+  return changeLog((notes) => notes.push({ at, who: c.name || '', kind, text: site ? `${text} on ${site}` : text }));
+}
+// visit: a page a session opened in one of its own tabs, by browser_navigate,
+// a new tab with an address, or an action that took the tab elsewhere. Its
+// address as it is, cut at 300 characters. Not waited for by the tool that
+// made it: the write happens behind it.
+function visit(who, url) {
+  if (!/^https?:/i.test(String(url || ''))) return;
+  let site = '';
+  try { site = new URL(url).host; } catch (_) {}
+  const at = Date.now();
+  changeLog((notes) => notes.push({ at, who: who || '', kind: 'visit', text: site ? `opened a page on ${site}` : 'opened a page', url: String(url).slice(0, 300) }));
 }
 // pruneNotes: the log's age limit, when nothing has been written for a while.
-function pruneNotes() {
-  noting = noting.then(async () => {
-    const { notes } = await chrome.storage.local.get('notes');
-    if (!notes) return;
-    const kept = keptNotes(notes);
-    if (kept.length !== notes.length) await chrome.storage.local.set({ notes: kept });
-  }).catch(() => {});
-  return noting;
-}
+function pruneNotes() { return changeLog(() => false); }
 
 // evaluate: an expression, or a function's result, run in the page as the
 // page's own scripts are. A script can do there what the rules keep an

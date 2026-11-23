@@ -20,8 +20,12 @@ li:first-child { border-top: 0; }
 .filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 10px; }
 .filters input, .filters select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
 .filters input { flex: 1 1 220px; }
+.filters { align-items: center; }
+button.small { padding: 3px 9px; font-size: 13px; }
+td div.dim { overflow-wrap: anywhere; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; vertical-align: top; padding: 8px 12px 8px 0; border-top: 1px solid var(--line); }
 th { border-top: 0; color: var(--dim); font-size: 13px; font-weight: 600; }
 td:first-child, td:nth-child(2) { white-space: nowrap; }
-td:last-child { overflow-wrap: anywhere; }
+td:nth-child(3) { overflow-wrap: anywhere; width: 100%; }
+td:last-child { padding-right: 0; }

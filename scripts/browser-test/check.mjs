@@ -663,13 +663,49 @@ let tabId;
 // of it on a page of its own, with a search and filters; kept short in
 // storage itself, not only where it is shown.
 {
-  const KEPT = 500, SHOWN = 8, BOUND = 3000;
+  const KEPT = 5000, SHOWN = 8, BOUND = 3000;
   const stored = () => inSW(() => chrome.storage.local.get('notes').then((o) => o.notes || []));
-  const put = (notes) => inSW((notes) => chrome.storage.local.set({ notes }), notes);
-  const made = (count, who = 'ABCD1234 - reminal') => Array.from({ length: count }, (_, i) => ({ at: Date.now() - (count - i) * 1000, who, kind: 'upload', text: `gave report-${i}.pdf, notes-${i}.txt on jobs.example-${i % 7}.com` }));
+  // The log put in place as the worker would leave it (with its newest lines beside it).
+  const put = (notes) => inSW((notes) => chrome.storage.local.set({ notes, recent: { n: notes.length, last: notes.slice(-8) } }), notes);
+  // count entries as large as they come (a page opened, its address the full
+  // 300 characters), made in the worker; with extra ones first. Returns the
+  // bytes they take in storage.
+  const fill = (count, first = []) => inSW(([count, first]) => {
+    const notes = [...first];
+    for (let i = 0; i < count; i++) notes.push({ at: Date.now() - (count - i) * 1000, who: 'ABCD1234 - reminal', kind: 'visit', text: `opened a page on jobs.example-${i % 7}.com`, url: `https://jobs.example-${i % 7}.com/apply/${i}?`.padEnd(300, 'x') });
+    return chrome.storage.local.set({ notes, recent: { n: notes.length, last: notes.slice(-8) } }).then(() => chrome.storage.local.getBytesInUse('notes'));
+  }, [count, first]);
+  const visitsNow = async () => (await stored()).filter((x) => x.kind === 'visit');
+  const visitTo = async (url) => { for (let i = 0; i < 40; i++) { const v = (await visitsNow()).filter((x) => x.url === url); if (v.length) return v[v.length - 1]; await pause(50); } return null; };
+
+  // Pages a session opens are logged: a new tab with an address, a
+  // navigation, and a click that takes the tab elsewhere. The address and
+  // the site; no title, nothing of the page.
+  {
+    const first = `${PAGES}/nav.html?visit`;
+    const V = JSON.parse((await call('browser_tabs_create', { url: first })).text || '{}').tabId;
+    let v = await visitTo(first);
+    check(v && v.who === `${ID} - reminal` && v.text === 'opened a page on 127.0.0.1:8088' && Object.keys(v).sort().join() === 'at,kind,text,url,who', `a new tab with an address is logged as a page opened: when, the session, the site and the address, and nothing else (${JSON.stringify(v)})`);
+    const second = `${PAGES}/tools.html?visit=2`;
+    await call('browser_navigate', { tabId: V, url: second });
+    v = await visitTo(second);
+    check(v && v.who === `${ID} - reminal` && Object.keys(v).sort().join() === 'at,kind,text,url,who', `browser_navigate is logged (${JSON.stringify(v)})`);
+    await call('browser_navigate', { tabId: V, url: first });
+    const link = (((await call('browser_find', { query: 'link long page', tabId: V })).text || '').match(/\[(ref_\d+)\]/) || [])[1];
+    const went = await call('browser_click', { ref: link, tabId: V });
+    const now = ((went.text || '').match(/The tab is now at "([^"]+)"/) || [])[1];
+    v = now ? await visitTo(now) : null;
+    check(v && now !== first && Object.keys(v).sort().join() === 'at,kind,text,url,who', `a click that takes the tab to another page is logged, with that page's address (${now}: ${JSON.stringify(v)})`);
+    const long = `${PAGES}/tools.html?pad=${'a'.repeat(400)}`;
+    await call('browser_navigate', { tabId: V, url: long });
+    v = await visitTo(long.slice(0, 300));
+    check(v && v.url.length === 300, `an address is kept to 300 characters (${v ? v.url.length : 'not logged'})`);
+    await call('browser_tabs_close', { tabId: V });
+    await call('browser_tabs_select', { tabId });
+  }
   const real = await stored();
   const newest = (real[real.length - 1] || { text: '(the log is empty)' }).text;
-  check(real.length > SHOWN &&real.every((x) => ['script', 'upload', 'cookies', 'storage'].includes(x.kind)), `the log so far: ${real.length} entries, each with its kind (${[...new Set(real.map((x) => x.kind))].join(', ')})`);
+  check(real.length > SHOWN && real.every((x) => ['visit', 'script', 'upload', 'cookies', 'storage'].includes(x.kind)), `the log so far: ${real.length} entries, each with its kind (${[...new Set(real.map((x) => x.kind))].join(', ')})`);
 
   const pop = await ctx.newPage();
   await pop.goto(`chrome-extension://${EXT_ID}/popup.html`);
@@ -691,7 +727,8 @@ let tabId;
     const settle = async (want) => { for (let i = 0; i < 40 && (await rows()) !== want; i++) await pause(50); return rows(); };
     check(await settle(real.length) === real.length && (await hist.locator('#rows tr').first().textContent()).includes(newest),`the page lists every kept entry, newest first (${await rows()} of ${real.length})`);
     const rule = await hist.textContent('#rule');
-    check(rule === `reminal keeps the last ${KEPT} entries, and none older than 30 days, in this browser only.`, `and says the rule the log is kept by (${rule})`);
+    check(rule === 'reminal keeps this for 30 days, the newest 5,000 entries at most, in this browser only. You can clear it here.', `and says the rule the log is kept by (${rule})`);
+    check(/the pages an agent opened/.test(await hist.textContent('main > p')), 'and that pages opened are kept');
     check(!/helper/.test(await hist.textContent('body')) && (await hist.locator('#rows tr').first().textContent()).includes(`${ID} - reminal`), 'a session is called by its id there too, never by the name it was given');
     // An older entry of another session, written before entries had a kind.
     await put([{ at: Date.now() - 10 * 86_400_000, who: 'ZZZZ0000 - reminal', text: 'ran a script on old.example' }, ...real]);
@@ -699,17 +736,22 @@ let tabId;
     await settle(all);
     const want = (f) => real.filter(f).length;
     await hist.fill('#q', 'cookie');
-    check(await settle(want((x) => /cookie/.test(x.text))) === want((x) => /cookie/.test(x.text)) && want((x) => /cookie/.test(x.text)) > 0, `search narrows it to the entries with those words (${await rows()} of ${all} for "cookie")`);
+    const says = (re) => (x) => re.test(`${x.text} ${x.url || ''}`);
+    check(await settle(want(says(/cookie/))) === want(says(/cookie/)) && want(says(/cookie/)) > 0, `search narrows it to the entries with those words (${await rows()} of ${all} for "cookie")`);
+    await hist.fill('#q', 'tools.html?visit=2');
+    check(await settle(1) === 1, `search matches a page's address (${await rows()} for "tools.html?visit=2")`);
     await hist.fill('#q', 'old.example');
     check(await settle(1) === 1, `search matches the site too (${await rows()} for "old.example")`);
     await hist.fill('#q', '');
     const sessions = await hist.locator('#session option').allTextContents();
-    check(sessions.join(' | ') === ['All sessions', ...[`${ID} - reminal`, 'ZZZZ0000 - reminal'].sort()].join(' | '), `the session filter offers the sessions in the log (${sessions.join(' | ')})`);
+    check(sessions.join(' | ') === ['All sessions', ...[...new Set([...real.map((x) => x.who), 'ZZZZ0000 - reminal'])].sort()].join(' | ') && sessions.includes(`${ID} - reminal`) && sessions.includes(`${ID2} - reminal`),`the session filter offers the sessions in the log (${sessions.join(' | ')})`);
     await hist.selectOption('#session', 'ZZZZ0000');
     check(await settle(1) === 1, `the session filter narrows it (${await rows()} of ${all})`);
     await hist.selectOption('#session', '');
     const kinds = await hist.locator('#kind option').allTextContents();
-    check(kinds.join(' | ') === 'All kinds of action | Scripts run in pages | Files given to pages | Cookies | Site storage', `the kind filter offers the kinds in the log (${kinds.join(' | ')})`);
+    check(kinds.join(' | ') === 'All kinds of action | Pages opened | Scripts run in pages | Files given to pages | Cookies | Site storage', `the kind filter offers the kinds in the log (${kinds.join(' | ')})`);
+    await hist.selectOption('#kind', 'visit', { timeout: 2000 }).catch(() => {});
+    check(await settle(want((x) => x.kind === 'visit')) === want((x) => x.kind === 'visit') && want((x) => x.kind === 'visit') > 0 && (await hist.locator('#rows tr').first().textContent()).includes('opened a page on'), `the kind filter narrows it to pages opened (${await rows()} of ${all})`);
     await hist.selectOption('#kind', 'upload');
     check(await settle(want((x) => x.kind === 'upload')) === want((x) => x.kind === 'upload') && want((x) => x.kind === 'upload') > 0, `the kind filter narrows it (${await rows()} of ${all} are files given)`);
     await hist.selectOption('#kind', 'script');
@@ -720,26 +762,75 @@ let tabId;
     await hist.selectOption('#when', 'all');
     await hist.fill('#q', 'no such words anywhere');
     check(await settle(0) === 0 && /^Nothing matches/.test(await hist.textContent('#count')), `and says so when nothing matches (${await hist.textContent('#count')})`);
+    await hist.fill('#q', '');
+
+    // Clearing, as a browser's history has it: one entry, or a range of
+    // time, asked once in the page itself (no dialog of the browser's), and
+    // out of storage, not only out of sight.
+    let dialogs = 0;
+    hist.on('dialog', () => { dialogs++; });
+    const H = 3_600_000, ages = { '10 minutes': H / 6, '30 minutes': H / 2, '5 hours': 5 * H, '20 hours': 20 * H, '3 days': 72 * H, '6 days': 144 * H, '10 days': 240 * H, '20 days': 480 * H };
+    await put(Object.entries(ages).map(([name, ms]) => ({ at: Date.now() - ms, who: `${ID} - reminal`, kind: 'visit', text: 'opened a page on aged.example', url: `https://aged.example/${name.replace(' ', '-')}` })).reverse());
+    await settle(8);
+    const left = async () => (await stored()).map((x) => x.url.split('/').pop().replace('-', ' ')).reverse().join(', ');
+    const leftIs = async (want) => { for (let i = 0; i < 40 && (await left()) !== want; i++) await pause(50); return (await left()) === want; };
+    // (Each with a short wait of its own: a page without the control fails the check, not the run.)
+    const tap = (sel) => hist.click(sel, { timeout: 2000 }).catch(() => {});
+    const pick = (range) => hist.selectOption('#range', range, { timeout: 2000 }).catch(() => {});
+    const words = (sel) => hist.textContent(sel, { timeout: 2000 }).catch(() => '');
+    await hist.locator('#rows tr', { hasText: '5-hours' }).locator('button').click({ timeout: 2000 }).catch(() => {});
+    check(await leftIs('10 minutes, 30 minutes, 20 hours, 3 days, 6 days, 10 days, 20 days') && await settle(7) === 7, `"Remove" on a row takes that one entry out of storage and off the page (left: ${await left()})`);
+    await pick('hour');
+    await tap('#clear');
+    const ask = await words('#ask');
+    check(ask === 'Remove the 2 entries from the last hour? They cannot be brought back.' && await hist.isVisible('#yes'), `"Clear history" asks once, in the page, saying how many (${ask})`);
+    await tap('#no');
+    await pause(300);
+    check(await leftIs('10 minutes, 30 minutes, 20 hours, 3 days, 6 days, 10 days, 20 days') && !(await hist.isVisible('#yes')), 'Cancel removes nothing');
+    for (const [range, label, want] of [['hour', 'The last hour', '20 hours, 3 days, 6 days, 10 days, 20 days'], ['day', 'The last day', '3 days, 6 days, 10 days, 20 days'], ['week', 'The last 7 days', '10 days, 20 days'], ['all', 'All time', '']]) {
+      await pick(range);
+      const offered = (await hist.locator('#range option:checked').allTextContents())[0] || '';
+      await tap('#clear');
+      await tap('#yes');
+      const ok = await leftIs(want);
+      check(ok && offered === label && await settle(want ? want.split(', ').length : 0) === (want ? want.split(', ').length : 0), `clearing "${label}" removes exactly those entries from storage (left: ${(await left()) || 'none'})`);
+    }
+    const recent = await inSW(() => chrome.storage.local.get('recent').then((o) => o.recent));
+    check((await words('#count')) === 'Nothing is kept.' && recent && recent.n === 0 && recent.last.length === 0 && dialogs === 0, `cleared of everything, the page says nothing is kept, the panel's lines are gone too, and no dialog of the browser's was used (${await words('#count')}; ${JSON.stringify(recent)}; ${dialogs} dialogs)`);
+    await tap('#clear');
+    check((await words('#cleared')) === 'Nothing is kept.' && !(await hist.isVisible('#yes')), 'with nothing to clear it says so and asks nothing');
     await hist.close();
+    await put(real);
   }
 
-  // The most the log can hold: the page is filled within BOUND, and with far
-  // more than that in storage (as nothing should leave it) the panel still
-  // shows its switches within BOUND.
-  await put(made(KEPT));
-  const full = await timedOpen('history.html', () => document.querySelectorAll('#rows tr').length >= 500);
+  // The most the log can hold, each entry as large as they come: well inside
+  // what the browser gives an extension to store (10 MB); the history page
+  // is filled within BOUND, and the panel shows its switches within BOUND.
+  const bytes = await fill(KEPT);
+  check(bytes > 0 && bytes < 5 * 1024 * 1024, `${KEPT} entries with full-length addresses take ${bytes} bytes of storage, under half of the 10 MB there is`);
+  const full = await timedOpen('history.html', () => document.querySelectorAll('#rows tr').length >= 5000);
   check(full.ms != null && full.ms < BOUND, `with ${KEPT} entries the history page is filled in ${full.ms} ms (bound ${BOUND})`);
   await full.pg.close();
-  await put(made(3000));
   const panel = await timedOpen('popup.html', () => document.getElementById('state').textContent !== '');
   const drawn = await panel.pg.locator('#notes li').count();
-  check(panel.ms != null && panel.ms < BOUND, `with 3000 entries in storage the panel shows its switches in ${panel.ms} ms (bound ${BOUND})`);
+  check(panel.ms != null && panel.ms < BOUND, `with ${KEPT} entries in storage the panel shows its switches in ${panel.ms} ms (bound ${BOUND})`);
   check(drawn <= SHOWN, `and still no more than ${SHOWN} lines of the log (${drawn})`);
   await panel.pg.close();
+  // Each opening says how long it took, in the panel's own console.
+  {
+    const pg = await ctx.newPage();
+    const said = [];
+    pg.on('console', (m) => said.push(m.text()));
+    await pg.goto(`chrome-extension://${EXT_ID}/popup.html`);
+    const line = () => said.find((t) => t.startsWith('[reminal] panel:')) || '';
+    for (let i = 0; i < 140 && !line(); i++) await pause(50);
+    check(new RegExp(`^\\[reminal\\] panel: switches drawn in \\d+ ms, lists in \\d+ ms, ${KEPT} log entries \\(worker answered in \\d+ ms\\)$`).test(line()), `the panel's console has one line of how long it took to show (${line() || 'no line'})`);
+    await pg.close();
+  }
 
   // Written to again, the log is cut down in storage: the newest KEPT, and
   // nothing past its age.
-  await put([{ at: Date.now() - 40 * 86_400_000, who: `${ID} - reminal`, kind: 'script', text: 'ran a script on long.ago' }, ...made(3000)]);
+  await fill(KEPT + 200, [{ at: Date.now() - 40 * 86_400_000, who: `${ID} - reminal`, kind: 'script', text: 'ran a script on long.ago' }]);
   const T = JSON.parse((await call('browser_tabs_create', { url: `${PAGES}/tools.html?log` })).text).tabId;
   await popupDo(async (p) => { await p.check('#scripts'); });
   const r = await call('browser_evaluate', { tabId: T, expression: '1 + 1' });
@@ -887,6 +978,9 @@ for (const url of ['https://x@chromewebstore.google.com/', ' https://example.com
   let r = await call('browser_navigate', { tabId: otherId, url: `${PAGES}/login.html` });
   check(r.err && /not in this session's tab group/.test(r.err), `a tab of the person's own is refused (${r.err})`);
   check(other.url().includes('mine'), 'and it was not touched');
+  await pause(500);
+  const logged = await inSW(() => chrome.storage.local.get('notes').then((o) => (o.notes || []).filter((x) => x.kind === 'visit').map((x) => x.url)));
+  check(logged.length > 0 && !logged.some((u) => u.includes('?mine')), `a page in a tab that is not the session's is not in the log, opened by the person or asked for by the agent (${logged.length} pages logged)`);
   await other.close();
   r = await call('browser_navigate', { url: 'chrome://settings' });
   check(r.err && /may only open web pages/.test(r.err), `chrome:// is refused (${r.err})`);
@@ -964,7 +1058,7 @@ const keptFor = (id) => inSW((id) => Promise.all([chrome.storage.session.get(nul
   let left = [];
   for (let i = 0; i < 40; i++) { left = await recOf(ID2); if (!left.length) break; await pause(500); }
   check(left.length === 0, 'the session ended: its record is gone');
-  check(!(await groups()).includes(`${ID2} - reminal`), 'and its tab group');
+  check(!(await groups()).includes(`${ID2} - reminal`), 'and it has no tab group (its Stop undid it; a group still open at the end is kept: 7b)');
   const kept = await keptFor(ID2), now = await panelRows();
   check(kept.length === 0, `nothing is kept for it any more, its Stop neither (${JSON.stringify(kept)})`);
   check(!now.some((t) => t.includes(ID2)) && now.some((t) => t.includes(`${ID} - reminal`)), `the panel no longer lists it, and still lists the session that is running (${JSON.stringify(now)})`);
