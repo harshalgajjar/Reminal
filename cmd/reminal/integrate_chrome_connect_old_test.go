@@ -63,7 +63,7 @@ func TestBrowserConnectDoesNotWaitOnADaemonThatCannotSay(t *testing.T) {
 		t.Errorf("waited %v", took)
 	}
 	out := r.out.String()
-	if !strings.Contains(out, "Open the extensions page in Google Chrome now? [Y/n] ") || len(r.commands()) != 2 {
+	if !strings.Contains(out, "Open the extensions page in Google Chrome now? [Y/n] ") || len(r.commands()) != 3 {
 		t.Errorf("the offer (ran %v):\n%s", r.commands(), out)
 	}
 	if !strings.HasSuffix(out, "\n"+oldDaemonLine) {

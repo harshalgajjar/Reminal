@@ -32,6 +32,8 @@ type connectRig struct {
 	asked  int
 	ran    [][]string
 	runErr error
+	// runFn, when set, is what each program started returns, by its argv.
+	runFn func(argv []string) error
 }
 
 var (
@@ -105,6 +107,9 @@ func newConnectRig(t *testing.T, goos string, state client.BrowserStatus) *conne
 			r.mu.Lock()
 			defer r.mu.Unlock()
 			r.ran = append(r.ran, c.argv)
+			if r.runFn != nil {
+				return r.runFn(c.argv)
+			}
 			return r.runErr
 		},
 		lookPath: func(name string) (string, error) { return "/usr/bin/" + name, nil },
@@ -250,7 +255,7 @@ func TestBrowserConnectOpensThenWaitsForTheConnection(t *testing.T) {
 	if !strings.HasSuffix(out, "Google Chrome connected. Agents in your reminal sessions can use it now.\n") {
 		t.Errorf("did not end on the connection:\n%s", out)
 	}
-	want := []string{"open -R " + chromeExtensionDir("/home/u"), "open -a Google Chrome chrome://extensions"}
+	want := []string{"open -R " + chromeExtensionDir("/home/u"), "pgrep -x Google Chrome", "open -a Google Chrome chrome://extensions"}
 	if got := r.commands(); strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("ran %q, want %q", got, want)
 	}
@@ -485,7 +490,7 @@ func TestBrowserConnectSaysWhenTheBrowserDidNotOpen(t *testing.T) {
 	r.typeLine("y")
 	r.finish(bc)
 	out := r.out.String()
-	if !strings.Contains(out, "Could not open Microsoft Edge (no such program): open it yourself and go to edge://extensions.\n") || !strings.Contains(out, "Waiting for the extension") {
+	if !strings.Contains(out, "Could not open Microsoft Edge (no such program): open it yourself and go to edge://extensions.\n") || !strings.Contains(out, "Waiting for the extension") || strings.Contains(out, "If the extensions page did not open") {
 		t.Errorf("a browser that did not open:\n%s", out)
 	}
 }

@@ -22,6 +22,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -107,10 +108,15 @@ func printBrowserConnectCheck(home string) {
 // extensions page: by starting its own program with the page as an argument
 // (the system's URL opener does not take chrome:// links).
 type browserProgram struct {
-	family string   // as the hub's marker names it
-	macApp string   // the application's name, for `open -a`
-	linux  []string // its program's names on PATH
-	win    string   // its program under Program Files or the local app data
+	family string // as the hub's marker names it
+	macApp string // the application's name, for `open -a`
+	// macProc matches the name of its main process on a Mac, whole, for
+	// `pgrep -x`: the name of the program inside the application. A Mac
+	// keeps the first 16 letters of a name, so one longer is matched cut
+	// there or whole. Its helpers have other names.
+	macProc string
+	linux   []string // its program's names on PATH
+	win     string   // its program under Program Files or the local app data
 }
 
 // url is its extensions page: the one the state sentences name for its
@@ -118,22 +124,39 @@ type browserProgram struct {
 func (p browserProgram) url() string { return client.BrowserExtensionsPage(p.family) }
 
 var browserPrograms = map[string]browserProgram{
-	"Google Chrome":      {"chrome", "Google Chrome", []string{"google-chrome", "google-chrome-stable"}, `Google\Chrome\Application\chrome.exe`},
-	"Google Chrome Beta": {"chrome", "Google Chrome Beta", []string{"google-chrome-beta"}, `Google\Chrome Beta\Application\chrome.exe`},
-	"Chromium":           {"chromium", "Chromium", []string{"chromium", "chromium-browser"}, `Chromium\Application\chrome.exe`},
-	"Microsoft Edge":     {"edge", "Microsoft Edge", []string{"microsoft-edge", "microsoft-edge-stable"}, `Microsoft\Edge\Application\msedge.exe`},
-	"Brave":              {"brave", "Brave Browser", []string{"brave-browser", "brave"}, `BraveSoftware\Brave-Browser\Application\brave.exe`},
-	"Arc":                {"arc", "Arc", nil, ""},
+	"Google Chrome":      {"chrome", "Google Chrome", "Google Chrome", []string{"google-chrome", "google-chrome-stable"}, `Google\Chrome\Application\chrome.exe`},
+	"Google Chrome Beta": {"chrome", "Google Chrome Beta", "Google Chrome Be(ta)?", []string{"google-chrome-beta"}, `Google\Chrome Beta\Application\chrome.exe`},
+	"Chromium":           {"chromium", "Chromium", "Chromium", []string{"chromium", "chromium-browser"}, `Chromium\Application\chrome.exe`},
+	"Microsoft Edge":     {"edge", "Microsoft Edge", "Microsoft Edge", []string{"microsoft-edge", "microsoft-edge-stable"}, `Microsoft\Edge\Application\msedge.exe`},
+	"Brave":              {"brave", "Brave Browser", "Brave Browser", []string{"brave-browser", "brave"}, `BraveSoftware\Brave-Browser\Application\brave.exe`},
+	"Arc":                {"arc", "Arc", "Arc", nil, ""},
 }
 
 // browserOpenCmd is one program to start. wait: it returns at once and its
 // exit says whether it worked (macOS's open); otherwise it is the browser
 // itself, started apart from this terminal and left running. optional: its
 // failure is not worth a line.
+//
+// probe and cold are for a Mac. A browser that is running takes the page
+// from `open -a App page`; one that is not starts on a new tab and drops it
+// (a chrome:// address handed over from outside as it starts), and takes it
+// only as its own argument, `open -a App --args page`, which one already
+// running does not read. So probe is run first: its exit 1 says no such
+// process, and cold is run in place of argv. Anything else (it found one, or
+// could not be run) leaves argv.
 type browserOpenCmd struct {
 	argv     []string
 	wait     bool
 	optional bool
+	probe    []string
+	cold     []string
+}
+
+// browserNotRunning reads a probe's result: only an exit of 1 (pgrep found
+// no process) says the browser is not running.
+func browserNotRunning(err error) bool {
+	var exit interface{ ExitCode() int }
+	return errors.As(err, &exit) && exit.ExitCode() == 1
 }
 
 // browserConnectDeps is everything the offer and the wait touch outside
@@ -238,7 +261,12 @@ func (c *browserConnect) openCmds(b chromeBrowser) []browserOpenCmd {
 		// The folder first, so the browser ends up in front of it.
 		return []browserOpenCmd{
 			{argv: []string{"open", "-R", chromeExtensionDir(c.home)}, wait: true, optional: true},
-			{argv: []string{"open", "-a", p.macApp, p.url()}, wait: true},
+			{
+				argv:  []string{"open", "-a", p.macApp, p.url()},
+				wait:  true,
+				probe: []string{"pgrep", "-x", p.macProc},
+				cold:  []string{"open", "-a", p.macApp, "--args", p.url()},
+			},
 		}
 	case "windows":
 		if p.win == "" {
@@ -341,10 +369,20 @@ func (c *browserConnect) finish() {
 				return // the terminal closed
 			}
 			if a := strings.ToLower(strings.TrimSpace(line)); a == "" || a == "y" || a == "yes" {
+				failed := false
 				for _, cmd := range cmds {
+					if len(cmd.probe) > 0 && browserNotRunning(c.d.run(browserOpenCmd{argv: cmd.probe, wait: true})) {
+						cmd.argv = cmd.cold
+					}
 					if err := c.d.run(cmd); err != nil && !cmd.optional {
+						failed = true
 						sayWrapped(out, "", "", fmt.Sprintf("Could not open %s (%v): open it yourself and go to %s.", b.Name, err, browserPrograms[b.Name].url()))
 					}
+				}
+				// Whether the page really opened cannot be seen from
+				// here, so where to go is always said.
+				if !failed {
+					sayWrapped(out, "", "", fmt.Sprintf("If the extensions page did not open, go to %s in %s.", browserPrograms[b.Name].url(), b.Name))
 				}
 			}
 		case <-hup:
