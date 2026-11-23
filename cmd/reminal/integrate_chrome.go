@@ -32,6 +32,7 @@ import (
 	"strings"
 
 	chromeext "reminal/extensions/chrome"
+	"reminal/internal/client"
 )
 
 // browserExtensionID is the id the "key" in extensions/chrome/manifest.json
@@ -238,10 +239,8 @@ func chromeExtensionsPage(home string, browsers []chromeBrowser) string {
 			break
 		}
 	}
-	if first == "Microsoft Edge" {
-		return "edge://extensions"
-	}
-	return "chrome://extensions"
+	// One source for each browser's page (the open command uses it too).
+	return client.BrowserExtensionsPage(browserPrograms[first].family)
 }
 
 // printChromeSteps is said last in a setup, until the extension is in the

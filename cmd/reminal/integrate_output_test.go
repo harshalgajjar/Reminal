@@ -356,7 +356,7 @@ func TestTheStepsNameTheFirstBrowsersExtensionsPage(t *testing.T) {
 		{[]chromeBrowser{chrome, edge}, "chrome://extensions"},
 		{[]chromeBrowser{edge, brave}, "edge://extensions"},
 		{[]chromeBrowser{brave, edge}, "edge://extensions"}, // Brave's application is not here
-		{[]chromeBrowser{brave}, "chrome://extensions"},
+		{[]chromeBrowser{brave}, "brave://extensions"},
 	} {
 		if got := chromeExtensionsPage(home, c.browsers); got != c.want {
 			t.Errorf("%v: %s, want %s", chromeNames(c.browsers), got, c.want)
