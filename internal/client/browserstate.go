@@ -179,13 +179,11 @@ func (s BrowserStatus) Sentence(setUp bool) string {
 		return BrowserFamilyName(s.Family) + " is connected: agents in your reminal sessions on this computer can use it."
 	case BrowserFilesGone:
 		// What the browser does with an extension whose folder went and
-		// came back is the browser's own, so nothing is promised of it: the
-		// reload is said for when it is needed.
-		whose := "the browser's"
-		if n := browserFamilies[s.Family]; n != "" {
-			whose = n + "'s"
-		}
-		return "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window; if the extension still does not connect, reload it on " + whose + " extensions page (" + BrowserExtensionsPage(s.Family) + ")."
+		// came back is the browser's own, and both ways are met: a browser
+		// left running keeps its entry, which needs its reload button; one
+		// started with the folder gone drops the extension altogether
+		// (Chrome on Windows), and then only loading it again helps.
+		return "The files of reminal's browser extension are no longer on this computer: run `reminal integrate` to put them back, then open a browser window. On " + BrowserExtensionsPage(s.Family) + ", press the reload button of reminal's extension if it is listed; if it is not listed, load it again: Developer mode on, Load unpacked, the reminal-extension folder in your home folder."
 	case BrowserFolderTaken:
 		// `reminal integrate` does not write over a folder that is not
 		// reminal's, so the one thing to do comes before it.
@@ -195,7 +193,7 @@ func (s BrowserStatus) Sentence(setUp bool) string {
 		if browserFamilies[s.Family] != "" {
 			who = browserFamilies[s.Family]
 		}
-		return "reminal's browser extension is not connected now, though " + who + " was connected before: open a browser window if none is open (a browser left running with no window does not start the connection); if one is open, the extension may be switched off: on " + BrowserExtensionsPage(s.Family) + ", turn Developer mode on and switch reminal's extension on, or press its reload button."
+		return "reminal's browser extension is not connected now, though " + who + " was connected before: open a browser window if none is open (a browser left running with no window does not start the connection); if one is open, the extension may be switched off or no longer loaded: on " + BrowserExtensionsPage(s.Family) + ", turn Developer mode on and switch reminal's extension on, press its reload button, or if it is not listed, Load unpacked the reminal-extension folder again."
 	}
 	return "reminal's browser extension is not connected, and has not connected before: load it in your browser (chrome://extensions, Developer mode, Load unpacked, then the reminal-extension folder that `reminal integrate` put in your home folder) and keep a browser window open."
 }
