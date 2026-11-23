@@ -1153,7 +1153,7 @@ async function switchedOn(name) {
 // browser restarts, for NOTES_DAYS; and at most the newest NOTES, so it
 // cannot grow without end (a visit is under 500 bytes with its address cut
 // at 300 characters: 5,000 of them are under 2.5 MB of the 10 MB the browser
-// gives an extension). history.js says the same numbers to the person, who
+// gives an extension; see visit for what of an address is kept). history.js says the same numbers to the person, who
 // can clear it there. "recent" is its newest few lines and its length, for
 // the button's panel, which then need not read all of it to show eight.
 //
@@ -1201,15 +1201,20 @@ async function note(c, kind, text) {
   return changeLog((notes) => notes.push({ at, who: c.name || '', kind, text: site ? `${text} on ${site}` : text }));
 }
 // visit: a page a session opened in one of its own tabs, by browser_navigate,
-// a new tab with an address, or an action that took the tab elsewhere. Its
-// address as it is, cut at 300 characters. Not waited for by the tool that
-// made it: the write happens behind it.
+// a new tab with an address, or an action that took the tab elsewhere. The
+// address kept is the page's scheme, host and path, cut at 300 characters:
+// never what follows "?" or "#" (a sign-in or password-reset link carries
+// its token there), nor a name and password written before the host. Two
+// pages that differ only in those parts are still two entries, reading the
+// same. An address the browser cannot parse, or not a web page's, is not
+// logged at all. Not waited for by the tool that made it: the write happens
+// behind it.
 function visit(who, url) {
-  if (!/^https?:/i.test(String(url || ''))) return;
-  let site = '';
-  try { site = new URL(url).host; } catch (_) {}
-  const at = Date.now();
-  changeLog((notes) => notes.push({ at, who: who || '', kind: 'visit', text: site ? `opened a page on ${site}` : 'opened a page', url: String(url).slice(0, 300) }));
+  let u;
+  try { u = new URL(String(url || '')); } catch (_) { return; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return;
+  const at = Date.now(), kept = (u.origin + u.pathname).slice(0, 300);
+  changeLog((notes) => notes.push({ at, who: who || '', kind: 'visit', text: `opened a page on ${u.host}`, url: kept }));
 }
 // pruneNotes: the log's age limit, when nothing has been written for a while.
 function pruneNotes() { return changeLog(() => false); }

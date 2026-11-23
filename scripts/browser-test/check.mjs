@@ -672,34 +672,50 @@ let tabId;
   // bytes they take in storage.
   const fill = (count, first = []) => inSW(([count, first]) => {
     const notes = [...first];
-    for (let i = 0; i < count; i++) notes.push({ at: Date.now() - (count - i) * 1000, who: 'ABCD1234 - reminal', kind: 'visit', text: `opened a page on jobs.example-${i % 7}.com`, url: `https://jobs.example-${i % 7}.com/apply/${i}?`.padEnd(300, 'x') });
+    for (let i = 0; i < count; i++) notes.push({ at: Date.now() - (count - i) * 1000, who: 'ABCD1234 - reminal', kind: 'visit', text: `opened a page on jobs.example-${i % 7}.com`, url: `https://jobs.example-${i % 7}.com/apply/${i}/`.padEnd(300, 'x') });
     return chrome.storage.local.set({ notes, recent: { n: notes.length, last: notes.slice(-8) } }).then(() => chrome.storage.local.getBytesInUse('notes'));
   }, [count, first]);
   const visitsNow = async () => (await stored()).filter((x) => x.kind === 'visit');
-  const visitTo = async (url) => { for (let i = 0; i < 40; i++) { const v = (await visitsNow()).filter((x) => x.url === url); if (v.length) return v[v.length - 1]; await pause(50); } return null; };
+  // The page opened at this address since a time (an address is kept without
+  // its query and fragment, so the same page opened before reads the same).
+  const visitTo = async (url, since) => { for (let i = 0; i < 40; i++) { const v = (await visitsNow()).filter((x) => x.url === url && x.at >= since); if (v.length) return v[v.length - 1]; await pause(50); } return null; };
 
   // Pages a session opens are logged: a new tab with an address, a
   // navigation, and a click that takes the tab elsewhere. The address and
   // the site; no title, nothing of the page.
   {
-    const first = `${PAGES}/nav.html?visit`;
-    const V = JSON.parse((await call('browser_tabs_create', { url: first })).text || '{}').tabId;
-    let v = await visitTo(first);
+    const first = `${PAGES}/nav.html`;
+    let since = Date.now();
+    const V = JSON.parse((await call('browser_tabs_create', { url: `${first}?visit` })).text || '{}').tabId;
+    let v = await visitTo(first, since);
     check(v && v.who === `${ID} - reminal` && v.text === 'opened a page on 127.0.0.1:8088' && Object.keys(v).sort().join() === 'at,kind,text,url,who', `a new tab with an address is logged as a page opened: when, the session, the site and the address, and nothing else (${JSON.stringify(v)})`);
-    const second = `${PAGES}/tools.html?visit=2`;
-    await call('browser_navigate', { tabId: V, url: second });
-    v = await visitTo(second);
-    check(v && v.who === `${ID} - reminal` && Object.keys(v).sort().join() === 'at,kind,text,url,who', `browser_navigate is logged (${JSON.stringify(v)})`);
+    // What follows "?" or "#" in an address is never kept: a sign-in link's
+    // token is there.
+    since = Date.now();
+    await call('browser_navigate', { tabId: V, url: `${PAGES}/tools.html?token=SECRET&next=%2Fhome#frag-SECRET` });
+    v = await visitTo(`${PAGES}/tools.html`, since);
+    check(v && v.who === `${ID} - reminal` && Object.keys(v).sort().join() === 'at,kind,text,url,who', `browser_navigate is logged, the address without its query and fragment (${JSON.stringify(v)})`);
+    await pause(300);
+    const whole = JSON.stringify(await inSW(() => chrome.storage.local.get(['notes', 'recent'])));
+    check(v && !/SECRET|token=|frag/.test(whole), `and nothing of the query or the fragment is anywhere in the stored log (${(whole.match(/SECRET|token=|frag/g) || []).length} traces)`);
+    since = Date.now();
+    await call('browser_navigate', { tabId: V, url: `${PAGES}/tools.html?token=OTHER` });
+    v = await visitTo(`${PAGES}/tools.html`, since);
+    check(!!v, `the same page opened again with another query is another entry (${JSON.stringify(v)})`);
     await call('browser_navigate', { tabId: V, url: first });
     const link = (((await call('browser_find', { query: 'link long page', tabId: V })).text || '').match(/\[(ref_\d+)\]/) || [])[1];
+    since = Date.now();
     const went = await call('browser_click', { ref: link, tabId: V });
     const now = ((went.text || '').match(/The tab is now at "([^"]+)"/) || [])[1];
-    v = now ? await visitTo(now) : null;
-    check(v && now !== first && Object.keys(v).sort().join() === 'at,kind,text,url,who', `a click that takes the tab to another page is logged, with that page's address (${now}: ${JSON.stringify(v)})`);
-    const long = `${PAGES}/tools.html?pad=${'a'.repeat(400)}`;
+    v = now ? await visitTo(now.split(/[?#]/)[0], since) : null;
+    check(v && now.split(/[?#]/)[0] !== first && Object.keys(v).sort().join() === 'at,kind,text,url,who', `a click that takes the tab to another page is logged, with that page's address (${now}: ${JSON.stringify(v)})`);
+    // A long path (no such page: the rig's server answers 404, and the tab
+    // is there all the same, so it is a page opened).
+    const long = `${PAGES}/${'a'.repeat(400)}.html`;
+    since = Date.now();
     await call('browser_navigate', { tabId: V, url: long });
-    v = await visitTo(long.slice(0, 300));
-    check(v && v.url.length === 300, `an address is kept to 300 characters (${v ? v.url.length : 'not logged'})`);
+    v = await visitTo(long.slice(0, 300), since);
+    check(v && v.url.length === 300, `an address is kept to 300 characters, and a page the site does not have is logged as opened too (${v ? v.url.length : 'not logged'})`);
     await call('browser_tabs_close', { tabId: V });
     await call('browser_tabs_select', { tabId });
   }
@@ -738,8 +754,9 @@ let tabId;
     await hist.fill('#q', 'cookie');
     const says = (re) => (x) => re.test(`${x.text} ${x.url || ''}`);
     check(await settle(want(says(/cookie/))) === want(says(/cookie/)) && want(says(/cookie/)) > 0, `search narrows it to the entries with those words (${await rows()} of ${all} for "cookie")`);
-    await hist.fill('#q', 'tools.html?visit=2');
-    check(await settle(1) === 1, `search matches a page's address (${await rows()} for "tools.html?visit=2")`);
+    await hist.fill('#q', 'a'.repeat(40));
+    check(await settle(1) === 1, `search matches a page's address (${await rows()} for the long path opened above)`);
+    check(/their address without the part after \? or #/.test(await hist.textContent('main > p')), 'and the page says an address is kept without the part after ? or #');
     await hist.fill('#q', 'old.example');
     check(await settle(1) === 1, `search matches the site too (${await rows()} for "old.example")`);
     await hist.fill('#q', '');
@@ -973,14 +990,15 @@ for (const url of ['https://x@chromewebstore.google.com/', ' https://example.com
 // 5. Only its own tabs; never the browser's own pages.
 {
   const other = await ctx.newPage();
-  await other.goto(`${PAGES}/form.html?mine`);
+  // (A page no session opens itself, so the log can be looked through for it.)
+  await other.goto(`${PAGES}/card-frame.html?mine`);
   const otherId = await inSW(() => chrome.tabs.query({}).then((t) => (t.find((x) => /mine/.test(x.url)) || {}).id));
   let r = await call('browser_navigate', { tabId: otherId, url: `${PAGES}/login.html` });
   check(r.err && /not in this session's tab group/.test(r.err), `a tab of the person's own is refused (${r.err})`);
   check(other.url().includes('mine'), 'and it was not touched');
   await pause(500);
   const logged = await inSW(() => chrome.storage.local.get('notes').then((o) => (o.notes || []).filter((x) => x.kind === 'visit').map((x) => x.url)));
-  check(logged.length > 0 && !logged.some((u) => u.includes('?mine')), `a page in a tab that is not the session's is not in the log, opened by the person or asked for by the agent (${logged.length} pages logged)`);
+  check(logged.length > 0 && !logged.some((u) => u.includes('card-frame.html')),`a page in a tab that is not the session's is not in the log, opened by the person or asked for by the agent (${logged.length} pages logged)`);
   await other.close();
   r = await call('browser_navigate', { url: 'chrome://settings' });
   check(r.err && /may only open web pages/.test(r.err), `chrome:// is refused (${r.err})`);
