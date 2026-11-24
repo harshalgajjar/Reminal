@@ -188,6 +188,11 @@ var loginRowCases = []loginRowCase{
 	{prog: "claude", row: " ❯ 1. Claude account with subscription · Pro, Max, Team, or Enterprise"},
 	{prog: "claude", row: "   2. Anthropic Console account · API usage billing"},
 	{prog: "claude", row: " Paste code here if prompted >"},
+	// A sign-in from an organization the machine does not take: the last
+	// row of its block, which stays above its input box (2.1.331 dropped
+	// the "Please").
+	{prog: "claude", row: " Please log in with a permitted organization: claude auth login"},
+	{prog: "claude", row: " Log in with a permitted organization: claude auth login"},
 	{prog: "goose", row: "error: No provider configured. Run 'goose configure' first."},
 	{prog: "goose", row: "Provider is not configured. Run `goose configure` to set it up."},
 	{prog: "crush", row: "  To start, let's choose a provider and model."},
@@ -199,7 +204,6 @@ var loginRowCases = []loginRowCase{
 	// What any CLI may say of its login on its own status rows.
 	{prog: "gemini", row: " Authentication required.", bottom: true},
 	{prog: "claude", row: "  Authentication required · Sign in again to continue", bottom: true},
-	{prog: "claude", row: " Please log in with a permitted organization: claude auth login", bottom: true},
 	{prog: "claude", row: "  login required — run /login", bottom: true},
 	{prog: "claude", row: " Login expired", bottom: true},
 	{prog: "claude", row: " Not logged in", bottom: true},
@@ -853,5 +857,44 @@ func TestCodexsBedrockSetupIsItsWelcomeAndHeading(t *testing.T) {
 	}
 	if harnessProblemIn(welcome+"> Set up Amazon Bedrock"+loginRowFrame, "claude") {
 		t.Error("read as another agent's")
+	}
+}
+
+// Claude Code 2.1.331 changed its organization sign-in wording: the last row
+// of the block lost its "Please". Both wordings are its status row: on its
+// own, above the input box, and as the last row of the whole block. A
+// sentence that starts with the words and carries on, or quotes them, is an
+// agent's own text.
+func TestClaudesOrganizationSignInRowInBothWordings(t *testing.T) {
+	for _, row := range []string{
+		" Log in with a permitted organization: claude auth login",
+		" Please log in with a permitted organization: claude auth login",
+	} {
+		for name, screen := range map[string]string{
+			"on its own":              row,
+			"above the box":           row + "\n────────\n❯ \n────────",
+			"the whole block":         " Your authentication token belongs to organization 11111111-aaaa,\n but this machine requires 22222222-bbbb.\n" + row,
+			"the block above the box": "● Done.\n\n Your authentication token belongs to organization 11111111-aaaa,\n but this machine requires 22222222-bbbb.\n" + row + "\n────────\n❯ \n────────",
+		} {
+			for _, prog := range []string{"claude", ""} {
+				if !harnessProblemIn(screen, prog) {
+					t.Errorf("%s, as %q: not read as a sign-in problem:\n%s", name, prog, screen)
+				}
+			}
+		}
+	}
+	for _, row := range []string{
+		"● Log in with a permitted organization: claude auth login, then rerun the deploy.",
+		"  Log in with a permitted organization: claude auth login so the build can go on",
+		"● It printed \"Log in with a permitted organization: claude auth login\" and stopped.",
+		"● Please log in with a permitted organization: claude auth login, then rerun the deploy.",
+	} {
+		for _, screen := range []string{row, row + "\n\n❯ ", "● Done.\n" + row + "\n────────\n❯ \n────────"} {
+			for _, prog := range []string{"claude", ""} {
+				if harnessProblemIn(screen, prog) {
+					t.Errorf("as %q: an agent's sentence read as a sign-in problem:\n%s", prog, screen)
+				}
+			}
+		}
 	}
 }

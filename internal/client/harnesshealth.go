@@ -407,6 +407,12 @@ var harnessLoginScreens = map[string][]loginRow{
 		`pastecodehereifprompted>?`,
 		`openingbrowsertosignin(?:withyourclaudeaccount)?`,
 		`browserdidn.?topen\?usetheurl(?:belowtosignin)?(?:\(c(?:to)?(?:copy)?\)?)?`,
+		// A sign-in from an organization this machine does not take: the
+		// last row of what it says ("Your authentication token belongs to
+		// organization …, but this machine requires …"), which stays above
+		// its input box. 2.1.331 dropped the "Please". A row of its own,
+		// whole: a sentence that goes on after it is an agent's.
+		`(?:please)?loginwithapermittedorganization:claudeauthlogin`,
 	), loginMarked("●⎿",
 		`loginexpired·run/logintosigninagain,orre-authenticateyouranthropicprofile`,
 		`notsignedintoclaude\.run/loginfirst`,
