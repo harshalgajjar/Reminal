@@ -972,6 +972,15 @@ let tabId;
     await hist.close();
     const said = await inSW(() => globalThis.__said || null);
     check(said && said.includes('[test] listening') && !said.join(' ').includes(SECRET), `the extension's worker wrote no password to its console (${said ? said.length : 'not'} heard, the same worker all through)`);
+    // A sign-in inside a frame: with the switch on, an action may land in it.
+    await call('browser_navigate', { url: `${PAGES}/login-frame.html` });
+    const fp = page(/login-frame\.html/);
+    const box = await fp.frameLocator('iframe').locator('#pass').boundingBox();
+    const at = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+    r = await call('browser_click', at);
+    const r2 = await call('browser_type', { text: SECRET });
+    const inFrame = await fp.frameLocator('iframe').locator('#pass').inputValue();
+    check(!r.err && !r2.err && /^Typed a password into /.test(r2.text) && inFrame === SECRET, `passwords on: a sign-in inside a frame is clicked into and typed into (${r.err || r2.err || r2.text})`);
   }
   // The switch stays on for the payment field and the CAPTCHA below: neither
   // is this switch's.
@@ -994,6 +1003,13 @@ let tabId;
   await page(/login\.html/).click('#pass');
   r = await call('browser_type', { text: SECRET });
   check(r.err && /typing passwords is off in this browser/.test(r.err) && await page(/login\.html/).inputValue('#pass') === '', `passwords switched off again: refused again, nothing typed (${r.err || r.text})`);
+  {
+    await call('browser_navigate', { url: `${PAGES}/login-frame.html` });
+    const fp = page(/login-frame\.html/);
+    const box = await fp.frameLocator('iframe').locator('#pass').boundingBox();
+    r = await call('browser_click', { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) });
+    check(r.err && /frame with a sign-in, payment field or CAPTCHA/.test(r.err), `passwords off: a click into a frame with a sign-in is paused, as before (${r.err || r.text})`);
+  }
   await slow(1200);
 }
 
