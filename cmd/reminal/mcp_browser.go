@@ -113,14 +113,14 @@ func browserTools(obj func(map[string]any, ...string) map[string]any, str func(s
 		{
 			"name": "browser_click",
 			"description": "Click an element (by ref) or a point (x, y in screenshot pixels), as a real mouse does. " + common +
-				"An action in a form with a password field, or with a CAPTCHA showing, is paused: ask the person to do that part.",
+				"With a CAPTCHA showing it is paused: ask the person to solve it. In a form with a password field it is paused unless the person has switched typing passwords on in the extension's button (the tool says so).",
 			"inputSchema": obj(map[string]any{"ref": ref, "x": num("Optional x."), "y": num("Optional y."), "tabId": tab,
 				"button": str("\"left\" (default), \"right\" or \"middle\"."), "double": map[string]any{"type": "boolean", "description": "Double click."}}),
 		},
 		{
 			"name": "browser_type",
 			"description": "Type text into the focused element, or into the element ref names (clicked first). " + common +
-				"Never into a password or payment field: the person types those.",
+				"Never into a payment field: the person types those. Into a password field only if the person has switched typing passwords on in the extension's button (the tool says so); a typed password is never said back.",
 			"inputSchema": obj(map[string]any{"text": str("What to type."), "ref": ref, "tabId": tab}, "text"),
 		},
 		{
@@ -162,7 +162,7 @@ func browserTools(obj func(map[string]any, ...string) map[string]any, str func(s
 		{
 			"name": "browser_fill_form",
 			"description": "Fill several fields in one call: text typed (replacing what is there), checkboxes and radios set, dropdowns chosen. Stops at the first field it cannot do and says which were done. " + common +
-				"Never a password or payment field: the person types those.",
+				"Never a payment field: the person types those. A password field only if the person has switched typing passwords on in the extension's button (the tool says so).",
 			"inputSchema": obj(map[string]any{"fields": map[string]any{"type": "array", "description": "The fields, in order.", "items": obj(map[string]any{
 				"ref":   str("The field's ref from browser_read_page."),
 				"value": map[string]any{"description": "Text for a text field; true or false for a checkbox or radio; an option's text or value for a dropdown."},

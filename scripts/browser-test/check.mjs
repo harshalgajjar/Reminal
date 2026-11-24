@@ -124,7 +124,7 @@ const tabsOfGroup = (title) => inSW((title) => chrome.tabGroups.query({ title })
 
 // The three switches as installed, read where the extension reads them: the
 // browser's policy for it, and what the person has set.
-const managedNow = () => inSW(() => chrome.storage.managed.get(['scripts', 'uploads', 'cookies']).catch(() => ({})));
+const managedNow = () => inSW(() => chrome.storage.managed.get(['scripts', 'uploads', 'cookies', 'passwords']).catch(() => ({})));
 if (!process.env.POLICY) {
   check(Object.keys(await managedNow()).length === 0, 'no policy in this browser: every switch starts off (checked below, tool by tool)');
 } else {
@@ -132,9 +132,9 @@ if (!process.env.POLICY) {
   // start on, and says nothing of files. The full run is this one's control.
   let m = {};
   for (let i = 0; i < 40 && !m.scripts; i++) { m = await managedNow(); if (!m.scripts) await pause(250); }
-  check(m.scripts === 'on' && m.cookies === 'on' && m.uploads === undefined, `the browser gives the extension its administrator's policy (${JSON.stringify(m)})`);
-  const mine = () => inSW(() => chrome.storage.local.get(['scripts', 'uploads', 'cookies']));
-  check(Object.keys(await mine()).length === 0, 'the person has set none of the three switches');
+  check(m.scripts === 'on' && m.cookies === 'on' && m.passwords === 'on' && m.uploads === undefined, `the browser gives the extension its administrator's policy (${JSON.stringify(m)})`);
+  const mine = () => inSW(() => chrome.storage.local.get(['scripts', 'uploads', 'cookies', 'passwords']));
+  check(Object.keys(await mine()).length === 0, 'the person has set none of the four switches');
   let r = await call('browser_tabs_create', { url: `${PAGES}/tools.html` });
   check(!r.err, `a tab (${r.err || r.text})`);
   r = await call('browser_evaluate', { expression: '1 + 1' });
@@ -144,8 +144,21 @@ if (!process.env.POLICY) {
   fs.writeFileSync('/tmp/policy-file.txt', 'x');
   r = await call('browser_file_upload', { ref: 'e1', paths: ['/tmp/policy-file.txt'] });
   check(r.err && /Giving files from this computer to pages is off/.test(r.err), `files: no policy for it, so off as installed (${r.err || r.text})`);
-  const shown = await popupDo(async (p) => [await p.isChecked('#scripts'), await p.isChecked('#uploads'), await p.isChecked('#cookies')]);
-  check(shown[0] && !shown[1] && shown[2], `the button's panel shows them as they are: scripts on, files off, cookies on (${JSON.stringify(shown)})`);
+  const shown = await popupDo(async (p) => [await p.isChecked('#scripts'), await p.isChecked('#uploads'), await p.isChecked('#cookies'), await p.isChecked('#passwords')]);
+  check(shown[0] && !shown[1] && shown[2] && shown[3], `the button's panel shows them as they are: scripts on, files off, cookies on, passwords on (${JSON.stringify(shown)})`);
+  // Passwords, on from the policy; then the person's own off.
+  {
+    await call('browser_navigate', { url: `${PAGES}/login.html` });
+    const lt = (await call('browser_read_page')).text || '';
+    const pr = (lt.match(/\[(ref_\d+)\] \(password/) || [])[1];
+    r = await call('browser_type', { ref: pr, text: 'policy-pass-1' });
+    check(!r.err && /^Typed a password into /.test(r.text) && await page(/login\.html/).inputValue('#pass') === 'policy-pass-1', `passwords: on from the policy, with no click (${r.err || r.text})`);
+    await popupDo(async (p) => { await p.uncheck('#passwords'); });
+    r = await call('browser_type', { ref: pr, text: 'policy-pass-2' });
+    check(r.err && /typing passwords is off in this browser/.test(r.err) && await page(/login\.html/).inputValue('#pass') === 'policy-pass-1', `passwords: the person's off beats the policy's on, nothing more typed (${r.err || r.text})`);
+    check(!(await popupDo(async (p) => p.isChecked('#passwords'))), "the panel shows the person's off for passwords");
+    await call('browser_navigate', { url: `${PAGES}/tools.html` });
+  }
   // The person's own switch wins over the policy, "off" too.
   await popupDo(async (p) => { await p.uncheck('#scripts'); });
   check((await mine()).scripts === 'off', 'switched off by the person: kept as their own "off"');
@@ -315,7 +328,7 @@ let tabId;
   const formTree = (await call('browser_read_page', { tabId })).text || '';
   const pass = (formTree.match(/\[(ref_\d+)\] \(password/) || [])[1];
   r = await call('browser_fill_form', { tabId, fields: [{ ref: pass, value: 'hunter2' }] });
-  check(pass && r.err && /never types into password/.test(r.err), `fill_form: a password field is refused (${r.err})`);
+  check(pass && r.err && /Refused: typing passwords is off in this browser/.test(r.err), `fill_form: a password field is refused, saying whose switch it is (${r.err})`);
   // The fields of a sign-in other than its password, and a payment field:
   // held to the rules where the field is, as a click on it is.
   const email = (formTree.match(/textbox "Email" \[(ref_\d+)\]/) || [])[1];
@@ -328,7 +341,7 @@ let tabId;
     const card = (pt.match(/\[(ref_\d+)\] \(payment/) || [])[1];
     r = await call('browser_fill_form', { tabId: P, fields: [{ ref: card, value: '4242424242424242' }] });
     const typedCard = await page(/pay\.html/).evaluate(() => [...document.querySelectorAll('input')].map((i) => i.value).join(''));
-    check(card && r.err && /never types into password or payment/.test(r.err) && typedCard === '', `fill_form: a payment field is refused, nothing typed (${r.err})`);
+    check(card && r.err && /never types into payment fields/.test(r.err) && typedCard === '', `fill_form: a payment field is refused, nothing typed (${r.err})`);
     await call('browser_tabs_close', { tabId: P });
   }
   await call('browser_tabs_select', { tabId: T });
@@ -388,7 +401,7 @@ let tabId;
     const st = (await call('browser_read_page', { tabId: S })).text || '';
     const exp = (st.match(/combobox "Card expiry month" \[(ref_\d+)\]/) || [])[1];
     r = await call('browser_select_option', { tabId: S, ref: exp, values: ['02'] });
-    check(exp && r.err && /never types into password or payment/.test(r.err), `select_option: a card's expiry dropdown is the person's (${r.err})`);
+    check(exp && r.err && /never types into payment fields/.test(r.err), `select_option: a card's expiry dropdown is the person's (${r.err})`);
     await call('browser_navigate', { tabId: S, url: `${PAGES}/tools.html?after` });
     await call('browser_evaluate', { tabId: S, expression: '1' }).catch(() => {});
     const lt = (await call('browser_find', { tabId: S, query: 'button log' })).text || '';
@@ -907,25 +920,96 @@ let tabId;
   check(/sign-in: actions inside it are paused/.test(tree), 'reading a sign-in page works, and says actions there are paused');
   const user = (tree.match(/textbox "Email" \[(ref_\d+)\]/) || [])[1];
   r = await call('browser_click', { ref: user });
-  check(r.err && /Paused: this is part of a sign-in form/.test(r.err), `an action in a sign-in form is paused (${r.err})`);
+  check(r.err && /Paused: this is part of a sign-in form, and typing passwords is off in this browser\. It is off unless the person switches it on \(the reminal button/.test(r.err), `an action in a sign-in form is paused, saying whose switch it is (${r.err})`);
   await page(/login\.html/).click('#pass'); // the person clicks into the password field
   r = await call('browser_type', { text: 'hunter2' });
-  check(r.err && /Refused: reminal never types into password/.test(r.err), `typing into a password field is refused (${r.err})`);
+  check(r.err && /Refused: typing passwords is off in this browser\. It is off unless the person switches it on \(the reminal button/.test(r.err), `typing into a password field is refused, saying whose switch it is (${r.err})`);
   check(await page(/login\.html/).inputValue('#pass') === '', 'and nothing went into it');
   await slow(1200);
+
+  // The person's switch for passwords, on: the sign-in is the agent's to
+  // fill in and send. The password is never said back, and never kept.
+  const SECRET = 'correct-horse-7Q';
+  const logNow = () => inSW(() => chrome.storage.local.get(['notes', 'recent']));
+  await popupDo(async (p) => { check(!(await p.isChecked('#passwords')), 'typing passwords is off as installed'); await p.check('#passwords'); });
+  // Every line the extension's worker writes to its console from here is
+  // kept (in the worker), with one line of the test's own to show it is.
+  await inSW(() => { const was = console.log; globalThis.__said = []; console.log = (...a) => { globalThis.__said.push(a.map(String).join(' ')); was(...a); }; console.log('[test] listening'); });
+  {
+    const lp = page(/login\.html/);
+    const t2 = (await call('browser_read_page')).text || '';
+    check(/switched typing passwords on in this browser/.test(t2) && /\(password: its value is not read\)/.test(t2), 'passwords on: reading the page says the sign-in may be filled in');
+    const u2 = (t2.match(/textbox "Email" \[(ref_\d+)\]/) || [])[1], p2 = (t2.match(/\[(ref_\d+)\] \(password/) || [])[1];
+    r = await call('browser_type', { ref: u2, text: 'ada@example.com' });
+    check(!r.err && await lp.inputValue('#user') === 'ada@example.com', `passwords on: a field of the sign-in is typed into (${r.err || r.text})`);
+    r = await call('browser_type', { ref: p2, text: SECRET });
+    check(!r.err && await lp.inputValue('#pass') === SECRET, `passwords on: the password is typed into its field (${r.err || r.text})`);
+    check(/^Typed a password into /.test(r.text) && !r.text.includes(SECRET) && !/characters/.test(r.text), `the result says neither the password nor how long it is (${r.text})`);
+    const t3 = (await call('browser_read_page')).text || '';
+    const t4 = (await call('browser_get_page_text')).text || '';
+    check(!t3.includes(SECRET) && !t4.includes(SECRET), 'reading the page after it gives no password');
+    r = await call('browser_fill_form', { fields: [{ ref: u2, value: 'bob@example.com' }, { ref: p2, value: SECRET + '-b' }] });
+    check(!r.err && await lp.inputValue('#pass') === SECRET + '-b' && /\(a password\)/.test(r.text) && !r.text.includes(SECRET), `fill_form: a password filled, and not said back (${r.err || r.text})`);
+    r = await call('browser_batch', { actions: [{ tool: 'type', args: { ref: p2, text: SECRET + '-c' } }, { tool: 'key', args: { key: 'Enter' } }] });
+    const sent = await lp.evaluate(() => document.body.dataset.sent || '');
+    check(!r.err && !r.text.includes(SECRET) && sent === 'bob@example.com', `batch: a password typed and the sign-in sent with Enter, the password in no step's result (${r.err || r.text.replace(/\n/g, ' | ')}; sent as ${sent})`);
+    await lp.evaluate(() => { delete document.body.dataset.sent; });
+    const btn = (t2.match(/button "Sign in" \[(ref_\d+)\]/) || [])[1];
+    r = await call('browser_click', { ref: btn });
+    check(!r.err && await lp.evaluate(() => document.body.dataset.sent || '') === 'bob@example.com', `passwords on: the sign-in's button is clicked (${r.err || r.text})`);
+    // What is kept: that a password was typed, and where. Never the password.
+    const kept = await logNow();
+    const lines = (kept.notes || []).filter((x) => x.kind === 'password');
+    check(lines.length >= 3 && lines.every((x) => x.text === 'typed a password on 127.0.0.1:8088'), `the log says a password was typed, and on which site (${JSON.stringify(lines.slice(-1))})`);
+    check(!JSON.stringify(kept).includes(SECRET), 'and holds no password, in the log or its newest lines');
+    const panel = await popupDo(async (p) => p.textContent('#notes'));
+    check(/typed a password on 127\.0\.0\.1/.test(panel) && !panel.includes(SECRET), `the button's panel shows it the same way (${panel.trim().slice(-70)})`);
+    const hist = await ctx.newPage();
+    await hist.goto(`chrome-extension://${EXT_ID}/history.html`);
+    await hist.waitForSelector('#rows tr', { timeout: 5000 }).catch(() => {});
+    const whole = await hist.content();
+    check(/typed a password on 127\.0\.0\.1/.test(whole) && /Passwords typed/.test(whole) && !whole.includes(SECRET), 'the history page lists it under its own kind, with no password');
+    await hist.close();
+    const said = await inSW(() => globalThis.__said || null);
+    check(said && said.includes('[test] listening') && !said.join(' ').includes(SECRET), `the extension's worker wrote no password to its console (${said ? said.length : 'not'} heard, the same worker all through)`);
+    // A sign-in inside a frame: with the switch on, an action may land in it.
+    await call('browser_navigate', { url: `${PAGES}/login-frame.html` });
+    const fp = page(/login-frame\.html/);
+    const box = await fp.frameLocator('iframe').locator('#pass').boundingBox();
+    const at = { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) };
+    r = await call('browser_click', at);
+    const r2 = await call('browser_type', { text: SECRET });
+    const inFrame = await fp.frameLocator('iframe').locator('#pass').inputValue();
+    check(!r.err && !r2.err && /^Typed a password into /.test(r2.text) && inFrame === SECRET, `passwords on: a sign-in inside a frame is clicked into and typed into (${r.err || r2.err || r2.text})`);
+  }
+  // The switch stays on for the payment field and the CAPTCHA below: neither
+  // is this switch's.
 
   await call('browser_navigate', { url: `${PAGES}/pay.html` });
   const pt = (await call('browser_read_page')).text || '';
   const card = (pt.match(/textbox "Card number" \[(ref_\d+)\]/) || [])[1];
   r = await call('browser_type', { ref: card, text: '4111111111111111' });
-  check(r.err && /Refused/.test(r.err), `typing into a card number field is refused (${r.err})`);
+  check(r.err && /never types into payment fields/.test(r.err), `typing into a card number field is refused, with passwords switched on too (${r.err})`);
 
   await call('browser_navigate', { url: `${PAGES}/captcha.html` });
   const ct = (await call('browser_read_page')).text || '';
   check(/A CAPTCHA is showing/.test(ct), 'reading a CAPTCHA page works, and says so');
   const next = (ct.match(/button "Continue" \[(ref_\d+)\]/) || [])[1];
   r = await call('browser_click', { ref: next });
-  check(r.err && /Paused: a CAPTCHA is showing/.test(r.err), `an action with a CAPTCHA showing is paused (${r.err})`);
+  check(r.err && /Paused: a CAPTCHA is showing/.test(r.err), `an action with a CAPTCHA showing is paused, with passwords switched on too (${r.err})`);
+  // Switched off again: as before, at once.
+  await popupDo(async (p) => { await p.uncheck('#passwords'); });
+  await call('browser_navigate', { url: `${PAGES}/login.html` });
+  await page(/login\.html/).click('#pass');
+  r = await call('browser_type', { text: SECRET });
+  check(r.err && /typing passwords is off in this browser/.test(r.err) && await page(/login\.html/).inputValue('#pass') === '', `passwords switched off again: refused again, nothing typed (${r.err || r.text})`);
+  {
+    await call('browser_navigate', { url: `${PAGES}/login-frame.html` });
+    const fp = page(/login-frame\.html/);
+    const box = await fp.frameLocator('iframe').locator('#pass').boundingBox();
+    r = await call('browser_click', { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height / 2) });
+    check(r.err && /frame with a sign-in, payment field or CAPTCHA/.test(r.err), `passwords off: a click into a frame with a sign-in is paused, as before (${r.err || r.text})`);
+  }
   await slow(1200);
 }
 
@@ -1065,7 +1149,36 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   check(recs.length > 0 && recs.every((s) => s.stopped), 'Stop: that session is stopped, and nothing brought it back');
   check(!(await groups()).includes(`${ID} - reminal`), `its tab group is undone, the tabs stay (${JSON.stringify(await groups())})`);
   const a = await call('browser_screenshot');
-  check(a.err && /stopped/.test(a.err) && !a.content.some((c) => c.type === 'image'), `a stopped session is refused, and no screenshot comes (${a.err})`);
+  check(a.err && /stopped/.test(a.err) && /Resume/.test(a.err) && !a.content.some((c) => c.type === 'image'), `a stopped session is refused, and no screenshot comes (${a.err})`);
+  // Resume, on the stopped session's own row: what Stop took is given back,
+  // in the same session, with its agent as it is (the stand-in was never
+  // restarted: the same one answers).
+  {
+    const stoppedKeys = () => inSW(() => chrome.storage.local.get('stopped').then((o) => Object.keys(o.stopped || {})));
+    const rowsS = await panelRows();
+    check(rowsS.includes(`${ID} - reminal (stopped)Resume`) && rowsS.includes(`${ID2} - reminal` + 'Stop'), `the stopped session's row says so and has Resume; the other keeps its Stop (${JSON.stringify(rowsS)})`);
+    check((await stoppedKeys()).some((k) => k.startsWith(`s:${ID}:`)), 'before Resume: the stop is kept');
+    await popupDo(async (p) => {
+      const li = p.locator('#list li.stopped', { hasText: `${ID} - reminal` });
+      check(await li.count() === 1, 'the row is marked as stopped (drawn dimmed)');
+      await li.locator('button', { hasText: 'Resume' }).click();
+      await p.waitForFunction((id) => [...document.querySelectorAll('#list li')].some((l) => l.textContent === `${id} - reminal` + 'Stop'), ID, { timeout: 5000 }).catch(() => {});
+    });
+    const b = await call('browser_tabs_context');
+    check(!b.err, `Resume: the same session is allowed again, its agent not restarted (${b.err || 'its tabs listed'})`);
+    check((await groups()).includes(`${ID} - reminal`), `and its tabs are back in its group (${JSON.stringify(await groups())})`);
+    check((await recOf(ID)).every((s) => !s.stopped) && !(await stoppedKeys()).some((k) => k.startsWith(`s:${ID}:`)), 'nothing is kept of the stop');
+    const b2 = await call('browser_get_page_text');
+    check(!b2.err, `and it acts on its page again (${b2.err || 'read'})`);
+    check((await panelRows()).includes(`${ID} - reminal` + 'Stop'), 'its row has Stop again');
+    // Stopped once more, for what follows.
+    await popupDo(async (p) => {
+      await p.locator('#list li', { hasText: `${ID} - reminal` }).locator('button', { hasText: 'Stop' }).click();
+      await p.waitForSelector('#list li.stopped', { timeout: 5000 }).catch(() => {});
+    });
+    const c2 = await call('browser_tabs_context');
+    check(c2.err && /stopped/.test(c2.err) && !(await groups()).includes(`${ID} - reminal`), `Stop after a Resume stops it as before (${c2.err || c2.text})`);
+  }
   const other = await call('browser_tabs_context', {}, '/tmp/q2');
   check(!other.err && /second\b/.test(other.text), `the other session goes on (${other.err || 'its tab'})`);
   await popupDo(async (p) => { await p.uncheck('#agents'); });
@@ -1104,6 +1217,21 @@ const recOf = (id) => inSW((id) => chrome.storage.session.get(null).then((all) =
   check(after.err && /stopped/.test(after.err) && !after.content.some((c) => c.type === 'image'), `Cancel in the browser's debugging bar stops the session: not attached again (${after.err || 'a screenshot came'})`);
   const recs2 = await recOf(ID2);
   check(recs2.length > 0 && recs2.every((s) => s.stopped), 'and it shows as stopped');
+  // Resume gives this back too: the tab the person cancelled is attached to
+  // again (a screenshot needs the debugger).
+  await popupDo(async (p) => {
+    await p.locator('#list li.stopped', { hasText: `${ID2} - reminal` }).locator('button', { hasText: 'Resume' }).click();
+    await p.waitForFunction((id) => [...document.querySelectorAll('#list li')].some((l) => l.textContent === `${id} - reminal` + 'Stop'), ID2, { timeout: 5000 }).catch(() => {});
+  });
+  const back = await call('browser_screenshot', {}, '/tmp/q2');
+  check(!back.err && back.content.some((c) => c.type === 'image'), `Resume after Cancel in the debugging bar: the session is attached again and a screenshot comes (${back.err || 'a screenshot'})`);
+  // Stopped once more, for what follows.
+  await popupDo(async (p) => {
+    await p.locator('#list li', { hasText: `${ID2} - reminal` }).locator('button', { hasText: 'Stop' }).click();
+    await p.waitForSelector(`#list li.stopped >> text=${ID2}`, { timeout: 5000 }).catch(() => {});
+  });
+  const again2 = await call('browser_tabs_context', {}, '/tmp/q2');
+  check(again2.err && /stopped/.test(again2.err), `and Stop stops it again (${again2.err || again2.text})`);
 }
 
 // 7. A session ends with no tab group left (its Stop undid it): everything
@@ -1168,7 +1296,7 @@ const keptFor = (id) => inSW((id) => Promise.all([chrome.storage.session.get(nul
   const rowOf = (rows, id) => rows.find((t) => t.includes(id)) || '';
   check(rowOf(rows3, ID3) === `${ID3} - reminal (ended)Close its tabs`, `the panel shows it as ended, with a button that closes its tabs and no Stop (${JSON.stringify(rows3)})`);
   check(rowOf(rows3, 'ZZZZ9999') === 'ZZZZ9999 - reminal (ended)Close its tabs', 'and the same for a group left under the name of a session long gone');
-  check(rowOf(rows3, ID) === `${ID} - reminal (stopped)`, `the session still running is listed as it was (${rowOf(rows3, ID)})`);
+  check(rowOf(rows3, ID) === `${ID} - reminal (stopped)Resume`, `the session still running is listed as it was (${rowOf(rows3, ID)})`);
   // "Close its tabs": that group's tabs, and no other tab.
   const tabIds = () => inSW(() => chrome.tabs.query({}).then((ts) => ts.map((t) => t.id).sort((a, b) => a - b)));
   const pop = await ctx.newPage();

@@ -27,18 +27,23 @@
 // dropped is made again from its tabs), the debugger is attached again when
 // needed, and an alarm reconnects to reminal.
 //
-// Typing into password or payment fields is refused, in any frame; an action
-// inside a sign-in, or with a CAPTCHA showing, is paused for the person. Input
+// Typing into payment fields is refused, in any frame, and an action with a
+// CAPTCHA showing is paused for the person. Passwords are the person's switch
+// (off as installed): off, a password field is refused and an action inside
+// a sign-in is paused; on, an agent may type passwords and send sign-in
+// forms, and a typed password is never said back or kept (the log says only
+// that one was typed, and on which site). Input
 // and screenshots go through chrome.debugger (the browser shows its own "is
 // debugging this browser" bar); pages are read by scripts in the extension's
 // isolated world.
 
 import * as page from './page.js';
+import { rules } from './rules.js';
 
 const HOST = 'app.reminal.browser';
 
 const COLORS = ['blue', 'green', 'purple', 'cyan', 'orange', 'pink', 'red', 'yellow', 'grey'];
-const STOPPED = 'The person stopped browser use for this session.';
+const STOPPED = 'The person stopped browser use for this session. Only they can allow it again (Resume, in the reminal button in the browser\'s toolbar).';
 const OFF = 'The person switched off agents\' use of this browser (the reminal button in the browser\'s toolbar). Ask them to switch it on if they want you to use it.';
 
 // ---------------------------------------------------------------- the host
@@ -200,6 +205,24 @@ async function stop(k, why = "stopped by the person") {
   const s = await putS(k, { stopped: true });
   await letGo(s, why);
 }
+// resume: the person's Resume, in the button's panel, for a run they
+// stopped: what Stop took is given back, and nothing more. The run is no
+// longer stopped (here and in the profile's storage), a tab the person
+// cancelled in the browser's debugging bar may be attached to again, and the
+// run's tabs that are still open go back into its group. The agent is not
+// restarted and is told nothing: its next request works. Only for a run
+// that is stopped, and only from the extension's own pages (the listener).
+async function resume(k) {
+  const s = await getS(k);
+  const kept = await stoppedRuns();
+  if (!(s && s.stopped) && !(k in kept)) return;
+  if (k in kept) { delete kept[k]; await chrome.storage.local.set({ stopped: kept }); }
+  if (!s) return;
+  for (const id of s.tabs || []) canceled.delete(id);
+  const now = await putS(k, { stopped: false });
+  console.log('[reminal] resumed', k);
+  await sessionTabs(now);
+}
 // forgetRuns: the records of a session's runs, and their Stops, removed
 // (all of them, or all but the run named by except).
 async function forgetRuns(id, except) {
@@ -293,6 +316,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   // Only the extension's own pages (popup.html) speak here.
   if (sender.id !== chrome.runtime.id || !sender.url || !sender.url.startsWith(chrome.runtime.getURL(''))) return;
   if (msg.t === 'stop') stop(String(msg.key || '')).then(() => reply(true));
+  else if (msg.t === 'resume') resume(String(msg.key || '')).then(() => reply(true));
   else if (msg.t === 'switch') (msg.on ? chrome.storage.local.set({ agents: 'on' }) : switchOff()).then(() => reply(true));
   else if (msg.t === 'reconnect') { backoff = 1000; connect(); reply(true); }
   // The panel opened: it has drawn itself from what is stored and waits for
@@ -770,11 +794,18 @@ async function screenshot(c, a = {}) {
   return { image: seen.data, mimeType, note: `${w}x${h} pixels; click at x, y in these pixels.${seen.note}` };
 }
 
+// rulesIn: the rules (rules.js) run in the frames target names, with the
+// person's switch for passwords as it is now: read each time, so a frame is
+// never held to an older answer than the switch.
+async function rulesIn(target) {
+  const on = (await switchValues(['passwords'])).passwords === 'on';
+  return chrome.scripting.executeScript({ target, func: rules, args: [on] });
+}
 // inPage: fn in the page's top frame, after the rules. inFrames: in every
 // frame the extension can reach (each frame's own answer, frameId 0 the top).
 async function inPage(c, fn, ...args) {
   await c.alive();
-  await chrome.scripting.executeScript({ target: { tabId: c.tabId }, files: ['rules.js'] });
+  await rulesIn({ tabId: c.tabId });
   const [r] = await chrome.scripting.executeScript({ target: { tabId: c.tabId }, func: fn, args });
   if (!r) throw new Error('The page could not be read.');
   return r.result;
@@ -789,7 +820,7 @@ async function frameChecks(c) {
 }
 async function inFrames(c, fn) {
   await c.alive();
-  await chrome.scripting.executeScript({ target: { tabId: c.tabId, allFrames: true }, files: ['rules.js'] }).catch(() => {});
+  await rulesIn({ tabId: c.tabId, allFrames: true }).catch(() => {});
   const rs = await chrome.scripting.executeScript({ target: { tabId: c.tabId, allFrames: true }, func: fn }).catch(() => []);
   return rs.filter((r) => r && r.result);
 }
@@ -811,7 +842,7 @@ async function target(c, a) {
     if (!web || !frames.some((r) => r.frameId !== 0 && sameDoc(r.result.url, src))) {
       throw new Error('Paused: that part of the page is a frame reminal cannot check. Ask the person to do it, then continue.');
     }
-    if (frames.some((r) => r.frameId !== 0 && r.result.personOnly)) {
+    if (frames.some((r) => r.frameId !== 0 && r.result.act)) {
       throw new Error('Paused: that part of the page is a frame with a sign-in, payment field or CAPTCHA in it. Ask the person to do it, then continue.');
     }
   }
@@ -878,7 +909,8 @@ async function click(c, a) {
 
 async function type(c, a) {
   if (a.ref) {
-    // A password or payment field is refused as such, before it is clicked.
+    // A payment field, or a password field with the person's switch off, is
+    // refused as such, before it is clicked.
     const t = await inPage(c, page.locate, a.ref, null, null);
     if (t.error) throw new Error(t.error);
     if (t.secret) throw new Error(t.secret);
@@ -888,6 +920,9 @@ async function type(c, a) {
   if (f.refused) throw new Error(f.refused);
   if (f.paused) throw new Error(f.paused);
   await cdp(c, 'Input.insertText', { text: String(a.text || '') });
+  // A password (typed only with the person's switch on) is never said back,
+  // nor how long it was; that one was typed is in the log.
+  if (f.password) { await note(c, 'password', 'typed a password'); return `Typed a password into ${f.what}.`; }
   return `Typed ${String(a.text || '').length} characters into ${f.what}.`;
 }
 
@@ -914,9 +949,10 @@ async function key(c, combo) {
   if (!k && last.length === 1) k = [last, last.match(/[a-z]/i) ? 'Key' + last.toUpperCase() : '', last.toUpperCase().charCodeAt(0), last];
   if (!k && /^f([1-9]|1[0-2])$/i.test(last)) k = [last.toUpperCase(), last.toUpperCase(), 111 + Number(last.slice(1))];
   if (!k) throw new Error('unknown key: ' + last);
-  // Every key in a password or payment field, or in a sign-in, is the
-  // person's: Backspace edits a password, Tab or ArrowDown can take the
-  // browser's saved sign-in, Enter sends it.
+  // Every key in a payment field is the person's; and, unless they switched
+  // passwords on, every key in a password field or a sign-in: Backspace
+  // edits a password, Tab or ArrowDown can take the browser's saved sign-in,
+  // Enter sends it.
   const f = await focusedField(c);
   if (f.refused) throw new Error(f.refused);
   if (f.paused) throw new Error(f.paused);
@@ -1007,7 +1043,7 @@ function sawPersonOnly(tabId) {
 // into its frames (their watch starts) and it is looked at once.
 async function loadedCheck(tabId) {
   try {
-    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['rules.js'] });
+    await rulesIn({ tabId, allFrames: true });
     const rs = await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: page.frameCheck });
     if (rs.some((r) => r && r.result && (r.result.personOnly || r.result.ever))) sawPersonOnly(tabId);
   } catch (_) {}
@@ -1156,8 +1192,10 @@ async function switchedOn(name) {
 }
 // The log: what agents did here that the person should be able to see
 // afterwards. A page a session opened in its tabs (kind "visit", with the
-// page's address), a script run, a file given, cookies or site storage used.
-// Nothing else: no clicks, no typing, no page titles, nothing a page says.
+// page's address), a script run, a file given, cookies or site storage used,
+// a password typed (kind "password": that one was, and on which site; never
+// the password or its length). Nothing else: no clicks, no other typing, no
+// page titles, nothing a page says.
 // An entry is {at, who, kind, text, url (a visit's)}; who is the session as
 // the person sees it, "<ID> - reminal".
 //
@@ -1342,7 +1380,8 @@ async function fillForm(c, a) {
         }
         if (text) await cdp(c, 'Input.insertText', { text });
         else await cdp(c, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }).then(() => cdp(c, 'Input.dispatchKeyEvent', { type: 'keyUp', key: 'Delete', code: 'Delete', windowsVirtualKeyCode: 46, nativeVirtualKeyCode: 46 }));
-        done.push(`Filled ${kind.what} (${text.length} characters).`);
+        if (kind.password) { await note(c, 'password', 'typed a password'); done.push(`Filled ${kind.what} (a password).`); }
+        else done.push(`Filled ${kind.what} (${text.length} characters).`);
       } else {
         throw new Error(`${kind.what} is not a field that can be filled.`);
       }
