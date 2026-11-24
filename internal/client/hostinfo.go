@@ -234,13 +234,14 @@ func gatherHostInfo() HostInfo {
 	return h
 }
 
-// CPU utilization is sampled by a platform-specific cpuPercent() (cpustat_*.go).
-// On macOS that shells out to `top` (~200ms); on Linux it diffs /proc/stat
-// between calls. cachedCPUPercent memoises the result briefly so a burst of
-// host_info polls (one per viewer, ~every 1.5s) doesn't spawn a `top` each —
-// and so gatherHostInfo stays cheap. handleHostInfo runs on its own goroutine
-// (see the dispatch in runReader) so the occasional refresh never stalls the
-// shell stream.
+// CPU utilization is read by a platform-specific cpuPercent() (cpustat_*.go).
+// On Linux it diffs /proc/stat between calls and on Windows GetSystemTimes:
+// one cheap call. On macOS reading it means running a program, so every
+// reminal process reads one value that a single sampler on the machine keeps
+// (cpushare.go): a session never runs one of its own. cachedCPUPercent
+// memoises the result briefly so a burst of host_info polls (one per viewer,
+// ~every 1.5s) is one reading, and keeps the last good value while there is
+// no fresh one.
 var (
 	cpuCacheMu  sync.Mutex
 	cpuCachePct float64

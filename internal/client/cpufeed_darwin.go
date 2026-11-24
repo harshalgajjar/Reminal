@@ -14,64 +14,88 @@ import (
 	"time"
 )
 
-// The alert watcher reads CPU every couple of seconds. cpuPercent's `top`
-// costs ~0.6s of CPU per call, which at that rate would itself be the load
-// the alert warns about. `iostat -w 1` is one long-lived process that prints a
-// fresh us/sy/id line every second for next to nothing, so the watcher reads
-// the latest line instead.
+// The CPU on macOS is read by one sampler for the whole machine (cpushare.go):
+// `iostat -w 1`, one long-lived process that prints a fresh us/sy/id line
+// every second for next to nothing. `top -l1` (topCPUPercent) costs about
+// 0.6 s of CPU a call, so it is only what the sampler falls back to when
+// iostat cannot run, and then at most once every cpuTopEvery: one process on
+// the machine, never one per session.
 
-var (
-	cpuFeedOnce sync.Once
-	cpuFeedMu   sync.Mutex
-	cpuFeedVal  float64
-	cpuFeedAt   time.Time
-	cpuTopAt    time.Time // last fallback to top, to keep it rare
-)
+const cpuTopEvery = 10 * time.Second
 
-// pushCPU is the watcher's CPU reading: the stream's latest, or — while the
-// stream is down — cpuPercent at most every pushTick.
-func pushCPU() (float64, bool) {
-	cpuFeedOnce.Do(func() { go runCPUFeed() })
-	cpuFeedMu.Lock()
-	defer cpuFeedMu.Unlock()
-	if time.Since(cpuFeedAt) < 5*time.Second {
-		return cpuFeedVal, true
-	}
-	if time.Since(cpuTopAt) < pushTick {
-		return 0, false
-	}
-	cpuTopAt = time.Now()
-	return cpuPercent()
+var machineCPU = &cpuShare{
+	sample:    sampleCPU,
+	fresh:     5 * time.Second,
+	wantEvery: 5 * time.Second,
+	wantFor:   30 * time.Second,
+	tryEvery:  2 * time.Second,
 }
 
-func runCPUFeed() {
-	for {
-		cmd := exec.Command("/usr/sbin/iostat", "-n0", "-w", "1")
-		out, err := cmd.StdoutPipe()
-		if err == nil {
-			err = cmd.Start()
+var machineCPUDir sync.Once
+
+// cpuPercent is the machine's CPU utilization (0..100): the shared reading.
+// Unknown until the sampler's first reading is in (about a second after the
+// first process asks), and a caller keeps its last value meanwhile.
+func cpuPercent() (float64, bool) {
+	machineCPUDir.Do(func() {
+		if dir, err := reminalDir(); err == nil {
+			machineCPU.dir = dir
 		}
-		if err == nil {
-			sc := bufio.NewScanner(out)
-			first := true
-			for sc.Scan() {
-				v, ok := parseIostatCPU(sc.Text())
-				if !ok {
-					continue
-				}
-				// The first line is the average since boot, not now.
-				if first {
-					first = false
-					continue
-				}
-				cpuFeedMu.Lock()
-				cpuFeedVal, cpuFeedAt = v, time.Now()
-				cpuFeedMu.Unlock()
-			}
-			_ = cmd.Wait()
-		}
-		time.Sleep(30 * time.Second)
+	})
+	if machineCPU.dir == "" {
+		return 0, false
 	}
+	return machineCPU.read()
+}
+
+// pushCPU is the alert watcher's CPU reading: the same shared one.
+func pushCPU() (float64, bool) { return cpuPercent() }
+
+// sampleCPU is the machine's sampler, run by the one process that holds the
+// lock: iostat's readings while it runs, and while it cannot, one top every
+// cpuTopEvery before iostat is tried again.
+func sampleCPU(emit func(float64) bool, wanted func() bool) {
+	for wanted() {
+		if !iostatCPU(emit) {
+			return
+		}
+		if v, ok := topCPUPercent(); ok && !emit(v) {
+			return
+		}
+		time.Sleep(cpuTopEvery)
+	}
+}
+
+// iostatCPU emits iostat's reading each second until emit answers false
+// (then it answers false too), or iostat ends or cannot be started (true:
+// the caller falls back).
+func iostatCPU(emit func(float64) bool) (more bool) {
+	cmd := exec.Command("/usr/sbin/iostat", "-n0", "-w", "1")
+	out, err := cmd.StdoutPipe()
+	if err == nil {
+		err = cmd.Start()
+	}
+	if err != nil {
+		return true
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	sc := bufio.NewScanner(out)
+	first := true
+	for sc.Scan() {
+		v, ok := parseIostatCPU(sc.Text())
+		if !ok {
+			continue
+		}
+		// The first line is the average since boot, not now.
+		if first {
+			first = false
+			continue
+		}
+		if !emit(v) {
+			return false
+		}
+	}
+	return true
 }
 
 // parseIostatCPU reads " 22 20 58  15.42 15.00 13.64" (us sy id, load avgs)

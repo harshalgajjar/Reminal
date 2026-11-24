@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -108,7 +109,15 @@ func listMachines() error {
 		// machines DO show CPU, so prime and re-read once to keep the local line
 		// consistent with them. A no-op on macOS/Windows, whose first sample
 		// already carries a value (so CPUPercent is non-nil and we skip the wait).
-		if local.Stats != nil && local.Stats.CPUPercent == nil {
+		// On macOS the reading is the machine's shared one: there at once
+		// while anything is sampling, and otherwise about a second after this
+		// asks for it (the sampler's first reading), so it is waited for a
+		// little longer there.
+		tries := 1
+		if runtime.GOOS == "darwin" {
+			tries = 16
+		}
+		for i := 0; i < tries && local.Stats != nil && local.Stats.CPUPercent == nil; i++ {
 			client.PrimeCPUSample()
 			time.Sleep(cpuPrimeDelay)
 			local = client.LocalDirectory()
