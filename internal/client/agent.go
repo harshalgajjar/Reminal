@@ -3129,6 +3129,11 @@ func (a *Agent) pumpHostStdin() {
 // beyond a one-line notice. Best-effort: a session must never fail because its
 // crash log couldn't be written.
 func logPanicStack(what string, r interface{}) {
+	// Where a session's end is read from (ended.go), a line says it went on
+	// past a fault, and where the stack is.
+	if id, _ := servedSession.Load().(string); id != "" {
+		session.LogRestore(id, "recovered from a panic in %s: %v (pid %d); its stack is in panic.log", what, r, os.Getpid())
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return
@@ -3177,6 +3182,7 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 	// reconnect. Standard server resilience (cf. http.Server per-request recover).
 	defer func() {
 		if r := recover(); r != nil {
+			logPanicStack("connection handler", r)
 			err = fmt.Errorf("recovered from panic in connection handler: %v", r)
 		}
 	}()
@@ -3242,6 +3248,7 @@ func (a *Agent) serveConn(conn *websocket.Conn, shellExit <-chan struct{}, local
 	// drops that one connection.
 	defer func() {
 		if r := recover(); r != nil {
+			logPanicStack("connection handler", r)
 			err = fmt.Errorf("recovered from panic in connection handler: %v", r)
 		}
 	}()

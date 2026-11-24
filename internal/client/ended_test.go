@@ -77,3 +77,38 @@ func TestASessionLeavesOneEndedLine(t *testing.T) {
 		t.Errorf("a crash file nothing died into was kept (%v)", err)
 	}
 }
+
+// A panic a session recovers from is said in its lines too, with where its
+// stack is; a process that serves no session says nothing there.
+func TestARecoveredPanicIsSaidInTheSessionsLines(t *testing.T) {
+	isolateHome(t)
+	crash, err := session.CrashLogPath("RCVR1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := filepath.Join(filepath.Dir(crash), "events.log")
+	was := servedSession.Load()
+	t.Cleanup(func() {
+		if was != nil {
+			servedSession.Store(was)
+		} else {
+			servedSession.Store("")
+		}
+	})
+	servedSession.Store("")
+	if err := guardPanic("a pump", func() error { panic("before any session") }); err == nil {
+		t.Fatal("the panic was not turned into an error")
+	}
+	if b, _ := os.ReadFile(events); strings.Contains(string(b), "recovered from a panic") {
+		t.Errorf("events %q: a process serving no session wrote a session's line", b)
+	}
+	servedSession.Store("RCVR1234")
+	if err := guardPanic("a pump", func() error { panic("the pump's own panic") }); err == nil {
+		t.Fatal("the panic was not turned into an error")
+	}
+	b, _ := os.ReadFile(events)
+	want := fmt.Sprintf(" RCVR1234 recovered from a panic in a pump: the pump's own panic (pid %d); its stack is in panic.log\n", os.Getpid())
+	if !strings.HasSuffix(string(b), want) {
+		t.Errorf("events %q: want %q", b, want)
+	}
+}

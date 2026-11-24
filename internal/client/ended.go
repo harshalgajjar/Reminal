@@ -6,6 +6,7 @@ package client
 import (
 	"fmt"
 	"os"
+	"sync/atomic"
 
 	"reminal/internal/session"
 )
@@ -21,10 +22,16 @@ import (
 // "ended" line is the session going in order, and none of them is a kill
 // from outside.
 
+// servedSession is the id of the session this process serves, once Run has
+// begun: a panic recovered anywhere in it (logPanicStack) is said in that
+// session's lines too.
+var servedSession atomic.Value
+
 // keepCrashOutput points the runtime's dying words at this session's crash
 // file. Run does it first thing, so the next image of a restart in place and
 // a restored session do it too.
 func (a *Agent) keepCrashOutput() {
+	servedSession.Store(a.sessionID)
 	what := "started"
 	switch {
 	case a.restoring:
