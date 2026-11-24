@@ -999,6 +999,11 @@ func printRestartLines(o integrateOut, done []agentTarget, before map[string]int
 	}
 }
 
+// cliAddWait is how long an agent's own CLI is given to add or remove
+// reminal's server: seconds at most when it works, so past this it is not
+// going to answer. A var for the tests.
+var cliAddWait = 45 * time.Second
+
 func applyViaCLI(p planStep, exe string, remove bool) error {
 	tmpl := p.target.cliAdd
 	if remove {
@@ -1011,7 +1016,19 @@ func applyViaCLI(p planStep, exe string, remove bool) error {
 	// The agent's own CLI, asked apart from any session integrate is run in
 	// (session.ProbeCommand): one that does not know the subcommand starts
 	// up instead, and its hooks are no session's.
-	out, err := session.RunProbe(session.ProbeCommand(context.Background(), p.binPath, args...), true)
+	// With a limit: a CLI that waits on something (a sign-in, a question, an
+	// install that is broken) used to hold integrate there for good, with
+	// nothing said and every agent after it never set up.
+	ctx, cancel := context.WithTimeout(context.Background(), cliAddWait)
+	defer cancel()
+	out, err := session.RunProbe(session.ProbeCommand(ctx, p.binPath, args...), true)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		name := p.target.Bin
+		if name == "" {
+			name = filepath.Base(p.binPath)
+		}
+		return fmt.Errorf("%s did not answer", name)
+	}
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		low := strings.ToLower(msg)

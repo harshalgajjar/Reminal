@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"reminal/internal/session"
 )
@@ -39,5 +40,28 @@ func TestAnAgentsCLIIsRunAsAProbe(t *testing.T) {
 	}
 	if strings.Contains(env, "\nREMINAL_SESSION=") {
 		t.Error("run with the session's REMINAL_SESSION")
+	}
+}
+
+// An agent's CLI that never answers (it waits on a sign-in, a question, a
+// broken install) is given up on after cliAddWait and said, by name:
+// integrate used to wait on it for good, and set up no agent after it.
+func TestAnAgentsCLIThatDoesNotAnswerIsGivenUpOn(t *testing.T) {
+	old := cliAddWait
+	cliAddWait = 300 * time.Millisecond
+	t.Cleanup(func() { cliAddWait = old })
+	dir := t.TempDir()
+	agent := filepath.Join(dir, "slowagent")
+	if err := os.WriteFile(agent, []byte("#!/bin/sh\necho started\nsleep 600\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	step := planStep{target: agentTarget{Name: "Slow", Bin: "slowagent", cliAdd: []string{"mcp", "add", "reminal", "%CMD%"}}, binPath: agent}
+	start := time.Now()
+	err := applyViaCLI(step, "/bin/reminal", false)
+	if took := time.Since(start); took > 10*time.Second {
+		t.Fatalf("waited %v on a CLI that does not answer", took)
+	}
+	if err == nil || err.Error() != "slowagent did not answer" {
+		t.Fatalf("a CLI that does not answer: %v, want it said by name", err)
 	}
 }
