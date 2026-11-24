@@ -1563,6 +1563,7 @@ func runStop(idArg string, yes bool) error {
 		fmt.Print("  Press Enter to continue, Ctrl-C to cancel: ")
 		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 	}
+	session.LogSent(a.ID, a.PID, "pause", "asked to stop sharing it (its shell goes on)")
 	if err := pauseAgent(a.PID); err != nil {
 		return fmt.Errorf("pause PID %d: %w", a.PID, err)
 	}
