@@ -73,8 +73,26 @@ jobs:
         working-directory: third_party/ultraviolet
         run: go vet ./... && go test -race ./...
 
+  # reminal upgraded in place, in a browser (scripts/browser-test, MODE=upgrade):
+  # the release before this commit is used in a browser profile, the browser
+  # is closed, this commit's reminal takes its place at the same paths, and
+  # the browser starts again on that profile. Reading, a screenshot and a
+  # click then have to work with nothing reloaded by hand, and the
+  # extension's running script has to be this commit's. 3.22.9 went out
+  # without this: browsers started the script they had kept from 3.22.8 on
+  # 3.22.9's files, and every page read came back empty.
+  browser-upgrade:
+    if: github.repository == 'harshalgajjar/Reminal'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the release before is found by its tag
+      - name: Upgrade in place, from the release before
+        run: MODE=upgrade scripts/browser-test/run.sh
+
   release:
-    needs: test
+    needs: [test, browser-upgrade]
     runs-on: ${{ matrix.os }}
     # The OIDC anchor for Azure Trusted Signing: the Entra app's federated
     # credential matches subject repo:…:environment:release-signing exactly

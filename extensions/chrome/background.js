@@ -42,6 +42,30 @@ import { rules } from './rules.js';
 
 const HOST = 'app.reminal.browser';
 
+// CODE: the version of the files this script was written out with (reminal
+// puts the manifest's version here as well, embed.go File). A browser keeps
+// an extension's worker script with the profile, and can start the script it
+// kept on files reminal has since replaced (it was closed while reminal was
+// upgraded): the manifest it reads is then the newer one, and only this
+// tells the two apart. Kept where the button's panel and the rig can read
+// what is running.
+const CODE = '0.1.0';
+chrome.storage.session.set({ code: CODE });
+// staleCode: this script is not the one the files hold, so the extension
+// reloads itself from them, once per version of the files (kept in local
+// storage: a reload empties the session's). Reloading again would not help
+// if that did not.
+async function staleCode() {
+  const files = chrome.runtime.getManifest().version;
+  if (CODE === files) { chrome.storage.local.remove('reloadedStale'); return; }
+  const { reloadedStale } = await chrome.storage.local.get('reloadedStale');
+  if (reloadedStale === files) return;
+  await chrome.storage.local.set({ reloadedStale: files });
+  console.log('[reminal] reloading: this is', CODE, 'the files are', files);
+  chrome.runtime.reload();
+}
+staleCode();
+
 const COLORS = ['blue', 'green', 'purple', 'cyan', 'orange', 'pink', 'red', 'yellow', 'grey'];
 const STOPPED = 'The person stopped browser use for this session. Only they can allow it again (Resume, in the reminal button in the browser\'s toolbar).';
 const OFF = 'The person switched off agents\' use of this browser (the reminal button in the browser\'s toolbar). Ask them to switch it on if they want you to use it.';
@@ -75,7 +99,9 @@ async function newerFiles(ext) {
   if (ext === mine) { chrome.storage.local.remove('reloadedFor'); return; }
   const { reloadedFor } = await chrome.storage.local.get('reloadedFor');
   if (reloadedFor === ext) {
-    setStatus({ connected: true, error: `reminal has a newer extension (${ext}) than the one loaded here (${mine}): reload it on the extensions page` });
+    // The host says the files' version with a mark after it when it is the
+    // running script that is older than the files (browser_host.go).
+    setStatus({ connected: true, error: ext.startsWith(mine) ? 'this browser is running an older copy of reminal\'s extension than its files: reload it on the extensions page' : `reminal has a newer extension (${ext}) than the one loaded here (${mine}): reload it on the extensions page` });
     return;
   }
   await chrome.storage.local.set({ reloadedFor: ext });
@@ -123,7 +149,9 @@ async function sayHave() {
   const all = await chrome.storage.session.get(null);
   const ids = new Set((await groupsOfSessions()).keys());
   for (const [k, s] of Object.entries(all)) if (k.startsWith('s:') && s.session) ids.add(s.session);
-  send({ t: 'have', sessions: [...ids].filter((id) => !(('e:' + id) in all)) });
+  // With the script that is running (CODE): reminal's host has an older one
+  // reload itself.
+  send({ t: 'have', code: CODE, sessions: [...ids].filter((id) => !(('e:' + id) in all)) });
 }
 
 // tidy: what is kept by session is kept only while it is of use. Run when
@@ -389,8 +417,8 @@ async function handle(m) {
     switch (m.tool) {
       case 'navigate': return await navigate(c, String(a.url ?? ''));
       case 'screenshot': return await screenshot(c, a);
-      case 'read_page': return await inPage(c, page.readTree, a.filter === 'interactive');
-      case 'get_page_text': return await inPage(c, page.pageText);
+      case 'read_page': return await read(c, page.readTree, a.filter === 'interactive');
+      case 'get_page_text': return await read(c, page.pageText);
       case 'click': return await click(c, a);
       case 'type': return await type(c, a);
       case 'key': return await key(c, String(a.key || ''));
@@ -801,14 +829,27 @@ async function rulesIn(target) {
   const on = (await switchValues(['passwords'])).passwords === 'on';
   return chrome.scripting.executeScript({ target, func: rules, args: [on] });
 }
+// What an agent is told when the extension's code did not run in a page:
+// never an empty answer.
+const NO_PAGE_CODE = 'The extension\'s page code did not load in this page, so nothing could be read or done there. reminal\'s extension reloads itself when its files are newer than what is running; if this goes on, ask the person to reload it on the browser\'s extensions page.';
 // inPage: fn in the page's top frame, after the rules. inFrames: in every
 // frame the extension can reach (each frame's own answer, frameId 0 the top).
+// The rules answer true once they are in; a function of page.js that threw
+// gives no result, or an error where the browser says it.
 async function inPage(c, fn, ...args) {
   await c.alive();
-  await rulesIn({ tabId: c.tabId });
+  const [ruled] = await rulesIn({ tabId: c.tabId });
+  if (!ruled || ruled.result !== true) throw new Error(NO_PAGE_CODE);
   const [r] = await chrome.scripting.executeScript({ target: { tabId: c.tabId }, func: fn, args });
   if (!r) throw new Error('The page could not be read.');
+  if (r.error) throw new Error(`The extension's page code failed in this page: ${r.error.message || r.error}`);
   return r.result;
+}
+// read: what a reading function of page.js gave, which is always words.
+async function read(c, fn, ...args) {
+  const s = await inPage(c, fn, ...args);
+  if (typeof s !== 'string' || !s.trim()) throw new Error('The extension\'s page code gave nothing back for this page: it failed there. Try again; if this goes on, ask the person to reload reminal\'s extension on the browser\'s extensions page.');
+  return s;
 }
 // frameChecks: every frame's frameCheck, and what it means for the tab's
 // kept requests (guard, below): a tab that shows, or has shown, something

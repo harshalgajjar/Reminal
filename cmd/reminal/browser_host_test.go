@@ -499,3 +499,78 @@ func TestBrowserTypeTextIsCapped(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// A browser can start the worker script it kept with the profile on files
+// reminal has since replaced: the extension then reads the newer manifest
+// and runs the older script, and nothing it compares differs. The script
+// says which one it is as it connects (the ones of before said nothing),
+// and the host tells an older one a version that is not its manifest's,
+// which is what makes it reload itself. Once a connection; a script that
+// is this reminal's is told nothing more.
+func TestAnOlderWorkerIsToldToReload(t *testing.T) {
+	for _, c := range []struct {
+		name, have string
+		reload     bool
+	}{
+		{"a script of before, saying no version", `{"t":"have","sessions":[]}`, true},
+		{"a script of another version", `{"t":"have","code":"0.1.1.1","sessions":["AAAA1111"]}`, true},
+		{"this reminal's script", `{"t":"have","code":"` + chromeext.Version() + `","sessions":[]}`, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hubSide, hostSide := net.Pipe()
+			inR, inW := io.Pipe()
+			outR, outW := io.Pipe()
+			go func() { _ = relayNative(inR, outW, hostSide) }()
+			defer inW.Close()
+			hub := bufio.NewReader(hubSide)
+			heard := func() {
+				if line, err := hub.ReadString('\n'); err != nil || line != c.have+"\n" {
+					t.Fatalf("the hub got %q, %v", line, err)
+				}
+			}
+			say := func() { go func() { _ = writeNativeRaw(inW, []byte(c.have)) }() }
+			say()
+			if !c.reload {
+				heard()
+			} else {
+				// Told before what it said goes on to the hub.
+				msg, err := readNativeMessage(outR)
+				var st struct {
+					T   string `json:"t"`
+					OK  bool   `json:"ok"`
+					Ext string `json:"ext"`
+				}
+				if err != nil || json.Unmarshal(msg, &st) != nil || st.T != "status" || !st.OK || st.Ext == chromeext.Version() || !strings.HasPrefix(st.Ext, chromeext.Version()) {
+					t.Fatalf("the older worker was told %s, %v: want a status naming a version that is not its manifest's (%s)", msg, err, chromeext.Version())
+				}
+				heard()
+				say() // said again (every 30 s): not told twice
+				heard()
+			}
+			go func() { _, _ = hubSide.Write([]byte(`{"t":"req","id":1,"tool":"navigate"}` + "\n")) }()
+			if msg, err := readNativeMessage(outR); err != nil || string(msg) != `{"t":"req","id":1,"tool":"navigate"}` {
+				t.Fatalf("the next thing Chrome got was %s, %v: want the hub's request", msg, err)
+			}
+		})
+	}
+}
+
+// A page read that comes back with nothing is the extension's code not
+// having run in the page (a read leads with the page's title and address):
+// it is an error saying so, never a page with nothing on it.
+func TestAPageReadWithNothingIsNotWords(t *testing.T) {
+	enc := func(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+	for _, reply := range []string{`{"ok":true,"result":null}`, `{"ok":true,"result":""}`, `{"ok":true,"result":" \n"}`, `{"ok":true}`} {
+		b, err := browserBlocks(enc(reply), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", reply, err)
+		}
+		if hasWords(b) {
+			t.Fatalf("%s reads as words: %v", reply, b)
+		}
+	}
+	b, err := browserBlocks(enc(`{"ok":true,"result":"Pizza order (http://x/)"}`), nil)
+	if err != nil || !hasWords(b) {
+		t.Fatalf("a page's words do not read as words: %v, %v", b, err)
+	}
+}
