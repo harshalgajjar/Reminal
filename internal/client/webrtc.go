@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 	"reminal/internal/protocol"
@@ -26,7 +28,26 @@ import (
 var rtcAPI = webrtc.NewAPI(
 	webrtc.WithMediaEngine(&webrtc.MediaEngine{}),
 	webrtc.WithInterceptorRegistry(&interceptor.Registry{}),
+	webrtc.WithSettingEngine(rtcSettings(runtime.GOOS)),
 )
+
+// rtcSettings is how peer connections are set up on goos. On Windows they
+// take no part in local name lookup (mDNS): that binds UDP port 5353 on
+// every interface, and a bind to a set port by a program the firewall has
+// no rule for brings up the Windows Firewall question ("allow public and
+// private networks to access this app?"). It stayed on top, and while it was
+// up Windows dropped every click reminal sent into a mirrored window. The
+// sockets a connection itself uses are on ports the system picks, which ask
+// nothing. Without the lookup a viewer's address given only as a ".local"
+// name is not used; its other addresses, and the ones it learns of this
+// side, still are.
+func rtcSettings(goos string) webrtc.SettingEngine {
+	var se webrtc.SettingEngine
+	if goos == "windows" {
+		se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	}
+	return se
+}
 
 // rtcProbeWindow is how long a connected-but-unconfirmed DataChannel is probed
 // (frames sent over both it and WS) before we give up on it. A channel that
