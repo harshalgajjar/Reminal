@@ -183,3 +183,59 @@ func TestAStillWindowIsCapturedLessOften(t *testing.T) {
 		t.Errorf("after input: floor %v, want %v", got, windowFrameInterval)
 	}
 }
+
+// A window answers a tap in more than one draw (a button shows pressed, the
+// result comes tens of milliseconds later). Over the relay only the first
+// changed frame used to leave early, and the frame with the result waited
+// out the pacing interval: every such tap took 200 ms and more. For the
+// input's burst the first wsBurstShips changed frames leave early, no closer
+// together than wsBurstGap; after them, and after the burst, the pacing
+// holds again, so a tap adds at most wsBurstShips-1 messages.
+func TestRelayFramesAfterInputLeaveEarlyAFewTimes(t *testing.T) {
+	s := lateJoinStream()
+	s.flush = newWinInputSignal()
+	due := func(at time.Time) bool { return s.wsFrameDue(s.a.framesWantedBy(), 0, at) }
+	// Paced, with no input: a frame right after another waits.
+	t0 := time.Now()
+	s.lastWSFrame = t0
+	if due(t0.Add(50 * time.Millisecond)) {
+		t.Fatal("with no input, a frame 50 ms after the last one must wait")
+	}
+	s.flush.raise()
+	s.takeInputFlush()
+	if !due(t0.Add(time.Millisecond)) {
+		t.Fatal("the first frame after input must leave at once")
+	}
+	sent := 1
+	at := t0.Add(16 * time.Millisecond)
+	s.wsShipped(at) // the pressed button
+	if due(at.Add(wsBurstGap / 2)) {
+		t.Error("a second frame left sooner than wsBurstGap after the first")
+	}
+	// A changed frame every 16 ms for the rest of the burst, as a capture
+	// loop in its burst would offer them.
+	for x := at.Add(16 * time.Millisecond); x.Before(s.burstUntil); x = x.Add(16 * time.Millisecond) {
+		if due(x) {
+			if gap := x.Sub(s.lastWSFrame); gap < wsBurstGap {
+				t.Errorf("frames %v apart in the burst, want at least %v", gap, wsBurstGap)
+			}
+			s.wsShipped(x)
+			sent++
+		}
+	}
+	// Pacing alone would have sent the first frame and one more in a burst
+	// of inputBurstFor: the burst may add wsBurstShips-1 to that at most.
+	paced := 1 + int(inputBurstFor/wsFrameMinInterval)
+	if sent < wsBurstShips || sent > paced+wsBurstShips-1 {
+		t.Errorf("%d relay frames in one input's burst, want at least %d (the result is not held back) and at most %d", sent, wsBurstShips, paced+wsBurstShips-1)
+	}
+	// The burst over: paced again.
+	after := s.burstUntil.Add(time.Millisecond)
+	s.wsShipped(after)
+	if due(after.Add(50 * time.Millisecond)) {
+		t.Error("after the burst a frame 50 ms after the last one must wait again")
+	}
+	if !due(after.Add(wsFrameMinInterval)) {
+		t.Error("after the burst the pacing interval must still let a frame through")
+	}
+}

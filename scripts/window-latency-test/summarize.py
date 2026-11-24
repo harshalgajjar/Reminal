@@ -33,7 +33,11 @@ for tag, trials in v["trials"].items():
             if tr["paintWall"]: h2p.append(tr["paintWall"] - events[ev][1])
     res["latency"][tag] = {
         "trials": len(trials), "lost": lost,
-        "g2g_ms": {"p50": pct(g2g, .5), "p95": pct(g2g, .95), "min": pct(g2g, 0)},
+        "g2g_ms": {"p50": pct(g2g, .5), "p90": pct(g2g, .9), "p95": pct(g2g, .95), "max": pct(g2g, 1), "min": pct(g2g, 0)},
+        # How many taps took a relay pacing interval or more (wsFrameMinInterval).
+        "g2g_200ms_or_more": sum(1 for x in g2g if x >= 200),
+        "frames_drawn_per_trial": (v.get("framesPerTrial") or {}).get(tag),
+        "g2g_all_ms": sorted(round(x) for x in g2g),
         "input_to_host_ms": {"p50": pct(in2h, .5), "p95": pct(in2h, .95)},
         "host_to_paint_ms": {"p50": pct(h2p, .5), "p95": pct(h2p, .95)},
         "by_kind_p50": {k: pct([t["g2g"] for t in trials if t["kind"] == k], .5) for k in ("key", "click")},

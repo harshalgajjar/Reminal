@@ -1671,9 +1671,11 @@ type winStream struct {
 	// window waits for it instead of capturing on a timer (xdamage_linux.go).
 	damage *winDamage
 	// shipNow is set when input just landed: drop unsent pre-click AUs, re-key,
-	// and send the next frame without waiting for the billing interval. Does
-	// not add messages — it only moves the next one earlier.
+	// and send the next frame without waiting for the billing interval.
 	shipNow bool
+	// burstShips counts the relay frames sent since the last input, while its
+	// burst lasts (burstUntil): the first few go out early (wsBurstDue).
+	burstShips int
 
 	// Frame source: the native SCK helper when available (hardware capture +
 	// JPEG at winHelperFPS with its own change detection), else per-frame
@@ -2590,7 +2592,40 @@ func (s *winStream) wsFrameDue(vc, confirmed int, now time.Time) bool {
 	if !wsSinkNeeded(vc, confirmed) {
 		return false
 	}
-	return s.forceSend || s.shipNow || now.Sub(s.lastWSFrame) >= wsFrameMinInterval
+	return s.forceSend || s.wsBurstDue(now) || now.Sub(s.lastWSFrame) >= wsFrameMinInterval
+}
+
+// After an input, a window seldom answers in one draw: a button shows
+// pressed at once and the result comes some tens of milliseconds later. With
+// only the first changed frame let through early, that first frame was the
+// pressed button, and the frame with the result waited out the rest of
+// wsFrameMinInterval: a tap over the relay took 200 ms and more whenever the
+// window drew in two steps. So for the length of the input burst
+// (inputBurstFor) the first wsBurstShips changed frames go out early, no
+// closer together than wsBurstGap. Only changed frames are ever sent, so a
+// window that answers in one draw still costs one message; the most a tap
+// can add is wsBurstShips-1 messages over what pacing alone would send.
+const (
+	wsBurstShips = 3
+	wsBurstGap   = 40 * time.Millisecond
+)
+
+// wsBurstDue reports whether a relay frame may go out now ahead of the
+// pacing, because input just landed.
+func (s *winStream) wsBurstDue(now time.Time) bool {
+	if s.shipNow {
+		return true
+	}
+	return now.Before(s.burstUntil) && s.burstShips < wsBurstShips && now.Sub(s.lastWSFrame) >= wsBurstGap
+}
+
+// wsShipped notes a relay frame (or batch) sent at now.
+func (s *winStream) wsShipped(now time.Time) {
+	s.lastWSFrame = now
+	s.shipNow = false
+	if now.Before(s.burstUntil) {
+		s.burstShips++
+	}
 }
 
 // takeInputFlush reacts to a viewer click/key: throw away unsent pre-click
@@ -2620,6 +2655,7 @@ func (s *winStream) takeInputFlush() {
 		s.helper.rekey()
 	}
 	s.shipNow = true
+	s.burstShips = 0
 }
 
 func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
@@ -2752,7 +2788,7 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 		// if the WS window isn't open yet, drop without advancing seq and let
 		// the next iteration carry fresher content.
 		sinks.confirmed, sinks.probe = nil, nil
-		sinks.ws = time.Since(s.lastWSFrame) >= wsFrameMinInterval || s.shipNow
+		sinks.ws = time.Since(s.lastWSFrame) >= wsFrameMinInterval || s.wsBurstDue(time.Now())
 		if !sinks.ws {
 			return
 		}
@@ -2763,8 +2799,7 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 	}
 	if sinks.ws {
 		s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
-		s.lastWSFrame = time.Now()
-		s.shipNow = false
+		s.wsShipped(time.Now())
 	}
 	if len(sinks.probe) > 0 {
 		for _, p := range sinks.probe {
@@ -2869,9 +2904,13 @@ func (s *winStream) appendWSBatch(conn *websocket.Conn, f winFrame) {
 	}
 	s.wsBatch = append(s.wsBatch, f)
 	s.wsBatchBytes += len(f.Data)
-	if s.wsBatchBytes >= wsBatchMaxBytes || time.Since(s.lastWSFrame) >= wsFrameMinInterval || s.shipNow {
+	if s.wsBatchBytes >= wsBatchMaxBytes || time.Since(s.lastWSFrame) >= wsFrameMinInterval || s.wsBurstDue(time.Now()) {
+		burst := s.shipNow || time.Now().Before(s.burstUntil)
 		s.flushWSBatch(conn)
 		s.shipNow = false
+		if burst {
+			s.burstShips++
+		}
 	}
 }
 
