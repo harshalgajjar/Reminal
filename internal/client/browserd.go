@@ -372,8 +372,9 @@ func browserBridgeBrowser(pid int) string {
 	return ""
 }
 
-// browserProcessName matches the program names of Chrome's family.
-var browserProcessName = regexp.MustCompile(`(?i)^(google chrome|chrome|chromium|chromium-browser|msedge|microsoft edge|brave|brave browser|brave-browser|arc|headless_shell)( (helper|beta|dev|canary).*)?$`)
+// browserProcessName matches the program names of Chrome's family, Chrome for
+// Testing among them (what browser automation downloads and runs).
+var browserProcessName = regexp.MustCompile(`(?i)^(google chrome|google chrome for testing|chrome|chromium|chromium-browser|msedge|microsoft edge|brave|brave browser|brave-browser|arc|headless_shell)( (helper|beta|dev|canary).*)?$`)
 
 // request checks who is asking, passes the request to the bridge and waits
 // for its answer.
