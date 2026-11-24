@@ -5,6 +5,12 @@
 set -u
 export HOME=/tmp/h PATH=/b:$PATH REMINAL_LOCAL=1 SHELL=/bin/bash DISPLAY=:99
 mkdir -p $HOME/.config/chromium /b /tmp/q && cp /out/reminal /b/reminal && chmod +x /b/reminal
+# POLICY=1: a managed browser. Its administrator's policy (a file only root
+# writes) starts two of the extension's switches on; the third has no policy.
+if [ -n "${POLICY:-}" ]; then
+  mkdir -p /etc/chromium/policies/managed
+  echo '{"3rdparty":{"extensions":{"igahbbfpoepnabdbgndnheeieimlhpjh":{"scripts":"on","cookies":"on"}}}}' > /etc/chromium/policies/managed/reminal.json
+fi
 Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 & sleep 1
 openbox >/dev/null 2>&1 &
 node -e '
@@ -34,7 +40,7 @@ REMINAL_SESSION=$ID mcp browser_tabs_context '{}' | grep -o '"text":"Error: [^"]
 REC=""
 if [ -n "${GIF:-}" ]; then ffmpeg -loglevel error -f x11grab -video_size 1280x800 -framerate 10 -i :99 -y /tmp/rec.mp4 & REC=$!; fi
 cp /r/scripts/browser-test/check.mjs /e2e/check.mjs
-cd /e2e && ID=$ID ID2=$ID2 MODE=${MODE:-full} node check.mjs; rc=$?
+cd /e2e && ID=$ID ID2=$ID2 MODE=${MODE:-full} POLICY=${POLICY:-} node check.mjs; rc=$?
 if [ -n "$REC" ]; then
   kill -INT $REC; wait $REC 2>/dev/null
   ffmpeg -loglevel error -i /tmp/rec.mp4 -vf "setpts=PTS/${GIF_SPEED:-1.6},fps=8,scale=960:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=96[p];[b][p]paletteuse=dither=bayer:bayer_scale=4" -y /s/browser.gif && ls -la /s/browser.gif | sed 's/^/  /'

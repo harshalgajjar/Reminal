@@ -32,6 +32,11 @@ function drawn(part, value) {
 
 async function drawSwitches() {
   const { agents, ...more } = await chrome.storage.local.get(['agents', 'scripts', 'uploads', 'cookies']);
+  // Until the person sets one, what the browser's policy says (an
+  // administrator's to set: background.js, switchValues).
+  let managed = {};
+  try { managed = await chrome.storage.managed.get(['scripts', 'uploads', 'cookies']); } catch { /* no policy */ }
+  for (const k of Object.keys(managed)) more[k] ??= managed[k];
   const on = agents !== 'off';
   $('agents').checked = on;
   $('state').textContent = on ? 'on' : 'off';

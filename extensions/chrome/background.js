@@ -1139,8 +1139,20 @@ const SWITCHES = {
   uploads: 'Giving files from this computer to pages is off in this browser. It is off unless the person switches it on (the reminal button in the browser\'s toolbar). Ask them if they want it on, or to upload the file themselves.',
   cookies: 'Reading and changing cookies and site storage is off in this browser. It is off unless the person switches it on (the reminal button in the browser\'s toolbar): those hold their sign-ins. Ask them if they want it on.',
 };
+// A switch is what the person set in the button; until they set it, what
+// the browser's policy says (chrome.storage.managed, managed_schema.json).
+// A policy is an administrator's to set, for browsers they manage, and gives
+// a switch its starting value only: what the person sets in the button wins,
+// "off" too. With no policy, as on a person's own computer, every switch is
+// off until they switch it on.
+async function switchValues(names) {
+  const local = await chrome.storage.local.get(names);
+  let managed = {};
+  try { managed = await chrome.storage.managed.get(names); } catch { /* no policy */ }
+  return Object.fromEntries(names.map((n) => [n, local[n] ?? managed[n]]));
+}
 async function switchedOn(name) {
-  if ((await chrome.storage.local.get(name))[name] !== 'on') throw new Error(SWITCHES[name]);
+  if ((await switchValues([name]))[name] !== 'on') throw new Error(SWITCHES[name]);
 }
 // The log: what agents did here that the person should be able to see
 // afterwards. A page a session opened in its tabs (kind "visit", with the

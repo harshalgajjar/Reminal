@@ -78,3 +78,51 @@ func TestChromeExtensionIsWrittenWithItsFilesVersion(t *testing.T) {
 		}
 	}
 }
+
+// The extension written out has its policy schema beside its manifest, and
+// the manifest names it: without the file the browser gives the extension no
+// policy at all, and an administrator's starting values are never seen.
+func TestChromeExtensionIsWrittenWithItsPolicySchema(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ext")
+	if err := writeChromeExtension(dir); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Storage struct {
+			Schema string `json:"managed_schema"`
+		} `json:"storage"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("the written manifest is not JSON: %v", err)
+	}
+	if m.Storage.Schema == "" {
+		t.Fatal("the written manifest names no policy schema")
+	}
+	got, err := os.ReadFile(filepath.Join(dir, m.Storage.Schema))
+	if err != nil {
+		t.Fatalf("the schema the manifest names was not written: %v", err)
+	}
+	var s struct {
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(got, &s); err != nil {
+		t.Fatalf("the written schema is not JSON: %v", err)
+	}
+	// Only the three switches a person has in the button: never the main
+	// switch (agents), which is the person's alone.
+	want := []string{"cookies", "scripts", "uploads"}
+	if len(s.Properties) != len(want) {
+		t.Errorf("the schema has %d properties, want exactly %v", len(s.Properties), want)
+	}
+	for _, k := range want {
+		if s.Properties[k].Type != "string" {
+			t.Errorf("the schema has no string property %q", k)
+		}
+	}
+}

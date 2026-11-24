@@ -18,7 +18,7 @@ import (
 
 // Files is the extension: its manifest, scripts, pages and icons.
 //
-//go:embed manifest.json *.js *.html *.css icons
+//go:embed manifest.json managed_schema.json *.js *.html *.css icons
 var Files embed.FS
 
 // Version is the extension's version as reminal writes it out: "0.1.a.b",

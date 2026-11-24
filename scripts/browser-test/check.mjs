@@ -122,6 +122,46 @@ const timedOpen = async (file, done) => {
 const panelRows = () => popupDo(async (p) => { await p.waitForFunction(() => document.querySelector('#list li') || !document.getElementById('none').hidden, null, { timeout: 5000 }).catch(() => {}); return p.locator('#list li').allTextContents(); });
 const tabsOfGroup = (title) => inSW((title) => chrome.tabGroups.query({ title }).then((gs) => chrome.tabs.query({}).then((ts) => ts.filter((t) => gs.some((g) => g.id === t.groupId)).map((t) => t.id))), title);
 
+// The three switches as installed, read where the extension reads them: the
+// browser's policy for it, and what the person has set.
+const managedNow = () => inSW(() => chrome.storage.managed.get(['scripts', 'uploads', 'cookies']).catch(() => ({})));
+if (!process.env.POLICY) {
+  check(Object.keys(await managedNow()).length === 0, 'no policy in this browser: every switch starts off (checked below, tool by tool)');
+} else {
+  // A managed browser (rig.sh, POLICY=1): the policy says scripts and cookies
+  // start on, and says nothing of files. The full run is this one's control.
+  let m = {};
+  for (let i = 0; i < 40 && !m.scripts; i++) { m = await managedNow(); if (!m.scripts) await pause(250); }
+  check(m.scripts === 'on' && m.cookies === 'on' && m.uploads === undefined, `the browser gives the extension its administrator's policy (${JSON.stringify(m)})`);
+  const mine = () => inSW(() => chrome.storage.local.get(['scripts', 'uploads', 'cookies']));
+  check(Object.keys(await mine()).length === 0, 'the person has set none of the three switches');
+  let r = await call('browser_tabs_create', { url: `${PAGES}/tools.html` });
+  check(!r.err, `a tab (${r.err || r.text})`);
+  r = await call('browser_evaluate', { expression: '1 + 1' });
+  check(!r.err && /\n2$/.test(r.text), `scripts: on from the policy, with no click (${r.err || r.text.split('\n').pop()})`);
+  r = await call('browser_cookies', {});
+  check(!r.err, `cookies: on from the policy (${r.err || 'listed'})`);
+  fs.writeFileSync('/tmp/policy-file.txt', 'x');
+  r = await call('browser_file_upload', { ref: 'e1', paths: ['/tmp/policy-file.txt'] });
+  check(r.err && /Giving files from this computer to pages is off/.test(r.err), `files: no policy for it, so off as installed (${r.err || r.text})`);
+  const shown = await popupDo(async (p) => [await p.isChecked('#scripts'), await p.isChecked('#uploads'), await p.isChecked('#cookies')]);
+  check(shown[0] && !shown[1] && shown[2], `the button's panel shows them as they are: scripts on, files off, cookies on (${JSON.stringify(shown)})`);
+  // The person's own switch wins over the policy, "off" too.
+  await popupDo(async (p) => { await p.uncheck('#scripts'); });
+  check((await mine()).scripts === 'off', 'switched off by the person: kept as their own "off"');
+  r = await call('browser_evaluate', { expression: '1 + 1' });
+  check(r.err && /Running scripts in pages is off/.test(r.err), `scripts: the person's off beats the policy's on (${r.err || r.text})`);
+  r = await call('browser_cookies', {});
+  check(!r.err, `cookies: still on, each switch by itself (${r.err || 'listed'})`);
+  check(!(await popupDo(async (p) => p.isChecked('#scripts'))), "the panel shows the person's off, not the policy's on");
+  await popupDo(async (p) => { await p.check('#scripts'); });
+  r = await call('browser_evaluate', { expression: '1 + 1' });
+  check(!r.err, `scripts: on again when the person switches it on (${r.err || 'ran'})`);
+  await ctx.close();
+  console.log(fails.length ? `${fails.length} failed` : 'all ok');
+  process.exit(fails.length ? 1 : 0);
+}
+
 // 1. The control: the switch in the button off. Every request is refused,
 // saying so, and nothing is done.
 {
