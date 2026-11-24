@@ -15,6 +15,8 @@ ul { list-style: none; padding: 0; margin: 0; }
 li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
 li:first-child { border-top: 0; }
 .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A session the person stopped: its name dimmed, Resume beside it. */
+li.stopped .who { color: var(--dim); }
 /* The whole log, on a page of its own (history.html). */
 .history main { max-width: 900px; margin: 0 auto; padding: 28px 22px; }
 .filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 10px; }

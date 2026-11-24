@@ -19,7 +19,7 @@ $('rule').textContent = `reminal keeps this for ${KEPT_DAYS} days, the newest ${
 
 // The kinds of action that are logged, as the filter names them. An entry
 // written before entries had a kind is told by its words.
-const KINDS = { visit: 'Pages opened', script: 'Scripts run in pages', upload: 'Files given to pages', cookies: 'Cookies', storage: 'Site storage' };
+const KINDS = { visit: 'Pages opened', script: 'Scripts run in pages', upload: 'Files given to pages', cookies: 'Cookies', storage: 'Site storage', password: 'Passwords typed' };
 const kindOf = (n) => {
   if (n.kind in KINDS) return n.kind;
   const t = String(n.text || '');

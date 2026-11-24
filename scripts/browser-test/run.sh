@@ -6,7 +6,7 @@
 # would (Deny first: the control; then Allow) and checks each tool and rule.
 #   GIF=1  record the run to $SHOTS/browser.gif (SHOTS defaults to ./out)
 #   POLICY=1  only the checks of a managed browser: an administrator's policy
-#             starts two switches on (the full run is its control: no policy)
+#             starts three switches on (the full run is its control: no policy)
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$(cd ../.. && pwd)

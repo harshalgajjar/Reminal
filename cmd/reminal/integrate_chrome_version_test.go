@@ -114,9 +114,9 @@ func TestChromeExtensionIsWrittenWithItsPolicySchema(t *testing.T) {
 	if err := json.Unmarshal(got, &s); err != nil {
 		t.Fatalf("the written schema is not JSON: %v", err)
 	}
-	// Only the three switches a person has in the button: never the main
-	// switch (agents), which is the person's alone.
-	want := []string{"cookies", "scripts", "uploads"}
+	// Only the switches that are off as installed: never the main switch
+	// (agents), which is the person's alone.
+	want := []string{"cookies", "passwords", "scripts", "uploads"}
 	if len(s.Properties) != len(want) {
 		t.Errorf("the schema has %d properties, want exactly %v", len(s.Properties), want)
 	}

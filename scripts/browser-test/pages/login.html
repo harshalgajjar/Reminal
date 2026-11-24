@@ -1,4 +1,4 @@
 <!doctype html><html><head><meta charset="utf-8"><title>Sign in</title><style>body{font:16px system-ui,sans-serif;padding:40px}input{display:block;margin:8px 0;font:inherit;padding:6px}</style></head>
 <body><h1>Sign in to Example</h1>
-<form onsubmit="event.preventDefault()"><input id="user" placeholder="Email"><input id="pass" type="password" placeholder="Password"><button id="signin">Sign in</button></form>
+<form onsubmit="event.preventDefault();document.body.dataset.sent=this.querySelector('#user').value"><input id="user" placeholder="Email"><input id="pass" type="password" placeholder="Password"><button id="signin">Sign in</button></form>
 </body></html>

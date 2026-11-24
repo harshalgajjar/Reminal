@@ -4,7 +4,8 @@
 // The extension's button: whether reminal is connected; the switch for this
 // browser profile (on, as installed: any reminal session on this computer may
 // use it; off: every request refused); the sessions using it now, with Stop
-// (for that run of the session); and the newest lines of the log, with a
+// (for that run of the session) and, on one that is stopped, Resume; and the
+// newest lines of the log, with a
 // button for the page that has all of it (history.html).
 //
 // Each part is drawn from what the browser has stored, by a read of its own,
@@ -30,12 +31,14 @@ function drawn(part, value) {
   console.log(`[reminal] panel: switches drawn in ${took.switches} ms, lists in ${Math.max(took.sessions, took.notes)} ms, ${took.entries} log entries (${took.worker == null ? 'worker did not answer in 5000 ms' : `worker answered in ${took.worker} ms`})`);
 }
 
+// The switches that are off as installed, each the id of its box.
+const MORE = ['scripts', 'uploads', 'cookies', 'passwords'];
 async function drawSwitches() {
-  const { agents, ...more } = await chrome.storage.local.get(['agents', 'scripts', 'uploads', 'cookies']);
+  const { agents, ...more } = await chrome.storage.local.get(['agents', ...MORE]);
   // Until the person sets one, what the browser's policy says (an
   // administrator's to set: background.js, switchValues).
   let managed = {};
-  try { managed = await chrome.storage.managed.get(['scripts', 'uploads', 'cookies']); } catch { /* no policy */ }
+  try { managed = await chrome.storage.managed.get(MORE); } catch { /* no policy */ }
   for (const k of Object.keys(managed)) more[k] ??= managed[k];
   const on = agents !== 'off';
   $('agents').checked = on;
@@ -73,8 +76,9 @@ async function drawNotes() {
 // ended is shown while its group is open, with a button that closes its
 // tabs, and the worker forgets it once the group is gone. With reminal not
 // connected nothing can say which are running: only those with a group.
-const row = (text, title, button, press) => {
+const row = (text, title, button, press, cls) => {
   const li = document.createElement('li');
+  if (cls) li.className = cls;
   const who = document.createElement('span');
   who.className = 'who';
   who.textContent = text;
@@ -99,8 +103,10 @@ async function sessionRows() {
     if (!k.startsWith('s:') || ended(s.session)) continue;
     seen.add(s.session);
     if (!connected && !grouped.has(s.session)) continue;
+    // One the person stopped looks stopped, and has the way back beside it:
+    // Resume gives that run what Stop took, with the agent as it is.
     rows.push(row(`${s.session ? s.session + ' - reminal' : 'reminal'}${s.stopped ? ' (stopped)' : ''}`, s.session || '',
-      s.stopped ? '' : 'Stop', () => chrome.runtime.sendMessage({ t: 'stop', key: k })));
+      s.stopped ? 'Resume' : 'Stop', () => chrome.runtime.sendMessage({ t: s.stopped ? 'resume' : 'stop', key: k }), s.stopped ? 'stopped' : ''));
   }
   for (const id of grouped) {
     if (ended(id)) rows.push(row(`${id} - reminal (ended)`, id, 'Close its tabs', () => chrome.runtime.sendMessage({ t: 'close', session: id })));
@@ -131,8 +137,8 @@ $('agents').addEventListener('change', async (e) => {
   await chrome.runtime.sendMessage({ t: 'switch', on: e.target.checked });
   drawSwitches();
 });
-// Scripts in pages, files given to pages, cookies and storage: each its own
-// switch, off as installed.
+// Scripts in pages, files given to pages, cookies and storage, passwords:
+// each its own switch, off as installed.
 for (const box of document.querySelectorAll('input.more')) {
   box.addEventListener('change', (e) => chrome.storage.local.set({ [box.id]: e.target.checked ? 'on' : 'off' }));
 }
@@ -147,7 +153,7 @@ setTimeout(() => drawn('worker', null), 5000);
 chrome.storage.onChanged.addListener((changes, area) => {
   const keys = Object.keys(changes);
   if (area === 'local') {
-    if (keys.some((k) => ['agents', 'scripts', 'uploads', 'cookies'].includes(k))) drawSwitches();
+    if (keys.some((k) => k === 'agents' || MORE.includes(k))) drawSwitches();
     if ('recent' in changes) drawNotes();
   } else if (area === 'session') {
     if ('host' in changes) drawStatus();

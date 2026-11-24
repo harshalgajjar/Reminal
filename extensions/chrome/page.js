@@ -2,8 +2,8 @@
 // Copyright (C) 2026 Harshal Gajjar
 //
 // What runs in a page, in the extension's own isolated world. Each function
-// is sent on its own by chrome.scripting.executeScript, after rules.js (the
-// rules and the ref map, as globalThis.__reminal): no closures.
+// is sent on its own by chrome.scripting.executeScript, after rules.js's
+// rules() (the rules and the ref map, as globalThis.__reminal): no closures.
 
 // locate: where an action on ref, or on the point x, y, lands, and whether
 // it is paused there.
@@ -29,20 +29,22 @@ export function locate(ref, x, y) {
   // presses a hidden file field).
   const fileField = !!el && el.tagName === 'INPUT' && el.type === 'file';
   const fileish = fileField || (!!el && !R.textField(el) && R.deepAll(document, 'input[type=file]').length > 0);
-  return { x, y, what: R.what(el), paused: R.paused(el), secret: R.secret(el) ? R.NEVER : "", frame, frameSrc, fileish, fileField };
+  return { x, y, what: R.what(el), paused: R.paused(el), secret: R.refused(el), frame, frameSrc, fileish, fileField };
 }
 
 // focused: what typing would go into, in this frame (each frame answers):
 // whether this frame has the focus, and whether its focused element is a
-// frame (the focus is further in). Refused for a password or payment field;
-// paused in a sign-in form or with a CAPTCHA showing.
+// frame (the focus is further in). Refused for a payment field, and for a
+// password field unless the person switched passwords on; paused in a
+// sign-in form (the same switch) or with a CAPTCHA showing. password: what
+// is typed there is a password, and is never said back.
 export function focused() {
   const R = globalThis.__reminal;
   let el = document.activeElement;
   while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
   return {
     hasFocus: document.hasFocus(), frame: !!el && /^(IFRAME|FRAME|OBJECT|EMBED)$/.test(el.tagName),
-    what: R.what(el), refused: R.secret(el) ? R.NEVER : '', paused: R.paused(el), captcha: R.captcha(),
+    what: R.what(el), refused: R.refused(el), paused: R.paused(el), captcha: R.captcha(), password: !!el && R.passwordish(el),
   };
 }
 
@@ -53,7 +55,7 @@ export function frameCheck() {
   const R = globalThis.__reminal;
   const personOnly = R.personOnly();
   if (personOnly) R.ever = true;
-  return { personOnly, ever: !!R.ever, captcha: R.captcha(), url: location.href };
+  return { personOnly, act: R.personOnlyAct(), ever: !!R.ever, captcha: R.captcha(), url: location.href };
 }
 
 export function middle() { return { x: innerWidth / 2, y: innerHeight / 2 }; }
@@ -76,7 +78,10 @@ export function readTree(interactiveOnly) {
   };
   const lines = [];
   if (R.captcha()) lines.push('(A CAPTCHA is showing: actions are paused until the person solves it.)');
-  if (R.deepAll(document, 'input, textarea').some(R.passwordish)) lines.push('(This page has a sign-in: actions inside it are paused for the person.)');
+  if (R.deepAll(document, 'input, textarea').some(R.passwordish)) {
+    lines.push(R.pw ? '(This page has a sign-in. The person switched typing passwords on in this browser, so you may fill it in and send it. A password\'s value is never read back.)'
+      : '(This page has a sign-in: actions inside it are paused for the person, who can switch typing passwords on in the reminal button.)');
+  }
   const walk = (el, depth) => {
     if (lines.length > 3000 || el.nodeType !== 1) return;
     if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(el.tagName) || el.getAttribute('aria-hidden') === 'true') return;
@@ -92,7 +97,7 @@ export function readTree(interactiveOnly) {
       if (name) line += ` "${name}"`;
       if (act) line += ` [${ref}]`;
       if (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) {
-        if (R.passwordish(el)) line += ' (password: the person types it)';
+        if (R.passwordish(el)) line += R.pw ? ' (password: its value is not read)' : ' (password: the person types it)';
         else if (R.payment(el)) line += ' (payment: the person types it)';
         else if (el.type === 'checkbox' || el.type === 'radio') line += el.checked ? ' checked' : ' unchecked';
         else if (el.value) line += ` value="${String(el.value).slice(0, 80)}"`;
@@ -165,7 +170,7 @@ export function fieldKind(ref) {
   if (!el || !el.isConnected) return { error: `${ref} is not on the page any more: read it again with browser_read_page.` };
   const type = (el.type || '').toLowerCase();
   const kind = el.tagName === 'SELECT' ? 'select' : el.tagName === 'INPUT' && (type === 'checkbox' || type === 'radio') ? 'check' : R.textField(el) ? 'text' : 'other';
-  return { kind, checked: !!el.checked, what: R.what(el), secret: R.secret(el) ? R.NEVER : '' };
+  return { kind, checked: !!el.checked, what: R.what(el), secret: R.refused(el), password: R.passwordish(el) };
 }
 
 // selectAll: everything in a text field selected, so what is typed next
@@ -264,14 +269,16 @@ export function storage(kind, action, key, value) {
 
 // focusField: a text field given the focus, what is in it selected, for
 // browser_fill_form to type over: held to the rules as a click on it is
-// (never a password or payment field, paused in a sign-in or with a CAPTCHA
-// showing). focused false: it did not take the focus this way.
+// (never a payment field, a password field only with the person's switch
+// on, paused in a sign-in without it or with a CAPTCHA showing). focused
+// false: it did not take the focus this way.
 export function focusField(ref) {
   const R = globalThis.__reminal;
   const w = R.refs.get(ref);
   const el = w && w.deref();
   if (!el || !el.isConnected) return { error: `${ref} is not on the page any more: read it again with browser_read_page.` };
-  if (R.secret(el)) return { error: R.NEVER };
+  const refused = R.refused(el);
+  if (refused) return { error: refused };
   const paused = R.paused(el);
   if (paused) return { error: paused };
   if (el.disabled || el.readOnly) return { error: `${R.what(el)} cannot be typed into (it is disabled or read-only).` };

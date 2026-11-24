@@ -6,10 +6,10 @@ set -u
 export HOME=/tmp/h PATH=/b:$PATH REMINAL_LOCAL=1 SHELL=/bin/bash DISPLAY=:99
 mkdir -p $HOME/.config/chromium /b /tmp/q && cp /out/reminal /b/reminal && chmod +x /b/reminal
 # POLICY=1: a managed browser. Its administrator's policy (a file only root
-# writes) starts two of the extension's switches on; the third has no policy.
+# writes) starts three of the extension's switches on; files has no policy.
 if [ -n "${POLICY:-}" ]; then
   mkdir -p /etc/chromium/policies/managed
-  echo '{"3rdparty":{"extensions":{"igahbbfpoepnabdbgndnheeieimlhpjh":{"scripts":"on","cookies":"on"}}}}' > /etc/chromium/policies/managed/reminal.json
+  echo '{"3rdparty":{"extensions":{"igahbbfpoepnabdbgndnheeieimlhpjh":{"scripts":"on","cookies":"on","passwords":"on"}}}}' > /etc/chromium/policies/managed/reminal.json
 fi
 Xvfb :99 -screen 0 1280x800x24 >/dev/null 2>&1 & sleep 1
 openbox >/dev/null 2>&1 &
