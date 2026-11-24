@@ -54,6 +54,18 @@ func markPageWords(blocks []any) []any {
 	return append([]any{map[string]any{"type": "text", "text": pageNote}}, blocks...)
 }
 
+// hasWords: some text block of a result says something.
+func hasWords(blocks []any) bool {
+	for _, b := range blocks {
+		if m, ok := b.(map[string]any); ok && m["type"] == "text" {
+			if s, _ := m["text"].(string); strings.TrimSpace(s) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // browserToolsHere: the browser tools are offered only where they can work:
 // once `reminal integrate` has registered the browser host for a browser
 // here.
@@ -281,6 +293,12 @@ func mcpBrowser(tool string, args map[string]any) ([]any, error) {
 		return nil, err
 	}
 	blocks, err := browserBlocks(reply, args)
+	if err == nil && (tool == "browser_read_page" || tool == "browser_get_page_text") && !hasWords(blocks) {
+		// A page read is never empty (it leads with the page's title and
+		// address): the extension's code did not run in the page. Said, not
+		// handed on as a blank page.
+		return nil, errors.New("the browser's extension gave nothing back for this page: its page code did not load there. reminal's extension reloads itself when its files are newer than what is running; try again, and if this goes on, ask the person to reload it on the browser's extensions page")
+	}
 	if err == nil && tool == "browser_batch" {
 		// Every step's answer may be a page's words.
 		for i, b := range blocks {

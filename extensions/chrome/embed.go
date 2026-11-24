@@ -50,18 +50,38 @@ func Version() string {
 	return fmt.Sprintf("0.1.%d.%d", binary.BigEndian.Uint16(s[0:2]), binary.BigEndian.Uint16(s[2:4]))
 }
 
-var manifestVersion = regexp.MustCompile(`"version":\s*"[^"]*"`)
+var (
+	manifestVersion = regexp.MustCompile(`"version":\s*"[^"]*"`)
+	workerCode      = regexp.MustCompile(`(?m)^const CODE = '[^']*';$`)
+)
 
 // File is one file of the extension as reminal writes it out: the manifest
-// with Version in place of the version it is kept with, every other file as
-// it is.
+// with Version in place of the version it is kept with, the worker's script
+// (background.js) with Version as the version it says it is (its CODE),
+// every other file as it is.
+//
+// The worker's own copy of the version is what tells a browser running an
+// older script apart: a browser keeps the worker's script with the profile,
+// and started again after reminal replaced the files while it was closed, it
+// can run the script it kept against the newer manifest. The manifest's
+// version is then the new one whichever script runs; the script's is its
+// own, and one that differs from the manifest's reloads the extension.
 func File(p string) ([]byte, error) {
 	b, err := fs.ReadFile(Files, p)
-	if err != nil || p != "manifest.json" {
+	if err != nil {
 		return b, err
 	}
-	if !manifestVersion.Match(b) {
-		return nil, errors.New("the extension's manifest has no version")
+	switch p {
+	case "manifest.json":
+		if !manifestVersion.Match(b) {
+			return nil, errors.New("the extension's manifest has no version")
+		}
+		return manifestVersion.ReplaceAll(b, []byte(`"version": "`+Version()+`"`)), nil
+	case "background.js":
+		if len(workerCode.FindAll(b, -1)) != 1 {
+			return nil, errors.New("the extension's worker does not say its version once")
+		}
+		return workerCode.ReplaceAll(b, []byte(`const CODE = '`+Version()+`';`)), nil
 	}
-	return manifestVersion.ReplaceAll(b, []byte(`"version": "`+Version()+`"`)), nil
+	return b, nil
 }

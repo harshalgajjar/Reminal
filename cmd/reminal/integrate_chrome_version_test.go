@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	chromeext "reminal/extensions/chrome"
@@ -69,8 +70,9 @@ func TestChromeExtensionIsWrittenWithItsFilesVersion(t *testing.T) {
 	if _, err := os.Stat(none); err == nil {
 		t.Error("a folder no setup wrote was created")
 	}
-	// Every other file is written as kept.
-	for _, p := range []string{"background.js", "popup.js", "page.js"} {
+	// Every other file is written as kept (the worker's script but for the
+	// version it says: TestTheWorkerIsWrittenSayingItsFilesVersion).
+	for _, p := range []string{"rules.js", "popup.js", "page.js"} {
 		a, _ := chromeext.Files.ReadFile(p)
 		b, _ := os.ReadFile(filepath.Join(dir, p))
 		if string(a) != string(b) {
@@ -124,5 +126,31 @@ func TestChromeExtensionIsWrittenWithItsPolicySchema(t *testing.T) {
 		if s.Properties[k].Type != "string" {
 			t.Errorf("the schema has no string property %q", k)
 		}
+	}
+}
+
+// The worker's script is written out saying the version of the files it
+// came with, the same one as the manifest's: a browser that starts a script
+// it kept from before on newer files reads the newer manifest either way,
+// and only the script's own version shows that it is the older one.
+func TestTheWorkerIsWrittenSayingItsFilesVersion(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ext")
+	if err := writeChromeExtension(dir); err != nil {
+		t.Fatal(err)
+	}
+	js, err := os.ReadFile(filepath.Join(dir, "background.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "\nconst CODE = '" + chromeext.Version() + "';\n"
+	if n := strings.Count(string(js), want); n != 1 {
+		t.Fatalf("the written worker says its version %d times, want once: %q", n, want)
+	}
+	mf, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(mf), `"version": "`+chromeext.Version()+`"`) {
+		t.Fatalf("the written manifest's version is not the worker's (%s)", chromeext.Version())
 	}
 }

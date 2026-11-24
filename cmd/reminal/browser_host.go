@@ -95,12 +95,29 @@ func relayNative(in io.Reader, out io.Writer, hub net.Conn) error {
 		_, err := hub.Write(append(b, '\n'))
 		return err
 	}
+	var outMu sync.Mutex // both directions may write to the extension
+	toExt := func(b []byte) error {
+		outMu.Lock()
+		defer outMu.Unlock()
+		return writeNativeRaw(out, b)
+	}
 	go func() { // the extension → the hub
+		told := false
 		for {
 			msg, err := readNativeMessage(in)
 			if err != nil {
 				done <- err
 				return
+			}
+			if !told && olderWorker(msg) {
+				// Once a connection: an extension that still differs after
+				// reloading says so in its panel and is not told again.
+				told = true
+				b, _ := json.Marshal(map[string]any{"t": "status", "ok": true, "ext": chromeext.Version() + staleMark})
+				if err := toExt(b); err != nil {
+					done <- err
+					return
+				}
 			}
 			if err := toHub(msg); err != nil {
 				done <- err
@@ -132,7 +149,7 @@ func relayNative(in io.Reader, out io.Writer, hub net.Conn) error {
 						done <- werr
 						return
 					}
-				} else if werr := writeNativeRaw(out, msg); werr != nil {
+				} else if werr := toExt(msg); werr != nil {
 					done <- werr
 					return
 				}
@@ -148,6 +165,26 @@ func relayNative(in io.Reader, out io.Writer, hub net.Conn) error {
 		return nil // Chrome closed the port, or the hub went away
 	}
 	return err
+}
+
+// staleMark follows the version in the status that has an extension running
+// an older script reload itself: the extension reloads when the version it
+// is told is not its manifest's, so the files' own version would not do (the
+// manifest it reads is the files').
+const staleMark = " (its files)"
+
+// olderWorker: msg is the extension saying which sessions it holds ("have",
+// sent as it connects), and the script saying it is not this reminal's: it
+// names another version as its own, or none (the scripts of before did not
+// say). The browser kept that script with the profile and started it on the
+// files reminal has since replaced; told a version that is not its
+// manifest's, it reloads itself from the files, once (its own guard).
+func olderWorker(msg []byte) bool {
+	var have struct {
+		T    string `json:"t"`
+		Code string `json:"code"`
+	}
+	return json.Unmarshal(msg, &have) == nil && have.T == "have" && have.Code != chromeext.Version()
 }
 
 // readNativeMessage reads one message in Chrome's framing.

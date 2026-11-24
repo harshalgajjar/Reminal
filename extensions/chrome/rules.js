@@ -122,4 +122,7 @@ export function rules(pw) {
     const name = R.secret(el) ? '' : (el.getAttribute('aria-label') || el.innerText || el.value || el.placeholder || el.title || '').trim().replace(/\s+/g, ' ').slice(0, 40);
     return `${el.tagName.toLowerCase()}${name ? ` "${name}"` : ''}`;
   };
+  // The rules are in: what background.js waits for before it runs anything
+  // of page.js here.
+  return true;
 }
