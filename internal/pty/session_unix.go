@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,6 +21,10 @@ import (
 type Session struct {
 	ptmx *os.File
 	cmd  *exec.Cmd
+	// The one wait for cmd that says how the shell ended (waited).
+	waitOnce sync.Once
+	waitDone chan struct{}
+	waitErr  error
 	// shell is the shell's pid when this Session took over a PTY from a
 	// hot-restart (cmd is nil then): the shell is still this process's
 	// child, the exec kept the pid, and the old image passed it along.
@@ -123,7 +128,18 @@ func (s *Session) Getsize() (cols, rows uint16, err error) {
 }
 
 func (s *Session) Wait() error {
-	return s.cmd.Wait()
+	s.startWait()
+	<-s.waitDone
+	return s.waitErr
+}
+
+// startWait waits for the shell this process started, once for every caller
+// (Wait, waited): a second wait on a process is refused.
+func (s *Session) startWait() {
+	s.waitOnce.Do(func() {
+		s.waitDone = make(chan struct{})
+		go func() { s.waitErr = s.cmd.Wait(); close(s.waitDone) }()
+	})
 }
 
 func (s *Session) Close() error {
@@ -269,17 +285,34 @@ func HandleSignals() {
 // the shell exiting on its own. False for an adopted PTY, whose shell this
 // process never started and cannot wait for.
 func (s *Session) EndedBySignal() bool {
+	ps := s.waited()
+	return ps != nil && ps.ExitCode() == -1
+}
+
+// Ended waits (briefly) for the shell and says how it ended, as the system
+// tells it: "exit status 0", "signal: killed". Empty when that cannot be
+// told: an adopted PTY (its shell is not this process's to wait for), or a
+// shell still running.
+func (s *Session) Ended() string {
+	if ps := s.waited(); ps != nil {
+		return ps.String()
+	}
+	return ""
+}
+
+// waited waits up to two seconds for the shell this process started, once
+// for every caller, and gives its end state (nil when there is none to give).
+func (s *Session) waited() *os.ProcessState {
 	if s.cmd == nil || s.cmd.Process == nil {
-		return false
+		return nil
 	}
-	done := make(chan struct{})
-	go func() { _ = s.cmd.Wait(); close(done) }()
+	s.startWait()
 	select {
-	case <-done:
+	case <-s.waitDone:
+		return s.cmd.ProcessState
 	case <-time.After(2 * time.Second):
-		return false
+		return nil
 	}
-	return s.cmd.ProcessState != nil && s.cmd.ProcessState.ExitCode() == -1
 }
 
 // WriteCancel is Write that stop cuts short: once stop is closed, a write

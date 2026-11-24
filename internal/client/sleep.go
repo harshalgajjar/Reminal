@@ -289,10 +289,12 @@ func SleepSession(id string, anyway bool) error {
 	if gone(sleepExitWait) {
 		return nil
 	}
+	session.LogSent(a.ID, a.PID, "terminate", "it said it would sleep and is still running")
 	_ = proc.Terminate(a.PID)
 	if gone(3 * time.Second) {
 		return nil
 	}
+	session.LogSent(a.ID, a.PID, "kill", "asleep by its own word, and still running 3 s after it was told to end")
 	_ = proc.Kill(a.PID)
 	if gone(3 * time.Second) {
 		return nil

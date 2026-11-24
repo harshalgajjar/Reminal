@@ -361,6 +361,7 @@ func killLocalSession(id string) error {
 			continue
 		}
 		pid := a.PID
+		session.LogSent(a.ID, pid, "terminate", "asked to end it from one of its owner's devices")
 		if err := proc.Terminate(pid); err != nil {
 			if errors.Is(err, proc.ErrGone) {
 				_ = session.ClearActive(a.ID) // already gone
@@ -376,7 +377,11 @@ func killLocalSession(id string) error {
 		_ = session.ClearActive(a.ID)
 		_ = session.ClearRestore(a.ID) // killed on purpose: never to be restored
 		forgetting.Add(1)
-		go func() { defer forgetting.Done(); forgetWhenGone(a.ID, pid, proc.Alive, proc.Kill, 3*time.Second) }()
+		kill := func(p int) error {
+			session.LogSent(a.ID, p, "kill", "still running 3 s after it was told to end")
+			return proc.Kill(p)
+		}
+		go func() { defer forgetting.Done(); forgetWhenGone(a.ID, pid, proc.Alive, kill, 3*time.Second) }()
 		return nil
 	}
 	// Asleep: nothing is running to stop; ending it is forgetting it.

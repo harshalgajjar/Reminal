@@ -867,6 +867,8 @@ func main() {
 		if id := client.RestoreEnvID(); id != "" {
 			st, plan, err := client.LoadRestoreState(id)
 			if err != nil {
+				// Its standard error goes nowhere: kept where its restore is told.
+				session.LogEnded(id, "restored and did not start: %v (pid %d)", err, os.Getpid())
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
@@ -875,6 +877,9 @@ func main() {
 		}
 		agent, err := client.NewAgentWith(version, opts)
 		if err != nil {
+			if id := client.RestoreEnvID(); id != "" {
+				session.LogEnded(id, "restored and did not start: %v (pid %d)", err, os.Getpid())
+			}
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -1527,6 +1532,7 @@ func runStop(idArg string, yes bool) error {
 			fmt.Print("  Press Enter to continue, Ctrl-C to cancel: ")
 			_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 		}
+		session.LogSent(a.ID, a.PID, "terminate", "its exposure was stopped")
 		if err := proc.Terminate(a.PID); err != nil && !errors.Is(err, proc.ErrGone) {
 			return fmt.Errorf("signal PID %d: %w", a.PID, err)
 		}
@@ -2680,6 +2686,7 @@ func terminateAgent(a session.Active) error {
 	// Windows termination is abrupt (no signal reaches a Go process, no defer
 	// runs), so a killed session used to leave that terminal mangling every
 	// keystroke. The control socket is the graceful route on both.
+	session.LogSent(a.ID, pid, "quit", "asked to end it")
 	if _, err := sendControl(pid, "quit", 2*time.Second); err == nil {
 		deadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(deadline) {
@@ -2689,6 +2696,7 @@ func terminateAgent(a session.Active) error {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
+	session.LogSent(a.ID, pid, "terminate", "it did not end when asked to quit")
 	if err := proc.Terminate(pid); err != nil {
 		if errors.Is(err, proc.ErrGone) {
 			return nil // process already gone; record cleared by the defer
@@ -2703,6 +2711,7 @@ func terminateAgent(a session.Active) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if proc.Alive(pid) {
+		session.LogSent(a.ID, pid, "kill", "still running 3 s after it was told to end")
 		_ = proc.Kill(pid)
 	}
 	return nil

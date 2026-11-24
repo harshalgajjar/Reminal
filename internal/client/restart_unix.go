@@ -51,6 +51,7 @@ import (
 
 	xterm "golang.org/x/term"
 	"reminal/internal/pty"
+	"reminal/internal/session"
 )
 
 // Env vars used to thread state across the Exec boundary. Scrollback
@@ -166,6 +167,9 @@ func (a *Agent) executeRestart() error {
 
 	agentNotify("\n  [%s] Restarting reminal in place — viewers will briefly disconnect…\n",
 		time.Now().Format("15:04:05"))
+	// Said before the exec: what follows for this session is the next
+	// image's, under the same pid.
+	session.LogRestore(a.sessionID, "restarting onto %s (pid %d, from v%s)", exe, os.Getpid(), a.version)
 
 	// Decrypt + write here, while the runtime is still healthy. Doing this
 	// after the fd dance (phase 2) would allocate megabytes and take buf's
@@ -230,6 +234,7 @@ func (a *Agent) executeRestart() error {
 
 	if err := syscall.Exec(exe, []string{exe}, env); err != nil {
 		removeScrollbackDump(dumpPath)
+		session.LogRestore(a.sessionID, "restart onto %s did not happen: %v (pid %d)", exe, err, os.Getpid())
 		return fmt.Errorf("exec %s: %w", exe, err)
 	}
 	return nil // unreachable
