@@ -105,13 +105,15 @@ export function render(spec, index, src) {
   return { html, assets, build: names.join(" ") };
 }
 
-// lineNames is a builds.txt line's script names, if it is build.json's
-// scripts in order, one build of each: all of them, or all but the last, for
-// a build made before the last was added (a page already open on it loads
-// only those).
+// lineNames is a builds.txt line's script names, if it is the first N of
+// build.json's scripts in order (N at least 1), one build of each: all of
+// them, or fewer for a build made before the later ones were added (a page
+// already open on it loads only those). A script is therefore only ever
+// added at the end of build.json's list. Allowing only one fewer failed the
+// next deploy after a build that added two scripts at once.
 function lineNames(spec, line) {
   const names = line.split(" ");
-  if (names.length < spec.scripts.length - 1 || names.length > spec.scripts.length) return null;
+  if (names.length < 1 || names.length > spec.scripts.length) return null;
   for (let i = 0; i < names.length; i++) {
     const m = /^([a-z]+)\.([0-9a-f]{16})\.js$/.exec(names[i]);
     if (!m || m[1] !== spec.scripts[i]) return null;

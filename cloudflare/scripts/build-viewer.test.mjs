@@ -152,6 +152,31 @@ test("a live build from before a script was added is kept, with only its own scr
   assert.deepEqual(scripts(o), [a, name("app", Buffer.from("v5\n")), h, m, p, name("voiceui", Buffer.from(VU))].sort());
 });
 
+// A build that adds two or more scripts at once leaves every live build
+// that many short: any first part of the list is a build of its own, down to
+// the first script alone.
+test("a live build from before several scripts were added is kept, down to the first alone", async () => {
+  const h = name("header", Buffer.from("fit()\n")), a = name("app", Buffer.from("v4\n")), m = name("moments", Buffer.from(MO));
+  const h0 = name("header", Buffer.from("fit0()\n"));
+  const { fetchFn } = live({ "/assets/builds.txt": `${h} ${a} ${m}\n${h0}\n`, ["/assets/" + h]: "fit()\n", ["/assets/" + a]: "v4\n", ["/assets/" + m]: MO, ["/assets/" + h0]: "fit0()\n" });
+  const o = out();
+  const r = await build({ web: web("v5\n"), out: o, previous: other, otherOrigin: other, fetchFn });
+  assert.deepEqual(r.kept, [`${h} ${a} ${m}`, h0]);
+  assert.deepEqual(readFileSync(join(o, "assets", "builds.txt"), "utf8").trim().split("\n"), [lineOf("v5\n"), `${h} ${a} ${m}`, h0]);
+  for (const nm of [h, a, m, h0]) assert.ok(scripts(o).includes(nm), nm);
+});
+
+// Fewer scripts is one build only as the first part of the list, in order:
+// not a later script without the ones before it, not a name the list does
+// not have, and not an empty line.
+test("a shorter live line that is not the first part of the list fails the deploy", async () => {
+  const h = name("header", Buffer.from("fit()\n")), a = name("app", Buffer.from("v4\n")), m = name("moments", Buffer.from(MO)), p = name("pick", Buffer.from(PK));
+  for (const line of [a, `${a} ${m}`, `${h} ${m}`, `${h} ${a} ${p}`, `${m} ${a} ${h}`, name("extra", Buffer.from("x\n")), `${h} ${name("extra", Buffer.from("x\n"))}`, `${h} `, ` ${h}`]) {
+    const { fetchFn } = live({ "/assets/builds.txt": line + "\n", ["/assets/" + h]: "fit()\n", ["/assets/" + a]: "v4\n", ["/assets/" + m]: MO, ["/assets/" + p]: PK });
+    await assert.rejects(build({ web: web(), out: out(), previous: other, otherOrigin: other, fetchFn }), /not one build of header app moments pick voiceui/, JSON.stringify(line));
+  }
+});
+
 test("a kept file that was changed fails the deploy", async () => {
   const o = out();
   const { fetchFn } = liveOf(["v4\n"]);
