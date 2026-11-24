@@ -239,3 +239,59 @@ func TestRelayFramesAfterInputLeaveEarlyAFewTimes(t *testing.T) {
 		t.Error("after the burst the pacing interval must still let a frame through")
 	}
 }
+
+// The capture helper offers a frame once, when the window changes. A changed
+// frame the relay pacing holds back is not offered again, so it used to reach
+// a viewer on the relay only when the wait for the next change ran out,
+// seconds later: the result of a tap, when it came just after the pressed
+// button. It stays owed, the wait is cut to when the relay is due, and it is
+// sent then with no new change.
+func TestAFrameHeldBackFromTheRelayIsSentWhenTheRelayIsDue(t *testing.T) {
+	s := lateJoinStream()
+	s.capNative = true
+	if _, ok := s.wsOwedIn(time.Now()); ok {
+		t.Fatal("nothing was held back yet")
+	}
+	s.dispatch(nil, true) // a frame went out microseconds ago: this one waits
+	if s.seq != 0 {
+		t.Fatalf("a frame was sent %v after the last one", time.Since(s.lastWSFrame))
+	}
+	d, ok := s.wsOwedIn(time.Now())
+	if !ok || d <= 0 || d > wsFrameMinInterval {
+		t.Fatalf("held back frame: owed %v in %v, want owed within %v", ok, d, wsFrameMinInterval)
+	}
+	s.dispatch(nil, false) // woken too soon, with no change: still waits
+	if s.seq != 0 {
+		t.Fatal("the held back frame left before the relay was due")
+	}
+	s.lastWSFrame = time.Now().Add(-wsFrameMinInterval)
+	s.dispatch(nil, false) // the relay is due, and the window has not changed
+	if s.seq != 1 {
+		t.Fatal("the held back frame was not sent when the relay came due")
+	}
+	if _, ok := s.wsOwedIn(time.Now()); ok {
+		t.Error("the frame was sent and is still owed")
+	}
+	s.lastWSFrame = time.Now().Add(-wsFrameMinInterval)
+	s.dispatch(nil, false)
+	if s.seq != 1 {
+		t.Error("a still window with nothing owed was sent again")
+	}
+
+	// In an input's burst the wait is the burst's gap, not the pacing.
+	s.flush = newWinInputSignal()
+	s.flush.raise()
+	s.takeInputFlush()
+	s.dispatch(nil, true) // the pressed button: at once
+	s.dispatch(nil, true) // the result, right behind it: held back
+	if d, ok := s.wsOwedIn(time.Now()); s.seq != 2 || !ok || d > wsBurstGap {
+		t.Errorf("in a burst: seq %d, owed %v in %v, want one frame sent and the next owed within %v", s.seq, ok, d, wsBurstGap)
+	}
+
+	// A capture loop offers the frame again at its next turn: nothing owed.
+	c := lateJoinStream()
+	c.dispatch(nil, true)
+	if _, ok := c.wsOwedIn(time.Now()); ok {
+		t.Error("a frame is owed on a path that captures again by itself")
+	}
+}

@@ -1676,6 +1676,10 @@ type winStream struct {
 	// burstShips counts the relay frames sent since the last input, while its
 	// burst lasts (burstUntil): the first few go out early (wsBurstDue).
 	burstShips int
+	// wsOwed: a changed frame was held back from the relay by the pacing, and
+	// the capture helper offers a frame only when the window changes. It is
+	// sent as soon as the relay is due (wsOwedIn), not at the next change.
+	wsOwed bool
 
 	// Frame source: the native SCK helper when available (hardware capture +
 	// JPEG at winHelperFPS with its own change detection), else per-frame
@@ -2329,7 +2333,11 @@ func (s *winStream) capture() (f winFrame, err error) {
 		// picture before these would be drawn over what they showed.
 		s.bands = nil
 		s.capNative = true
-		f, _ = s.helper.next(s.stop, winHeartbeat)
+		wait := winHeartbeat
+		if d, ok := s.wsOwedIn(time.Now()); ok && d < wait {
+			wait = d
+		}
+		f, _ = s.helper.next(s.stop, wait)
 		if s.codec == "h264" {
 			f.H264 = true
 		}
@@ -2619,10 +2627,32 @@ func (s *winStream) wsBurstDue(now time.Time) bool {
 	return now.Before(s.burstUntil) && s.burstShips < wsBurstShips && now.Sub(s.lastWSFrame) >= wsBurstGap
 }
 
+// wsOwedIn says how long the capture helper may be waited on before the
+// relay is due for something held back from it: a changed frame (wsOwed) or
+// video not yet sent (wsBatch). Without it the wait is for the window's next
+// change, and the last picture before a pause reached a viewer on the relay
+// only when the wait ran out, seconds later.
+func (s *winStream) wsOwedIn(now time.Time) (time.Duration, bool) {
+	if !s.wsOwed && len(s.wsBatch) == 0 {
+		return 0, false
+	}
+	d := wsFrameMinInterval - now.Sub(s.lastWSFrame)
+	if now.Before(s.burstUntil) && s.burstShips < wsBurstShips {
+		if g := wsBurstGap - now.Sub(s.lastWSFrame); g < d {
+			d = g
+		}
+	}
+	if d < time.Millisecond {
+		d = time.Millisecond
+	}
+	return d, true
+}
+
 // wsShipped notes a relay frame (or batch) sent at now.
 func (s *winStream) wsShipped(now time.Time) {
 	s.lastWSFrame = now
 	s.shipNow = false
+	s.wsOwed = false
 	if now.Before(s.burstUntil) {
 		s.burstShips++
 	}
@@ -2674,6 +2704,18 @@ func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
 
 	probeDue := len(probing) > 0 && time.Since(s.lastProbe) >= winProbeFrame
 	wsDue := s.wsFrameDue(vc, len(confirmed), time.Now())
+	// The capture helper offers a frame once, when the window changes: one
+	// the pacing held back from the relay is still owed there, and goes out
+	// now if the relay is due (run wakes for it: wsOwedIn).
+	if !wsSinkNeeded(vc, len(confirmed)) {
+		s.wsOwed = false
+	}
+	if s.wsOwed && wsDue {
+		changed = true
+	}
+	if changed && !wsDue && s.capNative && wsSinkNeeded(vc, len(confirmed)) {
+		s.wsOwed = true
+	}
 
 	var sinks winSinks
 	if changed {
@@ -2696,10 +2738,11 @@ func (s *winStream) dispatch(conn *websocket.Conn, changed bool) {
 		s.sendFrame(conn, sinks, force)
 		return
 	}
-	// A changed frame with every sink throttled out this instant is simply
-	// dropped — seq must not advance for a frame nobody receives (the viewer's
-	// acks would fall behind and stall the in-flight gate); the next iteration
-	// captures fresher content anyway.
+	// A changed frame with every sink throttled out this instant is not sent:
+	// seq must not advance for a frame nobody receives (the viewer's acks
+	// would fall behind and stall the in-flight gate). A capture loop offers
+	// it again at its next turn; the capture helper does not, so there it
+	// stays owed to the relay (wsOwed).
 	if time.Since(s.lastSent) >= winHeartbeat {
 		s.sendHeartbeat(conn, confirmed, probing, vc)
 	}
