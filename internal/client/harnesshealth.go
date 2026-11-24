@@ -368,6 +368,7 @@ var harnessLoginScreens = map[string][]loginRow{
 		`authenticationfailed:yourcursorcredentialsorapikeyareinvalidorexpired\.ifyousetcursor_api_key,checkthatitiscorrect,orrun.?cursor-agentlogin.?tore-authenticate`,
 	), loginBottom(
 		`yourstoredauthenticationisinvalid\.pleaseloginagain`,
+		`yoursessioncouldnotberefreshed\.pleaseloginagain`,
 	)),
 	// pi with no model to run on (no provider logged in) says so on its own
 	// status line, the last on its screen: its context "0" and its model

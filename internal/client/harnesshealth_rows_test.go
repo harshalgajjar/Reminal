@@ -161,6 +161,8 @@ var loginRowCases = []loginRowCase{
 	{prog: "cursor-agent", row: "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable."},
 	{prog: "cursor-agent", row: "Authentication failed: your Cursor credentials or API key are invalid or expired. If you set CURSOR_API_KEY, check that it is correct, or run `cursor-agent login` to re-authenticate."},
 	{prog: "cursor-agent", row: "Your stored authentication is invalid. Please log in again.", bottom: true},
+	// Cursor CLI 2026.11.22: a login it can no longer renew.
+	{prog: "cursor-agent", row: "Your session could not be refreshed. Please log in again.", bottom: true},
 	{prog: "cursor-agent", row: "⚠ Warning: The provided API key is invalid.", refused: true},
 	// Cline 3.0.75 (recorded): a run ended by its service turning the login away.
 	{prog: "cline", row: "error: Unauthorized: Please make sure you're using the latest version of Cline and re-authenticate your Cline account. (Request ID: qhnMsMwCWjFDRMhCjggRhNUlKeMgdJCq)", refused: true},
@@ -554,6 +556,7 @@ func TestAnAgentsOwnTextIsNotALoginAfterAll(t *testing.T) {
 		{"Amp's two sentences on two rows", "amp", "● Authentication failed.\n  Run amp login and try again."},
 		{"Amp's plain words in an answer", "amp", "  Your session has expired. You need to log in again."},
 		{"Cursor's plain words in an answer", "cursor-agent", "  Your stored authentication is invalid. Please log in again."},
+		{"Cursor's newer plain words in an answer", "cursor-agent", "  Your session could not be refreshed. Please log in again."},
 		{"Crush's plain words in an answer", "crush", "  You are not logged in to any platform"},
 		{"Qwen's words with no mark of its own", "qwen", "  Refresh token expired or invalid. Please use /auth to re-authenticate."},
 		{"Codex's words with no mark of its own", "codex", "  Your session has expired. Please reauthenticate."},
