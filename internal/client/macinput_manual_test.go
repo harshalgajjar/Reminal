@@ -58,7 +58,7 @@ func TestKeysHelperTakesPointerEvents(t *testing.T) {
 	if !keyHelperClick(10, 10, false, 1) {
 		t.Error("the helper did not take a click")
 	}
-	if !keyHelperScroll(10, 10, 0, 0) {
+	if !keyHelperScroll(10, 10, 0, 0, "") {
 		t.Error("the helper did not take a scroll")
 	}
 	if !keyHelperDrag("up", 10, 10) {
