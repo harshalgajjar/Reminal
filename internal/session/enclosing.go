@@ -40,6 +40,14 @@ func Enclosing() string {
 			agents[a.PID] = a.ID
 		}
 	}
+	// A session's shell stands for the session where the process serving it
+	// is not above the shell (Active.ShellPID). Never over a session's own
+	// process: a pid is one or the other.
+	for _, a := range all {
+		if _, taken := agents[a.ShellPID]; a.ShellPID > 0 && a.PID > 0 && !taken {
+			agents[a.ShellPID] = a.ID
+		}
+	}
 	probes, probing := probeSessions()
 	pid := os.Getpid()
 	for i := 0; i < enclosingMaxDepth && pid > 1; i++ {
@@ -84,19 +92,34 @@ func NearestSessionPID(pid int) int {
 	if err != nil {
 		return 0
 	}
-	agents := map[int]bool{}
-	for _, a := range all {
-		if a.PID > 0 {
-			agents[a.PID] = true
-		}
-	}
-	return nearestOf(pid, agents)
+	return nearestOf(pid, sessionPIDs(all))
 }
 
-func nearestOf(pid int, agents map[int]bool) int {
+// sessionPIDs maps each pid that marks a session in the process tree to the
+// pid of the process serving that session: that process itself, and the
+// session's shell where it is recorded (Active.ShellPID). On Windows the
+// shell hangs under a holder started by the session's first process; after a
+// hot restart the process serving the session is a new one, above nothing
+// that runs in it, and only the shell says whose they are.
+func sessionPIDs(all []Active) map[int]int {
+	agents := map[int]int{}
+	for _, a := range all {
+		if a.PID > 0 {
+			agents[a.PID] = a.PID
+		}
+	}
+	for _, a := range all {
+		if _, taken := agents[a.ShellPID]; a.ShellPID > 0 && a.PID > 0 && !taken {
+			agents[a.ShellPID] = a.PID
+		}
+	}
+	return agents
+}
+
+func nearestOf(pid int, agents map[int]int) int {
 	for i := 0; i < enclosingMaxDepth && pid > 1; i++ {
-		if agents[pid] {
-			return pid
+		if at, ok := agents[pid]; ok {
+			return at
 		}
 		next := parentPID(pid)
 		if next == pid || next <= 0 {

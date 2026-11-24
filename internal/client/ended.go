@@ -99,3 +99,13 @@ func (a *Agent) quitAsked() bool {
 		return false
 	}
 }
+
+// shellPID is this session's shell's pid when it is known for certain, for
+// its record: what runs in the session is found by it where the shell is
+// not under this process (session.Active.ShellPID).
+func (a *Agent) shellPID() int {
+	if a.term == nil {
+		return 0
+	}
+	return a.term.ShellPid()
+}

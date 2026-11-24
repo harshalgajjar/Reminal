@@ -6,6 +6,7 @@ package session
 import (
 	"os"
 	"testing"
+	"time"
 )
 
 func TestParentPIDMatchesGetppid(t *testing.T) {
@@ -69,16 +70,55 @@ func TestNearestSessionIsTheInnerOne(t *testing.T) {
 	if grand <= 1 {
 		t.Skip("no grandparent to stand in for an outer session")
 	}
-	if got := nearestOf(self, map[int]bool{parent: true, grand: true}); got != parent {
+	if got := nearestOf(self, map[int]int{parent: parent, grand: grand}); got != parent {
 		t.Fatalf("nested: %d, want the inner session %d (outer %d)", got, parent, grand)
 	}
-	if got := nearestOf(self, map[int]bool{grand: true}); got != grand {
+	if got := nearestOf(self, map[int]int{grand: grand}); got != grand {
 		t.Fatalf("one session above: %d, want %d", got, grand)
 	}
-	if got := nearestOf(self, map[int]bool{}); got != 0 {
+	if got := nearestOf(self, map[int]int{}); got != 0 {
 		t.Fatalf("no session above: %d", got)
 	}
-	if got := nearestOf(self, map[int]bool{self: true, parent: true}); got != self {
+	if got := nearestOf(self, map[int]int{self: self, parent: parent}); got != self {
 		t.Fatalf("itself a session: %d", got)
+	}
+}
+
+// A session is found by its shell where the process serving it is not above
+// the shell: on Windows after a hot restart, the shell hangs under a holder
+// the session's first process started, and the process now serving it is a
+// new one. What runs under the shell was in no session then, and was turned
+// away from its own session's browser.
+func TestASessionIsFoundByItsShellWhenItsProcessIsNotAbove(t *testing.T) {
+	isolateHome(t)
+	self, shell := os.Getpid(), os.Getppid() // this process runs "in the shell"
+	server := deadPID(t) + 100000            // serving the session, above nothing here
+	all := []Active{{ID: "RESTARTD", PID: server, ShellPID: shell}}
+	if got := nearestOf(self, sessionPIDs(all)); got != server {
+		t.Fatalf("under the session's shell: %d, want the process serving it (%d)", got, server)
+	}
+	if got := nearestOf(self, sessionPIDs([]Active{{ID: "RESTARTD", PID: server}})); got != 0 {
+		t.Fatalf("no shell recorded and its process not above: %d, want none", got)
+	}
+	// A session started inside that shell is the nearer one, by its own
+	// process or by its own shell.
+	inner := []Active{{ID: "RESTARTD", PID: server, ShellPID: parentPID(shell)}, {ID: "INNER123", PID: shell}}
+	if g := parentPID(shell); g > 1 {
+		if got := nearestOf(self, sessionPIDs(inner)); got != shell {
+			t.Fatalf("a session inside the shell: %d, want the inner one (%d)", got, shell)
+		}
+	}
+	// A pid that serves a session is never taken as another's shell.
+	both := sessionPIDs([]Active{{ID: "ONE12345", PID: shell}, {ID: "TWO12345", PID: server, ShellPID: shell}})
+	if both[shell] != shell {
+		t.Errorf("a session's own process was taken as another session's shell: %v", both)
+	}
+
+	// Enclosing reads the same from the records.
+	if err := WriteActive(Active{ID: "RESTARTD", PID: self, ShellPID: shell, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if got := NearestSessionPID(shell); got != self {
+		t.Errorf("from the recorded shell: session process %d, want %d", got, self)
 	}
 }

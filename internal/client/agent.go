@@ -1603,6 +1603,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		StartedAt:    a.startedAt,
 		PidStartedAt: session.SelfStartTime(),
 		PidIdent:     session.SelfIdentity(),
+		ShellPID:     a.shellPID(),
 		Headless:     a.headless,
 		Viewers:      viewers,
 		Away:         a.sight.awayOf(viewers),
