@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// The CPU on macOS is read by one sampler for the whole machine (cpushare.go):
+// The CPU on macOS is read by one sampler for the whole machine (machineshare.go):
 // `iostat -w 1`, one long-lived process that prints a fresh us/sy/id line
 // every second for next to nothing. `top -l1` (topCPUPercent) costs about
 // 0.6 s of CPU a call, so it is only what the sampler falls back to when
@@ -23,8 +23,11 @@ import (
 
 const cpuTopEvery = 10 * time.Second
 
-var machineCPU = &cpuShare{
-	sample:    sampleCPU,
+var machineCPU = &machineShare{
+	name: "cpu",
+	sample: func(emit func(string) bool, wanted func() bool) {
+		sampleCPU(func(pct float64) bool { return emit(strconv.FormatFloat(pct, 'f', 1, 64)) }, wanted)
+	},
 	fresh:     5 * time.Second,
 	wantEvery: 5 * time.Second,
 	wantFor:   30 * time.Second,
@@ -45,7 +48,15 @@ func cpuPercent() (float64, bool) {
 	if machineCPU.dir == "" {
 		return 0, false
 	}
-	return machineCPU.read()
+	w, ok := machineCPU.read()
+	if !ok {
+		return 0, false
+	}
+	pct, err := strconv.ParseFloat(w, 64)
+	if err != nil || pct < 0 || pct > 100 {
+		return 0, false
+	}
+	return pct, true
 }
 
 // pushCPU is the alert watcher's CPU reading: the same shared one.

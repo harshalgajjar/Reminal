@@ -60,7 +60,7 @@ func CurrentBattery() *Battery {
 func FreshBattery() *Battery {
 	batMu.Lock()
 	defer batMu.Unlock()
-	batVal = readBattery()
+	batVal = readBatteryFresh()
 	batRead = time.Now()
 	return batCopy()
 }
