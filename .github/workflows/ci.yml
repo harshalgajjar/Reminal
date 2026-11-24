@@ -55,9 +55,6 @@ jobs:
         working-directory: third_party/ultraviolet
         run: go vet ./... && go test -race ./...
 
-  # Releases build one platform per job, so a break on a platform this machine
-  # is not gets found at tag time, when the fix costs a re-tag. Compile them all
-  # on every push instead.
   # reminal upgraded in place, in a browser (scripts/browser-test, MODE=upgrade):
   # the release before this commit is used in a browser profile, the browser
   # is closed, this commit's reminal takes its place at the same paths, and
@@ -76,6 +73,9 @@ jobs:
       - name: Upgrade in place, from the release before
         run: MODE=upgrade scripts/browser-test/run.sh
 
+  # Releases build one platform per job, so a break on a platform this machine
+  # is not gets found at tag time, when the fix costs a re-tag. Compile them all
+  # on every push instead.
   crosscompile:
     runs-on: ubuntu-latest
     steps:
@@ -90,4 +90,15 @@ jobs:
           for pair in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64 windows/arm64; do
             echo "  building ${pair}"
             GOOS="${pair%/*}" GOARCH="${pair#*/}" go build ./...
+          done
+      # `go build` leaves test files out, and the tests here run on Linux
+      # only: a macOS or Windows test file that no longer compiles was seen by
+      # nothing (internal/client's macOS tests did not compile for a while).
+      # vet compiles the tests of each platform too.
+      - name: The tests of every platform compile (vet)
+        run: |
+          set -e
+          for pair in darwin/arm64 darwin/amd64 windows/amd64 windows/arm64; do
+            echo "  vetting ${pair}"
+            GOOS="${pair%/*}" GOARCH="${pair#*/}" go vet ./cmd/... ./internal/... ./extensions/...
           done
