@@ -238,7 +238,7 @@ func gatherHostInfo() HostInfo {
 // On Linux it diffs /proc/stat between calls and on Windows GetSystemTimes:
 // one cheap call. On macOS reading it means running a program, so every
 // reminal process reads one value that a single sampler on the machine keeps
-// (cpushare.go): a session never runs one of its own. cachedCPUPercent
+// (machineshare.go): a session never runs one of its own. cachedCPUPercent
 // memoises the result briefly so a burst of host_info polls (one per viewer,
 // ~every 1.5s) is one reading, and keeps the last good value while there is
 // no fresh one.
