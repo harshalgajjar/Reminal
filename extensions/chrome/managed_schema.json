@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "properties": {
+    "scripts": { "type": "string", "description": "\"on\": running scripts in pages is on until the person switches it off. Set by an administrator's policy." },
+    "uploads": { "type": "string", "description": "\"on\": giving files to pages is on until the person switches it off. Set by an administrator's policy." },
+    "cookies": { "type": "string", "description": "\"on\": reading and changing cookies and site storage is on until the person switches it off. Set by an administrator's policy." }
+  }
+}
