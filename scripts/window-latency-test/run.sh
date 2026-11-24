@@ -20,7 +20,9 @@
 #   BOX_CPUS=2 BOX_MEM=4g  a weak machine
 #   THROTTLE=1,4,6         viewer CPU throttle rates (a slow phone)
 #   TRIALS=40 PHASE_SECS=15 IDLE_SECS=20 PASSIVE_TRIALS=8 RAPID_TRIALS=10
-#   P2P=0                  measure the relay path (default: wait for peer-to-peer)
+#   P2P=0                  do not wait for peer-to-peer (it may still come up and carry input)
+#   NORTC=1                no WebRTC in the page: frames and input both over the relay
+#   PROBE_STEP_MS=40       the probe answers an input in two draws that far apart
 #   REQUIRE_P2P=1          fail if the peer-to-peer path never comes up
 #   RESULT=path            also write the summary there
 #   GOMOD_VOL=name         a docker volume to keep the Go module cache in
@@ -46,7 +48,7 @@ docker run --rm -v "$TREE":/src:ro -v "$PWD":/out ${CACHE[@]+"${CACHE[@]}"} -e G
   sh -c "cp -r /src /w && cd /w && CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH go build -o /out/reminal ./cmd/reminal"
 docker build -q -t "$NAME-img" . >/dev/null
 mkdir -p "$OUT/shared" && chmod 777 "$OUT/shared"
-ENVS=(-e "CAPTURE=${CAPTURE:-fbdir}" -e REMINAL_RELAY=ws://127.0.0.1:8080/ws -e REMINAL_WEB=http://127.0.0.1:8080)
+ENVS=(-e "PROBE_STEP_MS=${PROBE_STEP_MS:-0}" -e "CAPTURE=${CAPTURE:-fbdir}" -e REMINAL_RELAY=ws://127.0.0.1:8080/ws -e REMINAL_WEB=http://127.0.0.1:8080)
 [ "${CODEC:-jpeg}" = jpeg ] && ENVS+=(-e REMINAL_NO_H264=1)
 LIMITS=()
 [ -n "${BOX_CPUS:-}" ] && LIMITS+=(--cpus "$BOX_CPUS")
@@ -67,7 +69,7 @@ echo idle > "$OUT/shared/phase"
 sleep "${IDLE_SECS:-20}"
 docker run --rm --network "container:$NAME-box" -v "$OUT/shared":/shared -v "$PWD":/t:ro -w /tmp \
   -e TRIALS="${TRIALS:-40}" -e PASSIVE_TRIALS="${PASSIVE_TRIALS:-8}" -e RAPID_TRIALS="${RAPID_TRIALS:-10}" -e PHASE_SECS="${PHASE_SECS:-15}" -e THROTTLE="${THROTTLE:-1}" \
-  -e P2P="${P2P:-}" -e P2P_WAIT_MS="${P2P_WAIT_MS:-}" -e REQUIRE_P2P="${REQUIRE_P2P:-}" "$PW" \
+  -e NORTC="${NORTC:-}" -e P2P="${P2P:-}" -e P2P_WAIT_MS="${P2P_WAIT_MS:-}" -e REQUIRE_P2P="${REQUIRE_P2P:-}" "$PW" \
   sh -c 'npm i -s playwright@1.56.0 >/dev/null 2>&1 && cp /t/measure.js . && node measure.js' || true
 sleep 2
 docker exec "$NAME-box" python3 /usr/local/bin/summarize.py | tee "${RESULT:-/dev/null}"

@@ -23,6 +23,10 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   const b = await chromium.launch({ args: ['--no-sandbox'] });
   const page = await b.newPage({ viewport: { width: 1280, height: 860 } });
   await page.addInitScript(() => { try { localStorage.setItem('reminal-tour-v1', 'done'); } catch (_) {} });
+  // NORTC=1: a browser with no WebRTC at all, so frames AND input go over
+  // the relay. P2P=0 alone only skips the wait: the peer-to-peer channel
+  // still comes up and carries the input.
+  if (process.env.NORTC === '1') await page.addInitScript(() => { try { delete window.RTCPeerConnection; window.RTCPeerConnection = undefined; window.webkitRTCPeerConnection = undefined; } catch (_) {} });
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Performance.enable');
   const metrics = async () => Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(m => [m.name, m.value]));
@@ -52,7 +56,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
   // The peer-to-peer path is the normal one; wait for it (P2P=0 skips the
   // wait, to measure the relay path on purpose), and say how it ended.
   const t0p = Date.now();
-  out.p2p = process.env.P2P === '0' ? false : await page.waitForFunction(() => rtcActive(), null, { timeout: +(process.env.P2P_WAIT_MS || 45000) }).then(() => true, () => false);
+  out.p2p = process.env.P2P === '0' || process.env.NORTC === '1' ? false : await page.waitForFunction(() => rtcActive(), null, { timeout: +(process.env.P2P_WAIT_MS || 45000) }).then(() => true, () => false);
   out.p2pAfterMs = Date.now() - t0p;
   out.rtcState = await page.evaluate(() => {
     try { return { pc: typeof pc !== 'undefined' && pc ? { conn: pc.connectionState, ice: pc.iceConnectionState, sig: pc.signalingState } : null, active: rtcActive() }; } catch (e) { return String(e); }
@@ -112,6 +116,8 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     await cdp.send('Emulation.setCPUThrottlingRate', { rate });
     phase('latency' + tag);
     const trials = [];
+    // The frames drawn over the trials: over the relay each is a billed message.
+    const draws0 = await page.evaluate(() => { window.__drawn = 0; const d = window.__draws; const push = d.push.bind(d); d.push = (...a) => { window.__drawn++; return push(...a); }; return 0; });
     for (let i = 0; i < TRIALS; i++) {
       const kind = i % 2 ? 'click' : 'key';
       trials.push(await page.evaluate(async ({ id, kind }) => {
@@ -135,6 +141,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
       if (trials[trials.length - 1].g2g === null) await sleep(1500); // let a lost flip settle
     }
     out.trials['latency' + tag] = trials;
+    (out.framesPerTrial = out.framesPerTrial || {})['latency' + tag] = +((await page.evaluate(() => window.__drawn)) / TRIALS).toFixed(2);
 
     fs.writeFileSync('/shared/anim', '');
     await sleep(2000);
