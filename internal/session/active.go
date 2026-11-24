@@ -349,7 +349,9 @@ func ReadActiveByID(id string) (*Active, error) {
 		return nil, err
 	}
 	if !pidAlive(a.PID) || a.reusedPID() {
-		_ = os.Remove(p)
+		if os.Remove(p) == nil {
+			logGoneWithoutAWord(a.ID, a.PID, "its record")
+		}
 		return nil, os.ErrNotExist
 	}
 	return a, nil
@@ -487,7 +489,10 @@ func ReadAllActive() ([]Active, error) {
 			continue // skip corrupt entries silently — best-effort enumeration
 		}
 		if !pidAlive(a.PID) || a.reusedPID() {
-			_ = os.Remove(full)
+			// The one that removes the record says so, once.
+			if os.Remove(full) == nil {
+				logGoneWithoutAWord(a.ID, a.PID, "its record")
+			}
 			continue
 		}
 		out = append(out, *a)

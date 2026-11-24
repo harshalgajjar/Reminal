@@ -326,6 +326,18 @@ func (s *Session) CopyTo(w io.Writer, done chan<- struct{}) {
 // ended by the shutdown, not by its user.
 func (s *Session) EndedBySignal() bool { return systemShuttingDown() }
 
+// Ended says how the shell ended, once it has: "exit status 0", or what cut
+// its console off. Empty while it runs.
+func (s *Session) Ended() string {
+	if !s.Dead() {
+		return ""
+	}
+	if s.waitErr != nil {
+		return s.waitErr.Error()
+	}
+	return "exit status 0"
+}
+
 var procGetSystemMetrics = windows.NewLazySystemDLL("user32.dll").NewProc("GetSystemMetrics")
 
 const smShuttingDown = 0x2000

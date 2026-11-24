@@ -44,6 +44,7 @@ import (
 
 	xterm "golang.org/x/term"
 	"reminal/internal/pty"
+	"reminal/internal/session"
 )
 
 // Env keys shared with the Unix restart (same names, so tooling that knows
@@ -145,6 +146,9 @@ func (a *Agent) executeRestart() error {
 	if sock == "" {
 		return errors.New("session has no pty holder — cannot hand off")
 	}
+	// Said before the handoff: what follows for this session is the next
+	// process's, under its own pid.
+	session.LogRestore(a.sessionID, "restarting onto %s (pid %d, from v%s)", exe, os.Getpid(), a.version)
 
 	devnull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
@@ -231,6 +235,7 @@ func (a *Agent) executeRestart() error {
 			// shell, so reclaim sole ownership and keep serving.
 			a.restarting.Store(false)
 			removeScrollbackDump(dumpPath)
+			session.LogRestore(a.sessionID, "restart onto %s did not happen: %v (pid %d)", exe, err, os.Getpid())
 			return fmt.Errorf("successor didn't come up (still serving on the old binary): %w", err)
 		}
 		// Successor may already have take()n the dump; removing a missing
@@ -242,6 +247,7 @@ func (a *Agent) executeRestart() error {
 		// don't race a half-born successor for the record (liveness pruning
 		// cleans it), and a FOREGROUND process must not park forever on the
 		// linger defer: restore the console and exit here.
+		a.logEndedAs("restart failed after the handoff began, the session is winding down: %v", err)
 		if a.localActive {
 			if a.hostOldState != nil {
 				_ = xterm.Restore(int(os.Stdin.Fd()), a.hostOldState)

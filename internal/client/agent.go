@@ -153,6 +153,10 @@ type Agent struct {
 	restorePlan      func() (run, note string)
 	restoreSeq       uint64
 	stopSignal       atomic.Bool
+	// endSignal is the signal this session was told to stop with (its name),
+	// and endedOnce keeps its "ended" line to one (ended.go).
+	endSignal atomic.Value
+	endedOnce sync.Once
 	// hungUp: the session's own terminal closed (SIGHUP), and termHost is
 	// what held it, so settleRestore can tell a tab closed on purpose (its
 	// host carries on) from a terminal app quitting or the machine going
@@ -838,7 +842,19 @@ func NewAgentWith(version string, opts AgentOptions) (*Agent, error) {
 	}, nil
 }
 
+// Run serves the session until it ends, and leaves word of how it ended
+// (ended.go). A restart in place is not an ending: the process that takes
+// over says its own.
 func (a *Agent) Run() error {
+	a.keepCrashOutput()
+	err := a.run()
+	if !a.restarting.Load() {
+		a.logEnded(err)
+	}
+	return err
+}
+
+func (a *Agent) run() error {
 	// First thing, before anything below spawns a child of its own: collect any
 	// child that died under a previous image of this process. A hot restart
 	// keeps the PID and inherits the whole process group, so on a machine that
@@ -1196,9 +1212,11 @@ func (a *Agent) Run() error {
 			}
 			if !first {
 				fmt.Fprintln(os.Stderr, "\n  Force exit.")
+				a.logEndedAs("forced out: a second signal (%s) while shutting down", sig)
 				os.Exit(130)
 			}
 			first = false
+			a.endSignal.Store(sig.String())
 			// Ended from outside — the machine shutting down, most likely:
 			// the session is kept so it can be restored (see settleRestore).
 			if sig != os.Interrupt {
@@ -2404,6 +2422,7 @@ func (a *Agent) pause() {
 	a.recordMu.Unlock()
 	_ = session.ClearHookState(a.sessionID)
 	_ = session.ClearRestore(a.sessionID) // stopped on purpose: not to come back
+	session.LogRestore(a.sessionID, "paused: sharing stopped (reminal stop), its shell goes on (pid %d)", os.Getpid())
 	a.currentConnMu.Lock()
 	if a.currentConn != nil {
 		closeRelayConn(a.currentConn, "paused")
@@ -3110,6 +3129,11 @@ func (a *Agent) pumpHostStdin() {
 // beyond a one-line notice. Best-effort: a session must never fail because its
 // crash log couldn't be written.
 func logPanicStack(what string, r interface{}) {
+	// Where a session's end is read from (ended.go), a line says it went on
+	// past a fault, and where the stack is.
+	if id, _ := servedSession.Load().(string); id != "" {
+		session.LogRestore(id, "recovered from a panic in %s: %v (pid %d); its stack is in panic.log", what, r, os.Getpid())
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return
@@ -3158,6 +3182,7 @@ func (a *Agent) runConnection(shellExit <-chan struct{}) (err error) {
 	// reconnect. Standard server resilience (cf. http.Server per-request recover).
 	defer func() {
 		if r := recover(); r != nil {
+			logPanicStack("connection handler", r)
 			err = fmt.Errorf("recovered from panic in connection handler: %v", r)
 		}
 	}()
@@ -3223,6 +3248,7 @@ func (a *Agent) serveConn(conn *websocket.Conn, shellExit <-chan struct{}, local
 	// drops that one connection.
 	defer func() {
 		if r := recover(); r != nil {
+			logPanicStack("connection handler", r)
 			err = fmt.Errorf("recovered from panic in connection handler: %v", r)
 		}
 	}()
