@@ -93,29 +93,43 @@ func TestASessionIsFoundByItsShellWhenItsProcessIsNotAbove(t *testing.T) {
 	isolateHome(t)
 	self, shell := os.Getpid(), os.Getppid() // this process runs "in the shell"
 	server := deadPID(t) + 100000            // serving the session, above nothing here
-	all := []Active{{ID: "RESTARTD", PID: server, ShellPID: shell}}
+	is := ProcessIdentity(shell)
+	if is == "" {
+		t.Skip("no way to tell which process a pid is on this system")
+	}
+	all := []Active{{ID: "RESTARTD", PID: server, ShellPID: shell, ShellIdent: is}}
 	if got := nearestOf(self, sessionPIDs(all)); got != server {
 		t.Fatalf("under the session's shell: %d, want the process serving it (%d)", got, server)
 	}
 	if got := nearestOf(self, sessionPIDs([]Active{{ID: "RESTARTD", PID: server}})); got != 0 {
 		t.Fatalf("no shell recorded and its process not above: %d, want none", got)
 	}
+	// The shell ended and its pid went to another process: the record still
+	// names the pid, but the process there is not the one recorded, and
+	// what runs under it is in no session. Nor is a record that does not
+	// say which process its shell was.
+	for _, stale := range []string{"t1", "0:1", ""} {
+		reused := []Active{{ID: "RESTARTD", PID: server, ShellPID: shell, ShellIdent: stale}}
+		if got := nearestOf(self, sessionPIDs(reused)); got != 0 {
+			t.Fatalf("a shell pid now another process's (recorded as %q): %d, want none", stale, got)
+		}
+	}
 	// A session started inside that shell is the nearer one, by its own
 	// process or by its own shell.
-	inner := []Active{{ID: "RESTARTD", PID: server, ShellPID: parentPID(shell)}, {ID: "INNER123", PID: shell}}
+	inner := []Active{{ID: "RESTARTD", PID: server, ShellPID: parentPID(shell), ShellIdent: ProcessIdentity(parentPID(shell))}, {ID: "INNER123", PID: shell}}
 	if g := parentPID(shell); g > 1 {
 		if got := nearestOf(self, sessionPIDs(inner)); got != shell {
 			t.Fatalf("a session inside the shell: %d, want the inner one (%d)", got, shell)
 		}
 	}
 	// A pid that serves a session is never taken as another's shell.
-	both := sessionPIDs([]Active{{ID: "ONE12345", PID: shell}, {ID: "TWO12345", PID: server, ShellPID: shell}})
+	both := sessionPIDs([]Active{{ID: "ONE12345", PID: shell}, {ID: "TWO12345", PID: server, ShellPID: shell, ShellIdent: is}})
 	if both[shell] != shell {
 		t.Errorf("a session's own process was taken as another session's shell: %v", both)
 	}
 
 	// Enclosing reads the same from the records.
-	if err := WriteActive(Active{ID: "RESTARTD", PID: self, ShellPID: shell, StartedAt: time.Now()}); err != nil {
+	if err := WriteActive(Active{ID: "RESTARTD", PID: self, ShellPID: shell, ShellIdent: is, StartedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	if got := NearestSessionPID(shell); got != self {

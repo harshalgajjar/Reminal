@@ -109,3 +109,18 @@ func (a *Agent) shellPID() int {
 	}
 	return a.term.ShellPid()
 }
+
+// shellIdent says which process the shell's pid is (session.ProcessIdentity),
+// taken once for each shell: later a process given the same pid is not it.
+func (a *Agent) shellIdent() string {
+	pid := a.shellPID()
+	if pid <= 0 {
+		return ""
+	}
+	a.shellIdentMu.Lock()
+	defer a.shellIdentMu.Unlock()
+	if a.shellIdentPID != pid {
+		a.shellIdentPID, a.shellIdentIs = pid, session.ProcessIdentity(pid)
+	}
+	return a.shellIdentIs
+}

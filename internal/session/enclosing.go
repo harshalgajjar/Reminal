@@ -3,7 +3,10 @@
 
 package session
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 // enclosingMaxDepth bounds the walk. The agent is a handful of hops up at
 // most (agent → shell → harness → helper); anything deeper is a runaway or a
@@ -44,8 +47,10 @@ func Enclosing() string {
 	// is not above the shell (Active.ShellPID). Never over a session's own
 	// process: a pid is one or the other.
 	for _, a := range all {
-		if _, taken := agents[a.ShellPID]; a.ShellPID > 0 && a.PID > 0 && !taken {
-			agents[a.ShellPID] = a.ID
+		if pid, ok := shellOf(a); ok {
+			if _, taken := agents[pid]; !taken {
+				agents[pid] = a.ID
+			}
 		}
 	}
 	probes, probing := probeSessions()
@@ -109,8 +114,10 @@ func sessionPIDs(all []Active) map[int]int {
 		}
 	}
 	for _, a := range all {
-		if _, taken := agents[a.ShellPID]; a.ShellPID > 0 && a.PID > 0 && !taken {
-			agents[a.ShellPID] = a.PID
+		if pid, ok := shellOf(a); ok {
+			if _, taken := agents[pid]; !taken {
+				agents[pid] = a.PID
+			}
 		}
 	}
 	return agents
@@ -132,3 +139,30 @@ func nearestOf(pid int, agents map[int]int) int {
 
 // ParentPID is pid's parent's pid; 0 when not read.
 func ParentPID(pid int) int { return parentPID(pid) }
+
+// ProcessIdentity says which process pid is now, in a form that a later
+// process given the same pid does not share: on Linux its boot and start
+// ticks, elsewhere its start time as the system keeps it. "" when it cannot
+// be told (the process is gone, or this system has no reader).
+func ProcessIdentity(pid int) string {
+	if id, ok := procIdentity(pid); ok && id != "" {
+		return id
+	}
+	if !startTimeSteady {
+		return ""
+	}
+	if t, ok := procStartTime(pid); ok && !t.IsZero() {
+		return "t" + strconv.FormatInt(t.UnixNano(), 36)
+	}
+	return ""
+}
+
+// shellOf is a's recorded shell, while the process at that pid is still the
+// one recorded: a shell that ended and whose pid went to another process
+// stands for no session.
+func shellOf(a Active) (int, bool) {
+	if a.ShellPID <= 0 || a.PID <= 0 || a.ShellIdent == "" {
+		return 0, false
+	}
+	return a.ShellPID, ProcessIdentity(a.ShellPID) == a.ShellIdent
+}

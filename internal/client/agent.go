@@ -156,7 +156,11 @@ type Agent struct {
 	// endSignal is the signal this session was told to stop with (its name),
 	// and endedOnce keeps its "ended" line to one (ended.go).
 	endSignal atomic.Value
-	endedOnce sync.Once
+	// shellIdent: which process the shell's pid is, as first taken.
+	shellIdentMu  sync.Mutex
+	shellIdentPID int
+	shellIdentIs  string
+	endedOnce     sync.Once
 	// hungUp: the session's own terminal closed (SIGHUP), and termHost is
 	// what held it, so settleRestore can tell a tab closed on purpose (its
 	// host carries on) from a terminal app quitting or the machine going
@@ -1604,6 +1608,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		PidStartedAt: session.SelfStartTime(),
 		PidIdent:     session.SelfIdentity(),
 		ShellPID:     a.shellPID(),
+		ShellIdent:   a.shellIdent(),
 		Headless:     a.headless,
 		Viewers:      viewers,
 		Away:         a.sight.awayOf(viewers),
