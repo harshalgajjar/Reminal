@@ -1385,6 +1385,25 @@ await ctx.close();
   check(/restart/.test(said) && c1.err && /stopped/.test(c1.err), `the session restarted is stopped still (${said.slice(0, 60)}: ${c1.err || 'ALLOWED: ' + c1.text.slice(0, 60)})`);
   const rows10 = await rowsOf(ID);
   check(rows10.length === 1 && rows10[0] === `${ID} - reminal (stopped)Resume`, `and has one row, with Resume (${JSON.stringify(rows10)})`);
+  // A session's first restart changes the name of its run (its start time
+  // is handed on in whole seconds); its later ones keep it. A session that
+  // has been restarted before is the common one: stopped, restarted again
+  // under the same run, and the browser restarted (its session storage
+  // emptied), it is stopped still and has its row, with Resume.
+  const sw2 = async (fn, arg) => { const w = again.serviceWorkers().find((x) => x.url().includes(EXT_ID)) || await again.waitForEvent('serviceworker', { timeout: 20000 }); return w.evaluate(fn, arg); };
+  const keysOf = () => sw2((id) => chrome.storage.local.get('stopped').then((o) => Object.keys(o.stopped || {}).filter((k) => k.startsWith(`s:${id}:`))), ID);
+  const k1 = await keysOf();
+  try { execSync(`reminal restart ${ID} 2>&1`, { encoding: 'utf8', timeout: 60000 }); } catch (_) {}
+  await pause(6000);
+  const c1b = await call('browser_tabs_context');
+  const k2 = await keysOf();
+  check(k1.length === 1 && k2.length === 1 && k1[0] === k2[0], `restarted a second time, the run keeps its name (${JSON.stringify(k1)} then ${JSON.stringify(k2)})`);
+  check(c1b.err && /stopped/.test(c1b.err), `and is stopped still (${c1b.err || 'ALLOWED'})`);
+  await sw2((id) => chrome.storage.session.get(null).then((all) => chrome.storage.session.remove(Object.keys(all).filter((k) => k.startsWith(`s:${id}:`)))), ID);
+  check((await rowsOf(ID)).length === 0, 'its record gone, as after the browser restarting, it has no row');
+  const c1c = await call('browser_tabs_context');
+  const rows10b = await rowsOf(ID);
+  check(c1c.err && /stopped/.test(c1c.err) && rows10b.length === 1 && rows10b[0] === `${ID} - reminal (stopped)Resume`, `refused again, it has its one row back, with Resume (${JSON.stringify(rows10b)})`);
   await panel(async (p) => {
     await p.locator('#list li.stopped', { hasText: `${ID} - reminal` }).locator('button', { hasText: 'Resume' }).click({ timeout: 5000 }).catch(() => {});
     await p.waitForFunction((id) => [...document.querySelectorAll('#list li')].some((l) => l.textContent === `${id} - reminal` + 'Stop'), ID, { timeout: 5000 }).catch(() => {});
