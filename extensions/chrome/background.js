@@ -382,12 +382,21 @@ async function handle(m) {
   // group is titled. Never the name the session was given.
   const name = m.session ? `${m.session} - reminal` : 'reminal';
   let s = await getS(k);
+  // A Stop is the person's word for the session, whichever run of it asks:
+  // one restarted (a new run) is stopped still, or anything in the session
+  // could undo the Stop by restarting it. The Stop passes to the run that
+  // asks; only Resume in the button's panel, or the session ending, ends it.
+  const earlier = m.session ? Object.keys(await stoppedRuns()).filter((x) => x.startsWith(`s:${m.session}:`) && x !== k) : [];
+  if (earlier.length && !(await isStopped(k, s))) await keepStopped(k);
   if (await isStopped(k, s)) {
     // A Stop outlives the browser (and the extension) starting again; the
     // run's record does not. Refused with no record, the run had no row in
     // the button's panel, so nothing to press Resume on: it gets its
     // record back, stopped, and with it its row.
     if (!s && m.session) await putS(k, { session: m.session, run: m.run || "", name, machine: m.machine || "", stopped: true });
+    // One row for the session: its earlier runs' records go (their Stop is
+    // this run's now).
+    if (earlier.length) await forgetRuns(m.session, k);
     throw new Error(STOPPED);
   }
   const before = s;
