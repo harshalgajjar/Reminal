@@ -835,6 +835,11 @@ func runIntegrate(args []string) error {
 			state = "remove"
 		}
 		for _, b := range rows {
+			// One that cannot work is said so here, before anything is done.
+			if why := chromeCannotStart(home, b); why != "" && !remove {
+				o.row("", b.Name, why, plain)
+				continue
+			}
 			o.row("", b.Name, state, cDim)
 		}
 		if !remove {
