@@ -1359,6 +1359,43 @@ await ctx.close();
   await pop.close();
   const b = await call('browser_tabs_context');
   check(!b.err, `and Resume there lets the session use the browser again (${b.err || 'its tabs listed'})`);
+
+  // 10. A Stop holds across a restart of the session: the session restarted
+  // is a new run of it, and is stopped still, until Resume. (It was allowed
+  // again, so anything in the session could undo the person's Stop.)
+  const panel = async (fn) => {
+    const p = await again.newPage();
+    await p.goto(`chrome-extension://${EXT_ID}/popup.html`);
+    await p.waitForFunction(() => document.querySelector('#list li'), null, { timeout: 5000 }).catch(() => {});
+    const r = await fn(p);
+    await p.close();
+    return r;
+  };
+  const rowsOf = (id) => panel(async (p) => (await p.locator('#list li').allTextContents()).filter((r) => r.startsWith(`${id} - reminal`)));
+  await panel(async (p) => {
+    await p.locator('#list li', { hasText: `${ID} - reminal` }).locator('button', { hasText: 'Stop' }).click({ timeout: 5000 }).catch(() => {});
+    await p.waitForFunction((id) => [...document.querySelectorAll('#list li')].some((l) => l.textContent === `${id} - reminal (stopped)Resume`), ID, { timeout: 5000 }).catch(() => {});
+  });
+  const c0 = await call('browser_tabs_context');
+  check(c0.err && /stopped/.test(c0.err), `stopped again, before the restart (${c0.err || c0.text})`);
+  let said = '';
+  try { said = execSync(`reminal restart ${ID} 2>&1`, { encoding: 'utf8', timeout: 60000 }).trim(); } catch (e) { said = 'ERR ' + String(e.stdout || e.message); }
+  await pause(6000);
+  const c1 = await call('browser_tabs_context');
+  check(/restart/.test(said) && c1.err && /stopped/.test(c1.err), `the session restarted is stopped still (${said.slice(0, 60)}: ${c1.err || 'ALLOWED: ' + c1.text.slice(0, 60)})`);
+  const rows10 = await rowsOf(ID);
+  check(rows10.length === 1 && rows10[0] === `${ID} - reminal (stopped)Resume`, `and has one row, with Resume (${JSON.stringify(rows10)})`);
+  await panel(async (p) => {
+    await p.locator('#list li.stopped', { hasText: `${ID} - reminal` }).locator('button', { hasText: 'Resume' }).click({ timeout: 5000 }).catch(() => {});
+    await p.waitForFunction((id) => [...document.querySelectorAll('#list li')].some((l) => l.textContent === `${id} - reminal` + 'Stop'), ID, { timeout: 5000 }).catch(() => {});
+  });
+  const c2 = await call('browser_tabs_context');
+  check(!c2.err, `Resume, and only Resume, lets it use the browser again (${c2.err || 'its tabs listed'})`);
+  // The session restarted once more, not stopped: nothing is asked of it.
+  try { execSync(`reminal restart ${ID} 2>&1`, { encoding: 'utf8', timeout: 60000 }); } catch (_) {}
+  await pause(6000);
+  const c3 = await call('browser_tabs_context');
+  check(!c3.err, `a session that is not stopped is not stopped by restarting (${c3.err || 'its tabs listed'})`);
   await again.close();
 }
 console.log(fails.length ? `${fails.length} failed` : 'all ok');
