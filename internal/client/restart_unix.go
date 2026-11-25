@@ -115,12 +115,8 @@ func LoadResumeState() (*ResumeState, error) {
 	if err != nil || ptyFD < 3 {
 		return nil, fmt.Errorf("resume: invalid pty fd %q", fdStr)
 	}
-	startedAtUnix, _ := strconv.ParseInt(os.Getenv(envResumeStartedAt), 10, 64)
-	startedAt := time.Unix(startedAtUnix, 0)
+	startedAt := resumeStartedAt(os.Getenv)
 	shellPid, _ := strconv.Atoi(os.Getenv(envResumeShellPID)) // absent from an older binary: 0
-	if startedAtUnix == 0 {
-		startedAt = time.Now()
-	}
 
 	ptyFile := os.NewFile(uintptr(ptyFD), "ptmx")
 	if ptyFile == nil {
@@ -142,7 +138,7 @@ func LoadResumeState() (*ResumeState, error) {
 func scrubUnixResumeEnv() {
 	for _, k := range []string{
 		envResume, envResumeSessionID, envResumePIN, envResumePinHash,
-		envResumeToken, envResumePTYFD, envResumeStartedAt, envResumeHeadless,
+		envResumeToken, envResumePTYFD, envResumeStartedAt, envResumeStartedAtNanos, envResumeHeadless,
 		envResumeScrollback, envResumeScrollbackKey, envResumeShellPID,
 	} {
 		_ = os.Unsetenv(k)
@@ -226,7 +222,7 @@ func (a *Agent) executeRestart() error {
 		envResumePinHash+"="+a.carriedPinHash(),
 		envResumeToken+"="+a.token,
 		envResumePTYFD+"="+strconv.Itoa(ptyFD),
-		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
+		resumeStartedAtEnv(a.startedAt)[0], resumeStartedAtEnv(a.startedAt)[1],
 		envResumeHeadless+"="+headlessEnv,
 		envResumeShellPID+"="+strconv.Itoa(a.term.ShellPid()),
 	)

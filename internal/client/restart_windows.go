@@ -39,7 +39,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"strconv"
 	"time"
 
 	xterm "golang.org/x/term"
@@ -86,11 +85,7 @@ func LoadResumeState() (*ResumeState, error) {
 	if id == "" || pin == "" || pinHash == "" || sock == "" {
 		return nil, errors.New("resume requested but session id / pin / pin_hash / pty sock missing")
 	}
-	startedAtUnix, _ := strconv.ParseInt(os.Getenv(envResumeStartedAt), 10, 64)
-	startedAt := time.Unix(startedAtUnix, 0)
-	if startedAtUnix == 0 {
-		startedAt = time.Now()
-	}
+	startedAt := resumeStartedAt(os.Getenv)
 
 	sess, err := pty.AttachHolder(sock)
 	if err != nil {
@@ -116,7 +111,7 @@ func LoadResumeState() (*ResumeState, error) {
 
 func scrubWindowsResumeEnv() {
 	for _, k := range []string{envResume, envResumeSessionID, envResumePIN,
-		envResumePinHash, envResumeToken, envResumeStartedAt, envResumePTYSock,
+		envResumePinHash, envResumeToken, envResumeStartedAt, envResumeStartedAtNanos, envResumePTYSock,
 		envResumeName, envResumeHeadless, envResumeScrollback, envResumeScrollbackKey} {
 		_ = os.Unsetenv(k)
 	}
@@ -189,7 +184,7 @@ func (a *Agent) executeRestart() error {
 		envResumePIN+"="+a.carriedPIN(),
 		envResumePinHash+"="+a.carriedPinHash(),
 		envResumeToken+"="+a.token,
-		envResumeStartedAt+"="+strconv.FormatInt(a.startedAt.Unix(), 10),
+		resumeStartedAtEnv(a.startedAt)[0], resumeStartedAtEnv(a.startedAt)[1],
 		envResumePTYSock+"="+sock,
 		envResumeName+"="+name,
 		// A converting foreground session comes back HEADLESS — its old
