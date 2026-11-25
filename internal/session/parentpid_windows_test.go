@@ -25,7 +25,7 @@ func TestParentOfAChildOnWindows(t *testing.T) {
 	if got := snapshotParent(c.Process.Pid); got != os.Getpid() {
 		t.Fatalf("control: the snapshot's parent: %d", got)
 	}
-	if got := nearestOf(c.Process.Pid, map[int]bool{os.Getpid(): true}); got != os.Getpid() {
+	if got := nearestOf(c.Process.Pid, map[int]int{os.Getpid(): os.Getpid()}); got != os.Getpid() {
 		t.Fatalf("the session above the child: %d", got)
 	}
 	ps, pok := procStartTime(os.Getpid())
