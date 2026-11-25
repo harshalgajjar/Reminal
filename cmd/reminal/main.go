@@ -2679,6 +2679,13 @@ func terminateAgent(a session.Active) error {
 	defer func() { _ = session.ClearActive(a.ID) }()
 	// Killed on purpose: never to be restored.
 	defer func() { _ = session.ClearRestore(a.ID) }()
+	// And once its process is gone, no crash file that says nothing is left
+	// behind to be read as a crash.
+	defer func() {
+		if !proc.Alive(a.PID) {
+			session.RemoveQuietCrashLog(a.ID)
+		}
+	}()
 
 	pid := a.PID
 	// Ask first. A foreground agent owns the terminal it was started in — raw

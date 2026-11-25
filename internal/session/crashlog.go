@@ -99,6 +99,14 @@ func CrashLogSaysSomething(id string) bool {
 // is held open.
 func DropQuietCrashLog(id string) {
 	_ = debug.SetCrashOutput(nil, debug.CrashOptions{})
+	RemoveQuietCrashLog(id)
+}
+
+// RemoveQuietCrashLog removes session id's crash file when nothing died
+// into it: for whoever finds the process that served the session gone (its
+// record pruned, or ended by reminal kill). A file holding only the lines
+// of who was serving must not be left to be read as a crash.
+func RemoveQuietCrashLog(id string) {
 	p, err := CrashLogPath(id)
 	if err != nil || CrashLogSaysSomething(id) {
 		return
