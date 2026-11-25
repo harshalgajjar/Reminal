@@ -382,7 +382,11 @@ func (a *Agent) settleRestore() {
 		if a.hungUp.Load() {
 			return // its terminal app quit, or the machine is going down
 		}
-		if a.term != nil && a.term.EndedBySignal() {
+		// One asked to end (reminal kill, Ctrl-]) is ended on purpose, and
+		// its shell is still running here (its terminal is closed after):
+		// asking how that shell ended only held the exit for the two
+		// seconds the answer is waited for.
+		if a.term != nil && !a.quitAsked() && a.term.EndedBySignal() {
 			return
 		}
 	}

@@ -112,3 +112,27 @@ func TestARecoveredPanicIsSaidInTheSessionsLines(t *testing.T) {
 		t.Errorf("events %q: want %q", b, want)
 	}
 }
+
+// The line is said the moment the session is over, before its teardown, and
+// not again when Run returns; the crash file is kept through the teardown
+// and dropped when Run returns.
+func TestTheEndIsSaidBeforeTheTeardownAndOnce(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	a := &Agent{sessionID: "EARLY123", version: "0.0.0-test"}
+	a.keepCrashOutput()
+	crash, _ := session.CrashLogPath("EARLY123")
+	a.sayEnded("%s", "quit: asked to stop")
+	if _, err := os.Stat(crash); err != nil {
+		t.Fatalf("the crash file went before the teardown was done: %v", err)
+	}
+	a.logEnded(nil)
+	b, _ := os.ReadFile(filepath.Join(home, ".reminal", "restore", "events.log"))
+	if n := strings.Count(string(b), " EARLY123 ended: "); n != 1 || !strings.Contains(string(b), " EARLY123 ended: quit: asked to stop (pid ") {
+		t.Errorf("events %q: want the end said once, as it was first said", b)
+	}
+	if _, err := os.Stat(crash); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("a crash file nothing died into was kept after Run returned (%v)", err)
+	}
+}

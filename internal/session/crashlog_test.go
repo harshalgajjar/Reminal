@@ -211,3 +211,41 @@ func deadPID(t *testing.T) int {
 	}
 	return cmd.Process.Pid
 }
+
+// A crash file nothing died into does not outlive its session's process:
+// whoever finds the process gone removes it, whether the session had said
+// its end or not, and leaves one that says something.
+func TestAQuietCrashFileGoesWhenItsProcessIsFoundGone(t *testing.T) {
+	h := isolateHome(t)
+	dead := deadPID(t)
+	if err := os.MkdirAll(filepath.Join(h, "restore"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := func(id string) string { return filepath.Join(h, "restore", "crash-"+id+".log") }
+	for _, id := range []string{"QUIETGON", "SAIDGONE", "LOUDGONE"} {
+		body := "# then pid 1 reminal: started, v1\n"
+		if id == "LOUDGONE" {
+			body += "panic: something\n"
+		}
+		if err := os.WriteFile(file(id), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if id == "SAIDGONE" {
+			LogEnded(id, "quit: asked to stop (pid %d)", dead)
+		}
+		if err := WriteActive(Active{ID: id, PID: dead, StartedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if all, err := ReadAllActive(); err != nil || len(all) != 0 {
+		t.Fatalf("ReadAllActive: %v %v", all, err)
+	}
+	for _, id := range []string{"QUIETGON", "SAIDGONE"} {
+		if _, err := os.Stat(file(id)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s: a crash file nothing died into was left after its process was found gone (%v)", id, err)
+		}
+	}
+	if _, err := os.Stat(file("LOUDGONE")); err != nil {
+		t.Errorf("a crash file that says something was removed: %v", err)
+	}
+}

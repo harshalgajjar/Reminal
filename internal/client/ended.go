@@ -49,9 +49,18 @@ func (a *Agent) logEnded(err error) {
 }
 
 func (a *Agent) logEndedAs(format string, args ...any) {
+	a.sayEnded(format, args...)
+	session.DropQuietCrashLog(a.sessionID)
+}
+
+// sayEnded keeps the line alone, once. run says it the moment the session is
+// over, before its teardown: the teardown can take seconds, and a process
+// ended in the middle of it (reminal kill sends terminate when a session it
+// asked to quit is still there 2 s later) had left no word of its own. Its
+// crash file is kept until the teardown is done, for a fault in it.
+func (a *Agent) sayEnded(format string, args ...any) {
 	a.endedOnce.Do(func() {
 		session.LogEnded(a.sessionID, "%s (pid %d)", fmt.Sprintf(format, args...), os.Getpid())
-		session.DropQuietCrashLog(a.sessionID)
 	})
 }
 

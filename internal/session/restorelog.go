@@ -82,6 +82,8 @@ func senderName() string {
 // last line kept for it is not its own "ended". what says which record.
 // A crash file that says something is pointed at.
 func logGoneWithoutAWord(id string, pid int, what string) {
+	// The process is gone: a crash file nothing died into goes with it.
+	defer RemoveQuietCrashLog(id)
 	if strings.HasPrefix(lastLogged(id), "ended: ") {
 		return
 	}

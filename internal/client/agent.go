@@ -1236,6 +1236,9 @@ func (a *Agent) run() error {
 	}()
 
 	err := a.serveRelay(shellExit)
+	if !a.restarting.Load() {
+		a.sayEnded("%s", a.endReason(err))
+	}
 	// Leaving: give closed-lid mode's loop its moment to clean up (the lid
 	// dimmer puts the screen's brightness back) before this process exits
 	// underneath it.
