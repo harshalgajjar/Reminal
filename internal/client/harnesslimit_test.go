@@ -101,6 +101,10 @@ var limitScreens = []struct {
 	{"codex", "■ Your included usage is exhausted. Choose an option below to continue.\n› ", time.Time{}},
 	// Codex 0.169.0 (source): its usage limit, and what to do about it.
 	{"codex", "■ Usage limit reached. You've reached your usage limit.\n› ", time.Time{}},
+	// Codex 0.172: an API key's, project's or organization's spend limit.
+	{"codex", "■ Your API key has reached its spend limit.\n› ", time.Time{}},
+	{"codex", "■ Your API project has reached its spend limit.\n› ", time.Time{}},
+	{"codex", "■ Your API organization has reached its spend limit.\n› ", time.Time{}},
 	{"codex", "■ Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex.\n› ", time.Time{}},
 	// On a phone's narrow screen: four rows.
 	{"codex", "■ You’ve hit your usage limit. Upgrade to Pro\n(https://chatgpt.com/explore/pro), visit\nhttps://chatgpt.com/settings/usage to purchase\nmore credits or try again at 3:05 PM.\n\n› ", limitLA(2026, 10, 19, 15, 5)},
@@ -188,6 +192,9 @@ var limitScreens = []struct {
 	{"amp", "  Upgrade to a paid tier, or add credits to keep using Amp.\n", time.Time{}},
 	{"amp", "  Rate limit exceeded. Try again shortly.\n", time.Time{}},
 	{"amp", "  Usage Quota Exceeded\n", time.Time{}},
+	// Its "Workspace Requires a Subscription" dialog, on one row and wrapped.
+	{"amp", "  Workspace Requires a Subscription\n  Your workspace allows models only through subscriptions and model provider connections, and none of yours serves this model. Connect one, switch models, or wait for your subscription's usage limit to reset.\n", time.Time{}},
+	{"amp", "  Workspace Requires a Subscription\n  Your workspace allows models only through subscriptions and model provider\n  connections, and none of yours serves this model. Connect one, switch models,\n  or wait for your subscription's usage limit to reset.\n", time.Time{}},
 	// Claude Code 2.1.326's fast limit, reworded, with and without when it
 	// resets; its credits headline with the model switch joined on, the
 	// action rows under it or on its own row; Amp's headline with the plan
@@ -1093,6 +1100,9 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"codex", "■ ", "Your included usage is exhausted. Choose an option below to continue.", false},
 		{"codex", "■ ", "Request a limit increase from your owner to continue using codex. Request increase?", false},
 		{"codex", "■ ", "Request a limit increase from your owner to continue using codex.", false},
+		{"codex", "■ ", "Your API key has reached its spend limit.", false},
+		{"codex", "■ ", "Your API project has reached its spend limit.", false},
+		{"codex", "■ ", "Your API organization has reached its spend limit.", false},
 		{"claude", "⎿  ", "Goal paused · usage limit reached · send a message after it resets to continue", false},
 		{"claude", "⎿  ", "Goal paused · usage limit reached · continues automatically when it resets", false},
 		{"claude", "⎿  ", "This request exceeds your group's budget. Ask your organization's admins to raise it, or try again after it resets on November 3 at 14:00 UTC.", false},
@@ -1154,6 +1164,7 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"amp", "", "Add credits to keep using Amp right now, or wait until the next hour starts for more free usage.", false},
 		{"amp", "", "Rate limit exceeded. Try again shortly.", false},
 		{"amp", "", "Usage Quota Exceeded", false},
+		{"amp", "", "Your workspace allows models only through subscriptions and model provider connections, and none of yours serves this model. Connect one, switch models, or wait for your subscription's usage limit to reset.", false},
 		{"pi", "", "Monthly usage limit reached", false},
 		{"pi", "", "You've reached your ChatGPT workspace's usage limit. Ask your workspace admin to increase it at admin.openai.com → Workspace → Usage limits.", false},
 		{"copilot", "", "You've hit your rate limit. Please wait for your limit to reset", false},
@@ -1208,6 +1219,11 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"claude", "  You've reached your monthly limit."},
 		{"claude", "● The message is:\n\n      Your organization is out of usage credits. Contact your admin to add more."},
 		{"codex", "• Your workspace is out of credits. Add credits to continue."},
+		{"codex", "• Your API key has reached its spend limit."},
+		{"codex", "• The log said your API project has reached its spend limit, so I switched keys."},
+		{"codex", "› Your API organization has reached its spend limit."},
+		{"amp", "  The dialog is titled Workspace Requires a Subscription."},
+		{"amp", "  It said the workspace allows models only through subscriptions,\n  so I connected one and carried on."},
 		{"amp", "  You've exceeded your usage limit of $20."},
 		{"amp", "  You've reached your free usage limit"},
 		// Claude Code 2.1.323's credit row, quoted, and carried on.
