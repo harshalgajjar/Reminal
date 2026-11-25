@@ -32,7 +32,7 @@ import (
 // fetch and sockets (ws/wss included), data: and blob: images, the xterm
 // stylesheet and inline styles, the tour's two fonts, its service workers,
 // and blob: frames for a previewed PDF.
-const viewerCSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js; style-src 'unsafe-inline' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css; font-src https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2 https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/GeistMono-Variable.woff2; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; frame-src 'self' blob:; manifest-src 'self'"
+const viewerCSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js; style-src 'self' 'unsafe-inline'; font-src https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2 https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/GeistMono-Variable.woff2; img-src 'self' data: blob:; connect-src 'self'; worker-src 'self'; frame-src 'self' blob:; manifest-src 'self'"
 
 // The page's sources and what build.json copies (a test holds every copy
 // entry embedded).

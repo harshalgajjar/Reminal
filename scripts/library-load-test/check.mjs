@@ -22,13 +22,16 @@ const fails = [];
 const check = (ok, what) => { console.log((ok ? 'ok   ' : 'FAIL ') + what); if (!ok) fails.push(what); };
 const b = await chromium.launch();
 
-async function load(hold) {
+async function load(hold, alone = false) {
   const ctx = await b.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e && e.message || e)));
   let held = 0;
-  if (hold) await page.route(/\/xterm(\.min)?\.js(\?|$)/, (route) => { held++; return route.abort('failed'); });
+  if (hold) await page.route(/\/vendor\/xterm-[\d.]+\.min\.js(\?|$)/, (route) => { held++; return route.abort('failed'); });
+  // alone: nothing but the page's own origin answers.
+  let outside = 0;
+  if (alone) await page.route((u) => u.hostname !== "127.0.0.1", (route) => { outside++; return route.abort("failed"); });
   await page.goto('http://127.0.0.1:8099/', { waitUntil: 'load' });
   await page.waitForTimeout(1500);
   const seen = await page.evaluate(() => {
@@ -36,7 +39,7 @@ async function load(hold) {
     return { library: typeof Terminal, overlay: !!o && getComputedStyle(o).display !== 'none', text: t ? t.textContent : '' };
   });
   await ctx.close();
-  return { errors, held, ...seen };
+  return { errors, held, outside, ...seen };
 }
 
 // The library's request fails, as it does when its host cannot be reached.
@@ -57,6 +60,15 @@ async function load(hold) {
   check(!/did not load completely/.test(r.text), `and the page does not say it failed to load ("${r.text}")`);
   const bad = r.errors.filter((e) => /is not defined|before initialization|did not load/.test(e));
   check(bad.length === 0, `and no script fails for want of another (${bad.length ? bad.slice(0, 3).join(' | ') : 'none'})`);
+}
+
+// Nothing outside the page's own origin answers: its code is all its own,
+// so the terminal is there all the same.
+{
+  const r = await load(false, true);
+  check(r.library === "function", `with every other host out of reach the terminal library is there (Terminal is ${r.library}; ${r.outside} request(s) to other hosts refused)`);
+  const bad = r.errors.filter((e) => /is not defined|before initialization|did not load/.test(e));
+  check(!/did not load completely/.test(r.text) && bad.length === 0, `and the page loads (${bad.length ? bad.slice(0, 3).join(" | ") : "no script fails"})`);
 }
 
 await b.close(); srv.close();

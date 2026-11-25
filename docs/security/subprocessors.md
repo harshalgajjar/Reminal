@@ -29,7 +29,17 @@ addresses, no passwords, no payment details, no IP address logs of its own.
 | **Loops** | Waitlist email for the announced hosted tier, at `reminal.app` only | Email address, and whether the signup identified as an individual or a team with a size range. Nothing else, and only if the form is submitted | Until unsubscribe or deletion on request | **Yes** — the software never contacts it; do not submit the form |
 
 There are **no other subprocessors**. No analytics vendor, no error-reporting
-service, no CDN for client assets, no CRM, no payment processor.
+service, no CRM, no payment processor.
+
+The viewer page's code is served from the relay's own origin, the third-party
+libraries it uses included (the terminal, its search and the QR drawing ship
+inside reminal at pinned versions, each held to its published hash by a test).
+A viewer's browser can still fetch two things from jsDelivr, a public CDN: the
+welcome tour's two font files, and, only in a browser that lacks the built-in
+cryptography the page prefers, one fallback library, loaded by its exact
+address and checked against a pinned hash before use. jsDelivr sees the
+browser's IP address and User-Agent for those requests and nothing of a
+session.
 
 Loops is listed above for completeness and is **not in the software's path at all**: it
 receives a waitlist address only when someone submits a form on the marketing site, and no

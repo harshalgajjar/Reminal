@@ -76,6 +76,9 @@ func viewerText(t *testing.T, _ string) string {
 
 // The CSP names each CDN stylesheet and font by its exact URL: every one the
 // page loads is in style-src or font-src, and nothing else from a CDN is.
+// The page loads no stylesheet from a CDN any more (the terminal's is its
+// own file, web/vendor), so style-src names none; the tour's fonts still
+// come from one.
 func TestCSPNamesEveryCDNStylesheetAndFontThePageLoads(t *testing.T) {
 	b, err := os.ReadFile("web/index.html")
 	if err != nil {
@@ -93,7 +96,7 @@ func TestCSPNamesEveryCDNStylesheetAndFontThePageLoads(t *testing.T) {
 		for _, m := range c.used.FindAllStringSubmatch(page, -1) {
 			used = append(used, m[1])
 		}
-		if len(used) == 0 {
+		if len(used) == 0 && c.directive == "font-src" {
 			t.Fatalf("found nothing for %s in the page — the pattern has stopped matching it", c.directive)
 		}
 		var named []string
