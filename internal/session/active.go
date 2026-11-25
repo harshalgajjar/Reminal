@@ -50,6 +50,18 @@ type Active struct {
 	// clock ticks (procIdentity): what reusedPID compares there, no clock
 	// involved. Empty elsewhere, and in records written by older builds.
 	PidIdent string `json:"pid_ident,omitempty"`
+	// ShellPID is the session's shell, when the process serving the session
+	// knows it for certain. The shell is not always under that process: on
+	// Windows it hangs under a holder the first process of the session
+	// started, and a hot restart hands the session to a new process that is
+	// no ancestor of it. What runs in the session is then found by its
+	// shell (NearestSessionPID, Enclosing). Zero in older records.
+	ShellPID int `json:"shell_pid,omitempty"`
+	// ShellIdent says which process ShellPID was when it was recorded
+	// (ProcessIdentity). A pid is handed out again once its process ends: the
+	// shell is taken for the session only while the process at ShellPID is
+	// still that one.
+	ShellIdent string `json:"shell_ident,omitempty"`
 	// Kind distinguishes shell sessions ("" or "shell") from port
 	// forwards ("port"). Empty means shell for back-compat with
 	// records written before port-forwarding existed.
