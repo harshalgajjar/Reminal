@@ -33,4 +33,26 @@ func TestParentOfAChildOnWindows(t *testing.T) {
 	if !pok || !cok || ps.After(cs) {
 		t.Fatalf("start times: parent %v %v, child %v %v", ps, pok, cs, cok)
 	}
+	// The order Windows made them in: read for both, this process first.
+	pn, pnok := procOrder(os.Getpid())
+	cn, cnok := procOrder(c.Process.Pid)
+	if !pnok || !cnok || pn >= cn {
+		t.Fatalf("order numbers: parent %d %v, child %d %v: want both read, the parent's the smaller", pn, pnok, cn, cnok)
+	}
+	// And it is that order: three more children, each made after the last.
+	last := cn
+	for i := 0; i < 3; i++ {
+		k := exec.Command("cmd", "/c", "ping -n 3 127.0.0.1 >NUL")
+		if err := k.Start(); err != nil {
+			t.Fatal(err)
+		}
+		n, ok := procOrder(k.Process.Pid)
+		_ = k.Process.Kill()
+		_ = k.Wait()
+		if !ok || n <= last {
+			t.Fatalf("child %d: order number %d %v, not after %d", i, n, ok, last)
+		}
+		last = n
+	}
+	t.Logf("order numbers: this process %d, its children %d .. %d", pn, cn, last)
 }
