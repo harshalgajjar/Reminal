@@ -1347,6 +1347,18 @@ await ctx.close();
   await pause(4000);
   const a = await call('browser_tabs_context');
   check(a.err && /stopped/.test(a.err), `Stop holds across the browser restarting (${a.err || a.text})`);
+  // And the way back is there: the browser forgot the session's row as it
+  // restarted, so a session refused had no row to press Resume on.
+  const pop = await again.newPage();
+  await pop.goto(`chrome-extension://${EXT_ID}/popup.html`);
+  await pop.waitForFunction(() => document.querySelector('#list li'), null, { timeout: 5000 }).catch(() => {});
+  const rows9 = await pop.locator('#list li').allTextContents();
+  check(rows9.includes(`${ID} - reminal (stopped)Resume`), `after the restart the stopped session has its row, with Resume (${JSON.stringify(rows9)})`);
+  await pop.locator('#list li.stopped', { hasText: `${ID} - reminal` }).locator('button', { hasText: 'Resume' }).click({ timeout: 5000 }).catch(() => {});
+  await pop.waitForFunction((id) => [...document.querySelectorAll('#list li')].some((l) => l.textContent === `${id} - reminal` + 'Stop'), ID, { timeout: 5000 }).catch(() => {});
+  await pop.close();
+  const b = await call('browser_tabs_context');
+  check(!b.err, `and Resume there lets the session use the browser again (${b.err || 'its tabs listed'})`);
   await again.close();
 }
 console.log(fails.length ? `${fails.length} failed` : 'all ok');

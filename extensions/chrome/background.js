@@ -382,7 +382,14 @@ async function handle(m) {
   // group is titled. Never the name the session was given.
   const name = m.session ? `${m.session} - reminal` : 'reminal';
   let s = await getS(k);
-  if (await isStopped(k, s)) throw new Error(STOPPED);
+  if (await isStopped(k, s)) {
+    // A Stop outlives the browser (and the extension) starting again; the
+    // run's record does not. Refused with no record, the run had no row in
+    // the button's panel, so nothing to press Resume on: it gets its
+    // record back, stopped, and with it its row.
+    if (!s && m.session) await putS(k, { session: m.session, run: m.run || "", name, machine: m.machine || "", stopped: true });
+    throw new Error(STOPPED);
+  }
   const before = s;
   s = await putS(k, { session: m.session, run: m.run || "", name, machine: m.machine || "" });
   // A run's first request: the session is running, whatever was said of it
