@@ -2143,28 +2143,56 @@ func (s *winStream) drainAcks() {
 	}
 }
 
+// ackWaitSlowLink is how long a frame's ack is waited for over the relay from
+// a viewer that does ack, before the frame is taken as delivered. The relay
+// carries a session's terminal on the same connection, in order: a frame
+// sent while the one before is still on its way puts everything typed and
+// printed behind both. A late ack from such a viewer is a slow link, not a
+// lost ack, and ackWaitTimeout let the next frame go every 800 ms all the
+// same, so on a link slower than the frames they piled up and an echo took
+// over a second. Still a bound: an ack that is lost holds the pane this long
+// and no longer.
+const ackWaitSlowLink = 4 * time.Second
+
+// ackGate is how many frames a stream may have sent and not yet heard back
+// about, and how long it waits for word before taking them as delivered.
+// Over the relay the pictures (not h264) go one at a time, and a viewer that
+// acks is waited for (ackWaitSlowLink); a direct channel, which carries no
+// terminal, keeps its deeper pipeline and the short wait.
+func ackGate(h264, wsVideo, relay, acks bool) (limit uint64, wait time.Duration) {
+	limit, wait = uint64(maxFramesInFlight), ackWaitTimeout
+	if h264 {
+		// The relay acks once per 200ms batch, so more than one batch in
+		// flight is just click-to-photon delay. P2P keeps the deeper
+		// pipeline — those frames never touch the billed path.
+		if wsVideo {
+			limit = 6
+		} else {
+			limit = maxFramesInFlightH264
+		}
+	} else if relay {
+		limit = 1
+	}
+	if relay && acks {
+		wait = ackWaitSlowLink
+	}
+	return limit, wait
+}
+
 // waitCapacity blocks while maxFramesInFlight frames are unacknowledged, so we
 // never outrun the viewer by more than that — latency stays bounded instead of
 // accumulating on a slow link. Returns false when the stream should end: stop
 // closed, or a viewer that used to ack has been silent past
 // streamAckIdleTimeout (it vanished uncleanly; don't stream to nobody).
 func (s *winStream) waitCapacity() bool {
-	limit := uint64(maxFramesInFlight)
-	if s.codec == "h264" {
-		// The relay acks once per 200ms batch, so more than one batch in
-		// flight is just click-to-photon delay. P2P keeps the deeper
-		// pipeline — those frames never touch the billed path.
-		if s.wsVideo {
-			limit = 6
-		} else {
-			limit = maxFramesInFlightH264
-		}
-	}
+	confirmed, _, _ := s.a.rtcSinks()
+	relay := wsSinkNeeded(s.a.framesWantedBy(), len(confirmed))
+	limit, wait := ackGate(s.codec == "h264", s.wsVideo, relay, s.gotAnyAck)
 	for s.seq-s.acked >= limit {
 		select {
 		case v := <-s.ack:
 			s.consumeAck(v)
-		case <-time.After(ackWaitTimeout):
+		case <-time.After(wait):
 			if s.gotAnyAck && time.Since(s.lastAck) > streamAckIdleTimeout {
 				return false
 			}
