@@ -351,6 +351,9 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// more from its owner.
 		`requestalimitincreasefromyourownertocontinueusingcodex(?:\.requestincrease\?)?`,
 		`quotaexceeded\.checkyourplanandbillingdetails`,
+		// Codex 0.172: an API key's, project's or organization's spend
+		// limit.
+		`yourapi(?:key|project|organization)hasreacheditsspendlimit`,
 	),
 	// Gemini CLI 0.64–0.66: "Usage limit reached for gemini-2.5-pro.", then
 	// "Access resets at 3:05 PM PDT." on a row of its own; its daily quota;
@@ -437,6 +440,12 @@ var harnessLimitNotices = map[string][]limitNotice{
 		`upgradeto[a-z0-9]{1,24}formoreincludedusage,or(?:addcreditstokeepusingamp|addpaidcreditstocontinuenow)`,
 		`ratelimitexceeded\.tryagainshortly`,
 		`usagequotaexceeded`,
+		// Amp's "Workspace Requires a Subscription" dialog: no subscription
+		// or connection of the person's serves the model, and what to do
+		// about it. The dialog's heading is words anyone may write: not
+		// read.
+		`yourworkspaceallowsmodelsonlythroughsubscriptionsandmodelproviderconnections,andnoneofyoursservesthismodel\.`+
+			`connectone,switchmodels,orwaitforyoursubscription.?susagelimittoreset`,
 	),
 	// pi 1.4: its monthly limit, a ChatGPT plan's or workspace's, and a
 	// Hugging Face rate limit with when to retry.
