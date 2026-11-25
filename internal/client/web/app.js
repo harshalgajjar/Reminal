@@ -6,6 +6,19 @@
     const overlay = document.getElementById('overlay');
     const overlayText = document.getElementById('overlay-text');
 
+    // The terminal's library is a script of its own, loaded before this one.
+    // A browser that could not load it skips it and runs this script all the
+    // same: it then failed at its first use of the library, far below, with
+    // half of its handlers already made and failing in turn, and the person
+    // saw a page that did nothing. Said here instead, before anything is
+    // wired up, in words; nothing below runs.
+    if (typeof Terminal === 'undefined') {
+      if (overlayText) overlayText.textContent = 'This page did not load completely. Check your connection, then reload it.';
+      if (overlay) overlay.classList.add('visible');
+      if (statusEl) statusEl.textContent = 'Not loaded';
+      throw new Error('reminal: the terminal library did not load');
+    }
+
     const params = new URLSearchParams(location.search);
     const initialSession = params.get('s') || '';
     // Standalone pane mode: this tab IS one mirrored window and nothing else.
