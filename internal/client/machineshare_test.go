@@ -6,6 +6,7 @@
 package client
 
 import (
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -35,7 +36,7 @@ func TestManyReadersRunOneCPUSampler(t *testing.T) {
 	const readers = 40
 	shares := make([]*machineShare, readers)
 	for i := range shares {
-		shares[i] = &machineShare{dir: dir, name: "cpu", sample: sample, fresh: 300 * time.Millisecond, wantEvery: 50 * time.Millisecond, wantFor: 400 * time.Millisecond, tryEvery: 30 * time.Millisecond}
+		shares[i] = settleAtEnd(t, &machineShare{dir: dir, name: "cpu", sample: sample, fresh: 300 * time.Millisecond, wantEvery: 50 * time.Millisecond, wantFor: 400 * time.Millisecond, tryEvery: 30 * time.Millisecond})
 	}
 	ask := func(d time.Duration) (got int32) {
 		var wg sync.WaitGroup
@@ -89,7 +90,7 @@ func TestManyReadersRunOneCPUSampler(t *testing.T) {
 func TestAnotherReaderTakesOverTheCPUSampler(t *testing.T) {
 	dir := t.TempDir()
 	mk := func(sample func(func(string) bool, func() bool)) *machineShare {
-		return &machineShare{dir: dir, name: "cpu", sample: sample, fresh: 200 * time.Millisecond, wantEvery: 20 * time.Millisecond, wantFor: 5 * time.Second, tryEvery: 20 * time.Millisecond}
+		return settleAtEnd(t, &machineShare{dir: dir, name: "cpu", sample: sample, fresh: 200 * time.Millisecond, wantEvery: 20 * time.Millisecond, wantFor: 5 * time.Second, tryEvery: 20 * time.Millisecond})
 	}
 	// One that gives a reading and ends at once, as a holder that died does.
 	gone := mk(func(emit func(string) bool, _ func() bool) { emit("10") })
@@ -117,12 +118,12 @@ func TestAnotherReaderTakesOverTheCPUSampler(t *testing.T) {
 func TestMachineReadingsDoNotShareFiles(t *testing.T) {
 	dir := t.TempDir()
 	mk := func(name, val string) *machineShare {
-		return &machineShare{dir: dir, name: name, fresh: time.Second, wantEvery: 20 * time.Millisecond, wantFor: 400 * time.Millisecond, tryEvery: 20 * time.Millisecond,
+		return settleAtEnd(t, &machineShare{dir: dir, name: name, fresh: time.Second, wantEvery: 20 * time.Millisecond, wantFor: 400 * time.Millisecond, tryEvery: 20 * time.Millisecond,
 			sample: func(emit func(string) bool, _ func() bool) {
 				for emit(val) {
 					time.Sleep(20 * time.Millisecond)
 				}
-			}}
+			}})
 	}
 	cpu, bat := mk("cpu", "42.0"), mk("battery", "85,charging,123")
 	var c, b string
@@ -160,4 +161,24 @@ func TestBatteryWord(t *testing.T) {
 			t.Fatalf("%q was read as a battery reading (%+v)", w, b)
 		}
 	}
+}
+
+// settleAtEnd has s out of its directory before the test's folder is removed:
+// as the test ends nobody wants readings any more (its .want file goes), and
+// the offers to sample that s started, the one sampling among them, are
+// waited for. One still running wrote into the folder while it was being
+// removed, and the test failed on the removal ("directory not empty").
+// Registered after t.TempDir, so it runs before the folder goes.
+func settleAtEnd(t *testing.T, s *machineShare) *machineShare {
+	t.Helper()
+	t.Cleanup(func() {
+		for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+			_ = os.Remove(s.path(".want"))
+			if s.leading.Load() == 0 {
+				return
+			}
+		}
+		t.Errorf("%s: an offer to sample was still running 10 s after the test", s.name)
+	})
+	return s
 }
