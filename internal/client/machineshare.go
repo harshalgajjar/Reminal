@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -61,6 +62,10 @@ type machineShare struct {
 	sampling bool
 	wantAt   time.Time
 	triedAt  time.Time
+	// leading counts this share's offers to sample that have not ended yet,
+	// the one sampling among them: none of them touches the directory once
+	// it is zero.
+	leading atomic.Int32
 }
 
 func (s *machineShare) path(suffix string) string { return filepath.Join(s.dir, s.name+suffix) }
@@ -88,6 +93,7 @@ func (s *machineShare) read() (string, bool) {
 	}
 	s.mu.Unlock()
 	if try {
+		s.leading.Add(1)
 		go s.lead()
 	}
 	return "", false
@@ -141,6 +147,7 @@ func (s *machineShare) latest() (val string, at time.Time, ok bool) {
 // while it does, and writes each value to the file (a new file renamed over
 // the old one, so a reader never sees half of one).
 func (s *machineShare) lead() {
+	defer s.leading.Add(-1)
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return
 	}
