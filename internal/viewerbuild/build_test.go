@@ -23,14 +23,57 @@ func spec(t *testing.T) Spec {
 	return s
 }
 
-const page = "<!doctype html><title>t</title>\n  <script data-build=\"header\"></script>\n  <script data-build=\"pick\"></script>\n  <script data-build=\"app\"></script>\n  <script data-build=\"moments\"></script>\n  <script data-build=\"voiceui\"></script>\n"
+// The pages, sources and build lines below are made from build.json's own
+// list of scripts, so these tests hold whatever the list is.
+
+// order is the order a page here marks s's scripts in, which is not the
+// list's: the first, then the rest from the last.
+func order(s Spec) []string {
+	out := []string{s.Scripts[0]}
+	for i := len(s.Scripts) - 1; i >= 1; i-- {
+		out = append(out, s.Scripts[i])
+	}
+	return out
+}
+
+// pageOf is head and then a marker for each of s's scripts, each line ended
+// with nl.
+func pageOf(s Spec, head, nl string) string {
+	for _, sc := range order(s) {
+		head += "<script data-build=\"" + sc + "\"></script>" + nl
+	}
+	return head
+}
+
+// sources is a source for each of s's scripts, the first one's as given.
+func sources(s Spec, first string) map[string][]byte {
+	src := map[string][]byte{}
+	for _, sc := range s.Scripts {
+		src[sc] = []byte("// " + sc + "\n")
+	}
+	src[s.Scripts[0]] = []byte(first)
+	return src
+}
+
+// buildLine is the build line of src's scripts: their names in the list's order.
+func buildLine(s Spec, src map[string][]byte) string {
+	names := make([]string, 0, len(s.Scripts))
+	for _, sc := range s.Scripts {
+		names = append(names, Name(sc, src[sc]))
+	}
+	return strings.Join(names, " ")
+}
+
+const pageHead = "<!doctype html><title>t</title>\n"
 
 // A script is served by a name its content makes, and the page's tag for it
 // names that build and carries its SRI: a new build is a new name, so the
 // old one can be cached for good.
 func TestAScriptIsNamedByItsContentAndItsTagStamped(t *testing.T) {
-	src := map[string][]byte{"header": []byte("fit()\n"), "app": []byte("console.log('one')\n"), "moments": []byte("mo()\n"), "pick": []byte("pick()\n"), "voiceui": []byte("vu()\n")}
-	p, err := Render(spec(t), []byte(page), src)
+	s := spec(t)
+	page := pageOf(s, pageHead, "\n")
+	src := sources(s, "console.log('one')\n")
+	p, err := Render(s, []byte(page), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,30 +93,56 @@ func TestAScriptIsNamedByItsContentAndItsTagStamped(t *testing.T) {
 	if strings.Contains(string(p.HTML), "data-build") {
 		t.Fatal("a marker was left in the page")
 	}
-	if p.Build != Name("header", src["header"])+" "+Name("app", src["app"])+" "+Name("moments", src["moments"])+" "+Name("pick", src["pick"])+" "+Name("voiceui", src["voiceui"]) {
+	if p.Build != buildLine(s, src) {
 		t.Fatalf("its build line: %q", p.Build)
 	}
-	src["app"] = []byte("console.log('two')\n")
-	q, _ := Render(spec(t), []byte(page), src)
+	src[s.Scripts[0]] = []byte("console.log('two')\n")
+	q, _ := Render(s, []byte(page), src)
 	if q.Build == p.Build || string(q.HTML) == string(p.HTML) {
-		t.Fatal("a new app.js was not a new build")
+		t.Fatalf("a new %s.js was not a new build", s.Scripts[0])
+	}
+}
+
+// The list is build.json's, whatever it holds: with a script more at its
+// end, the page is stamped with it too and it ends the build line.
+func TestAListWithAScriptAddedAtItsEndRenders(t *testing.T) {
+	s := spec(t)
+	before := buildLine(s, sources(s, "one\n"))
+	s.Scripts = append(append([]string{}, s.Scripts...), "extra")
+	src := sources(s, "one\n")
+	p, err := Render(s, []byte(pageOf(s, pageHead, "\n")), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Build != before+" "+Name("extra", src["extra"]) {
+		t.Fatalf("its build line %q: want the line before it (%q), then the script added", p.Build, before)
+	}
+	if strings.Count(string(p.HTML), `<script src="/assets/`+Name("extra", src["extra"])+`"`) != 1 || strings.Contains(string(p.HTML), "data-build") {
+		t.Fatalf("the page does not carry the script added once:\n%s", p.HTML)
+	}
+	// A page with no marker for it is refused, as for any script of the list.
+	if _, err := Render(s, []byte(pageOf(spec(t), pageHead, "\n")), src); err == nil {
+		t.Fatal("rendered a page with no marker for a script of the list")
 	}
 }
 
 // A page that does not mark each script exactly once is refused, never
 // served half stamped.
 func TestAPageWithoutExactlyOneMarkerIsRefused(t *testing.T) {
-	src := map[string][]byte{"header": []byte("h"), "app": []byte("a"), "moments": []byte("m"), "pick": []byte("p"), "voiceui": []byte("v")}
+	s := spec(t)
+	page := pageOf(s, pageHead, "\n")
+	src := sources(s, "a")
 	for _, bad := range []string{
-		"<script data-build=\"header\"></script>",
-		page + "<script data-build=\"app\"></script>",
+		"<script data-build=\"" + s.Scripts[0] + "\"></script>",
+		page + "<script data-build=\"" + s.Scripts[len(s.Scripts)-1] + "\"></script>",
 	} {
-		if _, err := Render(spec(t), []byte(bad), src); err == nil {
+		if _, err := Render(s, []byte(bad), src); err == nil {
 			t.Fatalf("rendered %q", bad)
 		}
 	}
-	if _, err := Render(spec(t), []byte(page), map[string][]byte{"app": []byte("a")}); err == nil {
-		t.Fatal("rendered without header.js")
+	last := s.Scripts[len(s.Scripts)-1]
+	if _, err := Render(s, []byte(page), map[string][]byte{last: []byte("a")}); err == nil {
+		t.Fatalf("rendered with %s.js alone", last)
 	}
 }
 
@@ -81,12 +150,13 @@ func TestAPageWithoutExactlyOneMarkerIsRefused(t *testing.T) {
 // binary and the Worker's build can only change their rule together.
 func TestARuleThisBuildDoesNotKnowIsRefused(t *testing.T) {
 	good, _ := os.ReadFile(filepath.Join("..", "client", "web", "build.json"))
+	first := `"` + spec(t).Scripts[0] + `"`
 	for _, c := range []struct{ from, to string }{
 		{`"sha384"`, `"sha256"`},
 		{`{sha256:16}`, `{sha256:12}`},
 		{`"keep": 3`, `"keep": 0`},
-		{`"header", "app"`, `"../x", "app"`},
-		{`"header", "app"`, `"Header", "app"`},
+		{first, `"../x"`},
+		{first, strings.ToUpper(first[:2]) + first[2:]},
 		{`"version": 1`, `"version": 2`},
 		{`"keep": 3`, `"keep": 3, "minify": true`},
 		{`"sw.js"`, `"../sw.js"`},
@@ -151,13 +221,19 @@ func TestOnlyThePageNamesABuild(t *testing.T) {
 // The page is stamped as the bytes it is, whatever they are: what is not
 // UTF-8, a BOM or CRLFs, and a script with $& in it, come out as they went in.
 func TestThePageIsStampedAsItsBytes(t *testing.T) {
-	index := []byte("\xef\xbb\xbf<html>\xe9\xff\r\n<script data-build=\"header\"></script>\r\n<script data-build=\"pick\"></script>\r\n<script data-build=\"app\"></script>\r\n<script data-build=\"moments\"></script>\r\n<script data-build=\"voiceui\"></script>\r\n")
-	src := map[string][]byte{"header": []byte("a('\xe9')\r\n"), "app": []byte("a('$&$1')\n"), "moments": []byte("mo()\n"), "pick": []byte("p()\n"), "voiceui": []byte("v()\n")}
-	p, err := Render(spec(t), index, src)
+	s := spec(t)
+	const head = "\xef\xbb\xbf<html>\xe9\xff\r\n"
+	src := sources(s, "a('$&$1')\n")
+	last := s.Scripts[len(s.Scripts)-1]
+	src[last] = []byte("a('\xe9')\r\n")
+	p, err := Render(s, []byte(pageOf(s, head, "\r\n")), src)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "\xef\xbb\xbf<html>\xe9\xff\r\n<script src=\"/assets/" + Name("header", src["header"]) + "\" integrity=\"" + SRI(src["header"]) + "\" crossorigin=\"anonymous\"></script>\r\n<script src=\"/assets/" + Name("pick", src["pick"]) + "\" integrity=\"" + SRI(src["pick"]) + "\" crossorigin=\"anonymous\"></script>\r\n<script src=\"/assets/" + Name("app", src["app"]) + "\" integrity=\"" + SRI(src["app"]) + "\" crossorigin=\"anonymous\"></script>\r\n<script src=\"/assets/" + Name("moments", src["moments"]) + "\" integrity=\"" + SRI(src["moments"]) + "\" crossorigin=\"anonymous\"></script>\r\n<script src=\"/assets/" + Name("voiceui", src["voiceui"]) + "\" integrity=\"" + SRI(src["voiceui"]) + "\" crossorigin=\"anonymous\"></script>\r\n"
+	want := head
+	for _, sc := range order(s) {
+		want += "<script src=\"/assets/" + Name(sc, src[sc]) + "\" integrity=\"" + SRI(src[sc]) + "\" crossorigin=\"anonymous\"></script>\r\n"
+	}
 	if string(p.HTML) != want {
 		t.Fatalf("got %q", p.HTML)
 	}

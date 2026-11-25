@@ -11,31 +11,40 @@ import { spawnSync } from "node:child_process";
 import { build, name, sri, readSpec, MAX_SCRIPT, MAX_TOTAL, LIVE } from "./build-viewer.mjs";
 
 const SPEC = readFileSync(new URL("../../internal/client/web/build.json", import.meta.url), "utf8");
+// LIST is build.json's scripts. Every page, file and builds.txt line below is
+// made from it, so these tests hold whatever the list is; they ask only that
+// it has "app" (the script they vary) and at least three scripts.
+const LIST = JSON.parse(SPEC).scripts;
+const MO = "mo()\n";
+const PK = "// pick\n";
+const VU = "// voiceui\n";
+// src is what a script's source holds here: app.js as given.
+const src = (s, app = "console.log('one')\n") => (s === "app" ? app : s === "header" ? "fit()\n" : s === "moments" ? MO : `// ${s}\n`);
+// The page's markers, in an order that is not the list's: the first, then the rest from the last.
+const markers = (list = LIST, nl = "\n") => [list[0], ...list.slice(1).reverse()].map((s) => `<script data-build="${s}"></script>${nl}`).join("");
+// nm is the name script s is built to.
+const nm = (s, app) => name(s, Buffer.from(src(s, app)));
+// NOT_ONE is the refusal of a line that is not one build of the list.
+const NOT_ONE = new RegExp("not one build of " + LIST.join(" "));
 
-// web: a viewer's sources, app.js as given.
-function web(app = "console.log('one')\n") {
+// web: a viewer's sources, app.js as given, for the scripts of list (spec is its build.json).
+function web(app = "console.log('one')\n", list = LIST, spec = SPEC) {
   const d = mkdtempSync(join(tmpdir(), "web-"));
-  writeFileSync(join(d, "build.json"), SPEC);
-  writeFileSync(join(d, "index.html"), '<!doctype html>\n<script data-build="header"></script>\n<script data-build="pick"></script>\n<script data-build="app"></script>\n<script data-build="moments"></script>\n<script data-build="voiceui"></script>\n');
-  writeFileSync(join(d, "header.js"), "fit()\n");
-  writeFileSync(join(d, "moments.js"), MO);
-  writeFileSync(join(d, "app.js"), app);
+  writeFileSync(join(d, "build.json"), spec);
+  writeFileSync(join(d, "index.html"), "<!doctype html>\n" + markers(list));
+  for (const s of list) writeFileSync(join(d, s + ".js"), src(s, app));
   writeFileSync(join(d, "sw.js"), "// sw\n");
   writeFileSync(join(d, "reload.js"), "// guard\n");
-  // The dropdown (pick.js), a script of the viewer's.
-  writeFileSync(join(d, "pick.js"), PK);
-  // The voice button and panel (voiceui.js).
-  writeFileSync(join(d, "voiceui.js"), VU);
   writeFileSync(join(d, "manifest.webmanifest"), "{}");
   for (const sub of ["icons", "vendor", "voice"]) { mkdirSync(join(d, sub)); writeFileSync(join(d, sub, "x"), "x"); }
   return d;
 }
 // out: a new ./public, as the tree has it (_headers alone).
 const out = () => { const d = join(mkdtempSync(join(tmpdir(), "cf-")), "public"); mkdirSync(d); writeFileSync(join(d, "_headers"), "/*\n"); return d; };
-const MO = "mo()\n";
-const PK = "// pick\n";
-const VU = "// voiceui\n";
-const lineOf = (app) => [name("header", Buffer.from("fit()\n")), name("app", Buffer.from(app)), name("moments", Buffer.from(MO)), name("pick", Buffer.from(PK)), name("voiceui", Buffer.from(VU))].join(" ");
+// lineOf is the builds.txt line of the build with this app.js: the first n scripts of list.
+const lineOf = (app, n = LIST.length, list = LIST) => list.slice(0, n).map((s) => nm(s, app)).join(" ");
+// filesOf is those scripts as a live Worker serves them, by path.
+const filesOf = (app, n = LIST.length, list = LIST) => Object.fromEntries(list.slice(0, n).map((s) => ["/assets/" + nm(s, app), src(s, app)]));
 const other = "https://live.example";
 
 // A live Worker: its builds.txt and scripts, as files by path.
@@ -52,17 +61,13 @@ function live(files) {
 }
 // liveOf: a live Worker serving these builds (apps), newest first.
 function liveOf(apps, extra = {}) {
-  const files = { "/assets/builds.txt": apps.map(lineOf).join("\n") + "\n", ...extra };
-  for (const a of apps) {
-    files["/assets/" + name("header", Buffer.from("fit()\n"))] = "fit()\n";
-    files["/assets/" + name("app", Buffer.from(a))] = a;
-    files["/assets/" + name("moments", Buffer.from(MO))] = MO;
-    files["/assets/" + name("pick", Buffer.from(PK))] = PK;
-    files["/assets/" + name("voiceui", Buffer.from(VU))] = VU;
-  }
+  const files = { "/assets/builds.txt": apps.map((a) => lineOf(a)).join("\n") + "\n", ...extra };
+  for (const a of apps) Object.assign(files, filesOf(a));
   return live(files);
 }
 const scripts = (o) => readdirSync(join(o, "assets")).filter((f) => f.endsWith(".js")).sort();
+// namesIn is the script names these builds.txt lines hold, each once, sorted.
+const namesIn = (...lines) => [...new Set(lines.join(" ").split(" "))].sort();
 
 test("each script is named by its content and its tag stamped with its SRI", async () => {
   const o = out();
@@ -78,7 +83,7 @@ test("each script is named by its content and its tag stamped with its SRI", asy
 
 test("the page is stamped as its bytes, not as text", async () => {
   const w = web("a('$&$1')\n");
-  writeFileSync(join(w, "index.html"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("<html>"), Buffer.from([0xe9, 0xff]), Buffer.from('\r\n<script data-build="header"></script>\r\n<script data-build="pick"></script>\r\n<script data-build="app"></script>\r\n<script data-build="moments"></script>\r\n<script data-build="voiceui"></script>\r\n')]));
+  writeFileSync(join(w, "index.html"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("<html>"), Buffer.from([0xe9, 0xff]), Buffer.from("\r\n" + markers(LIST, "\r\n"))]));
   const o = out();
   await build({ web: w, out: o, dev: true });
   const html = readFileSync(join(o, "index.html"));
@@ -90,7 +95,7 @@ test("a rule or a key this build does not know is refused", () => {
   for (const [from, to] of [
     ['"sha384"', '"sha256"'], ["{sha256:16}", "{sha256:12}"], ['"keep": 3', '"keep": 0'],
     ['"version": 1', '"version": 2'], ['"keep": 3', '"keep": 3, "minify": true'],
-    ['"header", "app"', '"Header", "app"'], ['"sw.js"', '"../sw.js"'], ['"sw.js"', '"index.html"'], ['"sw.js"', '"assets/x.js"'],
+    [JSON.stringify(LIST[0]), JSON.stringify(LIST[0][0].toUpperCase() + LIST[0].slice(1))], ['"sw.js"', '"../sw.js"'], ['"sw.js"', '"index.html"'], ['"sw.js"', '"assets/x.js"'],
   ]) {
     assert.ok(SPEC.includes(from), from);
     assert.throws(() => readSpec(SPEC.replace(from, to)), undefined, to);
@@ -131,7 +136,7 @@ test("a deploy's build without a --previous run for this build fails, and never 
   await build({ web: web("/* a branch's app.js */\n"), out: o, dev: true });
   const r = await build({ web: web("v5\n"), out: o, otherOrigin: other });
   assert.deepEqual(r.kept, [lineOf("v4\n")]);
-  assert.deepEqual(scripts(o), [name("app", Buffer.from("v4\n")), name("app", Buffer.from("v5\n")), name("header", Buffer.from("fit()\n")), name("moments", Buffer.from(MO)), name("pick", Buffer.from(PK)), name("voiceui", Buffer.from(VU))].sort());
+  assert.deepEqual(scripts(o), namesIn(lineOf("v4\n"), lineOf("v5\n")));
   // A tree --previous did not run for.
   await assert.rejects(build({ web: web("v6\n"), out: o, otherOrigin: other }), /run --previous again/);
   // --first-deploy keeps nothing, and says so for the [build] after it.
@@ -143,13 +148,58 @@ test("a deploy's build without a --previous run for this build fails, and never 
 // The deploy that adds a script at the end of build.json's list finds builds
 // made before it, without that script: they are kept, as they were.
 test("a live build from before a script was added is kept, with only its own scripts", async () => {
-  const h = name("header", Buffer.from("fit()\n")), a = name("app", Buffer.from("v4\n")), m = name("moments", Buffer.from(MO)), p = name("pick", Buffer.from(PK));
-  const { fetchFn } = live({ "/assets/builds.txt": `${h} ${a} ${m} ${p}\n`, ["/assets/" + h]: "fit()\n", ["/assets/" + a]: "v4\n", ["/assets/" + m]: MO, ["/assets/" + p]: PK });
+  const before = lineOf("v4\n", LIST.length - 1);
+  const { fetchFn } = live({ "/assets/builds.txt": before + "\n", ...filesOf("v4\n", LIST.length - 1) });
   const o = out();
   const r = await build({ web: web("v5\n"), out: o, previous: other, otherOrigin: other, fetchFn });
-  assert.deepEqual(r.kept, [`${h} ${a} ${m} ${p}`]);
-  assert.deepEqual(readFileSync(join(o, "assets", "builds.txt"), "utf8").trim().split("\n"), [lineOf("v5\n"), `${h} ${a} ${m} ${p}`]);
-  assert.deepEqual(scripts(o), [a, name("app", Buffer.from("v5\n")), h, m, p, name("voiceui", Buffer.from(VU))].sort());
+  assert.deepEqual(r.kept, [before]);
+  assert.deepEqual(readFileSync(join(o, "assets", "builds.txt"), "utf8").trim().split("\n"), [lineOf("v5\n"), before]);
+  assert.deepEqual(scripts(o), namesIn(lineOf("v5\n"), before));
+});
+
+// A build that adds two or more scripts at once leaves every live build
+// that many short: any first part of the list is a build of its own, down to
+// the first script alone.
+test("a live build from before several scripts were added is kept, down to the first alone", async () => {
+  const short = lineOf("v4\n", LIST.length - 2);
+  const first = name(LIST[0], Buffer.from("first0()\n"));
+  const { fetchFn } = live({ "/assets/builds.txt": `${short}\n${first}\n`, ...filesOf("v4\n", LIST.length - 2), ["/assets/" + first]: "first0()\n" });
+  const o = out();
+  const r = await build({ web: web("v5\n"), out: o, previous: other, otherOrigin: other, fetchFn });
+  assert.deepEqual(r.kept, [short, first]);
+  assert.deepEqual(readFileSync(join(o, "assets", "builds.txt"), "utf8").trim().split("\n"), [lineOf("v5\n"), short, first]);
+  assert.deepEqual(scripts(o), namesIn(lineOf("v5\n"), short, first));
+});
+
+// Fewer scripts is one build only as the first part of the list, in order:
+// not a later script without the ones before it, not a name the list does
+// not have, and not an empty name.
+test("a shorter live line that is not the first part of the list fails the deploy", async () => {
+  assert.ok(LIST.length >= 3, "these lines need three scripts");
+  const [s0, s1, s2] = LIST.map((s) => nm(s, "v4\n"));
+  const extra = name("extra", Buffer.from("x\n"));
+  for (const line of [s1, `${s1} ${s2}`, `${s0} ${s2}`, `${s2} ${s1} ${s0}`, extra, `${s0} ${extra}`, `${s0} `, ` ${s0}`]) {
+    const { fetchFn } = live({ "/assets/builds.txt": line + "\n", ...filesOf("v4\n"), ["/assets/" + extra]: "x\n" });
+    await assert.rejects(build({ web: web(), out: out(), previous: other, otherOrigin: other, fetchFn }), NOT_ONE, JSON.stringify(line));
+  }
+});
+
+// The list is build.json's, whatever it holds: with a script more at its end
+// the page is built with it too, and a live build of the list before it, one
+// short now, is kept.
+test("a list with a script added at its end builds, and keeps the builds from before it", async () => {
+  const list = [...LIST, "extra"];
+  const spec = JSON.stringify({ ...JSON.parse(SPEC), scripts: list });
+  const o = out();
+  const before = lineOf("v4\n");
+  const { fetchFn } = live({ "/assets/builds.txt": before + "\n", ...filesOf("v4\n") });
+  const r = await build({ web: web("v5\n", list, spec), out: o, previous: other, otherOrigin: other, fetchFn });
+  assert.deepEqual(r.kept, [before]);
+  const now = lineOf("v5\n", list.length, list);
+  assert.deepEqual(readFileSync(join(o, "assets", "builds.txt"), "utf8").trim().split("\n"), [now, before]);
+  assert.deepEqual(scripts(o), namesIn(now, before));
+  const html = readFileSync(join(o, "index.html"), "utf8");
+  assert.ok(html.includes(`/assets/${nm("extra")}"`) && !html.includes("data-build"));
 });
 
 test("a kept file that was changed fails the deploy", async () => {
@@ -171,31 +221,33 @@ test("--previous reads only the live Worker, unless --other-origin", async () =>
 
 test("a live list that is not build.json's scripts in order fails the deploy", async () => {
   const evil = Buffer.from("document.title='pwned'\n");
-  const h = name("header", Buffer.from("fit()\n"));
-  const m = name("moments", Buffer.from(MO));
-  for (const line of [name("x", evil), `${name("app", evil)} ${h}`, `${h} ${name("app", evil)} ${name("app", evil)}`, `${h}  ${name("app", evil)}`, `${h} ${m}`, `${h} ${name("app", evil)} ${m} ${m}`, "../../etc/passwd"]) {
-    const { fetchFn } = live({ "/assets/builds.txt": line + "\n", ["/assets/" + name("x", evil)]: evil, ["/assets/" + name("app", evil)]: evil, ["/assets/" + h]: "fit()\n" });
-    await assert.rejects(build({ web: web(), out: out(), previous: other, otherOrigin: other, fetchFn }), /not one build of header app moments pick voiceui/, line);
+  const [s0, , s2] = LIST.map((s) => nm(s, "v4\n"));
+  const e1 = name(LIST[1], evil);
+  for (const line of [name("x", evil), `${e1} ${s0}`, `${s0} ${e1} ${e1}`, `${s0}  ${e1}`, `${s0} ${s2}`, `${s0} ${e1} ${s2} ${s2}`, "../../etc/passwd"]) {
+    const { fetchFn } = live({ "/assets/builds.txt": line + "\n", ["/assets/" + name("x", evil)]: evil, ["/assets/" + e1]: evil, ["/assets/" + s0]: src(LIST[0]) });
+    await assert.rejects(build({ web: web(), out: out(), previous: other, otherOrigin: other, fetchFn }), NOT_ONE, line);
   }
 });
 
 test("a live script whose content is not its name's fails the deploy", async () => {
-  const p = "/assets/" + name("app", Buffer.from("v4\n"));
-  const h = "/assets/" + name("header", Buffer.from("fit()\n"));
-  const { fetchFn } = live({ "/assets/builds.txt": lineOf("v4\n") + "\n", [h]: "fit()\n", [p]: "something else\n" });
+  const { fetchFn } = live({ "/assets/builds.txt": lineOf("v4\n") + "\n", ...filesOf("v4\n"), ["/assets/" + nm("app", "v4\n")]: "something else\n" });
   await assert.rejects(build({ web: web("v5\n"), out: out(), previous: other, otherOrigin: other, fetchFn }), /not the one its name says/);
 });
 
 test("a live script past its cap, or builds past the total, fail the deploy", async () => {
-  const h = name("header", Buffer.from("fit()\n"));
   const big = "x".repeat(MAX_SCRIPT + 1);
-  const n = name("app", Buffer.from(big)), m = name("moments", Buffer.from(MO)), p = name("pick", Buffer.from(PK));
-  const one = live({ "/assets/builds.txt": `${h} ${n} ${m} ${p}\n`, ["/assets/" + h]: "fit()\n", ["/assets/" + n]: big, ["/assets/" + m]: MO, ["/assets/" + p]: PK });
+  const one = live({ "/assets/builds.txt": lineOf(big) + "\n", ...filesOf(big) });
   await assert.rejects(build({ web: web(), out: out(), previous: other, otherOrigin: other, fetchFn: one.fetchFn }), /more than/);
-  // Two builds, each script under its cap, together past the total.
-  const [h1, a1, h2, a2] = ["h", "a", "g", "b"].map((c) => c.repeat(MAX_SCRIPT - 1));
-  const files = { "/assets/builds.txt": `${name("header", Buffer.from(h1))} ${name("app", Buffer.from(a1))} ${m} ${p}\n${name("header", Buffer.from(h2))} ${name("app", Buffer.from(a2))} ${m} ${p}\n`, ["/assets/" + m]: MO, ["/assets/" + p]: PK };
-  for (const [sc, v] of [["header", h1], ["app", a1], ["header", h2], ["app", a2]]) files["/assets/" + name(sc, Buffer.from(v))] = v;
+  // Two builds, each script under its cap, together past the total: two
+  // scripts of each as large as a script may be, the rest as they are.
+  const [a1, b1, a2, b2] = ["h", "a", "g", "b"].map((c) => c.repeat(MAX_SCRIPT - 1));
+  const files = {}, lines = [];
+  for (const [x, y] of [[a1, b1], [a2, b2]]) {
+    const parts = LIST.map((s, i) => (i === 0 ? x : i === 1 ? y : src(s)));
+    lines.push(LIST.map((s, i) => name(s, Buffer.from(parts[i]))).join(" "));
+    LIST.forEach((s, i) => { files["/assets/" + name(s, Buffer.from(parts[i]))] = parts[i]; });
+  }
+  files["/assets/builds.txt"] = lines.join("\n") + "\n";
   assert.ok(4 * (MAX_SCRIPT - 1) > MAX_TOTAL);
   await assert.rejects(build({ web: web(), out: out(), previous: other, otherOrigin: other, fetchFn: live(files).fetchFn }), /builds are more than/);
 });
