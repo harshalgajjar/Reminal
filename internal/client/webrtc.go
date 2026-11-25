@@ -4,15 +4,19 @@
 package client
 
 import (
+	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
 	"github.com/pion/webrtc/v4"
 	"reminal/internal/protocol"
@@ -26,7 +30,28 @@ import (
 var rtcAPI = webrtc.NewAPI(
 	webrtc.WithMediaEngine(&webrtc.MediaEngine{}),
 	webrtc.WithInterceptorRegistry(&interceptor.Registry{}),
+	webrtc.WithSettingEngine(rtcSettings(runtime.GOOS)),
 )
+
+// rtcSettings is how peer connections are set up on goos. On Windows they
+// take no part in local name lookup (mDNS): that binds UDP port 5353 on
+// every interface, and a bind to a set port by a program the firewall has
+// no rule for brings up the Windows Firewall question ("allow public and
+// private networks to access this app?"). It stayed on top, and while it was
+// up Windows dropped every click reminal sent into a mirrored window. The
+// sockets a connection itself uses are on ports the system picks, which ask
+// nothing. A browser gives its address on the local network only as a
+// ".local" name, which the lookup was there to resolve: on Windows the
+// system resolves those names itself, so they are asked of it instead
+// (addRemoteCandidate), and a viewer on the same network still connects
+// directly.
+func rtcSettings(goos string) webrtc.SettingEngine {
+	var se webrtc.SettingEngine
+	if goos == "windows" {
+		se.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	}
+	return se
+}
 
 // rtcProbeWindow is how long a connected-but-unconfirmed DataChannel is probed
 // (frames sent over both it and WS) before we give up on it. A channel that
@@ -548,7 +573,18 @@ func (a *Agent) handleWebRTCAnswer(encData string) {
 	peer.pendingICE = nil
 	peer.mu.Unlock()
 	for _, c := range pending {
-		_ = peer.pc.AddICECandidate(c)
+		addRemoteCandidate(peer.pc, c)
+	}
+	// Addresses the answer itself carries under a ".local" name: see
+	// addRemoteCandidate.
+	if rtcResolvesLocalNames {
+		zero := uint16(0)
+		for _, line := range strings.Split(ans.SDP, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "a=candidate:") && localNameOf(line) != "" {
+				addRemoteCandidate(peer.pc, webrtc.ICECandidateInit{Candidate: strings.TrimPrefix(line, "a="), SDPMLineIndex: &zero})
+			}
+		}
 	}
 }
 
@@ -583,7 +619,7 @@ func (a *Agent) handleWebRTCICE(encData string) {
 		return
 	}
 	peer.mu.Unlock()
-	_ = peer.pc.AddICECandidate(cand)
+	addRemoteCandidate(peer.pc, cand)
 }
 
 func (a *Agent) rtcPeerByID(id string) *rtcPeer {
@@ -777,4 +813,71 @@ type viewerCap struct {
 	// assumed to want frames.
 	panes      int
 	panesKnown bool
+}
+
+// rtcResolvesLocalNames says peer connections here do no local name lookup
+// of their own (rtcSettings), so a viewer's ".local" addresses are resolved
+// through the system before they are handed over.
+var rtcResolvesLocalNames = runtime.GOOS == "windows"
+
+// rtcLocalNameWait bounds one such lookup: a name nobody answers for must
+// not hold anything, and the connection has its other addresses meanwhile.
+const rtcLocalNameWait = 3 * time.Second
+
+// lookupLocalName asks the system for a ".local" name's addresses (a test
+// sets it). On Windows the system's own resolver answers these names.
+var lookupLocalName = func(ctx context.Context, name string) ([]net.IPAddr, error) {
+	return net.DefaultResolver.LookupIPAddr(ctx, name)
+}
+
+// localNameOf is the ".local" name a candidate line gives as its address
+// ("candidate:1 1 udp 2113937151 <name>.local 54321 typ host ..."), or "".
+func localNameOf(candidate string) string {
+	f := strings.Fields(candidate)
+	if len(f) < 6 || !strings.HasSuffix(strings.ToLower(f[4]), ".local") {
+		return ""
+	}
+	return f[4]
+}
+
+// resolveLocalCandidate is candidate with its ".local" name replaced by the
+// address the system gives for it (IPv4 before IPv6), and whether it was.
+func resolveLocalCandidate(ctx context.Context, candidate string) (string, bool) {
+	name := localNameOf(candidate)
+	if name == "" {
+		return candidate, false
+	}
+	addrs, err := lookupLocalName(ctx, name)
+	if err != nil || len(addrs) == 0 {
+		return candidate, false
+	}
+	ip := addrs[0].IP
+	for _, a := range addrs {
+		if a.IP.To4() != nil {
+			ip = a.IP
+			break
+		}
+	}
+	f := strings.Fields(candidate)
+	f[4] = ip.String()
+	return strings.Join(f, " "), true
+}
+
+// addRemoteCandidate hands a viewer's address to the peer connection. Where
+// connections do no local name lookup (Windows), one given as a ".local"
+// name is resolved through the system first, off the caller: the lookup may
+// take seconds, and the other addresses must not wait on it.
+func addRemoteCandidate(pc *webrtc.PeerConnection, c webrtc.ICECandidateInit) {
+	if !rtcResolvesLocalNames || localNameOf(c.Candidate) == "" {
+		_ = pc.AddICECandidate(c)
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), rtcLocalNameWait)
+		defer cancel()
+		if resolved, ok := resolveLocalCandidate(ctx, c.Candidate); ok {
+			c.Candidate = resolved
+			_ = pc.AddICECandidate(c)
+		}
+	}()
 }
