@@ -6,6 +6,19 @@
     const overlay = document.getElementById('overlay');
     const overlayText = document.getElementById('overlay-text');
 
+    // The terminal's library is a script of its own, loaded before this one.
+    // A browser that could not load it skips it and runs this script all the
+    // same: it then failed at its first use of the library, far below, with
+    // half of its handlers already made and failing in turn, and the person
+    // saw a page that did nothing. Said here instead, before anything is
+    // wired up, in words; nothing below runs.
+    if (typeof Terminal === 'undefined') {
+      if (overlayText) overlayText.textContent = 'This page did not load completely. Check your connection, then reload it.';
+      if (overlay) overlay.classList.add('visible');
+      if (statusEl) statusEl.textContent = 'Not loaded';
+      throw new Error('reminal: the terminal library did not load');
+    }
+
     const params = new URLSearchParams(location.search);
     const initialSession = params.get('s') || '';
     // Standalone pane mode: this tab IS one mirrored window and nothing else.
@@ -3534,7 +3547,7 @@
     // X25519), loaded lazily and integrity-pinned (SRI) so 18.4+ browsers never
     // fetch it and the fallback can't be tampered with. HKDF + AES-GCM keep using
     // WebCrypto everywhere (supported far back).
-    const NACL_URL = 'https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js';
+    const NACL_URL = '/vendor/tweetnacl-1.0.3.min.js';
     const NACL_SRI = 'sha384-LMUiUHpaYNGZFzWFRjsADnCSqae1Mk5llcUOHOLDhCxkyF2cdsWAueTZAzV+swW/';
     let _naclPromise = null;
     // ---- CPace (PIN handshake) ------------------------------------------------

@@ -206,7 +206,7 @@ TestEvaluatePushCPUSpikeResets	0.00
 TestEvaluatePushChargerSettles	0.00
 TestEvaluatePushChargerSettlesByTime	0.00
 TestEvaluatePushChargerTrackedWhileOff	0.00
-TestEveryExternalScriptAndStylesheetIsPinned	0.01
+TestEveryLibraryScriptAndStylesheetIsPinned	0.01
 TestEveryIntegratedAgentIsRecognisedOnSight	0.00
 TestExactFramesAreChangedByTheirBytesAlone	0.00
 TestExpiredTombstoneIsForgotten	0.00

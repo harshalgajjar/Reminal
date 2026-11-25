@@ -20,7 +20,7 @@
        Chrome shortcut, with nowhere to answer a notification prompt. -->
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css" integrity="sha384-tStR1zLfWgsiXCF3IgfB3lBa8KmBe/lG287CL9WCeKgQYcp1bjb4/+mwN6oti4Co" crossorigin="anonymous">
+  <link rel="stylesheet" href="/vendor/xterm-5.5.0.min.css" integrity="sha384-tStR1zLfWgsiXCF3IgfB3lBa8KmBe/lG287CL9WCeKgQYcp1bjb4/+mwN6oti4Co">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     /* Layout model: header sits in normal flow at the top of body;
@@ -1920,8 +1920,8 @@
        blocker eats clicks so a stray tap cannot open a menu out from under a
        step. Geist comes from the same CDN as xterm.js, so the viewer gains
        no new third party. */
-    @font-face { font-family: "Tour Geist"; src: url(https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
-    @font-face { font-family: "Tour Geist Mono"; src: url(https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/GeistMono-Variable.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
+    @font-face { font-family: "Tour Geist"; src: url(/vendor/geist-1.3.1-sans-variable.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
+    @font-face { font-family: "Tour Geist Mono"; src: url(/vendor/geist-1.3.1-mono-variable.woff2) format("woff2"); font-weight: 100 900; font-display: swap; }
     .tour-card, .tour-mock {
       --t-sans: "Tour Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
       --t-mono: "Tour Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -2419,9 +2419,9 @@
   <div class="cl-back" id="alback" hidden></div>
   <div class="cl-sheet al-sheet" id="alsheet" role="dialog" aria-modal="true" aria-label="Alerts" hidden></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-search@0.15.0/lib/addon-search.min.js" integrity="sha384-rZV6rh0SoMasxn3Q4xrTEgBKArJ47qXr2bxeT0S4mf6sqQCkvv99FnFKawCQUqUR" crossorigin="anonymous"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU" crossorigin="anonymous"></script>
+  <script src="/vendor/xterm-5.5.0.min.js" integrity="sha384-J4qzUjBl1FxyLsl/kQPQIOeINsmp17OHYXDOMpMxlKX53ZfYsL+aWHpgArvOuof9"></script>
+  <script src="/vendor/xterm-addon-search-0.15.0.min.js" integrity="sha384-rZV6rh0SoMasxn3Q4xrTEgBKArJ47qXr2bxeT0S4mf6sqQCkvv99FnFKawCQUqUR"></script>
+  <script src="/vendor/qrcode-1.0.0.min.js" integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU"></script>
   <script data-build="pick"></script>
   <script data-build="app"></script>
   <script data-build="moments"></script>

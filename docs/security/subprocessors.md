@@ -29,7 +29,16 @@ addresses, no passwords, no payment details, no IP address logs of its own.
 | **Loops** | Waitlist email for the announced hosted tier, at `reminal.app` only | Email address, and whether the signup identified as an individual or a team with a size range. Nothing else, and only if the form is submitted | Until unsubscribe or deletion on request | **Yes** — the software never contacts it; do not submit the form |
 
 There are **no other subprocessors**. No analytics vendor, no error-reporting
-service, no CDN for client assets, no CRM, no payment processor.
+service, no CRM, no payment processor.
+
+There is **no CDN for client assets**. A viewer's browser asks nothing of a
+third party to show the page: its scripts, stylesheets and fonts all come from
+the relay's own origin, the other projects' work it uses included (the
+terminal, its search, the QR drawing, a fallback for browsers without built-in
+X25519, and the welcome tour's two fonts ship inside reminal at pinned
+versions). A test holds each of those files to its published hash, and the
+page's content security policy allows no other origin for any of them. Their
+licences are in `internal/client/web/vendor/NOTICE`.
 
 Loops is listed above for completeness and is **not in the software's path at all**: it
 receives a waitlist address only when someone submits a form on the marketing site, and no

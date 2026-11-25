@@ -24,22 +24,34 @@ func readHosted(t *testing.T, name string) []byte {
 	return b
 }
 
-// The viewer holds this browser's keys, so a script it loads from somewhere
-// else must be exactly the file that was reviewed. A tag without an integrity
-// hash runs whatever that host serves on the day.
-func TestEveryExternalScriptAndStylesheetIsPinned(t *testing.T) {
+// The viewer holds this browser's keys, so another project's script it loads
+// must be exactly the file that was reviewed. Each such tag carries an
+// integrity hash, though the file ships with the page: without one it runs
+// whatever is served on the day. One from another host needs crossorigin as
+// well, or the browser cannot check it.
+func TestEveryLibraryScriptAndStylesheetIsPinned(t *testing.T) {
 	page := viewerText(t, hostedPublic)
-	tags := regexp.MustCompile(`<(script|link)\b[^>]*\b(?:src|href)="https://[^"]+"[^>]*>`).FindAllString(page, -1)
-	if len(tags) == 0 {
-		t.Fatal("found no external tags at all — the pattern has stopped matching the page")
-	}
+	tags := regexp.MustCompile(`<(script|link)\b[^>]*\b(?:src|href)="[^"]+"[^>]*>`).FindAllString(page, -1)
+	outside := regexp.MustCompile(`\b(?:src|href)="(?:https?:)?//`)
+	shipped := regexp.MustCompile(`\b(?:src|href)="/vendor/`)
+	checked := 0
 	for _, tag := range tags {
 		if strings.HasPrefix(tag, "<link") && !strings.Contains(tag, `rel="stylesheet"`) {
 			continue
 		}
-		if !strings.Contains(tag, `integrity="sha384-`) || !strings.Contains(tag, `crossorigin="anonymous"`) {
+		if !outside.MatchString(tag) && !shipped.MatchString(tag) {
+			continue
+		}
+		checked++
+		if !strings.Contains(tag, `integrity="sha384-`) {
 			t.Errorf("loaded without an integrity hash: %s", tag)
 		}
+		if outside.MatchString(tag) && !strings.Contains(tag, `crossorigin="anonymous"`) {
+			t.Errorf("loaded from another host without crossorigin: %s", tag)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("found no library tags at all: the pattern has stopped matching the page")
 	}
 	// Scripts added at runtime have to carry one too.
 	dyn := regexp.MustCompile(`s\.src = (\w+);([^\n]*)`).FindAllStringSubmatch(page, -1)
@@ -129,8 +141,8 @@ func TestViewerPolicyAllowsOnlyWhatThePageUses(t *testing.T) {
 		"default-src":  "'none'",
 		"connect-src":  "'self'",
 		"img-src":      "'self' data: blob:",
-		"style-src":    "'unsafe-inline' https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css",
-		"font-src":     "https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2 https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/GeistMono-Variable.woff2",
+		"style-src":    "'self' 'unsafe-inline'", // 'self': the terminal's stylesheet (web/vendor)
+		"font-src":     "'self'",                 // the tour's fonts (web/vendor)
 		"worker-src":   "'self'",
 		"frame-src":    "'self' blob:", // blob: a previewed PDF; 'self': the voice frame (web/voice)
 		"manifest-src": "'self'",
