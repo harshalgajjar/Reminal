@@ -76,9 +76,10 @@ func viewerText(t *testing.T, _ string) string {
 
 // The CSP names each CDN stylesheet and font by its exact URL: every one the
 // page loads is in style-src or font-src, and nothing else from a CDN is.
-// The page loads no stylesheet from a CDN any more (the terminal's is its
-// own file, web/vendor), so style-src names none; the tour's fonts still
-// come from one.
+// The page loads none from a CDN any more (the terminal's stylesheet and
+// the tour's fonts are its own files, web/vendor), so both name none: what
+// this still holds is that the policy names no address the page does not
+// use. TestThePageLoadsNothingFromOutsideItsOrigin holds the rest.
 func TestCSPNamesEveryCDNStylesheetAndFontThePageLoads(t *testing.T) {
 	b, err := os.ReadFile("web/index.html")
 	if err != nil {
@@ -95,9 +96,6 @@ func TestCSPNamesEveryCDNStylesheetAndFontThePageLoads(t *testing.T) {
 		var used []string
 		for _, m := range c.used.FindAllStringSubmatch(page, -1) {
 			used = append(used, m[1])
-		}
-		if len(used) == 0 && c.directive == "font-src" {
-			t.Fatalf("found nothing for %s in the page — the pattern has stopped matching it", c.directive)
 		}
 		var named []string
 		for _, s := range cspDirectives(t, viewerCSP)[c.directive] {

@@ -130,7 +130,7 @@ func TestViewerPolicyAllowsOnlyWhatThePageUses(t *testing.T) {
 		"connect-src":  "'self'",
 		"img-src":      "'self' data: blob:",
 		"style-src":    "'self' 'unsafe-inline'", // 'self': the terminal's stylesheet (web/vendor)
-		"font-src":     "https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/Geist-Variable.woff2 https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/GeistMono-Variable.woff2",
+		"font-src":     "'self'",                 // the tour's fonts (web/vendor)
 		"worker-src":   "'self'",
 		"frame-src":    "'self' blob:", // blob: a previewed PDF; 'self': the voice frame (web/voice)
 		"manifest-src": "'self'",

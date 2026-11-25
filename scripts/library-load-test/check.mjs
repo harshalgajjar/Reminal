@@ -67,6 +67,7 @@ async function load(hold, alone = false) {
 {
   const r = await load(false, true);
   check(r.library === "function", `with every other host out of reach the terminal library is there (Terminal is ${r.library}; ${r.outside} request(s) to other hosts refused)`);
+  check(r.outside === 0, `and it asks nothing of any other host (${r.outside} request(s))`);
   const bad = r.errors.filter((e) => /is not defined|before initialization|did not load/.test(e));
   check(!/did not load completely/.test(r.text) && bad.length === 0, `and the page loads (${bad.length ? bad.slice(0, 3).join(" | ") : "no script fails"})`);
 }

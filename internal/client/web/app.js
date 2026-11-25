@@ -3547,7 +3547,7 @@
     // X25519), loaded lazily and integrity-pinned (SRI) so 18.4+ browsers never
     // fetch it and the fallback can't be tampered with. HKDF + AES-GCM keep using
     // WebCrypto everywhere (supported far back).
-    const NACL_URL = 'https://cdn.jsdelivr.net/npm/tweetnacl@1.0.3/nacl.min.js';
+    const NACL_URL = '/vendor/tweetnacl-1.0.3.min.js';
     const NACL_SRI = 'sha384-LMUiUHpaYNGZFzWFRjsADnCSqae1Mk5llcUOHOLDhCxkyF2cdsWAueTZAzV+swW/';
     let _naclPromise = null;
     // ---- CPace (PIN handshake) ------------------------------------------------
