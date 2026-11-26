@@ -1387,3 +1387,44 @@ func TestHarnessLimitClaudeWaitFooter(t *testing.T) {
 		t.Error("a session waiting to go on by itself is not held as limited")
 	}
 }
+
+// Qwen Code says how its turn ended too (StopFailure, 0.14.4 on), with the
+// same words: a rate limit's or billing's refusal holds the limit whatever
+// the screen shows, as Claude Code's does. Its loop detection, and its
+// other errors, are no word of the limit.
+func TestHarnessLimitTurnsAreReadFromQwensHook(t *testing.T) {
+	if limitTestNow.IsZero() {
+		t.Skip("no zone data")
+	}
+	for _, code := range []string{"rate_limit", "billing_error"} {
+		now := limitLA(2026, 10, 19, 13, 0)
+		harnessNow = func() time.Time { return now }
+		notice := "✕ [API Error: You've used up your credits. Please try again after the reset.] (Press Ctrl+Y to retry)"
+		a := &Agent{}
+		turn := now.Add(-2 * time.Second)
+		screen := "  " + notice + "\n> "
+		a.noteHarnessLimit(screen, "qwen", false, turn, turn.Add(time.Second), code)
+		a.noteHarnessLimit(screen, "qwen", false, turn, turn.Add(time.Second), code)
+		if l, _ := a.harnessLimitedNow(); !l {
+			t.Fatalf("%s: not limited", code)
+		}
+		for i := 1; i <= 3; i++ {
+			now = now.Add(time.Minute)
+			turn = now
+			a.noteHarnessLimit(screen, "qwen", false, turn, time.Time{}, "")
+			now = now.Add(time.Second)
+			a.noteHarnessLimit(screen, "qwen", false, turn, now, code)
+			now = now.Add(harnessUpFor)
+			a.noteHarnessLimit(screen, "qwen", false, turn, now.Add(-harnessUpFor), code)
+			if l, _ := a.harnessLimitedNow(); !l {
+				t.Fatalf("%s, refusal %d, its hook saying so: read as no longer limited", code, i)
+			}
+		}
+	}
+	harnessNow = time.Now
+	for _, code := range []string{"loop_detected", "invalid_request", "server_error", "max_output_tokens", "unknown"} {
+		if limitRefusals[code] {
+			t.Errorf("%s is read as the limit's refusal", code)
+		}
+	}
+}

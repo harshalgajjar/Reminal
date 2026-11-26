@@ -141,6 +141,9 @@ type hookEvent struct {
 	// them (tried in Docker) — so below it, or with no version read, the
 	// event is not written, and one written before is taken out.
 	MinVersion string
+	// OldRunsNone: an agent older than MinVersion runs none of its hooks
+	// while any entry for the event is in its file (Claude Code 2.1.77).
+	OldRunsNone bool
 }
 
 // hookSpec is how to install reminal's attention hooks into one agent's config.
@@ -470,7 +473,7 @@ func agentTargets() []agentTarget {
 					{Event: "Stop", State: "done"},                // turn finished, with what it left running
 					// Its turn ended on an API error instead — a usage limit's
 					// refusal, a login gone: fires in Stop's place.
-					{Event: "StopFailure", State: "failed", MinVersion: "2.1.78"},
+					{Event: "StopFailure", State: "failed", MinVersion: "2.1.78", OldRunsNone: true},
 					// One of its own subagents finished: what is still running.
 					{Event: "SubagentStop", State: "subagent"},
 					// Up and reading its input: started, or resumed (a long
@@ -595,6 +598,15 @@ func agentTargets() []agentTarget {
 					{Event: "UserPromptSubmit", State: "working"},
 					{Event: "Notification", State: "notify"}, // idle_prompt + permission_prompt — split by payload
 					{Event: "Stop", State: "done"},
+					// Its turn ended on an error instead (the service refusing:
+					// a rate limit, billing, a login gone; or its own loop
+					// detection): fires in Stop's place, from 0.14.4 on, with
+					// the same "error" word Claude Code's carries. Without it
+					// such a turn read as still at work until the screen had
+					// been still for a while. (0.14.3 runs its other hooks
+					// with the event in its settings, tried in Docker; an
+					// older one is not handed it all the same.)
+					{Event: "StopFailure", State: "failed", MinVersion: "0.14.4"},
 					{Event: "SessionStart", State: "ready"},
 				},
 			},
