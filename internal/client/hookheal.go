@@ -5,9 +5,11 @@ package client
 
 import (
 	"context"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -29,7 +31,7 @@ import (
 
 // hookHealAgents are the agents whose hooks can be written for a version
 // they are not (cmd/reminal: hookEvent.MinVersion).
-var hookHealAgents = map[string]bool{"claude": true}
+var hookHealAgents = map[string]bool{"claude": true, "qwen": true}
 
 // hookHealWait caps each ask: an abort cap — an agent says its version at
 // once, and the heal reads and writes one file.
@@ -92,7 +94,7 @@ func (a *Agent) noteAgentVersion(fg string, pgrp int) {
 		// (session.ProbeCommand).
 		out, err := session.RunProbe(session.ProbeCommand(ctx, cmd[0], append(cmd[1:], "--version")...), false)
 		v := strings.TrimSpace(string(out))
-		if err != nil || v == "" || strings.ContainsAny(v, "\n=") || !strings.Contains(v, agentVersionSays[fg]) {
+		if err != nil || v == "" || strings.ContainsAny(v, "\n=") || !agentVersionAnswer(fg, v) {
 			return // not the agent's own answer (review)
 		}
 		if key != "" {
@@ -168,6 +170,19 @@ func agentCommandOf(pid int, prog string) []string {
 // one that does not is another program's, and decides nothing.
 var agentVersionSays = map[string]string{"claude": "(Claude Code)"}
 
+// agentVersionBare is an answer that is a version and nothing else, as an
+// agent that does not name itself gives ("0.26.9": Qwen Code).
+var agentVersionBare = regexp.MustCompile(`^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?$`)
+
+// agentVersionAnswer reports whether v is fg's own answer to --version: it
+// names the agent where the agent names itself, else it is a bare version.
+func agentVersionAnswer(fg, v string) bool {
+	if name := agentVersionSays[fg]; name != "" {
+		return strings.Contains(v, name)
+	}
+	return agentVersionBare.MatchString(v)
+}
+
 // healHooksFor asks, once for each version of the agent, when such an agent
 // (prev) has just left the front for a shell (fg), and its binary said its
 // version while it was there.
@@ -222,17 +237,71 @@ func (a *Agent) healHooksFor(prev, fg string) {
 // it writes is the new one. In the background, never holding up the start.
 var healPluginsOnce sync.Once
 
+// healSelf is the reminal that run is made with (a test stands in for it).
+var healSelf = reminalSelf
+
+// healSaid is what that run said it did (a hook an upgrade brought, added:
+// cmd/reminal's healAddedHooks), kept until a session says it to the person
+// (sayHealed); the daemon, with no one to say it to, logs it.
+var healSaid = struct {
+	sync.Mutex
+	lines []string
+}{}
+
 // HealOwnPlugins starts that, the first time it is called.
 func HealOwnPlugins() {
 	healPluginsOnce.Do(func() {
-		exe, ok := reminalSelf()
+		exe, ok := healSelf()
 		if !ok {
 			return
 		}
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), hookHealWait)
 			defer cancel()
-			_ = exec.CommandContext(ctx, exe, "integrate", "--heal-plugins").Run()
+			out, err := exec.CommandContext(ctx, exe, "integrate", "--heal-plugins").Output()
+			if err != nil {
+				return
+			}
+			healSaid.Lock()
+			defer healSaid.Unlock()
+			for _, line := range strings.Split(string(out), "\n") {
+				if line = strings.TrimSpace(line); line != "" && len(healSaid.lines) < 16 {
+					log.Printf("%s", line)
+					healSaid.lines = append(healSaid.lines, line)
+				}
+			}
 		}()
 	})
+}
+
+// sayHealed says to the person what reminal's start added, once: at the
+// shell's prompt (fg a shell), never over an agent's own screen.
+func (a *Agent) sayHealed(fg string) {
+	for _, line := range takeHealed(fg) {
+		a.broadcastNotice(line)
+	}
+}
+
+// takeHealed is what is to be said now that fg is in front, and is then
+// said: nothing while fg is not a shell.
+func takeHealed(fg string) []string {
+	if !isLoginShell(fg) {
+		return nil
+	}
+	healSaid.Lock()
+	defer healSaid.Unlock()
+	lines := healSaid.lines
+	healSaid.lines = nil
+	return lines
+}
+
+// WithFileLock runs fn holding the lock file name under ~/.reminal, waiting
+// while another reminal holds it. Where the lock cannot be taken at all
+// (a home that cannot be written), fn is run all the same.
+func WithFileLock(name string, fn func()) {
+	f, err := lockFile(name)
+	if err == nil {
+		defer unlockFile(f)
+	}
+	fn()
 }

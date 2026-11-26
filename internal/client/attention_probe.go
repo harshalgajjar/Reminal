@@ -640,6 +640,7 @@ func (a *Agent) noteForeground(fg string, pgrp int) {
 	}
 	a.noteAgentVersion(fg, pgrp) // what version the agent now in front is (hookheal.go)
 	a.healHooksFor(prev, fg)     // its hooks as its version can run them (hookheal.go)
+	a.sayHealed(fg)              // what reminal's start added, said at the shell's prompt
 	// An agent came to the front, or left it: its restore record says so
 	// now, not at the next timed save — a machine that goes down seconds
 	// after an agent started must still bring the agent back.

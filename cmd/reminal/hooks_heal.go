@@ -104,6 +104,12 @@ func eventKeyWritten(spec *hookSpec, home, event string) bool {
 // took out, one line each, for the person.
 func healHooks(home string, version func(bin string) string) []string {
 	var said []string
+	withHooksHealLock(func() { said = healHooksLocked(home, version) })
+	return said
+}
+
+func healHooksLocked(home string, version func(bin string) string) []string {
+	var said []string
 	for _, t := range agentTargets() {
 		if t.hooks == nil {
 			continue
@@ -126,7 +132,14 @@ func healHooks(home string, version func(bin string) string) []string {
 				continue
 			}
 			path := filepath.Join(home, t.hooks.file)
-			if removed, err := removeOwnHookFile(path, t.hooks.key, ev.Event); err != nil {
+			removed, err := removeOwnHookFile(path, t.hooks.key, ev.Event)
+			if err == nil && removed {
+				// Taken out for its agent's version, not by the person:
+				// held, and written again only when a session's agent is
+				// new enough (hooks_heal_added.go).
+				holdHookWritten(home, t.Bin, ev.Event, versionRe.FindString(have))
+			}
+			if err != nil {
 				said = append(said, fmt.Sprintf("reminal could not remove its %s hook from %s: %v", ev.Event, tildePath(home, path), err))
 			} else if removed {
 				line := fmt.Sprintf("reminal removed its %s hook: %s %s is older than %s. Start %s again to use reminal's hooks", ev.Event, t.Bin, versionRe.FindString(have), ev.MinVersion, t.Bin)

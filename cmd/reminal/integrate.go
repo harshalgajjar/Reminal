@@ -166,6 +166,10 @@ type hookSpec struct {
 	// version is the agent's own, as it says (agentVersion), for the events
 	// that need one (hookEvent.MinVersion); "" when not read.
 	version string
+	// calls: reminal as the entries already in the file name it, quoted as
+	// they quote it (healAddedHooks): an entry added beside them calls the
+	// same one. "" for the reminal given to applyHooks.
+	calls string
 }
 
 // hookEventFits says whether ev can be written for an agent of version
@@ -304,7 +308,11 @@ func applyHooks(spec *hookSpec, home, exe string, remove bool) error {
 			kept = append(kept, item)
 		}
 		if !remove && hookEventFits(ev, spec.version) {
-			kept = append(kept, hookEntry(spec.shape, exe, ev))
+			if spec.calls != "" {
+				kept = append(kept, hookEntryCalling(spec.shape, spec.calls+" hook "+ev.State, ev))
+			} else {
+				kept = append(kept, hookEntry(spec.shape, exe, ev))
+			}
 		}
 		if len(kept) == 0 {
 			delete(node, ev.Event)
@@ -430,7 +438,11 @@ func ourHookEntry(m map[string]any) bool {
 // hookEntry builds one config entry in the agent's expected shape, tagged with
 // hookMarker so we can find and remove exactly our own on a re-run or --remove.
 func hookEntry(shape hookShape, exe string, ev hookEvent) map[string]any {
-	cmd := hookCommand(exe, ev.State)
+	return hookEntryCalling(shape, hookCommand(exe, ev.State), ev)
+}
+
+// hookEntryCalling is hookEntry with its command given whole.
+func hookEntryCalling(shape hookShape, cmd string, ev hookEvent) map[string]any {
 	switch shape {
 	case shapeFlat:
 		return map[string]any{"command": cmd, hookMarker: ev.State}
@@ -735,10 +747,19 @@ func runIntegrate(args []string) error {
 		for _, line := range healHooks(home, sessionVersions(agentVersions)) {
 			fmt.Println(line)
 		}
+		// And an entry this agent, at the version its session says, is
+		// new enough for and does not have yet (hooks_heal_added.go).
+		for _, line := range healAddedHooks(home, exe, sessionVersions(agentVersions)) {
+			fmt.Println(line)
+		}
 		return nil
 	}
 	if healPlugin {
 		healPlugins(home)
+		// And its own hooks an upgrade added, for the agents already set up.
+		for _, line := range healAddedHooks(home, exe, nil) {
+			fmt.Println(line)
+		}
 		return nil
 	}
 
@@ -920,6 +941,20 @@ func runIntegrate(args []string) error {
 				spec.version = agentVersion(p.target.Bin)
 			}
 			hookErr = applyHooks(&spec, home, exe, remove)
+			if hookErr == nil {
+				// What was written is kept, for the heal (hooks_heal.go).
+				var wrote []string
+				if !remove {
+					for _, ev := range spec.events {
+						if hookEventFits(ev, spec.version) {
+							wrote = append(wrote, ev.Event)
+						}
+					}
+				}
+				// Under the heal's lock: a reminal starting meanwhile reads
+				// and writes the same note.
+				withHooksHealLock(func() { setHooksWritten(home, p.target.Bin, wrote) })
+			}
 		}
 		if p.target.plugin != nil {
 			hookErr = applyPlugin(p.target.plugin, home, exe, remove)
