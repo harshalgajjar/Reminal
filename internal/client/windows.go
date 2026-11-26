@@ -2880,7 +2880,7 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 	if sinks.ws {
 		s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
 		if relayOnly {
-			s.slim.sent(s.seq, time.Now())
+			s.slim.sent(s.seq, time.Now(), len(img))
 		}
 		s.wsShipped(time.Now())
 	}
