@@ -2855,7 +2855,8 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 	relayOnly := sinks.ws && len(sinks.confirmed) == 0 && len(sinks.probe) == 0
 	if relayOnly {
 		was := len(img)
-		img = slimJPEG(img, s.slim.level)
+		// Narrower too where every picture is a whole one (no bands).
+		img = slimJPEG(img, s.slim.level, s.bands == nil)
 		frame.Slim = s.slim.level
 		if len(img) < was {
 			frame.Was = was
