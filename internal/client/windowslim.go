@@ -21,12 +21,26 @@ import (
 	"time"
 )
 
+// What tells a slow link is how long a frame spent ON it, not how long its
+// ack took: the ack's time is the link's round trip plus the frame's own
+// time through it, and the round trip is the same for a frame of any size.
+// A small frame's ack is nearly all round trip, so the quickest small frame
+// lately is taken for it (relaySlim.base); until one has been seen, a round
+// trip of relayTripGuess is assumed. With 350 ms on the whole ack, a frame
+// that held the terminal back a quarter of a second on an ordinary round
+// trip was never made lighter.
 const (
-	// relayAckSlow is an ack time that makes the pictures lighter by a step;
-	// relayAckFast, held for relayFastRun frames in a row, heavier by one.
-	relayAckSlow = 350 * time.Millisecond
-	relayAckFast = 150 * time.Millisecond
-	relayFastRun = 12
+	// relayOverSlow is a time over the round trip that makes the pictures
+	// lighter by a step; relayOverFast, held for relayFastRun frames in a
+	// row, heavier by one.
+	relayOverSlow = 120 * time.Millisecond
+	relayOverFast = 50 * time.Millisecond
+	relayFastRun  = 12
+	// relaySmallFrame is a frame small enough for its ack to be the round
+	// trip; relayBaseKept is how long the quickest one stands.
+	relaySmallFrame = 16 << 10
+	relayBaseKept   = time.Minute
+	relayTripGuess  = 100 * time.Millisecond
 )
 
 // relayQualities are the JPEG qualities of the steps: 0 is the picture as it
@@ -36,21 +50,25 @@ var relayQualities = []int{0, 30, 22}
 
 // relaySlim is a stream's step, and what it has seen of the link.
 type relaySlim struct {
-	level   int
-	fastRun int
-	sentAt  time.Time // when the relay frame now on its way was sent
-	sentSeq uint64
+	level     int
+	fastRun   int
+	sentAt    time.Time // when the relay frame now on its way was sent
+	sentSeq   uint64
+	sentBytes int
+	base      time.Duration // the link's round trip: the quickest small frame's ack lately
+	baseAt    time.Time
 }
 
-// nextSlim is the step after a relay frame took ack to be acked.
-func nextSlim(level, fastRun int, ack time.Duration) (int, int) {
+// nextSlim is the step after a relay frame spent over on the link beyond
+// its round trip.
+func nextSlim(level, fastRun int, over time.Duration) (int, int) {
 	switch {
-	case ack > relayAckSlow:
+	case over > relayOverSlow:
 		if level < len(relayQualities)-1 {
 			level++
 		}
 		return level, 0
-	case ack < relayAckFast:
+	case over < relayOverFast:
 		fastRun++
 		if fastRun >= relayFastRun && level > 0 {
 			return level - 1, 0
@@ -60,16 +78,30 @@ func nextSlim(level, fastRun int, ack time.Duration) (int, int) {
 	return level, 0
 }
 
-// sent notes a frame going on the relay; acked takes the viewer's ack of seq
-// and moves the step.
-func (r *relaySlim) sent(seq uint64, now time.Time) { r.sentAt, r.sentSeq = now, seq }
+// sent notes a frame of bytes going on the relay; acked takes the viewer's
+// ack of seq. A small frame's ack is the round trip (the quickest lately is
+// kept); a larger one's, less the round trip, moves the step.
+func (r *relaySlim) sent(seq uint64, now time.Time, bytes int) {
+	r.sentAt, r.sentSeq, r.sentBytes = now, seq, bytes
+}
 
 func (r *relaySlim) acked(seq uint64, now time.Time) {
 	if r.sentAt.IsZero() || seq < r.sentSeq {
 		return
 	}
-	r.level, r.fastRun = nextSlim(r.level, r.fastRun, now.Sub(r.sentAt))
+	ack := now.Sub(r.sentAt)
 	r.sentAt = time.Time{}
+	if r.sentBytes < relaySmallFrame {
+		if r.base == 0 || ack < r.base || now.Sub(r.baseAt) > relayBaseKept {
+			r.base, r.baseAt = ack, now
+		}
+		return
+	}
+	trip := relayTripGuess
+	if r.base > 0 && now.Sub(r.baseAt) <= relayBaseKept {
+		trip = r.base
+	}
+	r.level, r.fastRun = nextSlim(r.level, r.fastRun, ack-trip)
 }
 
 // slimJPEG is img encoded again at the step's quality, or img itself when
