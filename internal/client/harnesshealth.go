@@ -72,6 +72,10 @@ type loginRow struct {
 	// with ChatGPT", then "2. Sign in with Device Code") — one numbered item
 	// alone is an agent's list.
 	then *regexp.Regexp
+	// para: a notice of several sentences, longer than a few rows: read as
+	// the whole paragraph it starts (loginParagraphs), from a row that
+	// starts with these words.
+	para string
 }
 
 // loginRowEnd is what a whole row may end on after its words: a full stop,
@@ -107,6 +111,24 @@ func loginMarked(marks string, res ...string) []loginRow {
 	out := loginRows(res...)
 	for i := range out {
 		out[i].marks = marks
+	}
+	return out
+}
+
+// loginParagraphMax is the longest a notice of several sentences is read at.
+const loginParagraphMax = 1000
+
+// loginParagraphs are notices of several sentences, each read as a whole
+// paragraph: from a row led by one of marks that starts with start, through
+// the rows under it to the paragraph's end (a blank row, the prompt, the
+// screen's end), and those rows together are the notice's words and nothing
+// else. Unlike a row and the few it wraps onto, a paragraph is joined past
+// a row that ends a sentence, since the notice has several; so it is the
+// CLI's only whole, to its last word, with nothing of an agent's after it.
+func loginParagraphs(marks, start string, res ...string) []loginRow {
+	out := loginRows(res...)
+	for i := range out {
+		out[i].marks, out[i].para = marks, start
 	}
 	return out
 }
@@ -434,7 +456,8 @@ var harnessLoginScreens = map[string][]loginRow{
 	), loginMarked("●⎿",
 		`loginexpired·run/logintosigninagain,orre-authenticateyouranthropicprofile`,
 		`notsignedintoclaude\.run/loginfirst`,
-		`failedtoauthenticate:(?:oauthtokenrevoked\.pleaseloginagainorcontactyouradministrator|oauthsessionexpiredandcouldnotberefreshed)`,
+		// 2.1.332 goes on to say how to sign in again.
+		"failedtoauthenticate:(?:oauthtokenrevoked\\.pleaseloginagainorcontactyouradministrator|oauthsessionexpiredandcouldnotberefreshed(?:\\.run`?claudeauthlogin`?tosigninagain)?)",
 		// 2.1.317: a login at the end of its time, and the Cloud gateway's
 		// own sign-in missing or its token lapsed.
 		"failedtoauthenticate:thisloginreacheditstimelimit(?:·signinagaintocontinue|andcannotberenewed\\.run`?claudeauthlogin`?tosigninagain,oruse`?claudesetup-token`?andsetclaude_code_oauth_tokenforunattendedjobs)?",
@@ -472,7 +495,7 @@ var harnessLoginScreens = map[string][]loginRow{
 		// Remote Control's sign-in on this machine, expired or no longer
 		// trusted, by its code (after the session's name when it has one).
 		`(?:[^·:()"]{1,64}\()?(?:session_stale_relogin\)?:thesign-inonthismachinehasexpired|untrusted_device\)?:theservernolongeracceptsthismachine.?sdeviceproof)\.signinagainonthismachine,thenopenthesessionagain`,
-	)),
+	), claudeNothingSent, claudeGatewaySignIn),
 }
 
 // opencodeGitLabKeyMissing is the same from OpenCode's GitLab provider, which
@@ -634,6 +657,12 @@ func harnessLoginRowIn(l loginLines, i int, rs []loginRow) bool {
 			}
 			continue
 		}
+		if r.para != "" {
+			if ok && strings.ContainsAny(lead, r.marks) && strings.HasPrefix(core, r.para) && l.paragraphIs(i, core, r.re) {
+				return true
+			}
+			continue
+		}
 		if !ok || len(core) > harnessLoginRowMax {
 			continue
 		}
@@ -664,6 +693,22 @@ func harnessLoginRowIn(l loginLines, i int, rs []loginRow) bool {
 		}
 	}
 	return false
+}
+
+// paragraphIs reports whether the paragraph that row i starts (core: the row
+// from its first word) is re, whole: the rows under it joined on until one
+// that is blank, has no words (a rule, an empty prompt) or is the screen's
+// end, and nothing left over.
+func (l loginLines) paragraphIs(i int, core string, re *regexp.Regexp) bool {
+	para := core
+	for j := i + 1; j < len(l.rows) && len(para) <= loginParagraphMax; j++ {
+		next := strings.Trim(l.rows[j], harnessFrameGlyphs)
+		if strings.IndexFunc(next, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) < 0 {
+			break
+		}
+		para += next
+	}
+	return len(para) <= loginParagraphMax && re.MatchString(para)
 }
 
 // inAnswer reports whether row i is a person's text at the prompt ("❯ …"),
