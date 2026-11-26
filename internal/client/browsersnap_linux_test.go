@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -175,12 +176,16 @@ func writeNote(t *testing.T, home string) {
 }
 
 // snapHub is a hub serving in home, as the daemon's does, and what asks it.
-func snapHub(t *testing.T, home string) (h *browserHub, main string, ask func(path, line string) string) {
+func snapHub(t *testing.T, home string, setup ...func(h *browserHub)) (h *browserHub, main string, ask func(path, line string) string) {
 	t.Helper()
 	t.Setenv("HOME", home)
 	t.Setenv("REMINAL_BROWSER_SOCK", "")
 	h = newBrowserHub()
 	h.noWait = true
+	// Set before it serves: nothing of the hub's is written once it runs.
+	for _, f := range setup {
+		f(h)
+	}
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
 	go serveBrowserOn(h, stop)
@@ -445,6 +450,14 @@ func TestRemoveWhateverWasDoneToTheFolder(t *testing.T) {
 	}
 }
 
+// eachABrowser has the hub take every connection in as the helper of
+// another browser.
+func eachABrowser(h *browserHub) {
+	var n atomic.Int64
+	h.allowBridge = func(int) bool { return true }
+	h.testBrowser = func(int) int { return int(n.Add(1)) }
+}
+
 // bridge connects to the hub as a browser's helper would and waits until
 // the hub has taken it in.
 func bridge(t *testing.T, h *browserHub, sock string) net.Conn {
@@ -478,11 +491,7 @@ func bridge(t *testing.T, h *browserHub, sock string) net.Conn {
 // take over from the snap's.
 func TestBridgesOfTwoBrowsersDoNotStealFromEachOther(t *testing.T) {
 	home, exe := snapHome(t)
-	h, main, ask := snapHub(t, home)
-	h.allowBridge = func(int) bool { return true }
-	// Each connection stands in for another browser's helper.
-	n := 0
-	h.testBrowser = func(int) int { n++; return n }
+	h, main, ask := snapHub(t, home, eachABrowser)
 	if err := SnapBrowserSetUp(home, exe); err != nil {
 		t.Fatal(err)
 	}
@@ -528,10 +537,7 @@ func TestBridgesOfTwoBrowsersDoNotStealFromEachOther(t *testing.T) {
 // one is used, and the snap's stands by.
 func TestABridgeOnTheHubsOwnSocketTakesOverFromTheSnaps(t *testing.T) {
 	home, exe := snapHome(t)
-	h, main, ask := snapHub(t, home)
-	h.allowBridge = func(int) bool { return true }
-	n := 0
-	h.testBrowser = func(int) int { n++; return n }
+	h, main, ask := snapHub(t, home, eachABrowser)
 	if err := SnapBrowserSetUp(home, exe); err != nil {
 		t.Fatal(err)
 	}
@@ -649,14 +655,9 @@ func TestALookAskedForWhileOneIsUnderWayIsNotLost(t *testing.T) {
 // in that moment, and the one that came back is. Only when none comes back
 // is the snap's used.
 func TestTheSnapsBridgeWaitsForTheHubsOwnToComeBack(t *testing.T) {
-	old := browserSnapGrace
-	t.Cleanup(func() { browserSnapGrace = old })
-	browserSnapGrace = 600 * time.Millisecond
+	const grace = 600 * time.Millisecond
 	home, exe := snapHome(t)
-	h, main, ask := snapHub(t, home)
-	h.allowBridge = func(int) bool { return true }
-	n := 0
-	h.testBrowser = func(int) int { n++; return n }
+	h, main, ask := snapHub(t, home, eachABrowser, func(h *browserHub) { h.snapGrace = grace })
 	if err := SnapBrowserSetUp(home, exe); err != nil {
 		t.Fatal(err)
 	}
@@ -681,7 +682,7 @@ func TestTheSnapsBridgeWaitsForTheHubsOwnToComeBack(t *testing.T) {
 	if b := inUse(); b == nil || b.snap {
 		t.Fatalf("the bridge that came back is not the one in use: %+v", b)
 	}
-	time.Sleep(browserSnapGrace + 200*time.Millisecond)
+	time.Sleep(grace + 200*time.Millisecond)
 	if b := inUse(); b == nil || b.snap {
 		t.Errorf("after the moment the snap's bridge took over from the one that came back: %+v", b)
 	}
@@ -696,10 +697,7 @@ func TestTheSnapsBridgeWaitsForTheHubsOwnToComeBack(t *testing.T) {
 // each is told of a session that ended, as the one in use is.
 func TestStandbysAreFewAndToldOfEndedSessions(t *testing.T) {
 	home, _ := snapHome(t)
-	h, main, _ := snapHub(t, home)
-	h.allowBridge = func(int) bool { return true }
-	n := 0
-	h.testBrowser = func(int) int { n++; return n }
+	h, main, _ := snapHub(t, home, eachABrowser)
 	bridge(t, h, main) // in use
 	var standby []net.Conn
 	for i := 0; i < browserStandbyMax+2; i++ {

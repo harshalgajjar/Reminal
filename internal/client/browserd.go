@@ -208,6 +208,8 @@ type browserHub struct {
 	// snapAgain: a look at the snap's folder was asked for while one was
 	// under way; the one under way looks once more before it is done.
 	snapAgain atomic.Bool
+	// tests: the wait of browserSnapGrace, when not 0 (read with mu held).
+	snapGrace time.Duration
 	// tests: called by a look when it is done, while it still holds snapMu.
 	snapHold func()
 
@@ -468,7 +470,11 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader, snap bool) {
 		// its bridge coming back is the one to use (the requests of that
 		// moment wait for a bridge, as they do with none).
 		if !h.promoteLocked(bc.snap) {
-			time.AfterFunc(browserSnapGrace, func() {
+			grace := browserSnapGrace
+			if h.snapGrace > 0 {
+				grace = h.snapGrace
+			}
+			time.AfterFunc(grace, func() {
 				h.mu.Lock()
 				h.promoteLocked(true)
 				h.mu.Unlock()
@@ -492,7 +498,7 @@ const browserStandbyMax = 4
 
 // browserSnapGrace is how long the snap browser's bridge on standby waits
 // before it is used in place of one on the hub's own socket that went.
-var browserSnapGrace = 5 * time.Second
+const browserSnapGrace = 5 * time.Second
 
 // standBy puts bc on standby, with h.mu held. Over browserStandbyMax the
 // oldest is taken off and returned, for the caller to close.
