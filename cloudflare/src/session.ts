@@ -242,8 +242,9 @@ export class SessionRoom {
     }
 
     const src = role === "viewer" ? await addressTag(request.headers.get("cf-connecting-ip") ?? "", await this.tagSalt()) : undefined;
-    // Where an agent's socket came in, for relayPlace: told to the agent alone.
-    const edge = role === "agent" ? placeCode(request.headers.get("x-reminal-edge")) : "";
+    // Where this socket came in: an agent is told it with where the session
+    // is served (relayPlace); a viewer is told its own, and nothing more.
+    const edge = placeCode(request.headers.get("x-reminal-edge"));
     server.serializeAttachment({ role, authed: false, src, ...(edge ? { edge } : {}) } satisfies Attachment);
     this.state.acceptWebSocket(server);
 
@@ -669,7 +670,9 @@ export class SessionRoom {
     if (!agentAuthed) return "session not ready";
     await this.state.storage.put("viewerAuthed", true);
     ws.serializeAttachment({ role: "viewer", authed: true, src: attachment.src } satisfies Attachment);
-    ws.send(JSON.stringify({ type: "auth_ok" }));
+    // A viewer is told where its OWN socket came in, which it could find out
+    // for itself, and never where the session is served (place.ts).
+    ws.send(JSON.stringify(attachment.edge ? { type: "auth_ok", relay: { edge: attachment.edge } } : { type: "auth_ok" }));
 
     const agent = this.authedAgent();
     if (agent) {

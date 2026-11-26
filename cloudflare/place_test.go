@@ -68,8 +68,15 @@ func TestOnlyTheAgentIsToldWhereItsSessionIsServed(t *testing.T) {
 	if !strings.Contains(s, `attachment.role === "agent" ? await this.relayPlace(attachment.edge) : null`) {
 		t.Fatal("relayPlace is no longer told to the agent's role alone")
 	}
-	if !strings.Contains(s, `const edge = role === "agent" ? placeCode(request.headers.get("x-reminal-edge")) : "";`) {
-		t.Fatal("the socket's edge is no longer read for an agent alone, through placeCode")
+	if !strings.Contains(s, `const edge = placeCode(request.headers.get("x-reminal-edge"));`) {
+		t.Fatal("the socket's edge is no longer read through placeCode")
+	}
+	// A viewer's answer carries its own edge and nothing else.
+	if !strings.Contains(s, `attachment.edge ? { type: "auth_ok", relay: { edge: attachment.edge } } : { type: "auth_ok" }`) {
+		t.Fatal("a viewer's auth_ok is no longer its own edge alone")
+	}
+	if n := strings.Count(s, "relay: {"); n != 1 {
+		t.Fatalf("%d answers are built with a relay of their own, want the viewer's edge alone", n)
 	}
 	index, err := os.ReadFile(filepath.Join("src", "index.ts"))
 	if err != nil {

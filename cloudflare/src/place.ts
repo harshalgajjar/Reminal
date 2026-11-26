@@ -10,7 +10,8 @@
 // (three letters each, as Cloudflare names them). Only the agent is told: its
 // authentication is the session's own secret, where a viewer's socket is
 // answered before the PIN is checked, and where a machine is served from is
-// not for whoever knows a session's id.
+// not for whoever knows a session's id. A viewer is told only the location
+// its own socket came in at, which it could find out for itself.
 
 // placeCode is v when it is a Cloudflare location's code, or "".
 export function placeCode(v: unknown): string {
