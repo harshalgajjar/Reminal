@@ -8,8 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
+
+	"reminal/internal/client"
 )
 
 // snapRig is a Linux machine for chromeSnapOnly: its PATH is the map given
@@ -85,13 +88,22 @@ func TestASnapsProgramIsToldFromABrowsersOwn(t *testing.T) {
 	}
 }
 
-// Chromium that is here only as a snap is said to be one reminal cannot
-// work with; with a Chromium of another kind beside it, or on another
-// system, nothing is said.
+// Chromium that is here only as a snap, in a folder that cannot take
+// reminal's setup, is said to be one reminal cannot work with; with a
+// Chromium of another kind beside it, or on another system, nothing is
+// said; nor where the snap's folder can be set up.
 func TestChromiumOnlyAsASnapIsSaidSo(t *testing.T) {
 	if os.PathSeparator != '/' {
 		t.Skip("snaps are on Linux")
 	}
+	oldCan := chromeSnapCanSetUp
+	t.Cleanup(func() { chromeSnapCanSetUp = oldCan })
+	chromeSnapCanSetUp = func(string) bool { return true }
+	snapRig(t, map[string]string{"chromium": "/snap/bin/chromium"})
+	if got := chromeSnapOnly("/home/someone", chromiumRow(t)); got != "" {
+		t.Errorf("a snap whose folder can be set up was said not to work: %q", got)
+	}
+	chromeSnapCanSetUp = func(string) bool { return false }
 	b := chromiumRow(t)
 	own := filepath.Join(t.TempDir(), "chromium")
 	if err := os.WriteFile(own, []byte("\x7fELF"), 0o755); err != nil {
@@ -206,5 +218,78 @@ func TestNoStepsWhenNoBrowserHereCanWork(t *testing.T) {
 		if strings.Contains(out, said) {
 			t.Errorf("no browser here can work, yet %q is said:\n%s", said, out)
 		}
+	}
+}
+
+// Chromium that is here as a snap is set up in the snap's own folder too:
+// reminal's copy, and a host manifest naming the copy. Its row says ready,
+// --check ticks it while the copy is this reminal, and a remove takes it
+// all away.
+func TestIntegrateSetsUpChromiumAsASnap(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("snaps are on Linux")
+	}
+	home := integrateRig(t, 200)
+	chromeOS = "linux"
+	oldHere, oldExe := chromeSnapHere, integrateExe
+	t.Cleanup(func() { chromeSnapHere, integrateExe = oldHere, oldExe })
+	chromeSnapHere = func(_ string, b chromeBrowser) bool { return b.Name == "Chromium" }
+	exe := filepath.Join(home, "bin", "reminal")
+	if err := os.WriteFile(exe, []byte("reminal one"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	integrateExe = func() (string, error) { return exe, nil }
+	if err := os.MkdirAll(filepath.Join(home, "snap", "chromium", "common"), 0o775); err != nil {
+		t.Fatal(err)
+	}
+	oldTell := chromeSnapTellHub
+	t.Cleanup(func() { chromeSnapTellHub = oldTell })
+	told := 0
+	chromeSnapTellHub = func() { told++ }
+	out := runIntegrateRig(t, "--yes")
+	if told != 1 {
+		t.Errorf("after a setup the daemon should be told once to open the snap's socket, told %d time(s)", told)
+	}
+	if !regexp.MustCompile(`✓\s+Chromium\s+ready`).MatchString(out) || strings.Contains(out, "installed as a snap") {
+		t.Fatalf("Chromium as a snap should be ready:\n%s", out)
+	}
+	if got, err := os.ReadFile(client.SnapBrowserHelper(home)); err != nil || string(got) != "reminal one" {
+		t.Fatalf("reminal's copy in the snap's folder: %q, %v", got, err)
+	}
+	raw, err := os.ReadFile(client.SnapBrowserManifestPath(home, browserHostName+".json"))
+	if err != nil || !strings.Contains(string(raw), client.SnapBrowserHelper(home)) {
+		t.Fatalf("the snap's host manifest should name the copy: %s, %v", raw, err)
+	}
+	check := runIntegrateRig(t, "--check")
+	if !regexp.MustCompile(`✓\s+Chromium\s+set up`).MatchString(check) {
+		t.Errorf("--check after a setup:\n%s", check)
+	}
+	// reminal was upgraded since: the copy is another reminal's.
+	if err := os.WriteFile(exe, []byte("reminal two!"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	check = runIntegrateRig(t, "--check")
+	if !regexp.MustCompile(`!\s+Chromium\s+set up for a different reminal`).MatchString(check) {
+		t.Errorf("--check with a copy of another reminal:\n%s", check)
+	}
+	runIntegrateRig(t, "--yes")
+	if got, _ := os.ReadFile(client.SnapBrowserHelper(home)); string(got) != "reminal two!" {
+		t.Errorf("a second setup did not bring the copy up to date: %q", got)
+	}
+	// The usual manifest gone (taken away by hand): a remove still finds
+	// the snap's setup.
+	if err := os.Remove(chromeHostManifestPath(home, chromiumRow(t))); err != nil {
+		t.Fatal(err)
+	}
+	told = 0
+	runIntegrateRig(t, "--remove", "--yes")
+	if told != 1 {
+		t.Errorf("after a remove the daemon should be told once to close the snap's socket, told %d time(s)", told)
+	}
+	if _, err := os.Lstat(client.SnapBrowserDir(home)); !os.IsNotExist(err) {
+		t.Errorf("after a remove the snap's folder of reminal's is still there: %v", err)
+	}
+	if _, err := os.Lstat(client.SnapBrowserManifestPath(home, browserHostName+".json")); !os.IsNotExist(err) {
+		t.Errorf("after a remove the snap's host manifest is still there: %v", err)
 	}
 }
