@@ -33,6 +33,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"reminal/internal/proc"
@@ -92,36 +93,49 @@ func (h *browserHub) snapEnsure() {
 		return
 	}
 	// Off the caller, and one at a time: the hub's first socket and a state
-	// asked of it never wait on the snap's folder.
+	// asked of it never wait on the snap's folder. A look asked for while
+	// one is under way is not lost: the one under way looks again.
+	h.snapAgain.Store(true)
 	go func() {
-		if !h.snapMu.TryLock() {
-			return
-		}
-		defer h.snapMu.Unlock()
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return
-		}
-		if h.snapLn != nil {
-			if snapBrowserGone(home) {
-				h.snapCloseLocked()
+		for h.snapAgain.Load() {
+			if !h.snapMu.TryLock() {
+				return
 			}
-			return
+			h.snapAgain.Store(false)
+			h.snapLook()
+			h.snapMu.Unlock()
 		}
-		ln, dir, err := snapBrowserListen(home)
-		if err != nil {
-			return
+	}()
+}
+
+// snapLook is one look at the snap's folder, with snapMu held.
+func (h *browserHub) snapLook() {
+	if h.snapHold != nil {
+		defer h.snapHold() // after it has looked, still holding the lock
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	if h.snapLn != nil {
+		if snapBrowserGone(home) {
+			h.snapCloseLocked()
 		}
-		h.snapLn, h.snapDir = ln, dir
-		go func() {
-			for {
-				conn, err := ln.Accept()
-				if err != nil {
-					return // closed
-				}
-				go h.handleFrom(conn, true)
+		return
+	}
+	ln, dir, err := snapBrowserListen(home)
+	if err != nil {
+		return
+	}
+	h.snapLn, h.snapDir = ln, dir
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // closed
 			}
-		}()
+			go h.handleFrom(conn, true)
+		}
 	}()
 }
 
@@ -191,6 +205,11 @@ type browserHub struct {
 	snapMu  sync.Mutex
 	snapLn  net.Listener
 	snapDir *os.File
+	// snapAgain: a look at the snap's folder was asked for while one was
+	// under way; the one under way looks once more before it is done.
+	snapAgain atomic.Bool
+	// tests: called by a look when it is done, while it still holds snapMu.
+	snapHold func()
 
 	// tests: whether peer pid may make a request for session (nil: the
 	// session's own process, by its active record); whether peer may be the
@@ -394,10 +413,10 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader, snap bool) {
 		replaced = old
 	case old.snap && !bc.snap:
 		h.host, h.family = bc, family
-		h.standby = append(h.standby, old)
+		replaced = h.standBy(old)
 		log.Printf("browser: the bridge from pid %d is in use now; the snap browser's (pid %d) stands by", peer, old.pid)
 	default:
-		h.standby = append(h.standby, bc)
+		replaced = h.standBy(bc)
 		log.Printf("browser: another browser's bridge (pid %d) stands by; the one from pid %d stays in use", peer, old.pid)
 	}
 	h.mu.Unlock()
@@ -443,17 +462,17 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader, snap bool) {
 	}
 	if h.host == bc {
 		h.host, h.family = nil, ""
-		// The next browser's bridge, one on the hub's own socket first.
-		next := -1
-		for i, sb := range h.standby {
-			if next < 0 || (h.standby[next].snap && !sb.snap) {
-				next = i
-			}
-		}
-		if next >= 0 {
-			h.host, h.family = h.standby[next], h.standby[next].family
-			h.standby = append(h.standby[:next], h.standby[next+1:]...)
-			log.Printf("browser: the bridge from pid %d is in use now", h.host.pid)
+		// The next browser's bridge. When the one that went was on the
+		// hub's own socket and only the snap browser's stands by, that one
+		// waits a moment first: a browser's extension reconnects often, and
+		// its bridge coming back is the one to use (the requests of that
+		// moment wait for a bridge, as they do with none).
+		if !h.promoteLocked(bc.snap) {
+			time.AfterFunc(browserSnapGrace, func() {
+				h.mu.Lock()
+				h.promoteLocked(true)
+				h.mu.Unlock()
+			})
 		}
 	}
 	// The requests this bridge held: answered now, not at their deadline.
@@ -465,6 +484,63 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader, snap bool) {
 	}
 	h.mu.Unlock()
 	_ = conn.Close()
+}
+
+// browserStandbyMax is how many bridges stand by at most: one more and the
+// oldest is let go.
+const browserStandbyMax = 4
+
+// browserSnapGrace is how long the snap browser's bridge on standby waits
+// before it is used in place of one on the hub's own socket that went.
+var browserSnapGrace = 5 * time.Second
+
+// standBy puts bc on standby, with h.mu held. Over browserStandbyMax the
+// oldest is taken off and returned, for the caller to close.
+func (h *browserHub) standBy(bc *browserConn) (dropped *browserConn) {
+	h.standby = append(h.standby, bc)
+	if len(h.standby) > browserStandbyMax {
+		dropped = h.standby[0]
+		h.standby = append([]*browserConn(nil), h.standby[1:]...)
+	}
+	return dropped
+}
+
+// promoteLocked makes a bridge on standby the one in use, when none is, with
+// h.mu held: one on the hub's own socket first; the snap browser's only
+// when snapToo. It reports whether nothing is left to wait for (a bridge is
+// in use, or none stands by).
+func (h *browserHub) promoteLocked(snapToo bool) bool {
+	if h.host != nil || len(h.standby) == 0 {
+		return true
+	}
+	next := -1
+	for i, sb := range h.standby {
+		if !sb.snap {
+			next = i
+			break
+		}
+	}
+	if next < 0 {
+		if !snapToo {
+			return false
+		}
+		next = 0
+	}
+	h.host, h.family = h.standby[next], h.standby[next].family
+	h.standby = append(h.standby[:next], h.standby[next+1:]...)
+	log.Printf("browser: the bridge from pid %d is in use now", h.host.pid)
+	return true
+}
+
+// bridges are the bridge in use and those on standby.
+func (h *browserHub) bridges() []*browserConn {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []*browserConn
+	if h.host != nil {
+		out = append(out, h.host)
+	}
+	return append(out, h.standby...)
 }
 
 // browserBridgeOK: pid is reminal (this daemon's own binary, or one named
@@ -634,11 +710,16 @@ func (h *browserHub) tellEnded() {
 		}
 	}
 	host := h.host
+	standby := append([]*browserConn(nil), h.standby...)
 	h.mu.Unlock()
 	if host == nil {
 		return
 	}
 	for _, id := range ended {
+		// A browser on standby may hold tabs of the session too.
+		for _, sb := range standby {
+			_ = sb.send(map[string]string{"t": "ended", "session": id})
+		}
 		if host.send(map[string]string{"t": "ended", "session": id}) == nil {
 			h.mu.Lock()
 			delete(h.seen, id)
@@ -778,12 +859,11 @@ func (h *browserHub) haveSessions(ids []string) {
 			h.mu.Unlock()
 			continue
 		}
-		h.mu.Lock()
-		host := h.host
-		h.mu.Unlock()
-		if host != nil {
+		if all := h.bridges(); len(all) > 0 {
 			log.Printf("browser: session %s ended while reminal was not looking: its tabs are let go", id)
-			_ = host.send(map[string]string{"t": "ended", "session": id})
+			for _, b := range all {
+				_ = b.send(map[string]string{"t": "ended", "session": id})
+			}
 		}
 	}
 }

@@ -7,9 +7,11 @@ import (
 	"bufio"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -604,5 +606,131 @@ func TestTheHelperInsideASnapUsesItsSocket(t *testing.T) {
 	t.Setenv("HOME", "/home/someone")
 	if got, _ := BrowserHostSockPath(); got != "/home/someone/.reminal/browser.sock" {
 		t.Errorf("outside a snap: %s", got)
+	}
+}
+
+// A look at the snap's folder asked for while another is under way is not
+// lost: a remove that lands then still has the socket closed, with no
+// further request.
+func TestALookAskedForWhileOneIsUnderWayIsNotLost(t *testing.T) {
+	home, exe := snapHome(t)
+	h, main, ask := snapHub(t, home)
+	if err := SnapBrowserSetUp(home, exe); err != nil {
+		t.Fatal(err)
+	}
+	ask(main, `{"t":"state"}`)
+	sock := filepath.Join(SnapBrowserDir(home), "browser.sock")
+	if !until(func() bool { return isSock(sock) }) {
+		t.Fatal("no socket in the snap's folder")
+	}
+	// The next look is held when it has looked (and found nothing to do),
+	// with the lock still its.
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	h.snapMu.Lock()
+	h.snapHold = func() { once.Do(func() { close(held); <-release }) }
+	h.snapMu.Unlock()
+	ask(main, `{"t":"state"}`)
+	<-held
+	// The setup is taken away, and its state request lands meanwhile.
+	if err := os.Remove(snapBrowserNote(home)); err != nil {
+		t.Fatal(err)
+	}
+	ask(main, `{"t":"state"}`)
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	if !until(func() bool { _, err := net.Dial("unix", sock); return err != nil }) {
+		t.Error("the snap's socket stayed open: the look asked for meanwhile was lost")
+	}
+}
+
+// The bridge on the hub's own socket goes and comes back (a browser's
+// extension reconnects often): the snap browser's, on standby, is not used
+// in that moment, and the one that came back is. Only when none comes back
+// is the snap's used.
+func TestTheSnapsBridgeWaitsForTheHubsOwnToComeBack(t *testing.T) {
+	old := browserSnapGrace
+	t.Cleanup(func() { browserSnapGrace = old })
+	browserSnapGrace = 600 * time.Millisecond
+	home, exe := snapHome(t)
+	h, main, ask := snapHub(t, home)
+	h.allowBridge = func(int) bool { return true }
+	n := 0
+	h.testBrowser = func(int) int { n++; return n }
+	if err := SnapBrowserSetUp(home, exe); err != nil {
+		t.Fatal(err)
+	}
+	ask(main, `{"t":"state"}`)
+	sock := filepath.Join(SnapBrowserDir(home), "browser.sock")
+	if !until(func() bool { return isSock(sock) }) {
+		t.Fatal("no socket in the snap's folder")
+	}
+	inUse := func() *browserConn { h.mu.Lock(); defer h.mu.Unlock(); return h.host }
+	first := bridge(t, h, main)
+	bridge(t, h, sock)
+	kept := inUse()
+	first.Close()
+	if !until(func() bool { return inUse() != kept }) {
+		t.Fatal("the bridge that went is still in use")
+	}
+	if b := inUse(); b != nil {
+		t.Fatalf("the snap's bridge was used the moment the hub's own went (snap %v)", b.snap)
+	}
+	// It comes back within the moment: it is the one used, then and after.
+	back := bridge(t, h, main)
+	if b := inUse(); b == nil || b.snap {
+		t.Fatalf("the bridge that came back is not the one in use: %+v", b)
+	}
+	time.Sleep(browserSnapGrace + 200*time.Millisecond)
+	if b := inUse(); b == nil || b.snap {
+		t.Errorf("after the moment the snap's bridge took over from the one that came back: %+v", b)
+	}
+	// It goes for good: the snap's is used once the moment is over.
+	back.Close()
+	if !until(func() bool { b := inUse(); return b != nil && b.snap }) {
+		t.Error("with no bridge coming back, the snap's was not used")
+	}
+}
+
+// At most browserStandbyMax bridges stand by (the oldest is let go), and
+// each is told of a session that ended, as the one in use is.
+func TestStandbysAreFewAndToldOfEndedSessions(t *testing.T) {
+	home, _ := snapHome(t)
+	h, main, _ := snapHub(t, home)
+	h.allowBridge = func(int) bool { return true }
+	n := 0
+	h.testBrowser = func(int) int { n++; return n }
+	bridge(t, h, main) // in use
+	var standby []net.Conn
+	for i := 0; i < browserStandbyMax+2; i++ {
+		standby = append(standby, bridge(t, h, main))
+	}
+	h.mu.Lock()
+	got := len(h.standby)
+	h.mu.Unlock()
+	if got != browserStandbyMax {
+		t.Fatalf("%d bridges stand by, want at most %d", got, browserStandbyMax)
+	}
+	// The oldest two were let go: their connections are closed.
+	for i := 0; i < 2; i++ {
+		_ = standby[i].SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := standby[i].Read(make([]byte, 1)); err == nil || os.IsTimeout(err) {
+			t.Errorf("standby %d, over the most kept, was not let go (%v)", i, err)
+		}
+	}
+	// A session that ended: said to one on standby too.
+	gone := exec.Command("true")
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	h.seen["ABCD1234"] = gone.Process.Pid
+	h.mu.Unlock()
+	h.tellEnded()
+	last := standby[len(standby)-1]
+	_ = last.SetReadDeadline(time.Now().Add(2 * time.Second))
+	line, _ := bufio.NewReader(last).ReadString('\n')
+	if !strings.Contains(line, `"ended"`) || !strings.Contains(line, "ABCD1234") {
+		t.Errorf("a bridge on standby was not told of the session that ended: %q", line)
 	}
 }
