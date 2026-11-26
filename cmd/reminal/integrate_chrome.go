@@ -226,7 +226,7 @@ func chromeExtensionIn(dir string) bool {
 }
 
 // chromeExtensionsPage is the page the extension is loaded on, in the first
-// of browsers whose application is here (the first of them all when none
+// of browsers whose application is here and can work (the first of them all when none
 // was found): Edge has its own name for it.
 func chromeExtensionsPage(home string, browsers []chromeBrowser) string {
 	first := ""
@@ -234,7 +234,7 @@ func chromeExtensionsPage(home string, browsers []chromeBrowser) string {
 		if first == "" {
 			first = b.Name
 		}
-		if chromeAppFound(home, b) {
+		if chromeAppFound(home, b) && chromeCannotStart(home, b) == "" {
 			first = b.Name
 			break
 		}
@@ -243,10 +243,32 @@ func chromeExtensionsPage(home string, browsers []chromeBrowser) string {
 	return client.BrowserExtensionsPage(browserPrograms[first].family)
 }
 
+// chromeAnyCanWork reports whether a browser of browsers that is here can
+// work with reminal. With none of them here at all it is true: the steps
+// are then for the browser the person goes on to install.
+func chromeAnyCanWork(home string, browsers []chromeBrowser) bool {
+	found := false
+	for _, b := range browsers {
+		if !chromeAppFound(home, b) {
+			continue
+		}
+		if chromeCannotStart(home, b) == "" {
+			return true
+		}
+		found = true
+	}
+	return !found
+}
+
 // printChromeSteps is said last in a setup, until the extension is in the
 // Chrome Web Store: the one thing left for the person to do, as steps short
 // enough to read on a phone, ending on the folder to pick.
 func printChromeSteps(home string, browsers []chromeBrowser) {
+	// With no browser here that can work, nothing is left to do in one: the
+	// rows above say why.
+	if !chromeAnyCanWork(home, browsers) {
+		return
+	}
 	o := newIntegrateOut()
 	fmt.Println()
 	o.para("", "", "Next, in your browser:", plain)
@@ -312,6 +334,11 @@ func applyChromeTo(o integrateOut, home, exe string, browsers []chromeBrowser, r
 			noApp = append(noApp, b.Name)
 			continue
 		}
+		// One that cannot work gets no tick: it is said why, and what does.
+		if why := chromeCannotStart(home, b); why != "" && !remove {
+			o.row("!", b.Name, why, plain)
+			continue
+		}
 		state := "ready"
 		if remove {
 			state = "removed"
@@ -361,6 +388,10 @@ func printChromeCheck(o integrateOut, home, exe string, verbose bool) {
 			if string(raw) == string(chromeHostManifest(exe)) && chromePointed(home, b) {
 				mark, what, where = "✓", "set up (browser)", verbose
 			}
+		}
+		// Set up or not, one that cannot work is said so.
+		if why := chromeCannotStart(home, b); why != "" {
+			mark, what = "!", why
 		}
 		o.row(mark, b.Name, what, plain)
 		if where {
