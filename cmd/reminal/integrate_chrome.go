@@ -324,6 +324,10 @@ func applyChromeTo(o integrateOut, home, exe string, browsers []chromeBrowser, r
 				err = regSet(b.Reg, path)
 			}
 		}
+		// Chromium as a snap reads a folder of its own (integrate_chrome_snap.go).
+		if err == nil {
+			err = chromeSnapApply(home, exe, b, remove)
+		}
 		if err != nil {
 			failures++
 			o.row("✗", b.Name, err.Error(), plain)
@@ -387,6 +391,10 @@ func printChromeCheck(o integrateOut, home, exe string, verbose bool) {
 			mark, what, where = "!", "set up for a different reminal (re-run integrate)", true
 			if string(raw) == string(chromeHostManifest(exe)) && chromePointed(home, b) {
 				mark, what, where = "✓", "set up (browser)", verbose
+				// And, where it is here as a snap, in the snap's own folder.
+				if !chromeSnapSetUpCurrent(home, exe, b) {
+					mark, what, where = "!", "set up for a different reminal (re-run integrate)", true
+				}
 			}
 		}
 		// Set up or not, one that cannot work is said so.

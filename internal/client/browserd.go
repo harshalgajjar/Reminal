@@ -59,6 +59,81 @@ func BrowserSockPath() (string, error) {
 	return filepath.Join(home, ".reminal", "browser.sock"), nil
 }
 
+// BrowserHostSockPath is the socket as reminal's helper (the browser's
+// native messaging host) reaches the hub: inside a snap browser, the one in
+// that snap's own folder, the only one it may reach.
+func BrowserHostSockPath() (string, error) {
+	if os.Getenv("REMINAL_BROWSER_SOCK") == "" {
+		if p := browserHostSockInSnap(); p != "" {
+			return p, nil
+		}
+	}
+	return BrowserSockPath()
+}
+
+// BrowserHostHome is the person's home folder as the helper finds it: a snap
+// gives its programs a home of its own, and says the real one beside it.
+func BrowserHostHome() (string, error) {
+	if browserHostSockInSnap() != "" {
+		if h := os.Getenv("SNAP_REAL_HOME"); h != "" {
+			return h, nil
+		}
+	}
+	return os.UserHomeDir()
+}
+
+// snapEnsure opens the hub's second socket when a snap browser was set up
+// (integrate put reminal's copy in its folder), and closes it when that
+// setup was taken away. It is served as the first is: the same handle, with
+// the same checks of who is at the other end. A daemon on a socket of its
+// own (REMINAL_BROWSER_SOCK, development) leaves it to the installed one.
+func (h *browserHub) snapEnsure() {
+	if os.Getenv("REMINAL_BROWSER_SOCK") != "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	h.snapMu.Lock()
+	defer h.snapMu.Unlock()
+	if h.snapLn != nil {
+		if snapBrowserGone(h.snapDir) {
+			h.snapCloseLocked()
+		}
+		return
+	}
+	ln, dir, err := snapBrowserListen(home)
+	if err != nil {
+		return
+	}
+	h.snapLn, h.snapDir = ln, dir
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // closed
+			}
+			go h.handle(conn)
+		}
+	}()
+}
+
+func (h *browserHub) snapClose() {
+	h.snapMu.Lock()
+	defer h.snapMu.Unlock()
+	h.snapCloseLocked()
+}
+
+func (h *browserHub) snapCloseLocked() {
+	if h.snapLn == nil {
+		return
+	}
+	_ = h.snapLn.Close()
+	snapBrowserUnlisten(h.snapDir)
+	h.snapLn, h.snapDir = nil, nil
+}
+
 // BrowserReq is a session's request, and what the hub hands the bridge (with
 // its own id). Run names the session's run (when its process started), so the
 // extension's consent belongs to that run alone.
@@ -100,6 +175,12 @@ type browserHub struct {
 	// stale after a clock jump, say), and an end told then took its tabs
 	// away mid-work.
 	seen map[string]int
+
+	// The second socket, in a snap browser's own folder (browsersnap_linux.go),
+	// served while a setup is there: its listener and the folder it is in.
+	snapMu  sync.Mutex
+	snapLn  net.Listener
+	snapDir *os.File
 
 	// tests: whether peer pid may make a request for session (nil: the
 	// session's own process, by its active record); whether peer may be the
@@ -161,8 +242,10 @@ func serveBrowserOn(h *browserHub, stop <-chan struct{}) {
 		<-stop
 		_ = ln.Close()
 		_ = os.Remove(sock)
+		h.snapClose()
 	}()
 	go h.watchEnded(stop)
+	h.snapEnsure()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -207,6 +290,9 @@ func (h *browserHub) handle(conn net.Conn) {
 		// Whether a browser is connected (browserstate.go): asked by
 		// `reminal integrate`, which is no session.
 		defer conn.Close()
+		// Asked by a setup just made (or just taken away): the moment the
+		// snap browser's socket is opened (or closed).
+		h.snapEnsure()
 		_ = (&browserConn{c: conn}).send(h.status().wire())
 	default:
 		conn.Close()

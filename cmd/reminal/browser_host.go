@@ -46,7 +46,7 @@ func runBrowserHost(args []string) error {
 	if len(args) > 0 && strings.HasPrefix(args[0], "chrome-extension://") && args[0] != browserExtensionOrigin {
 		return fmt.Errorf("not reminal's extension: %s", args[0])
 	}
-	sock, err := client.BrowserSockPath()
+	sock, err := client.BrowserHostSockPath()
 	if err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func runBrowserHost(args []string) error {
 	}
 	// The files a setup wrote, brought up to this reminal's first (it may
 	// have been upgraded since).
-	if home, err := os.UserHomeDir(); err == nil {
+	if home, err := client.BrowserHostHome(); err == nil {
 		refreshChromeExtensions(home)
 	}
 	// With the version of the extension this reminal carries: an extension
