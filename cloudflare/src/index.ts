@@ -1,4 +1,5 @@
 import { SessionRoom } from "./session";
+import { placeCode } from "./place";
 import { RendezvousRoom } from "./rendezvous";
 import { handlePush, handlePushKey, handlePushToken, type PushEnv } from "./push";
 import { RateLimiter, allow, inIsolate, type LimiterEnv } from "./limiter";
@@ -178,7 +179,14 @@ export default {
       const stub = env.SESSION.get(id);
       const doUrl = new URL(request.url);
       doUrl.pathname = `/ws/${sessionId}/${role}`;
-      return stub.fetch(new Request(doUrl.toString(), request));
+      // Where this socket came in (the Cloudflare location's code), for the
+      // session's object to tell its agent beside its own (relayPlace): a
+      // header of the relay's own, never the caller's.
+      const hdrs = new Headers(request.headers);
+      hdrs.delete("x-reminal-edge");
+      const colo = placeCode((request as { cf?: { colo?: unknown } }).cf?.colo);
+      if (colo) hdrs.set("x-reminal-edge", colo);
+      return stub.fetch(new Request(new Request(doUrl.toString(), request), { headers: hdrs }));
     }
 
     // Copy/paste rendezvous WS: /rv/<code>/source | paste
