@@ -7847,6 +7847,9 @@
       switch (msg.type) {
         case 'auth_ok':
           authed = true;
+          // Where this page's connection came into the hosted relay's
+          // network, when it says (a location's code): for the info box.
+          relayEdge = (msg.relay && /^[A-Z]{3}$/.test(String(msg.relay.edge || ''))) ? msg.relay.edge : '';
           // The relay is talking to us now; the dial watchdog has done its job.
           cancelDial();
           // Auth succeeded — remember the PIN for this tab so a refresh
@@ -11065,6 +11068,7 @@
         ? '<div class="row"><span class="k">Video</span><span class="v warn">' + gaps + ' gaps · ' + derrs + ' decode errors</span></div>'
         : '';
       return '<div class="row"><span class="k">Transport</span><span class="v ' + cls + '">' + transport + '</span></div>'
+        + (relayEdge ? '<div class="row"><span class="k">Relay entry</span><span class="v">' + relayEdge + '</span></div>' : '')
         + '<div class="row"><span class="k">Capture</span><span class="v">' + cap + '</span></div>'
         + health
         + '<div class="row"><span class="k">Encryption</span><span class="v">' + enc + '</span></div>'
@@ -12154,6 +12158,7 @@
     let rtcRetryAt = 0;  // don't (re)attempt P2P before this time (ms epoch)
     let rtcHelloAt = 0;  // when the current webrtc_hello was sent (to time out silence)
     let rtcRelayed = false; // is the P2P path going through a TURN relay (vs direct)?
+    let relayEdge = '';     // the hosted relay's location this page's connection came in at ('' = not said)
     let lastCapAt = 0;      // last capability announcement (relay-only viewers)
     // Can this browser hardware-decode H.264 via WebCodecs? Declared in the
     // webrtc_hello: the agent then sends compressed video AUs over the channel

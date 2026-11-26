@@ -86,6 +86,12 @@ type Active struct {
 	// the agent on every connect/disconnect event from the relay). Read
 	// by `reminal info` and the "attach to existing?" prompt.
 	Viewers int `json:"viewers,omitempty"`
+	// RelayAt and RelayEdge are where the hosted relay serves this session
+	// and where this machine's connection to it comes in, as the relay told
+	// the agent when it last connected (protocol.RelayPlace). Empty when
+	// the relay does not say (a relay of one's own).
+	RelayAt   string `json:"relay_at,omitempty"`
+	RelayEdge string `json:"relay_edge,omitempty"`
 	// Away is how many of those viewers have their terminal out of sight — a
 	// hidden tab, or another view over it. Viewers - Away are looking.
 	Away int `json:"away,omitempty"`
