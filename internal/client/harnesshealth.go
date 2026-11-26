@@ -79,6 +79,10 @@ type loginRow struct {
 // A row whose CLI ends it on ":", "?" or ">" says so in its pattern.
 const loginRowEnd = `(?:\.|…|!)*$`
 
+// kiroLogin is Kiro CLI's sign-in command as its notices name it: in quotes
+// or backticks.
+const kiroLogin = "[\"“`]kiro-clilogin[\"”`]"
+
 // loginRows are rows read whole: each's words, then only loginRowEnd.
 func loginRows(res ...string) []loginRow {
 	out := make([]loginRow, len(res))
@@ -179,6 +183,19 @@ var harnessLoginScreens = map[string][]loginRow{
 		loginRows(`youarenotloggedin\.loginnow\?·(?:yes|no)`),
 		loginThen(`selectloginmethod`, `usewithbuilderid`),
 		loginThen(`confirmthefollowingcodeinthebrowser`, `code:[a-z0-9]{4}-[a-z0-9]{4}`),
+		// Kiro CLI 3.6 changed its wordings: not signed in, a session that
+		// lapsed or was refused, and a sign-in that did not go through. Each
+		// names its own command, in quotes or backticks.
+		loginRows(
+			`pleaserun`+kiroLogin+`toauthenticate`,
+			`yoursessionhasexpired\.pleaserun`+kiroLogin+`tore-authenticate`,
+			`authenticationrequired\.pleaserun`+kiroLogin+`toauthenticate`,
+			`failedtoverifyauthentication\.pleaserun`+kiroLogin+`toauthenticate`,
+			`yoursessioncredentialswererejected\.run`+kiroLogin+`inanewterminal,thenretry`,
+			`authenticationtimedout\.pleasetry`+kiroLogin+`again`,
+			`authenticationfailedduetosecurityvalidation\.pleasetry`+kiroLogin+`again`,
+			`socialloginfailed\.pleasetry`+kiroLogin+`withadifferentmethod`,
+		),
 	),
 	// Gemini CLI: no way to sign in chosen yet; its Google sign-in waiting
 	// for the code; its API key dialog; no key at all; and a key it cannot

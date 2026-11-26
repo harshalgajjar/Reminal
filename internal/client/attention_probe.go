@@ -1074,6 +1074,13 @@ var attnPromptCues = []string{
 	// table or list of the same words has no "> " in it.
 	"|  > allow (allow the tool call once)", "|    allow\n|  > always allow",
 	"|    always allow\n|  > deny", "|    deny\n|  > cancel",
+	// Kiro CLI 3.6: a tool waiting for approval ("{tool} requires
+	// approval"), by the footer of its dialog, whose keys only that dialog
+	// lists; and its lettered chooser, by its rows as it letters them. Kiro
+	// has no hooks: the screen is all it says.
+	"y approve · n deny · t trust",
+	"y allow once · n deny once · t create allow rule · d create deny rule",
+	"(a) approve once", "(a) approve all pending", "(x) stop task run",
 }
 
 // The screen is read as text: the render carries its styling, and Claude
