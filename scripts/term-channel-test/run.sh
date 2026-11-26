@@ -9,7 +9,8 @@
 # direct. check.mjs times key to echo and types a long known line fast:
 #   - with the channel, an echo comes in well under one relay round trip;
 #   - without it (WebRTC taken away: the control), it takes the round trip;
-#   - either way every character typed is on the screen once, in order.
+#   - either way every character typed is on the screen once, in order,
+#     also when the channel goes away in the middle of the typing.
 # Nothing here touches the host's reminal.
 set -euo pipefail
 cd "$(dirname "$0")"

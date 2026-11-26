@@ -11,7 +11,9 @@ const browser = await chromium.launch({ args: ['--disable-background-timer-throt
 
 // One viewer: N keys timed from the terminal's input to its next output,
 // then a long known line typed with no pause and the screen read back.
-async function viewer(direct) {
+// cut: the direct connection is closed half way through the long line, as a
+// network that goes away does it: what is typed after goes on the relay alone.
+async function viewer(direct, cut) {
   const ctx = await browser.newContext({ viewport: { width: 1000, height: 900 } });
   if (!direct) await ctx.addInitScript(() => { try { delete window.RTCPeerConnection; } catch (_) {} window.RTCPeerConnection = undefined; window.webkitRTCPeerConnection = undefined; });
   const page = await ctx.newPage();
@@ -37,17 +39,22 @@ async function viewer(direct) {
   const p50 = got.length ? got[Math.floor(got.length / 2)] : Infinity;
   const rid = 'R' + Math.random().toString(36).slice(2, 8).toUpperCase() + 'Z';
   const want = rid + Array.from({ length: 400 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz0123456789'[(i * 7 + (i >> 3)) % 36]).join('');
-  await page.evaluate(async (w) => {
+  await page.evaluate(async ({ w, cut }) => {
     const t = window.__term;
     t.input('\r', true);
     await new Promise((r) => setTimeout(r, 1500));
     for (const c of 'echo ') t.input(c, true);
-    for (let i = 0; i < w.length; i++) { t.input(w[i], true); if (i % 40 === 39) await new Promise((r) => setTimeout(r, 3)); }
-  }, want);
+    for (let i = 0; i < w.length; i++) {
+      if (cut && i === (w.length >> 1)) { try { rtcPc.close(); } catch (_) {} }
+      t.input(w[i], true);
+      if (i % 40 === 39) await new Promise((r) => setTimeout(r, 3));
+    }
+  }, { w: want, cut: !!cut });
+  const after = await page.evaluate(() => { try { return !!(rtcTerm && rtcTerm.readyState === "open"); } catch (_) { return false; } });
   await page.waitForTimeout(2000 + 4 * TRIP);
   const screen = await page.evaluate(() => { const b = window.__term.buffer.active; let s = ''; for (let i = 0; i < b.length; i++) { const l = b.getLine(i); s += (l.isWrapped ? '' : '\n') + l.translateToString(true); } return s; });
   await ctx.close();
-  return { open, answered: got.length, p50, once: screen.split(want).length - 1 };
+  return { open, after, answered: got.length, p50, once: screen.split(want).length - 1 };
 }
 
 const relay = await viewer(false);
@@ -57,6 +64,9 @@ const direct = await viewer(true);
 check(direct.open, 'with WebRTC: the term channel opened');
 check(direct.answered === 40 && direct.p50 < TRIP / 2, `with the channel: an echo comes in well under the relay's round trip (median ${direct.p50.toFixed(0)} ms of ${TRIP} ms, ${direct.answered}/40 keys)`);
 check(direct.once === 1, `with the channel: a long line typed fast is on the screen once, in order, its relay copies dropped (${direct.once} time(s))`);
+const gone = await viewer(true, true);
+check(gone.open && !gone.after, `the channel was open, and closed half way through the line (open before: ${gone.open}, after: ${gone.after})`);
+check(gone.once === 1, `the channel gone in the middle of typing: no key lost or doubled, the line is on the screen once, in order (${gone.once} time(s))`);
 await browser.close();
 console.log(fails.length ? `${fails.length} failed` : 'all passed');
 process.exit(fails.length ? 1 : 0);
