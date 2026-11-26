@@ -747,12 +747,17 @@ func runIntegrate(args []string) error {
 		for _, line := range healHooks(home, sessionVersions(agentVersions)) {
 			fmt.Println(line)
 		}
+		// And an entry this agent, at the version its session says, is
+		// new enough for and does not have yet (hooks_heal_added.go).
+		for _, line := range healAddedHooks(home, exe, sessionVersions(agentVersions)) {
+			fmt.Println(line)
+		}
 		return nil
 	}
 	if healPlugin {
 		healPlugins(home)
 		// And its own hooks an upgrade added, for the agents already set up.
-		for _, line := range healAddedHooks(home, checkVersion) {
+		for _, line := range healAddedHooks(home, exe, nil) {
 			fmt.Println(line)
 		}
 		return nil
