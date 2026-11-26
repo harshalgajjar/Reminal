@@ -14,6 +14,13 @@ package client
 // cut against, and the viewer needs nothing new); when it has been short
 // for a while, they go back up a step. Only pictures that go on the relay
 // alone: a direct channel carries no terminal, and video has its own budget.
+//
+// Quality alone does little for a picture that is mostly sharp text, which
+// is what a Mac's own capture sends: at quality 22 one of 115 KB was still
+// 110 KB. Where every picture is a whole one (no bands: the native capture),
+// a step also makes it smaller in pixels, which the viewer draws at the
+// pane's size as it does any picture. Where bands are in use the size in
+// pixels is kept, since a band must fit the picture it is cut against.
 
 import (
 	"bytes"
@@ -47,6 +54,10 @@ const (
 // was captured. No step is below 22: a pane is mostly text, and lower than
 // that small text is hard to read.
 var relayQualities = []int{0, 30, 22}
+
+// relayWidths are the steps' widths, as parts of the picture's own, for a
+// stream whose pictures are all whole ones.
+var relayWidths = []float64{1, 0.75, 0.6}
 
 // relaySlim is a stream's step, and what it has seen of the link.
 type relaySlim struct {
@@ -104,9 +115,11 @@ func (r *relaySlim) acked(seq uint64, now time.Time) {
 	r.level, r.fastRun = nextSlim(r.level, r.fastRun, ack-trip)
 }
 
-// slimJPEG is img encoded again at the step's quality, or img itself when
-// the step is 0, it does not decode, or the result is no smaller.
-func slimJPEG(img []byte, level int) []byte {
+// slimJPEG is img encoded again at the step's quality, and with narrower
+// (the picture is a whole one, never a band or what a band is cut against)
+// at the step's width as well; or img itself when the step is 0, it does
+// not decode, or the result is no smaller.
+func slimJPEG(img []byte, level int, narrower bool) []byte {
 	if level <= 0 || level >= len(relayQualities) || len(img) == 0 {
 		return img
 	}
@@ -114,9 +127,17 @@ func slimJPEG(img []byte, level int) []byte {
 	if err != nil {
 		return img
 	}
-	var out bytes.Buffer
-	if err := jpeg.Encode(&out, src, &jpeg.Options{Quality: relayQualities[level]}); err != nil || out.Len() >= len(img) {
+	q := relayQualities[level]
+	var out []byte
+	if w := int(float64(src.Bounds().Dx()) * relayWidths[level]); narrower && w >= 320 && w < src.Bounds().Dx() {
+		out, err = downscaleJPEG(src, w, q)
+	} else {
+		var buf bytes.Buffer
+		err = jpeg.Encode(&buf, src, &jpeg.Options{Quality: q})
+		out = buf.Bytes()
+	}
+	if err != nil || len(out) == 0 || len(out) >= len(img) {
 		return img
 	}
-	return out.Bytes()
+	return out
 }

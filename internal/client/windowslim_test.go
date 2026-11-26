@@ -126,12 +126,12 @@ func TestALighterPictureKeepsItsSizeInPixels(t *testing.T) {
 		t.Fatal(err)
 	}
 	orig := buf.Bytes()
-	if got := slimJPEG(orig, 0); !bytes.Equal(got, orig) {
+	if got := slimJPEG(orig, 0, false); !bytes.Equal(got, orig) {
 		t.Fatal("step 0 changed the picture")
 	}
 	prev := len(orig)
 	for level := 1; level < len(relayQualities); level++ {
-		got := slimJPEG(orig, level)
+		got := slimJPEG(orig, level, false)
 		cfg, err := jpeg.DecodeConfig(bytes.NewReader(got))
 		if err != nil || cfg.Width != 320 || cfg.Height != 200 {
 			t.Fatalf("step %d: %v, %dx%d, want 320x200", level, err, cfg.Width, cfg.Height)
@@ -148,10 +148,58 @@ func TestALighterPictureKeepsItsSizeInPixels(t *testing.T) {
 		t.Errorf("the last step's quality is %d: below 22 small text is hard to read", q)
 	}
 	junk := []byte("not a picture")
-	if got := slimJPEG(junk, 2); !bytes.Equal(got, junk) {
+	if got := slimJPEG(junk, 2, true); !bytes.Equal(got, junk) {
 		t.Fatal("what does not decode was changed")
 	}
-	if got := slimJPEG(orig, 99); !bytes.Equal(got, orig) {
+	if got := slimJPEG(orig, 99, true); !bytes.Equal(got, orig) {
 		t.Fatal("a step that does not exist changed the picture")
+	}
+}
+
+// A picture of sharp text hardly shrinks at a lower quality (a Mac's own
+// capture: 115 KB was still 110 KB at quality 22). Where every picture is a
+// whole one it is made narrower as well, and is then a good deal smaller;
+// where bands are in use its size in pixels is never changed.
+func TestAWholePictureIsMadeNarrowerToo(t *testing.T) {
+	src := image.NewRGBA(image.Rect(0, 0, 1200, 700))
+	rng := rand.New(rand.NewSource(7))
+	for y := 0; y < 700; y++ {
+		for x := 0; x < 1200; x++ {
+			c := color.RGBA{20, 20, 24, 255}
+			// rows of small bright marks on dark, as text is
+			if y%14 > 3 && y%14 < 11 && rng.Intn(3) == 0 {
+				c = color.RGBA{230, 230, 220, 255}
+			}
+			src.Set(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, src, &jpeg.Options{Quality: 45}); err != nil {
+		t.Fatal(err)
+	}
+	orig := buf.Bytes()
+	for level := 1; level < len(relayQualities); level++ {
+		kept := slimJPEG(orig, level, false)
+		ck, err := jpeg.DecodeConfig(bytes.NewReader(kept))
+		if err != nil || ck.Width != 1200 || ck.Height != 700 {
+			t.Fatalf("step %d with bands in use: %v, %dx%d, want 1200x700", level, err, ck.Width, ck.Height)
+		}
+		narrow := slimJPEG(orig, level, true)
+		cn, err := jpeg.DecodeConfig(bytes.NewReader(narrow))
+		wantW := int(1200 * relayWidths[level])
+		if err != nil || cn.Width != wantW || cn.Height != 700*wantW/1200 {
+			t.Fatalf("step %d, a whole picture: %v, %dx%d, want %dx%d", level, err, cn.Width, cn.Height, wantW, 700*wantW/1200)
+		}
+		if len(narrow) >= len(kept) {
+			t.Errorf("step %d: narrower is %d bytes, quality alone %d", level, len(narrow), len(kept))
+		}
+		t.Logf("step %d: as captured %d bytes, quality alone %d, narrower too %d", level, len(orig), len(kept), len(narrow))
+	}
+	// A picture already small is not made narrower than is of use.
+	small := image.NewRGBA(image.Rect(0, 0, 400, 300))
+	buf.Reset()
+	_ = jpeg.Encode(&buf, small, &jpeg.Options{Quality: 45})
+	if c, err := jpeg.DecodeConfig(bytes.NewReader(slimJPEG(buf.Bytes(), 2, true))); err != nil || c.Width != 400 {
+		t.Errorf("a 400 px picture came out %d wide (%v)", c.Width, err)
 	}
 }
