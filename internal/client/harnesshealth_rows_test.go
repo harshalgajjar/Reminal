@@ -30,6 +30,16 @@ var loginRowCases = []loginRowCase{
 	{prog: "agy", row: " Open this link in a browser to log in with Google:"},
 	{prog: "agy", row: " Then paste the authorization code, or the full URL of the page you land on, and press Enter:", bottom: true},
 
+	// Kiro CLI 3.6 changed its wordings.
+	{prog: "kiro", row: " Please run \"kiro-cli login\" to authenticate."},
+	{prog: "kiro", row: " Your session has expired. Please run \"kiro-cli login\" to re-authenticate."},
+	{prog: "kiro", row: " Authentication required. Please run \"kiro-cli login\" to authenticate."},
+	{prog: "kiro", row: " Failed to verify authentication. Please run \"kiro-cli login\" to authenticate."},
+	{prog: "kiro", row: " Your session credentials were rejected. Run `kiro-cli login` in a new terminal, then retry."},
+	{prog: "kiro", row: " Authentication timed out. Please try \"kiro-cli login\" again."},
+	{prog: "kiro", row: " Authentication failed due to security validation. Please try \"kiro-cli login\" again."},
+	{prog: "kiro", row: " Social login failed. Please try \"kiro-cli login\" with a different method."},
+
 	{prog: "codex", row: "  Sign in with ChatGPT to use Codex as part of your paid plan"},
 	{prog: "codex", row: "■ Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again."},
 	{prog: "codex", row: "■ Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again."},

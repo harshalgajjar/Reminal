@@ -217,6 +217,8 @@ var limitScreens = []struct {
 	{"pi", "  Hugging Face rate limit reached; retry in 30s\n", limitLA(2026, 10, 19, 10, 0).Add(30 * time.Second)},
 	{"agy", "  AI: Out of credits\n", time.Time{}},
 	{"kiro", "\n ⚠️  Kiro rate limit reached:\n", time.Time{}},
+	// Kiro CLI 3.6 changed its wording.
+	{"kiro", "\n The cloud service is rate-limiting requests. Wait a moment and retry.\n", time.Time{}},
 	{"kiro", "Monthly request limit reached - The limits reset on 12/01.\n", time.Time{}},
 	{"kiro", "Monthly request limit reached\n", time.Time{}},
 	{"copilot", "  You've hit your session rate limit.\n", time.Time{}},
@@ -1178,6 +1180,7 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"agy", "", "AI: Out of credits", false},
 		{"kiro", "⚠️  ", "Kiro rate limit reached:", false},
 		{"kiro", "", "Kiro rate limit reached", false},
+		{"kiro", "", "The cloud service is rate-limiting requests. Wait a moment and retry.", false},
 		{"kiro", "", "Monthly request limit reached", false},
 		{"kiro", "", "Monthly request limit reached - The limits reset on 12/01.", false},
 	} {
@@ -1215,6 +1218,9 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"agy", "  The status bar then read\n  AI: out of credits."},
 		{"kiro", "  The CLI said its\n  monthly request limit reached."},
 		{"kiro", "  Kiro rate limit reached: I paused the deploy and will retry."},
+		{"kiro", "  It said the cloud service is rate-limiting requests, so I waited a moment."},
+		{"kiro", "  The cloud service is rate-limiting requests. Wait a moment and retry was the message."},
+		{"kiro", "  No credits remaining"},
 		{"claude", "● You've reached your usage limit."},
 		{"claude", "  You've reached your monthly limit."},
 		{"claude", "● The message is:\n\n      Your organization is out of usage credits. Contact your admin to add more."},
