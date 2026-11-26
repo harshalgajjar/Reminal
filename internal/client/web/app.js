@@ -2715,6 +2715,7 @@
         return g.length ? Math.round(g[Math.floor(g.length / 2)]) : 0; })(),
       queued: (p.renderQ || []).length,
       fps: (p.frameTimes || []).length, seq: p.lastSeq || 0,
+      bytes: p.frameBytes || 0, slim: p.frameSlim || 0, was: p.frameWas || 0,
     }));
 
     // Pointer-ownership guard, same rule as scroll routing below: an app only
@@ -11022,6 +11023,16 @@
       if (!lastDCSeenAt || performance.now() - lastDCSeenAt > TRANSPORT_CLAIM_MS) lastFrameVia = 'ws';
       if (before !== lastFrameVia) for (const p of panes.values()) requestPaneQuality(p);
     }
+    // pictureRow is the last picture's size for a pane's (i) popover, and,
+    // when the host made it lighter for a slow relay link, by which step and
+    // from what size. Nothing for video, or before a picture has come.
+    function pictureRow(p) {
+      if (!p.frameBytes || p.capSrc === 'h264') return '';
+      const kb = (n) => (n >= 10240 ? Math.round(n / 1024) : (n / 1024).toFixed(1)) + ' KB';
+      let v = kb(p.frameBytes);
+      if (p.frameSlim) v += p.frameWas ? ' · lighter, step ' + p.frameSlim + ' (was ' + kb(p.frameWas) + ')' : ' · step ' + p.frameSlim + ' asked, no smaller';
+      return '<div class="row"><span class="k">Picture</span><span class="v">' + v + '</span></div>';
+    }
     // Describe the current transport for a pane's (i) popover.
     function paneInfoHtml(p) {
       const webrtc = lastFrameVia === 'webrtc';
@@ -11070,6 +11081,7 @@
       return '<div class="row"><span class="k">Transport</span><span class="v ' + cls + '">' + transport + '</span></div>'
         + (relayEdge ? '<div class="row"><span class="k">Relay entry</span><span class="v">' + relayEdge + '</span></div>' : '')
         + '<div class="row"><span class="k">Capture</span><span class="v">' + cap + '</span></div>'
+        + pictureRow(p)
         + health
         + '<div class="row"><span class="k">Encryption</span><span class="v">' + enc + '</span></div>'
         + '<div class="row"><span class="k">Resolution</span><span class="v">' + res + '</span></div>'
@@ -12618,6 +12630,13 @@
       p.lastAliveAt = p.lastFrameAt; // frames count as liveness too
       noteTransport(viaDC); // for the (i) transport popover
       if (payload.cap) { p.capSrc = payload.cap; p.capErr = payload.cap_err || null; }
+      // A picture's size as it came, and what the host did to it for a slow
+      // relay link (its step, and its size before): for the (i) popover.
+      if (typeof payload.img === 'string') {
+        p.frameBytes = Math.floor(payload.img.length * 3 / 4);
+        p.frameSlim = Number.isInteger(payload.slim) ? payload.slim : 0;
+        p.frameWas = Number.isInteger(payload.was) ? payload.was : 0;
+      }
       (p.frameTimes || (p.frameTimes = [])).push(p.lastFrameAt); // rolling 1s window → fps
       while (p.frameTimes.length && p.lastFrameAt - p.frameTimes[0] > 1000) p.frameTimes.shift();
       updatePaneOverlay(p);
