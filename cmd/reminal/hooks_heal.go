@@ -130,7 +130,7 @@ func healHooks(home string, version func(bin string) string) []string {
 				said = append(said, fmt.Sprintf("reminal could not remove its %s hook from %s: %v", ev.Event, tildePath(home, path), err))
 			} else if removed {
 				line := fmt.Sprintf("reminal removed its %s hook: %s %s is older than %s. Start %s again to use reminal's hooks", ev.Event, t.Bin, versionRe.FindString(have), ev.MinVersion, t.Bin)
-				if eventKeyWritten(t.hooks, home, ev.Event) {
+				if ev.OldRunsNone && eventKeyWritten(t.hooks, home, ev.Event) {
 					// A hook of the person's own for it is left, as it is
 					// theirs — and while it is there this agent runs none.
 					line += fmt.Sprintf(". A %s hook of your own is still in %s: %s %s runs none of its hooks while it is there", ev.Event, tildePath(home, path), t.Bin, versionRe.FindString(have))
