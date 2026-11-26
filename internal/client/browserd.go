@@ -83,39 +83,45 @@ func BrowserHostHome() (string, error) {
 }
 
 // snapEnsure opens the hub's second socket when a snap browser was set up
-// (integrate put reminal's copy in its folder), and closes it when that
-// setup was taken away. It is served as the first is: the same handle, with
-// the same checks of who is at the other end. A daemon on a socket of its
+// (integrate wrote its note in ~/.reminal), and closes it when that setup
+// was taken away. It is served as the first is: the same handle, with the
+// same checks of who is at the other end. A daemon on a socket of its
 // own (REMINAL_BROWSER_SOCK, development) leaves it to the installed one.
 func (h *browserHub) snapEnsure() {
 	if os.Getenv("REMINAL_BROWSER_SOCK") != "" {
 		return
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	h.snapMu.Lock()
-	defer h.snapMu.Unlock()
-	if h.snapLn != nil {
-		if snapBrowserGone(h.snapDir) {
-			h.snapCloseLocked()
-		}
-		return
-	}
-	ln, dir, err := snapBrowserListen(home)
-	if err != nil {
-		return
-	}
-	h.snapLn, h.snapDir = ln, dir
+	// Off the caller, and one at a time: the hub's first socket and a state
+	// asked of it never wait on the snap's folder.
 	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return // closed
-			}
-			go h.handle(conn)
+		if !h.snapMu.TryLock() {
+			return
 		}
+		defer h.snapMu.Unlock()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		if h.snapLn != nil {
+			if snapBrowserGone(home) {
+				h.snapCloseLocked()
+			}
+			return
+		}
+		ln, dir, err := snapBrowserListen(home)
+		if err != nil {
+			return
+		}
+		h.snapLn, h.snapDir = ln, dir
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return // closed
+				}
+				go h.handleFrom(conn, true)
+			}
+		}()
 	}()
 }
 
@@ -164,9 +170,13 @@ func (h *browserHub) errNoBrowser() error {
 }
 
 type browserHub struct {
-	mu      sync.Mutex
-	host    *browserConn
-	family  string // the browser family of host, for the state (browserstate.go)
+	mu     sync.Mutex
+	host   *browserConn
+	family string // the browser family of host, for the state (browserstate.go)
+	// standby: the bridges of other browsers running with the extension at
+	// the same time, kept connected and sent nothing (serveHost). The first
+	// of them becomes the bridge when the one in use goes.
+	standby []*browserConn
 	nextID  uint64
 	waiting map[uint64]waiter
 	// seen: the sessions that have asked, by the pid of their process (the
@@ -187,6 +197,8 @@ type browserHub struct {
 	// bridge (nil: reminal's browser-host under a browser).
 	allow       func(peer int, session string) bool
 	allowBridge func(peer int) bool
+	// tests: the browser a bridge from peer belongs to (nil: all one).
+	testBrowser func(peer int) int
 	noWait      bool   // tests: no wait for a bridge
 	testFamily  string // tests: the family of a bridge allowBridge lets in
 }
@@ -200,7 +212,13 @@ type waiter struct {
 type browserConn struct {
 	c   net.Conn
 	pid int
-	mu  sync.Mutex // one writer at a time
+	// browser: the pid of the browser that started this bridge (0: not
+	// known). snap: it came in on the snap browser's socket. family: its
+	// browser's, for the state.
+	browser int
+	snap    bool
+	family  string
+	mu      sync.Mutex // one writer at a time
 }
 
 func (b *browserConn) send(v any) error {
@@ -261,7 +279,11 @@ func serveBrowserOn(h *browserHub, stop <-chan struct{}) {
 	}
 }
 
-func (h *browserHub) handle(conn net.Conn) {
+func (h *browserHub) handle(conn net.Conn) { h.handleFrom(conn, false) }
+
+// handleFrom serves one connection; snap: it came in on the snap browser's
+// socket.
+func (h *browserHub) handleFrom(conn net.Conn, snap bool) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			recoverLog("browser hub", rec)
@@ -281,7 +303,7 @@ func (h *browserHub) handle(conn net.Conn) {
 	}
 	switch m.T {
 	case "host":
-		h.serveHost(conn, r)
+		h.serveHost(conn, r, snap)
 	case "req":
 		defer conn.Close()
 		resp := h.request(conn, m)
@@ -317,19 +339,33 @@ func readBrowserLine(r *bufio.Reader) ([]byte, error) {
 	}
 }
 
-// serveHost makes conn the bridge, if it is reminal's browser-host started by
-// a browser. A newer one takes over from an older (the extension reconnected:
-// the older one's browser port is gone), and says so in the daemon's log; the
-// requests the older one held are failed, the newer one's are not.
-func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
+// serveHost takes conn in as a bridge, if it is reminal's browser-host
+// started by a browser. There is one bridge in use at a time:
+//
+//   - with none, this one is it;
+//   - one from the same browser as the bridge in use takes over from it (the
+//     extension reconnected: the older one's browser port is gone), said in
+//     the daemon's log; the requests the older one held are failed;
+//   - one from another browser does not: it is kept connected on standby and
+//     sent nothing, and becomes the bridge when the one in use goes. Two
+//     browsers running with the extension at once took the bridge from each
+//     other without end before, and a session's tabs with it;
+//   - except that a bridge on the hub's own socket takes over from one on
+//     the snap browser's socket, which then stands by. One from the snap's
+//     socket never takes a bridge over.
+func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader, snap bool) {
 	peer, err := peerPID(conn)
 	// The browser above the host says which family it is, kept for the
 	// state (browserstate.go).
-	okay, family := false, ""
+	okay, family, above := false, "", 0
 	if err == nil && h.allowBridge != nil {
 		okay, family = h.allowBridge(peer), h.testFamily
+		if h.testBrowser != nil {
+			above = h.testBrowser(peer)
+		}
 	} else if err == nil {
-		name := browserBridgeBrowser(peer)
+		var name string
+		name, above = browserBridgeAbove(peer)
 		okay, family = name != "", browserFamily(name)
 	}
 	if err != nil || !okay {
@@ -342,18 +378,31 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 		_ = conn.Close()
 		return
 	}
-	bc := &browserConn{c: conn, pid: peer}
+	bc := &browserConn{c: conn, pid: peer, browser: above, snap: snap, family: family}
 	// What a later "not connected" is told apart by: one connected before.
 	// Written first, so the state never says connected with no time for it.
 	writeBrowserMarker(family, time.Now())
 	h.mu.Lock()
 	old := h.host
-	h.host = bc
-	h.family = family
-	h.mu.Unlock()
-	if old != nil {
+	var replaced *browserConn
+	switch {
+	case old == nil:
+		h.host, h.family = bc, family
+	case old.browser == bc.browser && old.snap == bc.snap:
+		h.host, h.family = bc, family
 		log.Printf("browser: the bridge from pid %d replaces the one from pid %d", peer, old.pid)
-		_ = old.c.Close()
+		replaced = old
+	case old.snap && !bc.snap:
+		h.host, h.family = bc, family
+		h.standby = append(h.standby, old)
+		log.Printf("browser: the bridge from pid %d is in use now; the snap browser's (pid %d) stands by", peer, old.pid)
+	default:
+		h.standby = append(h.standby, bc)
+		log.Printf("browser: another browser's bridge (pid %d) stands by; the one from pid %d stays in use", peer, old.pid)
+	}
+	h.mu.Unlock()
+	if replaced != nil {
+		_ = replaced.c.Close()
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	for {
@@ -386,9 +435,26 @@ func (h *browserHub) serveHost(conn net.Conn, r *bufio.Reader) {
 		}
 	}
 	h.mu.Lock()
+	for i, sb := range h.standby {
+		if sb == bc {
+			h.standby = append(h.standby[:i], h.standby[i+1:]...)
+			break
+		}
+	}
 	if h.host == bc {
-		h.host = nil
-		h.family = ""
+		h.host, h.family = nil, ""
+		// The next browser's bridge, one on the hub's own socket first.
+		next := -1
+		for i, sb := range h.standby {
+			if next < 0 || (h.standby[next].snap && !sb.snap) {
+				next = i
+			}
+		}
+		if next >= 0 {
+			h.host, h.family = h.standby[next], h.standby[next].family
+			h.standby = append(h.standby[:next], h.standby[next+1:]...)
+			log.Printf("browser: the bridge from pid %d is in use now", h.host.pid)
+		}
 	}
 	// The requests this bridge held: answered now, not at their deadline.
 	for id, w := range h.waiting {
@@ -409,6 +475,12 @@ func browserBridgeOK(pid int) bool { return browserBridgeBrowser(pid) != "" }
 // browserBridgeBrowser is that check, answering with the program name of the
 // browser found above the host ("" when pid is not the host under one).
 func browserBridgeBrowser(pid int) string {
+	name, _ := browserBridgeAbove(pid)
+	return name
+}
+
+// browserBridgeAbove is browserBridgeBrowser, with the pid of that browser.
+func browserBridgeAbove(pid int) (string, int) {
 	args := processArgs(pid)
 	exe := browserExecPath(pid)
 	if exe == "" && len(args) > 0 {
@@ -422,7 +494,7 @@ func browserBridgeBrowser(pid int) string {
 		exe = r
 	}
 	if exe == "" || (exe != self && !strings.HasPrefix(strings.ToLower(filepath.Base(exe)), "reminal")) {
-		return ""
+		return "", 0
 	}
 	asHost := false
 	for _, a := range args {
@@ -431,13 +503,13 @@ func browserBridgeBrowser(pid int) string {
 		}
 	}
 	if !asHost {
-		return ""
+		return "", 0
 	}
 	p := pid
 	for i := 0; i < 8; i++ {
 		p = session.ParentPID(p)
 		if p <= 1 {
-			return ""
+			return "", 0
 		}
 		path := browserExecPath(p)
 		name := filepath.Base(path)
@@ -452,10 +524,10 @@ func browserBridgeBrowser(pid int) string {
 			name = name[:len(name)-4]
 		}
 		if browserProcessName.MatchString(name) {
-			return path
+			return path, p
 		}
 	}
-	return ""
+	return "", 0
 }
 
 // browserProcessName matches the program names of Chrome's family, Chrome for
@@ -489,6 +561,18 @@ func (h *browserHub) request(conn net.Conn, m BrowserReq) BrowserResp {
 	if host == nil {
 		h.mu.Unlock()
 		return BrowserResp{Error: h.errNoBrowser().Error()}
+	}
+	// The snap browser reads only some folders: said here, where it is
+	// known which browser the request goes to.
+	if host.snap {
+		if home, err := os.UserHomeDir(); err == nil {
+			for _, path := range browserArgPaths(m.Tool, m.Args) {
+				if !snapBrowserCanRead(home, path) {
+					h.mu.Unlock()
+					return BrowserResp{Error: path + ": the browser in use is Chromium installed as a snap, which reads files only in the home folder (not in a hidden folder). Put the file there, or ask the person to upload it."}
+				}
+			}
+		}
 	}
 	h.nextID++
 	id := h.nextID
@@ -702,4 +786,43 @@ func (h *browserHub) haveSessions(ids []string) {
 			_ = host.send(map[string]string{"t": "ended", "session": id})
 		}
 	}
+}
+
+// browserArgPaths are the files a request asks the browser to read: the
+// paths of a file_upload, alone or as a step of a batch.
+func browserArgPaths(tool string, args json.RawMessage) []string {
+	if tool != "file_upload" && tool != "batch" {
+		return nil
+	}
+	var v any
+	if json.Unmarshal(args, &v) != nil {
+		return nil
+	}
+	var out []string
+	var walk func(v any, depth int)
+	walk = func(v any, depth int) {
+		if depth > 6 {
+			return
+		}
+		switch t := v.(type) {
+		case map[string]any:
+			for k, x := range t {
+				if list, ok := x.([]any); ok && k == "paths" {
+					for _, e := range list {
+						if p, ok := e.(string); ok {
+							out = append(out, p)
+						}
+					}
+					continue
+				}
+				walk(x, depth+1)
+			}
+		case []any:
+			for _, x := range t {
+				walk(x, depth+1)
+			}
+		}
+	}
+	walk(v, 0)
+	return out
 }

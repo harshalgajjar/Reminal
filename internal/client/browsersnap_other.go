@@ -19,7 +19,9 @@ func SnapBrowserProfile() string                         { return "" }
 func SnapBrowserSetUp(home, exe string) error            { return errors.New("no snap browsers here") }
 func SnapBrowserSetUpDone(home, exe string) (bool, bool) { return false, false }
 func SnapBrowserRemove(home string) error                { return nil }
-func snapBrowserGone(dir *os.File) bool                  { return true }
+func SnapBrowserEnabled(home string) bool                { return false }
+func snapBrowserCanRead(home, path string) bool          { return true }
+func snapBrowserGone(home string) bool                   { return true }
 func snapBrowserUnlisten(dir *os.File)                   {}
 func browserHostSockInSnap() string                      { return "" }
 func snapBrowserListen(home string) (net.Listener, *os.File, error) {

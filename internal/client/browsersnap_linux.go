@@ -13,7 +13,10 @@ package client
 //	~/snap/chromium/common/reminal/reminal       a copy of reminal, the helper
 //	~/snap/chromium/common/reminal/browser.sock  a second socket of the hub
 //
-// and the hub serves the second socket exactly as it serves the first.
+// and the hub serves the second socket as it serves the first. Whether it
+// is served at all is said by a note outside the snap's reach,
+// ~/.reminal/browser-snap, which only `reminal integrate` writes and takes
+// away: what is in the snap's folder never decides it.
 //
 // The confined browser can write in that folder and in the folders above
 // it, and this code runs unconfined. So nothing here follows a path a
@@ -28,9 +31,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/sys/unix"
 )
@@ -111,18 +116,52 @@ func openOwnDir(home string, parts []string, create bool) (*os.File, error) {
 	return os.NewFile(uintptr(fd), filepath.Join(parts...)), nil
 }
 
-// readIn is the regular file name in the folder dir, never a link.
-func readIn(dir *os.File, name string) ([]byte, error) {
-	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+// snapManifestMax bounds a host manifest read back from the snap's folder.
+const snapManifestMax = 64 << 10
+
+// openFileIn opens the regular file name in the folder dir: never a link,
+// never waited for (something that is not a file is refused, whatever it
+// is), and says its size.
+func openFileIn(dir *os.File, name string) (*os.File, int64, error) {
+	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, 0, err
+	}
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
+		unix.Close(fd)
+		return nil, 0, fmt.Errorf("%s is not a file", name)
+	}
+	return os.NewFile(uintptr(fd), name), st.Size, nil
+}
+
+// readIn is the regular file name in the folder dir, when it is no larger
+// than max.
+func readIn(dir *os.File, name string, max int64) ([]byte, error) {
+	f, size, err := openFileIn(dir, name)
 	if err != nil {
 		return nil, err
 	}
-	f := os.NewFile(uintptr(fd), name)
 	defer f.Close()
-	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s is not a file", name)
+	if size > max {
+		return nil, fmt.Errorf("%s is too large", name)
 	}
-	return io.ReadAll(f)
+	return io.ReadAll(io.LimitReader(f, max))
+}
+
+// sameIn reports whether the file name in the folder dir is want, byte for
+// byte. One of another size is not read at all.
+func sameIn(dir *os.File, name string, want []byte) bool {
+	f, size, err := openFileIn(dir, name)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	if size != int64(len(want)) {
+		return false
+	}
+	have, err := io.ReadAll(io.LimitReader(f, size))
+	return err == nil && sameBytes(have, want)
 }
 
 // writeIn writes name in the folder dir: to a new file beside it, then moved
@@ -152,9 +191,22 @@ func writeIn(dir *os.File, name string, data []byte, mode uint32) error {
 	return err
 }
 
+// snapBrowserNote is the note that says the snap browser is set up: in
+// ~/.reminal, which the snap may not reach.
+func snapBrowserNote(home string) string {
+	return filepath.Join(home, ".reminal", "browser-snap")
+}
+
+// SnapBrowserEnabled reports whether a setup was made (the note is there).
+func SnapBrowserEnabled(home string) bool {
+	st, err := os.Lstat(snapBrowserNote(home))
+	return err == nil && st.Mode().IsRegular()
+}
+
 // SnapBrowserSetUp puts a copy of the reminal at exe where the snap browser
-// may start it, making the folder if need be. Run again it brings the copy
-// up to exe (an upgrade).
+// may start it, making the folder if need be, and writes the note that has
+// the daemon serve its socket there. Run again it brings the copy up to exe
+// (an upgrade).
 func SnapBrowserSetUp(home, exe string) error {
 	want, err := os.ReadFile(exe)
 	if err != nil {
@@ -165,49 +217,60 @@ func SnapBrowserSetUp(home, exe string) error {
 		return err
 	}
 	defer dir.Close()
-	if have, err := readIn(dir, snapHelperName); err == nil && sameBytes(have, want) {
-		return nil
+	if !sameIn(dir, snapHelperName, want) {
+		if err := writeIn(dir, snapHelperName, want, 0o700); err != nil {
+			return err
+		}
 	}
-	return writeIn(dir, snapHelperName, want, 0o700)
+	if err := os.MkdirAll(filepath.Dir(snapBrowserNote(home)), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(snapBrowserNote(home), []byte(snapBrowser+"\n"), 0o600)
 }
 
-// SnapBrowserSetUpDone reports whether a copy is there (a setup was made),
-// and whether it is the reminal at exe.
+// SnapBrowserSetUpDone reports whether a setup was made (the note is
+// there), and whether the copy in the snap's folder is the reminal at exe.
 func SnapBrowserSetUpDone(home, exe string) (there, current bool) {
+	if !SnapBrowserEnabled(home) {
+		return false, false
+	}
 	dir, err := openOwnDir(home, snapBrowserParts(), false)
 	if err != nil {
-		return false, false
+		return true, false
 	}
 	defer dir.Close()
-	have, err := readIn(dir, snapHelperName)
-	if err != nil {
-		return false, false
-	}
 	want, err := os.ReadFile(exe)
-	return true, err == nil && sameBytes(have, want)
+	return true, err == nil && sameIn(dir, snapHelperName, want)
 }
 
-// SnapBrowserRemove takes away what SnapBrowserSetUp and the hub put there:
-// the copy, the socket and the folder.
+// SnapBrowserRemove takes away the note first, so the daemon serves nothing
+// there whatever is left, then what is in reminal's folder in the snap (the
+// copy, the socket, and anything else put there since) and the folder.
 func SnapBrowserRemove(home string) error {
+	if err := os.Remove(snapBrowserNote(home)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	parts := snapBrowserParts()
+	dir, err := openOwnDirLoose(home, parts)
+	if err != nil {
+		return nil // no such folder of this user's: nothing of reminal's is there
+	}
+	names, _ := dir.Readdirnames(-1)
+	for _, name := range append(names, snapHelperName, snapSockName) {
+		if err := unix.Unlinkat(int(dir.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.EISDIR) {
+			dir.Close()
+			return err
+		}
+	}
+	dir.Close()
 	parent, err := openOwnDirLoose(home, parts[:len(parts)-1])
 	if err != nil {
-		return nil // no such snap folder: nothing was put there
+		return nil
 	}
 	defer parent.Close()
-	if dir, err := openOwnDir(home, parts, false); err == nil {
-		for _, name := range []string{snapHelperName, snapSockName} {
-			if err := unix.Unlinkat(int(dir.Fd()), name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
-				dir.Close()
-				return err
-			}
-		}
-		dir.Close()
-	}
 	err = unix.Unlinkat(int(parent.Fd()), parts[len(parts)-1], unix.AT_REMOVEDIR)
-	if errors.Is(err, unix.ENOENT) {
-		return nil
+	if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENOTEMPTY) {
+		return nil // a folder made inside it since is left; nothing is served there
 	}
 	return err
 }
@@ -244,24 +307,37 @@ func sameBytes(a, b []byte) bool {
 	return bytes.Equal(x[:], y[:])
 }
 
+// installedExe is the path this reminal was started from. After an upgrade
+// in place the system says it with " (deleted)" at its end: the path, with
+// the new reminal at it, is what is wanted.
+func installedExe() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(exe, " (deleted)"), nil
+}
+
 // snapBrowserListen opens the hub's second socket, in the snap browser's
-// folder, when a setup was made there (the copy is there): never otherwise,
-// and the folder is never made here. The copy is first brought up to this
-// reminal, which an upgrade has just replaced. The returned folder stays
-// open for as long as the socket is served (snapBrowserGone asks it).
+// folder, when a setup was made (the note in ~/.reminal says so): never
+// otherwise, and the folder is never made here. The copy is first brought
+// up to the installed reminal, which an upgrade has just replaced. The
+// returned folder stays open for as long as the socket is served.
 func snapBrowserListen(home string) (net.Listener, *os.File, error) {
+	if !SnapBrowserEnabled(home) {
+		return nil, nil, errors.New("no snap browser is set up")
+	}
 	dir, err := openOwnDir(home, snapBrowserParts(), false)
 	if err != nil {
 		return nil, nil, err
 	}
-	have, err := readIn(dir, snapHelperName)
-	if err != nil {
-		dir.Close()
-		return nil, nil, err
-	}
-	if exe, err := os.Executable(); err == nil {
-		if want, err := os.ReadFile(exe); err == nil && !sameBytes(have, want) {
-			_ = writeIn(dir, snapHelperName, want, 0o700)
+	if exe, err := installedExe(); err != nil {
+		log.Printf("browser: the copy for the snap browser was not looked at: %v", err)
+	} else if want, err := os.ReadFile(exe); err != nil {
+		log.Printf("browser: the copy for the snap browser was not looked at: %v", err)
+	} else if !sameIn(dir, snapHelperName, want) {
+		if err := writeIn(dir, snapHelperName, want, 0o700); err != nil {
+			log.Printf("browser: the copy for the snap browser was not brought up to date: %v", err)
 		}
 	}
 	_ = unix.Unlinkat(int(dir.Fd()), snapSockName, 0)
@@ -272,25 +348,50 @@ func snapBrowserListen(home string) (net.Listener, *os.File, error) {
 		dir.Close()
 		return nil, nil, err
 	}
-	if err := unix.Fchmodat(int(dir.Fd()), snapSockName, 0o600, 0); err != nil {
-		ln.Close()
-		dir.Close()
-		return nil, nil, err
-	}
+	closeSockToOthers(dir, snapSockName)
 	return ln, dir, nil
 }
 
-// snapBrowserGone reports whether the setup served from dir was taken away
-// since (its copy is no longer in that folder).
-func snapBrowserGone(dir *os.File) bool {
+// closeSockToOthers puts the socket name in the folder dir at 0600 (its
+// folder is already the person's alone): through a handle on the thing of
+// that name itself, and only when it is a socket, so a link put in its
+// place is never followed.
+func closeSockToOthers(dir *os.File, name string) {
+	fd, err := unix.Openat(int(dir.Fd()), name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return
+	}
+	defer unix.Close(fd)
 	var st unix.Stat_t
-	return unix.Fstatat(int(dir.Fd()), snapHelperName, &st, unix.AT_SYMLINK_NOFOLLOW) != nil
+	if unix.Fstat(fd, &st) == nil && st.Mode&unix.S_IFMT == unix.S_IFSOCK {
+		_ = unix.Chmod(fmt.Sprintf("/proc/self/fd/%d", fd), 0o600)
+	}
 }
+
+// snapBrowserGone reports whether the setup served was taken away since
+// (its note is no longer there).
+func snapBrowserGone(home string) bool { return !SnapBrowserEnabled(home) }
 
 // snapBrowserUnlisten removes the socket's name from dir.
 func snapBrowserUnlisten(dir *os.File) {
 	_ = unix.Unlinkat(int(dir.Fd()), snapSockName, 0)
 	_ = dir.Close()
+}
+
+// snapBrowserCanRead reports whether the snap browser may read the file at
+// path: one in the home folder and in no hidden folder of it, or on a
+// drive that was plugged in.
+func snapBrowserCanRead(home, path string) bool {
+	for _, root := range []string{"/media/", "/mnt/", "/run/media/"} {
+		if strings.HasPrefix(path, root) {
+			return true
+		}
+	}
+	rel, err := filepath.Rel(home, path)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".") && !strings.HasPrefix(rel, "snap"+string(filepath.Separator))
 }
 
 // browserHostSockInSnap is the hub's socket as reminal's helper reaches it
@@ -374,7 +475,7 @@ func SnapBrowserManifest(home, name string) ([]byte, error) {
 		return nil, err
 	}
 	defer dir.Close()
-	return readIn(dir, name)
+	return readIn(dir, name, snapManifestMax)
 }
 
 // SnapBrowserRemoveManifest takes the host manifest name away.
