@@ -2834,7 +2834,12 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 		Seq    uint64 `json:"seq"`
 		Cap    string `json:"cap,omitempty"`     // capture source, shown in the (i) popover
 		CapErr string `json:"cap_err,omitempty"` // why the native path is unavailable
-		Img    string `json:"img"`               // base64 JPEG
+		// The step a relay picture was made lighter by (windowslim.go) and
+		// the bytes it was before, for the (i) popover: Slim alone is a step
+		// asked for that did not make this picture smaller.
+		Slim int    `json:"slim,omitempty"`
+		Was  int    `json:"was,omitempty"`
+		Img  string `json:"img"` // base64 JPEG
 		// A changed band (winbands.go): img is the rectangle bx,by,bw×bh of
 		// an fw×fh picture, to draw over the one frame base left.
 		Base uint64 `json:"base,omitempty"`
@@ -2849,7 +2854,12 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 	// (windowslim.go).
 	relayOnly := sinks.ws && len(sinks.confirmed) == 0 && len(sinks.probe) == 0
 	if relayOnly {
+		was := len(img)
 		img = slimJPEG(img, s.slim.level)
+		frame.Slim = s.slim.level
+		if len(img) < was {
+			frame.Was = was
+		}
 	}
 	frame.Img = base64.StdEncoding.EncodeToString(img)
 	if band != nil {
