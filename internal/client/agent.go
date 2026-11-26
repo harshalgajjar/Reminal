@@ -232,6 +232,7 @@ type Agent struct {
 
 	writeMu sync.Mutex // serializes WS writes; safe across sender/reader goroutines
 	seal    sealState  // sealed session frames (sealedframes.go)
+	termIn  termOrder  // numbered terminal input typed (termchannel.go)
 
 	// PIN-handshake allowance. Each pake_init we answer is one online PIN
 	// guess (CPace, crypto/cpace.go: a handshake tests one candidate), so a
@@ -3439,6 +3440,14 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 		case protocol.TypeDirIntegrate:
 			a.goGuarded("dir integrate", func() { a.handleDirIntegrate(conn, msg.Data) })
 		case protocol.TypeData:
+			// Numbered by its viewer: it is on the direct channel too, and
+			// whichever copy comes first is typed (termchannel.go).
+			if msg.Seq > 0 && msg.Stream != 0 {
+				if err := a.typeTermInput(msg.Stream, msg.Seq, msg.Data, false); err != nil {
+					return err
+				}
+				continue
+			}
 			data, err := a.box.Decrypt(msg.Data)
 			if err != nil {
 				continue
@@ -3803,6 +3812,8 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			}); err != nil {
 				return err
 			}
+			// And on the direct channel, where a viewer has one.
+			a.sendTerm(e.Seq, e.Data)
 			cursor = e.Seq + 1
 		}
 
