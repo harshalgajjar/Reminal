@@ -211,3 +211,173 @@ func TestTheHealRunsAsReminalStarts(t *testing.T) {
 		t.Error("the hook the upgrade brought was not written as reminal started")
 	}
 }
+
+// dropOwn takes reminal's own entry for event out of the agent's file, as a
+// person editing it would.
+func dropOwn(t *testing.T, spec *hookSpec, home, event string) {
+	t.Helper()
+	path := filepath.Join(home, spec.file)
+	removed, err := removeOwnHookFile(path, spec.key, event)
+	if err != nil || !removed {
+		t.Fatalf("could not take the %s entry out: %v", event, err)
+	}
+}
+
+// An entry the person took out stays out: across a restart of reminal, and
+// across an upgrade that brings another hook, which is added without the
+// one they removed coming back. A run of integrate is what writes it again.
+func TestAHookThePersonRemovedStaysRemoved(t *testing.T) {
+	now := *targetNamed(t, "qwen").hooks
+	old := specBefore(now, "StopFailure")
+	version := func(string) string { return "0.26.9" }
+	wrote := func(spec hookSpec) []string {
+		var out []string
+		for _, ev := range spec.events {
+			out = append(out, ev.Event)
+		}
+		return out
+	}
+
+	// Set up by a reminal that keeps the note; then one entry taken out.
+	home := t.TempDir()
+	old.version = "0.26.9"
+	if err := applyHooks(&old, home, "/usr/local/bin/reminal", false); err != nil {
+		t.Fatal(err)
+	}
+	setHooksWritten(home, "qwen", wrote(old))
+	dropOwn(t, &now, home, "Notification")
+	// reminal starts again, the same version: nothing comes back.
+	oldOnly := func(home string) []string {
+		// The reminal of before, started again: it registers no StopFailure.
+		t.Helper()
+		var said []string
+		wrote, _ := hooksWritten(home, "qwen")
+		for _, ev := range old.events {
+			if !ownHookWritten(&old, home, ev.Event) && !wrote[ev.Event] {
+				said = append(said, ev.Event)
+			}
+		}
+		return said
+	}
+	if would := oldOnly(home); len(would) != 0 {
+		t.Fatalf("a restart would write %v again", would)
+	}
+	// The upgrade: StopFailure is new to this install and is added; the
+	// entry the person removed is not.
+	said := healAddedHooks(home, version)
+	if len(said) != 1 || !strings.Contains(said[0], "StopFailure") || strings.Contains(said[0], "Notification") {
+		t.Fatalf("after the upgrade: %q, want StopFailure alone", said)
+	}
+	if !ownHookWritten(&now, home, "StopFailure") {
+		t.Error("the hook the upgrade brought was not added")
+	}
+	if ownHookWritten(&now, home, "Notification") {
+		t.Error("the entry the person removed came back with the upgrade")
+	}
+	// And again, and again: still out.
+	for i := 0; i < 2; i++ {
+		if said := healAddedHooks(home, version); len(said) != 0 || ownHookWritten(&now, home, "Notification") {
+			t.Errorf("a later start: said %q, the removed entry back: %v", said, ownHookWritten(&now, home, "Notification"))
+		}
+	}
+	// One more removed after the upgrade, the new one itself: stays out too.
+	dropOwn(t, &now, home, "StopFailure")
+	if said := healAddedHooks(home, version); len(said) != 0 || ownHookWritten(&now, home, "StopFailure") {
+		t.Errorf("the new hook, removed by the person, came back: %q", said)
+	}
+}
+
+// An install from before the note was kept: the events in its file are
+// taken as the ones written and the others added, once; from then on an
+// entry the person takes out stays out.
+func TestAnInstallFromBeforeTheNoteIsNotedOnce(t *testing.T) {
+	now := *targetNamed(t, "qwen").hooks
+	old := specBefore(now, "StopFailure")
+	version := func(string) string { return "0.26.9" }
+	home := t.TempDir()
+	if err := applyHooks(&old, home, "/usr/local/bin/reminal", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, noted := hooksWritten(home, "qwen"); noted {
+		t.Fatal("a note before any was kept")
+	}
+	if said := healAddedHooks(home, version); len(said) != 1 {
+		t.Fatalf("the first start: %q", said)
+	}
+	wrote, noted := hooksWritten(home, "qwen")
+	if !noted || len(wrote) != len(now.events) {
+		t.Fatalf("after the first start the note holds %v, want every event", wrote)
+	}
+	dropOwn(t, &now, home, "Stop")
+	if said := healAddedHooks(home, version); len(said) != 0 || ownHookWritten(&now, home, "Stop") {
+		t.Errorf("an entry removed after the note was kept came back: %q", said)
+	}
+	// One with every hook and no note: noted, its file not written.
+	home = t.TempDir()
+	full := now
+	full.version = "0.26.9"
+	if err := applyHooks(&full, home, "/usr/local/bin/reminal", false); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(home, now.file))
+	if said := healAddedHooks(home, version); len(said) != 0 {
+		t.Errorf("an install with every hook: %q", said)
+	}
+	if got, _ := os.ReadFile(filepath.Join(home, now.file)); string(got) != string(raw) {
+		t.Error("an install with every hook had its file written")
+	}
+	if _, noted := hooksWritten(home, "qwen"); !noted {
+		t.Error("an install with every hook was not noted")
+	}
+}
+
+// An entry taken out because its agent is too old for it (not by the
+// person) is written again when the agent has the event.
+func TestAHookTakenOutForAnOldAgentComesBackWithANewOne(t *testing.T) {
+	now := *targetNamed(t, "qwen").hooks
+	home := t.TempDir()
+	full := now
+	full.version = "0.26.9"
+	if err := applyHooks(&full, home, "/usr/local/bin/reminal", false); err != nil {
+		t.Fatal(err)
+	}
+	var all []string
+	for _, ev := range now.events {
+		all = append(all, ev.Event)
+	}
+	setHooksWritten(home, "qwen", all)
+	healHooks(home, func(bin string) string {
+		if bin == "qwen" {
+			return "0.14.3"
+		}
+		return ""
+	})
+	if ownHookWritten(&now, home, "StopFailure") {
+		t.Fatal("the entry was not taken out for a Qwen Code too old for it")
+	}
+	if said := healAddedHooks(home, func(string) string { return "0.14.3" }); len(said) != 0 {
+		t.Errorf("written for a Qwen Code too old for it: %q", said)
+	}
+	if said := healAddedHooks(home, func(string) string { return "0.26.9" }); len(said) != 1 || !ownHookWritten(&now, home, "StopFailure") {
+		t.Errorf("not written again for a Qwen Code that has the event: %q", said)
+	}
+}
+
+// integrate notes what it writes, and a remove drops the note.
+func TestIntegrateNotesTheHooksItWrites(t *testing.T) {
+	home := integrateRig(t, 200)
+	runIntegrateRig(t, "--yes")
+	wrote, noted := hooksWritten(home, "gemini")
+	if !noted || !wrote["Stop"] && len(wrote) == 0 {
+		t.Fatalf("after integrate the note for an agent set up holds %v (noted %v)", wrote, noted)
+	}
+	for _, ev := range targetNamed(t, "gemini").hooks.events {
+		if ev.MinVersion == "" && !wrote[ev.Event] {
+			t.Errorf("%s was written and is not in the note", ev.Event)
+		}
+	}
+	runIntegrateRig(t, "--remove", "--yes")
+	if _, noted := hooksWritten(home, "gemini"); noted {
+		t.Error("the note is kept after a remove")
+	}
+}

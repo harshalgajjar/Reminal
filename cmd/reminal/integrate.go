@@ -936,6 +936,18 @@ func runIntegrate(args []string) error {
 				spec.version = agentVersion(p.target.Bin)
 			}
 			hookErr = applyHooks(&spec, home, exe, remove)
+			if hookErr == nil {
+				// What was written is kept, for the heal (hooks_heal.go).
+				var wrote []string
+				if !remove {
+					for _, ev := range spec.events {
+						if hookEventFits(ev, spec.version) {
+							wrote = append(wrote, ev.Event)
+						}
+					}
+				}
+				setHooksWritten(home, p.target.Bin, wrote)
+			}
 		}
 		if p.target.plugin != nil {
 			hookErr = applyPlugin(p.target.plugin, home, exe, remove)

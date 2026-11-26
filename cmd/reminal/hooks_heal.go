@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 
 	"reminal/internal/atomicfile"
@@ -126,7 +127,13 @@ func healHooks(home string, version func(bin string) string) []string {
 				continue
 			}
 			path := filepath.Join(home, t.hooks.file)
-			if removed, err := removeOwnHookFile(path, t.hooks.key, ev.Event); err != nil {
+			removed, err := removeOwnHookFile(path, t.hooks.key, ev.Event)
+			if err == nil && removed {
+				// Taken out for its agent's version, not by the person: to
+				// be written again when the agent has the event.
+				forgetHookWritten(home, t.Bin, ev.Event)
+			}
+			if err != nil {
 				said = append(said, fmt.Sprintf("reminal could not remove its %s hook from %s: %v", ev.Event, tildePath(home, path), err))
 			} else if removed {
 				line := fmt.Sprintf("reminal removed its %s hook: %s %s is older than %s. Start %s again to use reminal's hooks", ev.Event, t.Bin, versionRe.FindString(have), ev.MinVersion, t.Bin)
@@ -559,6 +566,15 @@ func (p *jsonSpan) str() (string, error) {
 // is left alone; an event its agent is too old for, or whose agent's
 // version was not read, is not written; nothing but the missing entries is
 // added, and with none missing the file is not written at all.
+//
+// An entry the person took out stays out. reminal keeps, in its own folder
+// (~/.reminal/hooks-written.json, never the agent's file), which events it
+// has written for each agent: integrate and this heal both note them. Only
+// an event that is not in that note is added, so one that was written and
+// is gone from the file was taken out by the person, and is left out; a
+// run of `reminal integrate` writes them all again. An install from before
+// the note was kept has none: the events its file holds are taken as the
+// ones written, the others as new to it and added, once.
 
 // ownHookCalls is reminal as its own entries in spec's file name it,
 // quoted as they are ("" when the file holds none of them).
@@ -631,15 +647,24 @@ func healAddedHooks(home string, version func(bin string) string) []string {
 				break
 			}
 		}
+		wrote, noted := hooksWritten(home, t.Bin)
 		var missing []hookEvent
-		var names []string
+		var names, there []string
 		for _, ev := range t.hooks.events {
-			if hookEventFits(ev, have) && !ownHookWritten(t.hooks, home, ev.Event) {
-				missing = append(missing, ev)
-				names = append(names, ev.Event)
+			if ownHookWritten(t.hooks, home, ev.Event) {
+				there = append(there, ev.Event)
+				continue
 			}
+			if !hookEventFits(ev, have) || (noted && wrote[ev.Event]) {
+				continue // too old for it, or written before and taken out
+			}
+			missing = append(missing, ev)
+			names = append(names, ev.Event)
 		}
 		if len(missing) == 0 {
+			// The entries there are noted all the same (an install from
+			// before the note was kept).
+			addHooksWritten(home, t.Bin, there)
 			continue
 		}
 		add := *t.hooks
@@ -650,7 +675,95 @@ func healAddedHooks(home string, version func(bin string) string) []string {
 			said = append(said, fmt.Sprintf("reminal could not add its %s hook for %s: %v", strings.Join(names, ", "), t.Name, err))
 			continue
 		}
-		said = append(said, fmt.Sprintf("reminal added its %s hook for %s", strings.Join(names, ", "), t.Name))
+		addHooksWritten(home, t.Bin, append(there, names...))
+		said = append(said, fmt.Sprintf("reminal added its %s hook for %s: it takes effect the next time %s starts", strings.Join(names, ", "), t.Name, t.Name))
 	}
 	return said
+}
+
+// hooksWrittenPath is reminal's note of the hook events it has written, by
+// agent.
+func hooksWrittenPath(home string) string {
+	return filepath.Join(home, ".reminal", "hooks-written.json")
+}
+
+func readHooksWritten(home string) map[string][]string {
+	all := map[string][]string{}
+	if b, err := os.ReadFile(hooksWrittenPath(home)); err == nil && len(b) < 64<<10 {
+		_ = json.Unmarshal(b, &all)
+	}
+	return all
+}
+
+func writeHooksWritten(home string, all map[string][]string) {
+	b, err := json.MarshalIndent(all, "", "  ")
+	if err != nil {
+		return
+	}
+	if os.MkdirAll(filepath.Dir(hooksWrittenPath(home)), 0o700) == nil {
+		_ = atomicfile.Write(hooksWrittenPath(home), append(b, '\n'), 0o600)
+	}
+}
+
+// hooksWritten is the events noted as written for bin, and whether any note
+// is kept for it.
+func hooksWritten(home, bin string) (map[string]bool, bool) {
+	list, ok := readHooksWritten(home)[bin]
+	set := map[string]bool{}
+	for _, ev := range list {
+		set[ev] = true
+	}
+	return set, ok
+}
+
+// setHooksWritten notes events as the ones written for bin (integrate, which
+// writes them all); with none, the note for bin is dropped (a remove).
+func setHooksWritten(home, bin string, events []string) {
+	all := readHooksWritten(home)
+	if len(events) == 0 {
+		if _, ok := all[bin]; !ok {
+			return
+		}
+		delete(all, bin)
+	} else {
+		sorted := append([]string(nil), events...)
+		sort.Strings(sorted)
+		if reflect.DeepEqual(all[bin], sorted) {
+			return
+		}
+		all[bin] = sorted
+	}
+	writeHooksWritten(home, all)
+}
+
+// addHooksWritten notes events as written for bin, beside those noted.
+func addHooksWritten(home, bin string, events []string) {
+	have, _ := hooksWritten(home, bin)
+	for _, ev := range events {
+		have[ev] = true
+	}
+	var list []string
+	for ev := range have {
+		list = append(list, ev)
+	}
+	if len(list) > 0 {
+		setHooksWritten(home, bin, list)
+	}
+}
+
+// forgetHookWritten takes event out of the note for bin.
+func forgetHookWritten(home, bin, event string) {
+	have, ok := hooksWritten(home, bin)
+	if !ok || !have[event] {
+		return
+	}
+	delete(have, event)
+	var list []string
+	for ev := range have {
+		list = append(list, ev)
+	}
+	all := readHooksWritten(home)
+	sort.Strings(list)
+	all[bin] = list
+	writeHooksWritten(home, all)
 }
