@@ -56,6 +56,23 @@ type hooksNote struct {
 	Held  map[string]string `json:"held,omitempty"`
 }
 
+// UnmarshalJSON reads a note as reminal writes it, and as a build of
+// before wrote it: the events alone, as a list.
+func (n *hooksNote) UnmarshalJSON(b []byte) error {
+	var list []string
+	if json.Unmarshal(b, &list) == nil {
+		*n = hooksNote{Wrote: list}
+		return nil
+	}
+	type plain hooksNote
+	var v plain
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*n = hooksNote(v)
+	return nil
+}
+
 func (n hooksNote) wrote(event string) bool {
 	for _, ev := range n.Wrote {
 		if ev == event {
@@ -104,13 +121,22 @@ func writeHooksNotes(home string, all map[string]hooksNote) {
 }
 
 // changeHooksNote reads the note, lets change alter bin's part, and writes
-// it back when it differs. A note that cannot be read is left alone.
-func changeHooksNote(home, bin string, change func(n *hooksNote) (keep bool)) {
+// it back when it differs. A note that cannot be read is left alone, unless
+// anew: then it is begun again from nothing (integrate, which writes every
+// event, so what the old note said of this agent is not needed; without
+// that an unreadable note would stop the heal for good).
+func changeHooksNote(home, bin string, anew bool, change func(n *hooksNote) (keep bool)) {
 	all, err := readHooksNotes(home)
 	if err != nil {
-		return
+		if !anew {
+			return
+		}
+		all = map[string]hooksNote{}
 	}
 	was, _ := json.Marshal(all)
+	if err != nil {
+		was = nil // whatever is there is written over
+	}
 	n := all[bin]
 	if change(&n) {
 		sort.Strings(n.Wrote)
@@ -130,7 +156,7 @@ func changeHooksNote(home, bin string, change func(n *hooksNote) (keep bool)) {
 // writes them all, whatever was held or taken out); with none, the note for
 // bin is dropped (a remove).
 func setHooksWritten(home, bin string, events []string) {
-	changeHooksNote(home, bin, func(n *hooksNote) bool {
+	changeHooksNote(home, bin, true, func(n *hooksNote) bool {
 		*n = hooksNote{Wrote: append([]string(nil), events...)}
 		return len(events) > 0
 	})
@@ -142,7 +168,7 @@ func addHooksWritten(home, bin string, events []string) {
 	if len(events) == 0 {
 		return
 	}
-	changeHooksNote(home, bin, func(n *hooksNote) bool {
+	changeHooksNote(home, bin, false, func(n *hooksNote) bool {
 		for _, ev := range events {
 			if !n.wrote(ev) {
 				n.Wrote = append(n.Wrote, ev)
@@ -157,7 +183,7 @@ func addHooksWritten(home, bin string, events []string) {
 // at version, is too old for it: not the person's doing, and not to be
 // written again until a session's agent is new enough.
 func holdHookWritten(home, bin, event, version string) {
-	changeHooksNote(home, bin, func(n *hooksNote) bool {
+	changeHooksNote(home, bin, false, func(n *hooksNote) bool {
 		kept := n.Wrote[:0:0]
 		for _, ev := range n.Wrote {
 			if ev != event {

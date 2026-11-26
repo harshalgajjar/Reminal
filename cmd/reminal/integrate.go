@@ -951,7 +951,9 @@ func runIntegrate(args []string) error {
 						}
 					}
 				}
-				setHooksWritten(home, p.target.Bin, wrote)
+				// Under the heal's lock: a reminal starting meanwhile reads
+				// and writes the same note.
+				withHooksHealLock(func() { setHooksWritten(home, p.target.Bin, wrote) })
 			}
 		}
 		if p.target.plugin != nil {

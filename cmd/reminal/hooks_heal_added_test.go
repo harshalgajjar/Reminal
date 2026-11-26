@@ -500,3 +500,69 @@ func TestIntegrateNotesTheHooksItWrites(t *testing.T) {
 		t.Error("the note is kept after a remove")
 	}
 }
+
+// A note that cannot be read does not stop the heal for good: integrate,
+// which writes every event, begins it again, and the heal works after.
+// And a note a build of before wrote (the events alone, as a list) is read.
+func TestIntegrateBeginsAnUnreadableNoteAgain(t *testing.T) {
+	now := *targetNamed(t, "qwen").hooks
+	old := specBefore(now, "SessionStart")
+	home := t.TempDir()
+	if err := applyHooks(&old, home, healExe, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".reminal"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksWrittenPath(home), []byte(`{"qwen": {"wrote": ["Stop"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if said := atStart(home); len(said) != 0 {
+		t.Fatalf("with a note that cannot be read: %q", said)
+	}
+	// integrate for another agent: the note is begun again, with that one.
+	setHooksWritten(home, "claude", []string{"Stop", "UserPromptSubmit"})
+	notes, err := readHooksNotes(home)
+	if err != nil || len(notes["claude"].Wrote) != 2 {
+		t.Fatalf("after integrate the note reads %+v (%v)", notes, err)
+	}
+	// And the heal works again: Qwen Code, with no note of its own now, has
+	// what its file lacks added.
+	if said := atStart(home); len(said) != 1 || !ownHookWritten(&now, home, "SessionStart") {
+		t.Errorf("after integrate began the note again, the heal: %q", said)
+	}
+
+	// The form of a build of before.
+	home = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".reminal"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hooksWrittenPath(home), []byte(`{"qwen": ["Notification", "Stop", "UserPromptSubmit"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	notes, err = readHooksNotes(home)
+	if err != nil || !notes["qwen"].wrote("Notification") || len(notes["qwen"].Wrote) != 3 {
+		t.Fatalf("a note of a build of before reads %+v (%v)", notes, err)
+	}
+	// Read as written, so an entry of it gone from the file stays out.
+	if err := applyHooks(&old, home, healExe, false); err != nil {
+		t.Fatal(err)
+	}
+	dropOwn(t, &now, home, "Notification")
+	if said := atStart(home); len(said) != 1 || strings.Contains(said[0], "Notification") || ownHookWritten(&now, home, "Notification") {
+		t.Errorf("with a note of a build of before: %q", said)
+	}
+}
+
+// integrate writes its note under the heal's lock.
+func TestIntegrateNotesUnderTheHealsLock(t *testing.T) {
+	integrateRig(t, 200)
+	old := withHooksHealLock
+	t.Cleanup(func() { withHooksHealLock = old })
+	held := 0
+	withHooksHealLock = func(fn func()) { held++; fn() }
+	runIntegrateRig(t, "--yes")
+	if held == 0 {
+		t.Error("integrate wrote its note without the heal's lock")
+	}
+}
