@@ -232,6 +232,7 @@ type Agent struct {
 
 	writeMu sync.Mutex // serializes WS writes; safe across sender/reader goroutines
 	seal    sealState  // sealed session frames (sealedframes.go)
+	termIn  termOrder  // numbered terminal input typed (termchannel.go)
 
 	// PIN-handshake allowance. Each pake_init we answer is one online PIN
 	// guess (CPace, crypto/cpace.go: a handshake tests one candidate), so a
@@ -295,6 +296,7 @@ type Agent struct {
 	// metaMu guards title + lastActivity + cwd, which the pumpPTY and
 	// meta-flush goroutines write while activeRecord reads them.
 	metaMu       sync.Mutex
+	relayPlace   protocol.RelayPlace // where the relay serves this session, as it last said (authenticate)
 	title        string
 	lastActivity time.Time
 	// bracketedPaste is whether the foreground program asked for pasted text
@@ -1594,6 +1596,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	attnAgents := a.attnAgents
 	attnOther := maps.Clone(a.attnOther)
 	attnScheduled := a.attnScheduled
+	relayPlace := a.relayPlace
 	var resetsAt time.Time
 	if attn == harnessLimited {
 		resetsAt = a.limit.resetsAt
@@ -1614,6 +1617,8 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		ShellIdent:   a.shellIdent(),
 		Headless:     a.headless,
 		Viewers:      viewers,
+		RelayAt:      relayPlace.At,
+		RelayEdge:    relayPlace.Edge,
 		Away:         a.sight.awayOf(viewers),
 		Name:         name,
 		Cwd:          cwd,
@@ -3354,6 +3359,21 @@ func (a *Agent) authenticate(conn *websocket.Conn) error {
 	// Migration succeeded — the relay now holds our token. Stop sending pin_hash
 	// so it stops crossing the wire on subsequent reconnects.
 	a.sendPinHash = false
+	// Where the relay serves this session, when it says: kept for the
+	// session's record (reminal info).
+	place := protocol.RelayPlace{}
+	if p := msg.Relay.Clean(); p != nil {
+		place = *p
+	}
+	a.metaMu.Lock()
+	changed := a.relayPlace != place
+	a.relayPlace = place
+	a.metaMu.Unlock()
+	if changed {
+		// Into the record now: nothing else writes it until the session
+		// next has something to note.
+		a.recordActive(int(a.curViewers.Load()))
+	}
 	return nil
 }
 
@@ -3439,6 +3459,14 @@ func (a *Agent) runReader(conn *websocket.Conn, cursorCh chan uint64) error {
 		case protocol.TypeDirIntegrate:
 			a.goGuarded("dir integrate", func() { a.handleDirIntegrate(conn, msg.Data) })
 		case protocol.TypeData:
+			// Numbered by its viewer: it is on the direct channel too, and
+			// whichever copy comes first is typed (termchannel.go).
+			if msg.Seq > 0 && msg.Stream != 0 {
+				if err := a.typeTermInput(msg.Stream, msg.Seq, msg.Data, false); err != nil {
+					return err
+				}
+				continue
+			}
 			data, err := a.box.Decrypt(msg.Data)
 			if err != nil {
 				continue
@@ -3803,6 +3831,8 @@ func (a *Agent) runSender(conn *websocket.Conn, cursorCh <-chan uint64, stop <-c
 			}); err != nil {
 				return err
 			}
+			// And on the direct channel, where a viewer has one.
+			a.sendTerm(e.Seq, e.Data)
 			cursor = e.Seq + 1
 		}
 

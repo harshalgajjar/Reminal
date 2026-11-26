@@ -2715,6 +2715,7 @@
         return g.length ? Math.round(g[Math.floor(g.length / 2)]) : 0; })(),
       queued: (p.renderQ || []).length,
       fps: (p.frameTimes || []).length, seq: p.lastSeq || 0,
+      bytes: p.frameBytes || 0, slim: p.frameSlim || 0, was: p.frameWas || 0,
     }));
 
     // Pointer-ownership guard, same rule as scroll routing below: an app only
@@ -6389,6 +6390,13 @@
         if (!authed || !cryptoKey) return;
         if (msg.type === 'data') {
           msg = { type: 'data', data: await encrypt(cryptoKey, Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))) };
+          // Numbered when the term channel is open, and on it too: the machine
+          // types whichever copy comes first (see rtcTerm).
+          const { n, direct } = termNumber();
+          if (n) {
+            msg.seq = n;
+            if (direct) { try { rtcTerm.send(JSON.stringify({ s: termStream, n, data: msg.data })); } catch (_) {} }
+          }
         } else {
           const payload = JSON.stringify({ cols: msg.cols, rows: msg.rows, viewer: viewerId, ...(msg.away ? { away: true } : {}) });
           msg = { type: 'resize', data: await encrypt(cryptoKey, payload) };
@@ -7211,7 +7219,7 @@
       snapAsm = null;
       snapPartsOff = true;
       // The plain snapshot instead: a resume from nothing, without parts.
-      lastSeq = 0;
+      lastSeq = 0; wsDataStarted = 0; termSeq = 0;
       awaitingSnapshotUntil = Date.now() + 15000;
       sendResume();
     }
@@ -7570,7 +7578,7 @@
         // A remembered screen of the session being left is not this one's.
         staleScreen = false;
         document.getElementById('terminal').classList.remove('stale');
-        lastSeq = 0;
+        lastSeq = 0; wsDataStarted = 0; termSeq = 0;
         sessionId = s;
         term.reset();
         showCachedScreen(s);
@@ -7840,6 +7848,9 @@
       switch (msg.type) {
         case 'auth_ok':
           authed = true;
+          // Where this page's connection came into the hosted relay's
+          // network, when it says (a location's code): for the info box.
+          relayEdge = (msg.relay && /^[A-Z]{3}$/.test(String(msg.relay.edge || ''))) ? msg.relay.edge : '';
           // The relay is talking to us now; the dial watchdog has done its job.
           cancelDial();
           // Auth succeeded — remember the PIN for this tab so a refresh
@@ -8243,8 +8254,13 @@
           // reset lastSeq before processing.
           let staleTagged = false;
           if (typeof msg.seq === 'number') {
+            // The relay's copy of an entry the term channel already brought:
+            // dropped here, before it can be read as a restart (the channel
+            // may be far ahead of the relay, and "far behind" is how a
+            // restart is told).
+            if (termSeq && msg.seq <= termSeq && msg.seq !== 1 && Date.now() >= awaitingSnapshotUntil) break;
             if (msg.seq === 1 || msg.seq + 32 < lastSeq) {
-              lastSeq = 0;
+              lastSeq = 0; wsDataStarted = 0; termSeq = 0;
             } else if (msg.seq <= lastSeq) {
               // A snapshot is tagged with the seq of the newest entry it
               // covers, so caught-up viewers drop it. But a viewer that just
@@ -8259,6 +8275,9 @@
               staleTagged = true;
             }
           }
+          // The relay's copy of this entry is being opened from here: the
+          // term channel's copy of it is no longer the first (onTermData).
+          if (typeof msg.seq === 'number' && msg.seq > wsDataStarted) wsDataStarted = msg.seq;
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             // A snapshot in parts is being gathered: what comes meanwhile
@@ -11004,6 +11023,16 @@
       if (!lastDCSeenAt || performance.now() - lastDCSeenAt > TRANSPORT_CLAIM_MS) lastFrameVia = 'ws';
       if (before !== lastFrameVia) for (const p of panes.values()) requestPaneQuality(p);
     }
+    // pictureRow is the last picture's size for a pane's (i) popover, and,
+    // when the host made it lighter for a slow relay link, by which step and
+    // from what size. Nothing for video, or before a picture has come.
+    function pictureRow(p) {
+      if (!p.frameBytes || p.capSrc === 'h264') return '';
+      const kb = (n) => (n >= 10240 ? Math.round(n / 1024) : (n / 1024).toFixed(1)) + ' KB';
+      let v = kb(p.frameBytes);
+      if (p.frameSlim) v += p.frameWas ? ' · lighter, step ' + p.frameSlim + ' (was ' + kb(p.frameWas) + ')' : ' · step ' + p.frameSlim + ' asked, no smaller';
+      return '<div class="row"><span class="k">Picture</span><span class="v">' + v + '</span></div>';
+    }
     // Describe the current transport for a pane's (i) popover.
     function paneInfoHtml(p) {
       const webrtc = lastFrameVia === 'webrtc';
@@ -11050,7 +11079,9 @@
         ? '<div class="row"><span class="k">Video</span><span class="v warn">' + gaps + ' gaps · ' + derrs + ' decode errors</span></div>'
         : '';
       return '<div class="row"><span class="k">Transport</span><span class="v ' + cls + '">' + transport + '</span></div>'
+        + (relayEdge ? '<div class="row"><span class="k">Relay entry</span><span class="v">' + relayEdge + '</span></div>' : '')
         + '<div class="row"><span class="k">Capture</span><span class="v">' + cap + '</span></div>'
+        + pictureRow(p)
         + health
         + '<div class="row"><span class="k">Encryption</span><span class="v">' + enc + '</span></div>'
         + '<div class="row"><span class="k">Resolution</span><span class="v">' + res + '</span></div>'
@@ -12121,9 +12152,25 @@
     // Durable Object, and that hop was the single biggest reason typing and
     // clicking felt remote. Falls back to WS whenever it isn't open.
     let rtcInput = null;
+    // The "term" channel: the terminal itself, as well as on the relay. The
+    // terminal went through the relay alone, both ways, also when this
+    // device and the machine were on one network: every key and its echo
+    // took the round trip to the relay. With this channel open, output comes
+    // on it too (the copy that comes first is drawn, the other dropped by its
+    // number: onTermData) and what is typed goes on it too, numbered (termN,
+    // per handshake stream) so the machine types the copy that comes first.
+    // The relay's copy is never left out: nothing is lost if the channel is
+    // slow or goes.
+    let rtcTerm = null;
+    let termN = 0;            // the last number given to typed input
+    let termStream = 0;       // the handshake stream termN counts on
+    let termLive = false;     // typed input is numbered, and from the second piece on sent on the channel too
+    let wsDataStarted = 0;    // the newest output entry the relay's copy has begun to open
+    let termSeq = 0;          // the newest output entry drawn from the term channel
     let rtcRetryAt = 0;  // don't (re)attempt P2P before this time (ms epoch)
     let rtcHelloAt = 0;  // when the current webrtc_hello was sent (to time out silence)
     let rtcRelayed = false; // is the P2P path going through a TURN relay (vs direct)?
+    let relayEdge = '';     // the hosted relay's location this page's connection came in at ('' = not said)
     let lastCapAt = 0;      // last capability announcement (relay-only viewers)
     // Can this browser hardware-decode H.264 via WebCodecs? Declared in the
     // webrtc_hello: the agent then sends compressed video AUs over the channel
@@ -12150,8 +12197,44 @@
       try { if (rtcDc) rtcDc.close(); } catch (_) {}
       try { if (rtcCtl) rtcCtl.close(); } catch (_) {}
       try { if (rtcInput) rtcInput.close(); } catch (_) {}
+      try { if (rtcTerm) rtcTerm.close(); } catch (_) {}
       try { if (rtcPc) rtcPc.close(); } catch (_) {}
-      rtcPc = null; rtcDc = null; rtcCtl = null; rtcInput = null; rtcPeerId = null; rtcPendingIce = []; rtcRelayed = false;
+      rtcPc = null; rtcDc = null; rtcCtl = null; rtcInput = null; rtcTerm = null; termLive = false; rtcPeerId = null; rtcPendingIce = []; rtcRelayed = false;
+    }
+    // onTermData takes one output entry off the term channel: {seq, data}.
+    // Drawn only when it is the entry right after the last one drawn, and the
+    // relay's copy of it is not already being opened: then it is the first
+    // copy, and the relay's is dropped by its number when it comes. Anything
+    // else (a gap, a screen still owed, a snapshot being gathered) is left
+    // for the relay's copy, which always comes. Nothing here waits, so what
+    // the channel brings is drawn in the order it came.
+    function onTermData(o) {
+      if (!o || typeof o.seq !== 'number' || typeof o.data !== 'string') return;
+      if (!cryptoKey || snapAsm || awaitingSnapshotUntil || !lastSeq) return;
+      if (o.seq !== lastSeq + 1 || o.seq <= wsDataStarted) return;
+      let bytes;
+      try { bytes = base64ToU8(o.data); } catch (_) { return; }
+      lastSeq = termSeq = o.seq;
+      if (snapLive) keepForSnapshot(o.seq, bytes);
+      enqueueData(bytes);
+      bytesReceived += bytes.byteLength;
+    }
+    // termNumber gives typed input its number when the term channel is
+    // open, and says whether this piece goes on the channel as well: {n: 0}
+    // when the channel is not open (the relay alone, unnumbered). The first
+    // numbered piece after the channel opens goes on the relay ALONE: what
+    // was typed just before went there unnumbered and may still be on its
+    // way, and on the relay it stays behind that. The machine types a
+    // channel copy only when every number before it has been typed, so no
+    // later piece can pass it either. Nothing here depends on timing.
+    // Counted per handshake stream: a new handshake starts at 1.
+    function termNumber() {
+      const open = !!(rtcTerm && rtcTerm.readyState === 'open' && sealState && sealState.stream);
+      if (!open) { termLive = false; return { n: 0, direct: false }; }
+      if (termStream !== sealState.stream) { termStream = sealState.stream; termN = 0; termLive = false; }
+      const direct = termLive;
+      termLive = true;
+      return { n: ++termN, direct };
     }
     function rtcCtlOpen() { return !!(rtcCtl && rtcCtl.readyState === 'open'); }
     // Inspect the live ICE candidate pair to tell a direct P2P path from a TURN
@@ -12196,7 +12279,9 @@
       // than assumed because the host is the offerer — an older viewer must
       // keep getting exactly one reliable ordered channel, or it would bind
       // its frame handler to whichever channel happened to open last.
-      try { await sendWin('webrtc_hello', { peer: rtcPeerId, viewer: viewerId, h264: h264Decode, v2: true, panes: panes.size }); } catch (_) { rtcPeerId = null; }
+      // term asks for the terminal's channel too: declared for the same
+      // reason, a viewer from before it would take it for the frame channel.
+      try { await sendWin('webrtc_hello', { peer: rtcPeerId, viewer: viewerId, h264: h264Decode, v2: true, term: true, panes: panes.size }); } catch (_) { rtcPeerId = null; }
     }
     // Capability announcement for viewers that will never open a DataChannel
     // (P2P disabled, or blocked by the network). The agent tracks decode
@@ -12265,6 +12350,15 @@
           rtcInput = ch;
           ch.onopen = () => { if (DEBUG) dbg('rtc input channel open'); };
           ch.onclose = () => { if (rtcInput === ch) rtcInput = null; };
+          return;
+        }
+        if (ch.label === 'term') {
+          rtcTerm = ch;
+          ch.onmessage = (ev) => {
+            try { onTermData(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data))); } catch (_) {}
+          };
+          ch.onopen = () => { if (DEBUG) dbg('rtc term channel open'); };
+          ch.onclose = () => { if (rtcTerm === ch) { rtcTerm = null; termLive = false; } };
           return;
         }
         rtcDc = ch;
@@ -12536,6 +12630,13 @@
       p.lastAliveAt = p.lastFrameAt; // frames count as liveness too
       noteTransport(viaDC); // for the (i) transport popover
       if (payload.cap) { p.capSrc = payload.cap; p.capErr = payload.cap_err || null; }
+      // A picture's size as it came, and what the host did to it for a slow
+      // relay link (its step, and its size before): for the (i) popover.
+      if (typeof payload.img === 'string') {
+        p.frameBytes = Math.floor(payload.img.length * 3 / 4);
+        p.frameSlim = Number.isInteger(payload.slim) ? payload.slim : 0;
+        p.frameWas = Number.isInteger(payload.was) ? payload.was : 0;
+      }
       (p.frameTimes || (p.frameTimes = [])).push(p.lastFrameAt); // rolling 1s window → fps
       while (p.frameTimes.length && p.lastFrameAt - p.frameTimes[0] > 1000) p.frameTimes.shift();
       updatePaneOverlay(p);

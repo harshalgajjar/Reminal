@@ -1714,6 +1714,7 @@ type winStream struct {
 	// confirmation. sentSinceAck counts ack-expected frames sent since the last
 	// consumed ack — the demote evidence (see dispatch).
 	seq, acked   uint64
+	slim         relaySlim // lighter pictures for a slow relay link (windowslim.go)
 	lastAck      time.Time
 	gotAnyAck    bool
 	sentSinceAck int
@@ -2126,6 +2127,7 @@ func (s *winStream) consumeAck(v uint64) {
 		s.acked = v
 	}
 	s.lastAck, s.gotAnyAck, s.sentSinceAck = time.Now(), true, 0
+	s.slim.acked(v, s.lastAck)
 }
 
 // drainAcks consumes every ack that arrived since the last iteration, without
@@ -2143,28 +2145,56 @@ func (s *winStream) drainAcks() {
 	}
 }
 
+// ackWaitSlowLink is how long a frame's ack is waited for over the relay from
+// a viewer that does ack, before the frame is taken as delivered. The relay
+// carries a session's terminal on the same connection, in order: a frame
+// sent while the one before is still on its way puts everything typed and
+// printed behind both. A late ack from such a viewer is a slow link, not a
+// lost ack, and ackWaitTimeout let the next frame go every 800 ms all the
+// same, so on a link slower than the frames they piled up and an echo took
+// over a second. Still a bound: an ack that is lost holds the pane this long
+// and no longer.
+const ackWaitSlowLink = 4 * time.Second
+
+// ackGate is how many frames a stream may have sent and not yet heard back
+// about, and how long it waits for word before taking them as delivered.
+// Over the relay the pictures (not h264) go one at a time, and a viewer that
+// acks is waited for (ackWaitSlowLink); a direct channel, which carries no
+// terminal, keeps its deeper pipeline and the short wait.
+func ackGate(h264, wsVideo, relay, acks bool) (limit uint64, wait time.Duration) {
+	limit, wait = uint64(maxFramesInFlight), ackWaitTimeout
+	if h264 {
+		// The relay acks once per 200ms batch, so more than one batch in
+		// flight is just click-to-photon delay. P2P keeps the deeper
+		// pipeline — those frames never touch the billed path.
+		if wsVideo {
+			limit = 6
+		} else {
+			limit = maxFramesInFlightH264
+		}
+	} else if relay {
+		limit = 1
+	}
+	if relay && acks {
+		wait = ackWaitSlowLink
+	}
+	return limit, wait
+}
+
 // waitCapacity blocks while maxFramesInFlight frames are unacknowledged, so we
 // never outrun the viewer by more than that — latency stays bounded instead of
 // accumulating on a slow link. Returns false when the stream should end: stop
 // closed, or a viewer that used to ack has been silent past
 // streamAckIdleTimeout (it vanished uncleanly; don't stream to nobody).
 func (s *winStream) waitCapacity() bool {
-	limit := uint64(maxFramesInFlight)
-	if s.codec == "h264" {
-		// The relay acks once per 200ms batch, so more than one batch in
-		// flight is just click-to-photon delay. P2P keeps the deeper
-		// pipeline — those frames never touch the billed path.
-		if s.wsVideo {
-			limit = 6
-		} else {
-			limit = maxFramesInFlightH264
-		}
-	}
+	confirmed, _, _ := s.a.rtcSinks()
+	relay := wsSinkNeeded(s.a.framesWantedBy(), len(confirmed))
+	limit, wait := ackGate(s.codec == "h264", s.wsVideo, relay, s.gotAnyAck)
 	for s.seq-s.acked >= limit {
 		select {
 		case v := <-s.ack:
 			s.consumeAck(v)
-		case <-time.After(ackWaitTimeout):
+		case <-time.After(wait):
 			if s.gotAnyAck && time.Since(s.lastAck) > streamAckIdleTimeout {
 				return false
 			}
@@ -2804,7 +2834,12 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 		Seq    uint64 `json:"seq"`
 		Cap    string `json:"cap,omitempty"`     // capture source, shown in the (i) popover
 		CapErr string `json:"cap_err,omitempty"` // why the native path is unavailable
-		Img    string `json:"img"`               // base64 JPEG
+		// The step a relay picture was made lighter by (windowslim.go) and
+		// the bytes it was before, for the (i) popover: Slim alone is a step
+		// asked for that did not make this picture smaller.
+		Slim int    `json:"slim,omitempty"`
+		Was  int    `json:"was,omitempty"`
+		Img  string `json:"img"` // base64 JPEG
 		// A changed band (winbands.go): img is the rectangle bx,by,bw×bh of
 		// an fw×fh picture, to draw over the one frame base left.
 		Base uint64 `json:"base,omitempty"`
@@ -2814,7 +2849,20 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 		BH   int    `json:"bh,omitempty"`
 		FW   int    `json:"fw,omitempty"`
 		FH   int    `json:"fh,omitempty"`
-	}{ID: s.w.ID, W: s.w.W, H: s.w.H, Seq: s.seq + 1, Cap: capSrc, CapErr: capErr, Img: base64.StdEncoding.EncodeToString(img)}
+	}{ID: s.w.ID, W: s.w.W, H: s.w.H, Seq: s.seq + 1, Cap: capSrc, CapErr: capErr}
+	// On the relay alone, and its link slow: the picture goes lighter
+	// (windowslim.go).
+	relayOnly := sinks.ws && len(sinks.confirmed) == 0 && len(sinks.probe) == 0
+	if relayOnly {
+		was := len(img)
+		// Narrower too where every picture is a whole one (no bands).
+		img = slimJPEG(img, s.slim.level, s.bands == nil)
+		frame.Slim = s.slim.level
+		if len(img) < was {
+			frame.Was = was
+		}
+	}
+	frame.Img = base64.StdEncoding.EncodeToString(img)
 	if band != nil {
 		frame.Base = s.bands.sentSeq
 		frame.BX, frame.BY, frame.BW, frame.BH = band.Min.X, band.Min.Y, band.Dx(), band.Dy()
@@ -2842,6 +2890,9 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 	}
 	if sinks.ws {
 		s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
+		if relayOnly {
+			s.slim.sent(s.seq, time.Now(), len(img))
+		}
 		s.wsShipped(time.Now())
 	}
 	if len(sinks.probe) > 0 {

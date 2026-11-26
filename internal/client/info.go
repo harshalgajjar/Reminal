@@ -99,6 +99,9 @@ func printActiveDetails(a *session.Active) {
 	// client reads it to auto-fill the PIN. Ideal for tapping on a phone.
 	fmt.Fprintf(out, "  Join:     %s#p=%s\n", a.OpenURL, a.PIN)
 	fmt.Fprintf(out, "  Connect:  reminal connect %s %s\n", a.ID, a.PIN)
+	if line := relayPlaceLine(a); line != "" {
+		fmt.Fprintf(out, "  Relay:    %s\n", line)
+	}
 	// Where it's running / what's running — so iterating many sessions tells
 	// you which is which without attaching to each.
 	if a.Cwd != "" {
@@ -196,6 +199,10 @@ func InfoJSON(a *session.Active) any {
 		Scheduled *session.Scheduled `json:"scheduled,omitempty"`
 		Kind      string             `json:"kind,omitempty"`
 		Port      int                `json:"port,omitempty"`
+		// Where the hosted relay serves it, and where this machine reaches
+		// the relay (session.Active.RelayAt).
+		RelayAt   string `json:"relay_at,omitempty"`
+		RelayEdge string `json:"relay_edge,omitempty"`
 	}{
 		ID:        a.ID,
 		Name:      a.Name,
@@ -214,7 +221,28 @@ func InfoJSON(a *session.Active) any {
 		Scheduled: session.CleanScheduled(a.Scheduled),
 		Kind:      kindJSON(a),
 		Port:      a.Port,
+		RelayAt:   a.RelayAt,
+		RelayEdge: a.RelayEdge,
 	}
+}
+
+// relayPlaceLine says where the hosted relay serves a session, for reminal
+// info: the location its relay object runs in and the one this machine's
+// connection comes in at, by the codes the relay names them with. When the
+// two differ everything typed goes by way of the first, which is where the
+// machine was when the session was made. Empty when the relay did not say.
+func relayPlaceLine(a *session.Active) string {
+	switch {
+	case a.RelayAt == "" && a.RelayEdge == "":
+		return ""
+	case a.RelayAt == "":
+		return "this machine reaches it at " + a.RelayEdge
+	case a.RelayEdge == "":
+		return "served at " + a.RelayAt
+	case a.RelayAt == a.RelayEdge:
+		return "served at " + a.RelayAt + ", where this machine reaches it"
+	}
+	return "served at " + a.RelayAt + "; this machine reaches it at " + a.RelayEdge + " (the session was made nearer " + a.RelayAt + ")"
 }
 
 // kindJSON is "port" for a `reminal expose` forward and empty for a shell, so

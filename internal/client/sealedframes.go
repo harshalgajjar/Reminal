@@ -310,7 +310,7 @@ func (a *Agent) openSealed(k *crypto.FrameKeys, msg protocol.Message) (protocol.
 	if first {
 		a.markProvenSource(src)
 	}
-	out := protocol.Message{Type: msg.Inner, Seq: msg.Seq}
+	out := protocol.Message{Type: msg.Inner, Seq: msg.Seq, Stream: msg.Stream}
 	switch kind {
 	case crypto.FrameBoxed:
 		// The handlers decrypt with the session key; hand them what they expect.
