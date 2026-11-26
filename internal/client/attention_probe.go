@@ -1078,8 +1078,12 @@ var attnPromptCues = []string{
 	// approval"), by the footer of its dialog, whose keys only that dialog
 	// lists; and its lettered chooser, by its rows as it letters them. Kiro
 	// has no hooks: the screen is all it says.
-	"y approve · n deny · t trust",
+	// The footer's separator follows the glyphs Kiro is set to draw with:
+	// "·" as it comes, "." in ASCII, "|" in plain.
+	"y approve · n deny · t trust", "y approve . n deny . t trust", "y approve | n deny | t trust",
 	"y allow once · n deny once · t create allow rule · d create deny rule",
+	"y allow once . n deny once . t create allow rule . d create deny rule",
+	"y allow once | n deny once | t create allow rule | d create deny rule",
 	"(a) approve once", "(a) approve all pending", "(x) stop task run",
 }
 

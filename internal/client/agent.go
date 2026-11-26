@@ -296,6 +296,7 @@ type Agent struct {
 	// metaMu guards title + lastActivity + cwd, which the pumpPTY and
 	// meta-flush goroutines write while activeRecord reads them.
 	metaMu       sync.Mutex
+	relayPlace   protocol.RelayPlace // where the relay serves this session, as it last said (authenticate)
 	title        string
 	lastActivity time.Time
 	// bracketedPaste is whether the foreground program asked for pasted text
@@ -1595,6 +1596,7 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 	attnAgents := a.attnAgents
 	attnOther := maps.Clone(a.attnOther)
 	attnScheduled := a.attnScheduled
+	relayPlace := a.relayPlace
 	var resetsAt time.Time
 	if attn == harnessLimited {
 		resetsAt = a.limit.resetsAt
@@ -1615,6 +1617,8 @@ func (a *Agent) activeRecord(viewers int) session.Active {
 		ShellIdent:   a.shellIdent(),
 		Headless:     a.headless,
 		Viewers:      viewers,
+		RelayAt:      relayPlace.At,
+		RelayEdge:    relayPlace.Edge,
 		Away:         a.sight.awayOf(viewers),
 		Name:         name,
 		Cwd:          cwd,
@@ -3355,6 +3359,21 @@ func (a *Agent) authenticate(conn *websocket.Conn) error {
 	// Migration succeeded — the relay now holds our token. Stop sending pin_hash
 	// so it stops crossing the wire on subsequent reconnects.
 	a.sendPinHash = false
+	// Where the relay serves this session, when it says: kept for the
+	// session's record (reminal info).
+	place := protocol.RelayPlace{}
+	if p := msg.Relay.Clean(); p != nil {
+		place = *p
+	}
+	a.metaMu.Lock()
+	changed := a.relayPlace != place
+	a.relayPlace = place
+	a.metaMu.Unlock()
+	if changed {
+		// Into the record now: nothing else writes it until the session
+		// next has something to note.
+		a.recordActive(int(a.curViewers.Load()))
+	}
 	return nil
 }
 

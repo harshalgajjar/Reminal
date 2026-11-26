@@ -457,6 +457,9 @@ type Message struct {
 	Inner  MessageType `json:"inner,omitempty"`
 	Stream uint32      `json:"stream,omitempty"`
 	Ctr    uint64      `json:"ctr,omitempty"`
+	// Relay, on the hosted relay's auth_ok to an agent: where the session is
+	// served (RelayPlace). Absent from a relay that does not say.
+	Relay *RelayPlace `json:"relay,omitempty"`
 	// Frames, on a viewer's pake_init / own_init, says it can use sealed
 	// frames (1). Seal, on the agent's answer, is the encrypted stream and
 	// counter it is to use (crypto.SealSealInfo); absent from an agent that
@@ -748,4 +751,39 @@ type DirPush struct {
 	// says nothing of tokens, and is not asked to renew.
 	Tokens bool   `json:"tokens,omitempty"`
 	Error  string `json:"error,omitempty"`
+}
+
+// RelayPlace is where on its network the hosted relay serves a session, as
+// the codes it names its locations by (three capital letters): At, where
+// the session's relay object runs, and Edge, where this agent's connection
+// came in. The object is made where the session was first registered and
+// stays there, so a machine that has moved since is served by way of a place
+// far from it: this is what shows it. A diagnostic; nothing is decided by it.
+type RelayPlace struct {
+	At   string `json:"at,omitempty"`
+	Edge string `json:"edge,omitempty"`
+}
+
+// Clean is p with anything that is not a location's code left out, or nil
+// when nothing is left: it comes from the relay, and is shown to a person.
+func (p *RelayPlace) Clean() *RelayPlace {
+	if p == nil {
+		return nil
+	}
+	code := func(s string) string {
+		if len(s) != 3 {
+			return ""
+		}
+		for _, c := range s {
+			if c < 'A' || c > 'Z' {
+				return ""
+			}
+		}
+		return s
+	}
+	out := RelayPlace{At: code(p.At), Edge: code(p.Edge)}
+	if out.At == "" && out.Edge == "" {
+		return nil
+	}
+	return &out
 }

@@ -1,4 +1,5 @@
 import { closeBack } from "./closeback";
+import { placeCode, placeFromTrace } from "./place";
 import type { Attachment, TunnelMeta } from "./types";
 import { ALARM_ARMS, armAlarm, type AlarmArms } from "./alarm";
 import { BodyBudget, readBody } from "./body";
@@ -100,6 +101,10 @@ const AUTH_COOKIE_PREFIX = "reminal_auth_";
 
 export class SessionRoom {
   private state: DurableObjectState;
+  // The code of the Cloudflare location this object runs in, once it has
+  // been asked for (relayPlace). Kept in memory only: asked again after the
+  // object has slept, which is when an agent next authenticates.
+  private place = "";
   // Serializes PIN-gate attempts. bcrypt.compare is deliberately expensive (~1024
   // rounds) and the DO isolate is single-threaded, so a burst of concurrent
   // /__auth POSTs would otherwise (a) run many compares at once, pegging the CPU
@@ -237,7 +242,10 @@ export class SessionRoom {
     }
 
     const src = role === "viewer" ? await addressTag(request.headers.get("cf-connecting-ip") ?? "", await this.tagSalt()) : undefined;
-    server.serializeAttachment({ role, authed: false, src } satisfies Attachment);
+    // Where this socket came in: an agent is told it with where the session
+    // is served (relayPlace); a viewer is told its own, and nothing more.
+    const edge = placeCode(request.headers.get("x-reminal-edge"));
+    server.serializeAttachment({ role, authed: false, src, ...(edge ? { edge } : {}) } satisfies Attachment);
     this.state.acceptWebSocket(server);
 
     // The expiry alarm is pushed out to LIVE_EXPIRY_MS once this connection
@@ -524,6 +532,24 @@ export class SessionRoom {
 
   // ---- auth ----
 
+  // relayPlace is what an agent is told with its auth_ok: {at, edge}, the
+  // codes of the location this object runs in and of the one the agent came
+  // in at; either left out when it is not known, null when neither is. The
+  // object asks Cloudflare's trace page where it is, once, and gives it
+  // 400 ms: an authentication never waits on it for longer.
+  private async relayPlace(edge?: string): Promise<{ at?: string; edge?: string } | null> {
+    if (!this.place) {
+      try {
+        const res = await fetch("https://www.cloudflare.com/cdn-cgi/trace", { signal: AbortSignal.timeout(400) });
+        if (res.ok) this.place = placeFromTrace(await res.text());
+      } catch { /* not known this time */ }
+    }
+    const out: { at?: string; edge?: string } = {};
+    if (this.place) out.at = this.place;
+    if (edge) out.edge = edge;
+    return out.at || out.edge ? out : null;
+  }
+
   private async handleAuth(
     ws: WebSocket,
     attachment: Attachment,
@@ -617,7 +643,9 @@ export class SessionRoom {
       );
       await this.state.storage.put({ ownerHash: owner[0], ownerUntil: Date.now() + this.ownerKeep });
       ws.serializeAttachment({ role: attachment.role, authed: true } satisfies Attachment);
-      ws.send(JSON.stringify({ type: "auth_ok" }));
+      // The agent is told where the session is served (place.ts).
+      const relay = attachment.role === "agent" ? await this.relayPlace(attachment.edge) : null;
+      ws.send(JSON.stringify(relay ? { type: "auth_ok", relay } : { type: "auth_ok" }));
 
       if (attachment.role === "agent") {
         // An agent come (back): parked sockets hold a key from before it.
@@ -642,7 +670,9 @@ export class SessionRoom {
     if (!agentAuthed) return "session not ready";
     await this.state.storage.put("viewerAuthed", true);
     ws.serializeAttachment({ role: "viewer", authed: true, src: attachment.src } satisfies Attachment);
-    ws.send(JSON.stringify({ type: "auth_ok" }));
+    // A viewer is told where its OWN socket came in, which it could find out
+    // for itself, and never where the session is served (place.ts).
+    ws.send(JSON.stringify(attachment.edge ? { type: "auth_ok", relay: { edge: attachment.edge } } : { type: "auth_ok" }));
 
     const agent = this.authedAgent();
     if (agent) {
