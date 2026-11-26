@@ -546,3 +546,111 @@ func (p *jsonSpan) str() (string, error) {
 	}
 	return "", errJSON
 }
+
+// A reminal that learns of a new event (Qwen Code's StopFailure, Claude
+// Code's before it) writes its hook only when `reminal integrate` is run,
+// and a person who set an agent up once does not run it again: the upgrade
+// reached them without it. So what an upgrade added is written as the new
+// reminal starts (`integrate --heal-plugins`, which the daemon and a session
+// run as they start): for each agent whose hooks file already holds
+// reminal's own entries, the events this reminal registers that have none
+// get one, calling the reminal the entries there already call. An agent
+// with none of reminal's entries was not set up, or had them taken out, and
+// is left alone; an event its agent is too old for, or whose agent's
+// version was not read, is not written; nothing but the missing entries is
+// added, and with none missing the file is not written at all.
+
+// ownHookCalls is reminal as its own entries in spec's file name it,
+// quoted as they are ("" when the file holds none of them).
+func ownHookCalls(spec *hookSpec, home string) string {
+	raw, err := os.ReadFile(filepath.Join(home, spec.file))
+	if err != nil {
+		return ""
+	}
+	root := map[string]any{}
+	if json.Unmarshal(raw, &root) != nil {
+		return ""
+	}
+	node := root
+	for _, k := range spec.key {
+		next, ok := node[k].(map[string]any)
+		if !ok {
+			return ""
+		}
+		node = next
+	}
+	for _, ev := range spec.events {
+		list, _ := node[ev.Event].([]any)
+		for _, item := range list {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if !ourHookEntry(m) {
+				continue
+			}
+			cmd, _ := m["command"].(string)
+			if cmd == "" {
+				cmd, _ = m["bash"].(string)
+			}
+			if cmd == "" {
+				if hs, _ := m["hooks"].([]any); len(hs) > 0 {
+					if h, ok := hs[0].(map[string]any); ok {
+						cmd, _ = h["command"].(string)
+					}
+				}
+			}
+			if !reminalHookCmdRe.MatchString(cmd) {
+				continue
+			}
+			cmd = strings.TrimSpace(cmd)
+			if at := strings.LastIndex(cmd, " hook "); at > 0 {
+				return cmd[:at]
+			}
+		}
+	}
+	return ""
+}
+
+// healAddedHooks writes reminal's hooks that are missing for the agents
+// already set up (see above), and says which it wrote, one line an agent.
+func healAddedHooks(home string, version func(bin string) string) []string {
+	var said []string
+	for _, t := range agentTargets() {
+		if t.hooks == nil {
+			continue
+		}
+		calls := ownHookCalls(t.hooks, home)
+		if calls == "" {
+			continue // none of reminal's entries: not set up, or taken out
+		}
+		have := ""
+		for _, ev := range t.hooks.events {
+			if ev.MinVersion != "" {
+				have = version(t.Bin)
+				break
+			}
+		}
+		var missing []hookEvent
+		var names []string
+		for _, ev := range t.hooks.events {
+			if hookEventFits(ev, have) && !ownHookWritten(t.hooks, home, ev.Event) {
+				missing = append(missing, ev)
+				names = append(names, ev.Event)
+			}
+		}
+		if len(missing) == 0 {
+			continue
+		}
+		add := *t.hooks
+		add.events, add.version, add.calls = missing, have, calls
+		// Nothing at the file's top is cleaned up here: only entries added.
+		add.cleanTop = false
+		if err := applyHooks(&add, home, "", false); err != nil {
+			said = append(said, fmt.Sprintf("reminal could not add its %s hook for %s: %v", strings.Join(names, ", "), t.Name, err))
+			continue
+		}
+		said = append(said, fmt.Sprintf("reminal added its %s hook for %s", strings.Join(names, ", "), t.Name))
+	}
+	return said
+}
