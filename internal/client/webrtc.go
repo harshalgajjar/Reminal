@@ -204,7 +204,10 @@ type rtcPeer struct {
 	// relay round-trip to every click and keystroke — the dominant reason a
 	// remote window felt remote rather than local. Nil for a v1 viewer, which
 	// keeps sending input over WS.
-	in        *webrtc.DataChannel
+	in *webrtc.DataChannel
+	// term carries the terminal as well as the relay does (termchannel.go).
+	// Nil for a viewer that did not ask for it.
+	term      *webrtc.DataChannel
 	v2        bool        // viewer speaks the split-channel protocol
 	h264      bool        // viewer declared WebCodecs H.264 decode in its hello
 	open      atomic.Bool // true once the DataChannel is ready to carry frames
@@ -213,6 +216,7 @@ type rtcPeer struct {
 
 	mu         sync.Mutex
 	openedAt   time.Time                 // when probing with frames started; zero until a stream first asks (guarded by mu)
+	restUntil  time.Time                 // no frames are tried on it until then (rest; guarded by mu)
 	haveRemote bool                      // remote description applied yet?
 	pendingICE []webrtc.ICECandidateInit // candidates that arrived early
 }
@@ -287,6 +291,33 @@ func (p *rtcPeer) probeAge() time.Duration {
 		return 0
 	}
 	return time.Since(p.openedAt)
+}
+
+// rtcFramesRest is how long a peer kept for its term channel goes without
+// being tried for frames, after a probe window in which no frame was acked
+// over it.
+const rtcFramesRest = 30 * time.Second
+
+// rest starts a peer's rest from frames (rtcSinks).
+func (p *rtcPeer) rest() {
+	p.mu.Lock()
+	p.restUntil = time.Now().Add(rtcFramesRest)
+	p.mu.Unlock()
+}
+
+// resting reports whether the peer is resting from frames. When the rest is
+// over its probe clock starts afresh, at the next stream that asks.
+func (p *rtcPeer) resting() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.restUntil.IsZero() {
+		return false
+	}
+	if time.Now().Before(p.restUntil) {
+		return true
+	}
+	p.restUntil, p.openedAt = time.Time{}, time.Time{}
+	return false
 }
 
 // rtcFrameLifetimeMS is how long SCTP may keep trying to deliver one frame
@@ -369,6 +400,10 @@ type rtcHelloMsg struct {
 	// than always offering both. Old viewers omit it and get exactly the
 	// reliable ordered single channel they have always had.
 	V2 bool `json:"v2,omitempty"`
+	// Term asks for the "term" channel (termchannel.go). Declared, as V2 is:
+	// a viewer from before it takes any channel it does not know for the
+	// frame channel.
+	Term bool `json:"term,omitempty"`
 	// Viewer is a STABLE per-tab id. Peer churns across renegotiation
 	// attempts, so keying capability records by it left one stale record per
 	// attempt — fine for "can anyone decode h264", useless for counting how
@@ -486,6 +521,12 @@ func (a *Agent) handleWebRTCHello(conn *websocket.Conn, encData string) {
 		if ierr == nil {
 			peer.in = in
 			in.OnMessage(func(m webrtc.DataChannelMessage) { a.onRTCInput(m.Data) })
+		}
+		if hello.Term {
+			if term, terr := pc.CreateDataChannel("term", nil); terr == nil {
+				peer.term = term
+				term.OnMessage(func(m webrtc.DataChannelMessage) { a.onRTCTerm(append([]byte(nil), m.Data...)) })
+			}
 		}
 	}
 
@@ -674,8 +715,16 @@ func (a *Agent) rtcSinks() (confirmed, probing []*rtcPeer, allH264 bool) {
 			if !p.h264 {
 				allH264 = false
 			}
+		case p.resting():
+			// carries the terminal; frames are not tried on it for now
 		case p.probeAge() < rtcProbeWindow:
 			probing = append(probing, p)
+		case p.term != nil:
+			// It did not prove itself for frames (too big for it, or lost
+			// on the way), and used to be closed here. It carries the
+			// terminal as well now, which needs nothing proven: it is kept,
+			// and frames are tried on it again after a rest.
+			p.rest()
 		default:
 			stale = append(stale, p)
 			delete(a.rtcPeers, id)

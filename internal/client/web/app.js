@@ -6389,6 +6389,13 @@
         if (!authed || !cryptoKey) return;
         if (msg.type === 'data') {
           msg = { type: 'data', data: await encrypt(cryptoKey, Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))) };
+          // On the term channel too, numbered, when it is open: the machine
+          // types whichever copy comes first (see rtcTerm).
+          const n = termNumber();
+          if (n) {
+            msg.seq = n;
+            try { rtcTerm.send(JSON.stringify({ s: termStream, n, data: msg.data })); } catch (_) {}
+          }
         } else {
           const payload = JSON.stringify({ cols: msg.cols, rows: msg.rows, viewer: viewerId, ...(msg.away ? { away: true } : {}) });
           msg = { type: 'resize', data: await encrypt(cryptoKey, payload) };
@@ -7211,7 +7218,7 @@
       snapAsm = null;
       snapPartsOff = true;
       // The plain snapshot instead: a resume from nothing, without parts.
-      lastSeq = 0;
+      lastSeq = 0; wsDataStarted = 0; termSeq = 0;
       awaitingSnapshotUntil = Date.now() + 15000;
       sendResume();
     }
@@ -7570,7 +7577,7 @@
         // A remembered screen of the session being left is not this one's.
         staleScreen = false;
         document.getElementById('terminal').classList.remove('stale');
-        lastSeq = 0;
+        lastSeq = 0; wsDataStarted = 0; termSeq = 0;
         sessionId = s;
         term.reset();
         showCachedScreen(s);
@@ -8243,8 +8250,13 @@
           // reset lastSeq before processing.
           let staleTagged = false;
           if (typeof msg.seq === 'number') {
+            // The relay's copy of an entry the term channel already brought:
+            // dropped here, before it can be read as a restart (the channel
+            // may be far ahead of the relay, and "far behind" is how a
+            // restart is told).
+            if (termSeq && msg.seq <= termSeq && msg.seq !== 1 && Date.now() >= awaitingSnapshotUntil) break;
             if (msg.seq === 1 || msg.seq + 32 < lastSeq) {
-              lastSeq = 0;
+              lastSeq = 0; wsDataStarted = 0; termSeq = 0;
             } else if (msg.seq <= lastSeq) {
               // A snapshot is tagged with the seq of the newest entry it
               // covers, so caught-up viewers drop it. But a viewer that just
@@ -8259,6 +8271,9 @@
               staleTagged = true;
             }
           }
+          // The relay's copy of this entry is being opened from here: the
+          // term channel's copy of it is no longer the first (onTermData).
+          if (typeof msg.seq === 'number' && msg.seq > wsDataStarted) wsDataStarted = msg.seq;
           try {
             const bytes = await decrypt(cryptoKey, msg.data);
             // A snapshot in parts is being gathered: what comes meanwhile
@@ -12121,6 +12136,22 @@
     // Durable Object, and that hop was the single biggest reason typing and
     // clicking felt remote. Falls back to WS whenever it isn't open.
     let rtcInput = null;
+    // The "term" channel: the terminal itself, as well as on the relay. The
+    // terminal went through the relay alone, both ways, also when this
+    // device and the machine were on one network: every key and its echo
+    // took the round trip to the relay. With this channel open, output comes
+    // on it too (the copy that comes first is drawn, the other dropped by its
+    // number: onTermData) and what is typed goes on it too, numbered (termN,
+    // per handshake stream) so the machine types the copy that comes first.
+    // The relay's copy is never left out: nothing is lost if the channel is
+    // slow or goes.
+    let rtcTerm = null;
+    let termN = 0;            // the last number given to typed input
+    let termStream = 0;       // the handshake stream termN counts on
+    let termLive = false;     // typed input is being numbered and sent on the channel
+    let termTypedAt = 0;      // when input was last sent (numbering starts in a pause)
+    let wsDataStarted = 0;    // the newest output entry the relay's copy has begun to open
+    let termSeq = 0;          // the newest output entry drawn from the term channel
     let rtcRetryAt = 0;  // don't (re)attempt P2P before this time (ms epoch)
     let rtcHelloAt = 0;  // when the current webrtc_hello was sent (to time out silence)
     let rtcRelayed = false; // is the P2P path going through a TURN relay (vs direct)?
@@ -12150,8 +12181,42 @@
       try { if (rtcDc) rtcDc.close(); } catch (_) {}
       try { if (rtcCtl) rtcCtl.close(); } catch (_) {}
       try { if (rtcInput) rtcInput.close(); } catch (_) {}
+      try { if (rtcTerm) rtcTerm.close(); } catch (_) {}
       try { if (rtcPc) rtcPc.close(); } catch (_) {}
-      rtcPc = null; rtcDc = null; rtcCtl = null; rtcInput = null; rtcPeerId = null; rtcPendingIce = []; rtcRelayed = false;
+      rtcPc = null; rtcDc = null; rtcCtl = null; rtcInput = null; rtcTerm = null; termLive = false; rtcPeerId = null; rtcPendingIce = []; rtcRelayed = false;
+    }
+    // onTermData takes one output entry off the term channel: {seq, data}.
+    // Drawn only when it is the entry right after the last one drawn, and the
+    // relay's copy of it is not already being opened: then it is the first
+    // copy, and the relay's is dropped by its number when it comes. Anything
+    // else (a gap, a screen still owed, a snapshot being gathered) is left
+    // for the relay's copy, which always comes. Nothing here waits, so what
+    // the channel brings is drawn in the order it came.
+    function onTermData(o) {
+      if (!o || typeof o.seq !== 'number' || typeof o.data !== 'string') return;
+      if (!cryptoKey || snapAsm || awaitingSnapshotUntil || !lastSeq) return;
+      if (o.seq !== lastSeq + 1 || o.seq <= wsDataStarted) return;
+      let bytes;
+      try { bytes = base64ToU8(o.data); } catch (_) { return; }
+      lastSeq = termSeq = o.seq;
+      if (snapLive) keepForSnapshot(o.seq, bytes);
+      enqueueData(bytes);
+      bytesReceived += bytes.byteLength;
+    }
+    // termNumber gives typed input its number when it is to go on the term
+    // channel as well, or 0 when it goes on the relay alone. Numbering
+    // starts only in a pause in the typing: a key sent just before, on the
+    // relay alone, could otherwise be passed on the way by the next one on
+    // the channel. Counted per handshake stream: a new handshake starts at 1.
+    function termNumber() {
+      const open = !!(rtcTerm && rtcTerm.readyState === 'open' && sealState && sealState.stream);
+      const now = Date.now();
+      const paused = now - termTypedAt > 1000;
+      termTypedAt = now;
+      if (!open) { termLive = false; return 0; }
+      if (termStream !== sealState.stream) { termStream = sealState.stream; termN = 0; termLive = false; }
+      if (!termLive) { if (!paused) return 0; termLive = true; }
+      return ++termN;
     }
     function rtcCtlOpen() { return !!(rtcCtl && rtcCtl.readyState === 'open'); }
     // Inspect the live ICE candidate pair to tell a direct P2P path from a TURN
@@ -12196,7 +12261,9 @@
       // than assumed because the host is the offerer — an older viewer must
       // keep getting exactly one reliable ordered channel, or it would bind
       // its frame handler to whichever channel happened to open last.
-      try { await sendWin('webrtc_hello', { peer: rtcPeerId, viewer: viewerId, h264: h264Decode, v2: true, panes: panes.size }); } catch (_) { rtcPeerId = null; }
+      // term asks for the terminal's channel too: declared for the same
+      // reason, a viewer from before it would take it for the frame channel.
+      try { await sendWin('webrtc_hello', { peer: rtcPeerId, viewer: viewerId, h264: h264Decode, v2: true, term: true, panes: panes.size }); } catch (_) { rtcPeerId = null; }
     }
     // Capability announcement for viewers that will never open a DataChannel
     // (P2P disabled, or blocked by the network). The agent tracks decode
@@ -12265,6 +12332,15 @@
           rtcInput = ch;
           ch.onopen = () => { if (DEBUG) dbg('rtc input channel open'); };
           ch.onclose = () => { if (rtcInput === ch) rtcInput = null; };
+          return;
+        }
+        if (ch.label === 'term') {
+          rtcTerm = ch;
+          ch.onmessage = (ev) => {
+            try { onTermData(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data))); } catch (_) {}
+          };
+          ch.onopen = () => { if (DEBUG) dbg('rtc term channel open'); };
+          ch.onclose = () => { if (rtcTerm === ch) { rtcTerm = null; termLive = false; } };
           return;
         }
         rtcDc = ch;
