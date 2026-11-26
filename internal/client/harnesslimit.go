@@ -481,6 +481,8 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// needed), and its monthly requests, perhaps with when they reset.
 	"kiro": wholeRows(`\.?`,
 		`kiroratelimitreached:?`,
+		// Kiro CLI 3.6 says it this way.
+		`thecloudserviceisrate-limitingrequests\.waitamomentandretry`,
 		`monthlyrequestlimitreached(?:-thelimitsreseton\d{1,2}/01)?`,
 	),
 }
