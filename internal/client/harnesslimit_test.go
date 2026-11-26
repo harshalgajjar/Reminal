@@ -216,6 +216,10 @@ var limitScreens = []struct {
 	{"pi", "  You have hit your ChatGPT usage limit.\n", time.Time{}},
 	{"pi", "  Hugging Face rate limit reached; retry in 30s\n", limitLA(2026, 10, 19, 10, 0).Add(30 * time.Second)},
 	{"agy", "  AI: Out of credits\n", time.Time{}},
+	// Antigravity 1.5.18 changed its wording.
+	{"agy", "  Your organization's prepaid balance is insufficient. Contact your administrator to add funds.\n", time.Time{}},
+	{"agy", "  Your organization's prepaid balance is insufficient. Contact your\n  administrator to add funds.\n", time.Time{}},
+	{"agy", "  You have exhausted your quota on this model.\n", time.Time{}},
 	{"kiro", "\n ⚠️  Kiro rate limit reached:\n", time.Time{}},
 	// Kiro CLI 3.6 changed its wording.
 	{"kiro", "\n The cloud service is rate-limiting requests. Wait a moment and retry.\n", time.Time{}},
@@ -1178,6 +1182,8 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"copilot", "", "You've used all your Copilot Free chat requests for the month.", false},
 		{"pi", "", "Hugging Face rate limit reached; retry in 30s", false},
 		{"agy", "", "AI: Out of credits", false},
+		{"agy", "", "Your organization's prepaid balance is insufficient. Contact your administrator to add funds.", true},
+		{"agy", "", "You have exhausted your quota on this model.", true},
 		{"kiro", "⚠️  ", "Kiro rate limit reached:", false},
 		{"kiro", "", "Kiro rate limit reached", false},
 		{"kiro", "", "The cloud service is rate-limiting requests. Wait a moment and retry.", false},
@@ -1211,6 +1217,11 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 	// forms in an answer or a code block, a Codex bullet, an answer naming a
 	// sum, a status word in a sentence.
 	for _, tc := range []struct{ prog, screen string }{
+		// A changelog line quoting the notice, cut where the row ends, and
+		// one wrapped onto the next row.
+		{"agy", "● In 1.5.18 the CLI now stops right away and tells you `Your organization's prepaid balance"},
+		{"agy", "● In 1.5.18 the CLI now stops right away and tells you `Your organization's prepaid balance\n  is insufficient. Contact your administrator to add funds.`"},
+		{"agy", "  - the CLI now stops right away and tells you \"You have exhausted your quota on this model.\""},
 		{"claude", "● I looked at the billing page. For your account it now says that\n  you're out of extra usage."},
 		{"goose", "  The provider said the account's\n  credits exhausted."},
 		{"amp", "  The dashboard shows the\n  usage quota exceeded."},
