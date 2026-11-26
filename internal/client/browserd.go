@@ -113,8 +113,8 @@ func (h *browserHub) snapLook() {
 	if h.snapHold != nil {
 		defer h.snapHold() // after it has looked, still holding the lock
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
+	home := h.snapHome
+	if home == "" || h.snapDone {
 		return
 	}
 	if h.snapLn != nil {
@@ -142,6 +142,7 @@ func (h *browserHub) snapLook() {
 func (h *browserHub) snapClose() {
 	h.snapMu.Lock()
 	defer h.snapMu.Unlock()
+	h.snapDone = true
 	h.snapCloseLocked()
 }
 
@@ -205,6 +206,11 @@ type browserHub struct {
 	snapMu  sync.Mutex
 	snapLn  net.Listener
 	snapDir *os.File
+	// snapHome: the home folder as it was when the hub began to serve, the
+	// one whose snap folder it looks at from then on. snapDone: the hub has
+	// stopped; a look still on its way opens nothing.
+	snapHome string
+	snapDone bool
 	// snapAgain: a look at the snap's folder was asked for while one was
 	// under way; the one under way looks once more before it is done.
 	snapAgain atomic.Bool
@@ -284,6 +290,11 @@ func serveBrowserOn(h *browserHub, stop <-chan struct{}) {
 		h.snapClose()
 	}()
 	go h.watchEnded(stop)
+	if home, err := os.UserHomeDir(); err == nil {
+		h.snapMu.Lock()
+		h.snapHome = home
+		h.snapMu.Unlock()
+	}
 	h.snapEnsure()
 	for {
 		conn, err := ln.Accept()

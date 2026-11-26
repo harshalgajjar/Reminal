@@ -214,9 +214,11 @@ func snapHub(t *testing.T, home string, setup ...func(h *browserHub)) (h *browse
 	return h, main, ask
 }
 
-// until waits for ok, for up to two seconds.
+// until waits for ok, for up to twenty seconds: before the hub opens the
+// snap's socket it writes its own program there, and under the race
+// detector on a busy machine this test program is large and slow to write.
 func until(ok func() bool) bool {
-	for i := 0; i < 200; i++ {
+	for i := 0; i < 2000; i++ {
 		if ok() {
 			return true
 		}
