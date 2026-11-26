@@ -93,6 +93,12 @@ var loginRowCases = []loginRowCase{
 	{prog: "claude", row: "  ⎿  Failed to authenticate: OAuth token revoked. Please log in again or contact your administrator."},
 	{prog: "claude", row: "  ⎿  Failed to authenticate: OAuth session expired and could not be refreshed"},
 	{prog: "claude", row: "● Invalid API key · Fix external API key", refused: true},
+	// Claude Code 2.1.332 changed its sign-in wording.
+	{prog: "claude", row: "  ⎿  Failed to authenticate: OAuth session expired and could not be refreshed. Run `claude auth login` to sign in again"},
+	{prog: "claude", row: "  ⎿  Nothing was sent: this session's sign-in is gone, possibly after a /login or /logout in another terminal. To continue here, sign in again to the organization this session began on. Run /login in an interactive session, choose Anthropic Console account, then Sign in with your Console account. If another tool made this sign-in, use that tool. To use another sign-in, start a new session."},
+	{prog: "claude", row: "  ⎿  Nothing was sent: this session's sign-in was replaced by one for a different or unknown organization. To continue here, sign in again to the organization this session began on. Run /login in an interactive session, choose Anthropic Console account, then Sign in with your Console account. If another tool made this sign-in, use that tool. To use the new sign-in, start a new session."},
+	{prog: "claude", row: "  ⎿  Nothing was sent: the organization of this session's sign-in wasn't known when it began, so there's no way to confirm that the sign-in is unchanged. If this session is interactive, run /login here, choose Anthropic Console account, then Sign in with your Console account, and sign in to the organization it began on. Otherwise sign in again with the tool that made this sign-in, then start a new session."},
+	{prog: "claude", row: "  ⎿  By this computer's clock, the token from your organization's identity provider has expired or is about to expire. Check the date and time on this computer. Then sign in again."},
 	// Claude Code 2.1.317–318: a login that
 	// reached the end of its time, the Cloud gateway's own, and the sign-in
 	// step's new words.
@@ -907,6 +913,43 @@ func TestClaudesOrganizationSignInRowInBothWordings(t *testing.T) {
 				if harnessProblemIn(screen, prog) {
 					t.Errorf("as %q: an agent's sentence read as a sign-in problem:\n%s", prog, screen)
 				}
+			}
+		}
+	}
+}
+
+// Claude Code 2.1.332's long sign-in notices as a terminal draws them, over
+// several rows; and what is not one: an agent quoting their words in a
+// sentence or going on after them, and its notices that are no sign-in
+// problem.
+func TestClaudesLongSignInNoticesWrappedAndQuoted(t *testing.T) {
+	for name, screen := range map[string]string{
+		"gone, on five rows":               "❯ continue\n  ⎿  Nothing was sent: this session's sign-in is gone, possibly after a /login or /logout in\n     another terminal. To continue here, sign in again to the organization this session began\n     on. Run /login in an interactive session, choose Anthropic Console account, then Sign in\n     with your Console account. If another tool made this sign-in, use that tool. To use\n     another sign-in, start a new session.\n\n❯ ",
+		"replaced, on four rows":           "  ⎿  Nothing was sent: this session's sign-in was replaced by one for a different or unknown organization. To\n     continue here, sign in again to the organization this session began on. Run /login in an interactive session,\n     choose Anthropic Console account, then Sign in with your Console account. If another tool made this sign-in,\n     use that tool. To use the new sign-in, start a new session.\n❯ ",
+		"not known, on four rows":          "  ⎿  Nothing was sent: the organization of this session's sign-in wasn't known when it began, so there's no\n     way to confirm that the sign-in is unchanged. If this session is interactive, run /login here, choose\n     Anthropic Console account, then Sign in with your Console account, and sign in to the organization it\n     began on. Otherwise sign in again with the tool that made this sign-in, then start a new session.\n❯ ",
+		"the session expired, on two rows": "  ⎿  Failed to authenticate: OAuth session expired and could not be refreshed. Run\n     `claude auth login` to sign in again\n❯ ",
+		"the clock, on two rows":           "  ⎿  By this computer's clock, the token from your organization's identity provider has expired or is\n     about to expire. Check the date and time on this computer. Then sign in again.\n❯ ",
+	} {
+		for _, prog := range []string{"claude", ""} {
+			if !harnessProblemIn(screen, prog) {
+				t.Errorf("%s, as %q: not read as a sign-in problem:\n%s", name, prog, screen)
+			}
+		}
+	}
+	for name, screen := range map[string]string{
+		"quoted mid-sentence":                              "● The docs say to Run /login in an interactive session, choose Anthropic Console account, then Sign in with your Console account before the deploy.",
+		"the notice, going on":                             "● Nothing was sent: this session's sign-in is gone, possibly after a /login or /logout in another terminal, so I stopped and wrote the notes instead.",
+		"its first sentence alone":                         "● Nothing was sent: this session's sign-in is gone, possibly after a /login or /logout in another terminal.",
+		"the whole of it, then more":                       "● Nothing was sent: this session's sign-in was replaced by one for a different or unknown organization. To continue here, sign in again to the organization this session began on. Run /login in an interactive session, choose Anthropic Console account, then Sign in with your Console account. If another tool made this sign-in, use that tool. To use the new sign-in, start a new session. That is what the log shows, and the fix is in the next commit.",
+		"in a list of what it prints":                      "● It can print any of these:\n  - \"Nothing was sent: this session's sign-in is gone\"\n  - \"Failed to authenticate: OAuth session expired and could not be refreshed. Run `claude auth login` to sign in again\"\n  and I handle each.",
+		"the expired line, going on":                       "● Failed to authenticate: OAuth session expired and could not be refreshed. Run `claude auth login` to sign in again, then rerun the job.",
+		"the notice's rows, an answer going on under them": "● Nothing was sent: this session's sign-in is gone, possibly after a /login or /logout in another terminal.\n  To continue here, sign in again to the organization this session began on. Run /login in an interactive session,\n  choose Anthropic Console account, then Sign in with your Console account. If another tool made this sign-in,\n  use that tool. To use another sign-in, start a new session.\n  That is the text I added to the docs page, under Troubleshooting.",
+		"not a sign-in: try again":                         "  ⎿  Nothing was sent: this session's sign-in couldn't be confirmed. Try again.\n❯ ",
+		"the clock line, going on":                         "● By this computer's clock, the token from your organization's identity provider has expired or is about to expire, which explains the 401s in the log.",
+	} {
+		for _, prog := range []string{"claude", ""} {
+			if harnessProblemIn(screen, prog) {
+				t.Errorf("%s, as %q: read as a sign-in problem:\n%s", name, prog, screen)
 			}
 		}
 	}
