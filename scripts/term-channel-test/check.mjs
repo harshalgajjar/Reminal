@@ -37,7 +37,12 @@ async function viewer(direct, cut) {
   });
   const got = ms.filter((x) => x != null).sort((a, b) => a - b);
   const p50 = got.length ? got[Math.floor(got.length / 2)] : Infinity;
-  const rid = 'R' + Math.random().toString(36).slice(2, 8).toUpperCase() + 'Z';
+  // The line's own mark, drawn until no letter in it comes twice in a row:
+  // typed this way (no key event with it) the page takes a repeated
+  // character for one key reported twice and drops it. The line after the
+  // mark never repeats one either.
+  let rid;
+  do { rid = 'R' + Math.random().toString(36).slice(2, 8).toUpperCase() + 'Z'; } while (/(.)\1/.test(rid));
   const want = rid + Array.from({ length: 400 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz0123456789'[(i * 7 + (i >> 3)) % 36]).join('');
   await page.evaluate(async ({ w, cut }) => {
     const t = window.__term;
