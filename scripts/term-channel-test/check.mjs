@@ -37,7 +37,12 @@ async function viewer(direct, cut) {
   });
   const got = ms.filter((x) => x != null).sort((a, b) => a - b);
   const p50 = got.length ? got[Math.floor(got.length / 2)] : Infinity;
-  const rid = 'R' + Math.random().toString(36).slice(2, 8).toUpperCase() + 'Z';
+  // The line's own mark, drawn until no letter in it comes twice in a row:
+  // typed this way (no key event with it) the page takes a repeated
+  // character for one key reported twice and drops it. The line after the
+  // mark never repeats one either.
+  let rid;
+  do { rid = 'R' + Math.random().toString(36).slice(2, 8).toUpperCase() + 'Z'; } while (/(.)\1/.test(rid));
   const want = rid + Array.from({ length: 400 }, (_, i) => 'abcdefghijklmnopqrstuvwxyz0123456789'[(i * 7 + (i >> 3)) % 36]).join('');
   await page.evaluate(async ({ w, cut }) => {
     const t = window.__term;
@@ -54,7 +59,11 @@ async function viewer(direct, cut) {
   await page.waitForTimeout(2000 + 4 * TRIP);
   const screen = await page.evaluate(() => { const b = window.__term.buffer.active; let s = ''; for (let i = 0; i < b.length; i++) { const l = b.getLine(i); s += (l.isWrapped ? '' : '\n') + l.translateToString(true); } return s; });
   await ctx.close();
-  return { open, after, answered: got.length, p50, once: screen.split(want).length - 1 };
+  // Compared without line breaks or spaces: a shell wraps a long line its
+  // own way (zsh ends each row itself, so the rows are not marked as one
+  // line), and the line typed has neither.
+  const flat = screen.replace(/\s+/g, "");
+  return { open, after, answered: got.length, p50, once: flat.split(want).length - 1 };
 }
 
 const relay = await viewer(false);
