@@ -1714,6 +1714,7 @@ type winStream struct {
 	// confirmation. sentSinceAck counts ack-expected frames sent since the last
 	// consumed ack — the demote evidence (see dispatch).
 	seq, acked   uint64
+	slim         relaySlim // lighter pictures for a slow relay link (windowslim.go)
 	lastAck      time.Time
 	gotAnyAck    bool
 	sentSinceAck int
@@ -2126,6 +2127,7 @@ func (s *winStream) consumeAck(v uint64) {
 		s.acked = v
 	}
 	s.lastAck, s.gotAnyAck, s.sentSinceAck = time.Now(), true, 0
+	s.slim.acked(v, s.lastAck)
 }
 
 // drainAcks consumes every ack that arrived since the last iteration, without
@@ -2842,7 +2844,14 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 		BH   int    `json:"bh,omitempty"`
 		FW   int    `json:"fw,omitempty"`
 		FH   int    `json:"fh,omitempty"`
-	}{ID: s.w.ID, W: s.w.W, H: s.w.H, Seq: s.seq + 1, Cap: capSrc, CapErr: capErr, Img: base64.StdEncoding.EncodeToString(img)}
+	}{ID: s.w.ID, W: s.w.W, H: s.w.H, Seq: s.seq + 1, Cap: capSrc, CapErr: capErr}
+	// On the relay alone, and its link slow: the picture goes lighter
+	// (windowslim.go).
+	relayOnly := sinks.ws && len(sinks.confirmed) == 0 && len(sinks.probe) == 0
+	if relayOnly {
+		img = slimJPEG(img, s.slim.level)
+	}
+	frame.Img = base64.StdEncoding.EncodeToString(img)
 	if band != nil {
 		frame.Base = s.bands.sentSeq
 		frame.BX, frame.BY, frame.BW, frame.BH = band.Min.X, band.Min.Y, band.Dx(), band.Dy()
@@ -2870,6 +2879,9 @@ func (s *winStream) sendFrame(conn *websocket.Conn, sinks winSinks, force bool) 
 	}
 	if sinks.ws {
 		s.a.sendWindowMsg(conn, protocol.TypeWindowFrame, frame)
+		if relayOnly {
+			s.slim.sent(s.seq, time.Now())
+		}
 		s.wsShipped(time.Now())
 	}
 	if len(sinks.probe) > 0 {
