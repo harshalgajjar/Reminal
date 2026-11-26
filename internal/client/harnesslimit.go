@@ -472,9 +472,16 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// and executing: Error 429, Message: …, Status: RESOURCE_EXHAUSTED,
 	// Details: …"). A per-minute limit it waits out, the turn going on
 	// ("Model unavailable (attempt 1/9), retrying in 33s..."): not one.
-	"agy": append(onCased("AI: Out of credits", wholeRows(`\.?`,
+	// 1.5.18 says two of them in sentences of its own: an organization's
+	// prepaid balance used up, and a model's quota used up. Each is the
+	// whole row, written as the CLI writes it.
+	"agy": append(append(append(onCased("AI: Out of credits", wholeRows(`\.?`,
 		`ai:outofcredits`,
-	)), spanning("⚠",
+	)), onCased("Your organization", wholeRows(`\.?`,
+		`yourorganization.?sprepaidbalanceisinsufficient\.contactyouradministratortoaddfunds`,
+	))...), onCased("You have exhausted your quota", wholeRows(`\.?`,
+		`youhaveexhaustedyourquotaonthismodel`,
+	))...), spanning("⚠",
 		`agentexecutorerror:generatingandexecuting:error429,message:.{1,300}?,status:resource_exhausted(?:,|$)`,
 	)...),
 	// Kiro CLI 3.2: its rate limit (the warning sign before it is not
