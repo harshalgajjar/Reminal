@@ -54,7 +54,11 @@ async function viewer(direct, cut) {
   await page.waitForTimeout(2000 + 4 * TRIP);
   const screen = await page.evaluate(() => { const b = window.__term.buffer.active; let s = ''; for (let i = 0; i < b.length; i++) { const l = b.getLine(i); s += (l.isWrapped ? '' : '\n') + l.translateToString(true); } return s; });
   await ctx.close();
-  return { open, after, answered: got.length, p50, once: screen.split(want).length - 1 };
+  // Compared without line breaks or spaces: a shell wraps a long line its
+  // own way (zsh ends each row itself, so the rows are not marked as one
+  // line), and the line typed has neither.
+  const flat = screen.replace(/\s+/g, "");
+  return { open, after, answered: got.length, p50, once: flat.split(want).length - 1 };
 }
 
 const relay = await viewer(false);
