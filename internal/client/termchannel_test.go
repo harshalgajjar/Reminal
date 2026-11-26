@@ -25,6 +25,7 @@ func TestTerminalInputIsTypedOnceWhicheverPathIsFirst(t *testing.T) {
 		{"interleaved", []step{{1, direct, true}, {1, relay, false}, {2, relay, true}, {3, direct, true}, {2, direct, false}, {3, relay, false}}},
 		{"the channel opened late: it does not jump ahead", []step{{1, relay, true}, {3, direct, false}, {2, relay, true}, {3, relay, true}, {4, direct, true}}},
 		{"the channel gone: the relay carries on", []step{{1, direct, true}, {2, relay, true}, {3, relay, true}, {4, relay, true}}},
+		{"the first numbered piece is on the relay alone: the channel waits for it", []step{{2, direct, false}, {3, direct, false}, {1, relay, true}, {2, relay, true}, {4, direct, false}, {3, relay, true}, {4, relay, true}, {5, direct, true}}},
 		{"a viewer met in the middle of its count", []step{{7, direct, false}, {7, relay, true}, {8, direct, true}, {8, relay, false}}},
 	} {
 		var o termOrder

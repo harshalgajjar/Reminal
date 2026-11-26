@@ -6389,12 +6389,12 @@
         if (!authed || !cryptoKey) return;
         if (msg.type === 'data') {
           msg = { type: 'data', data: await encrypt(cryptoKey, Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))) };
-          // On the term channel too, numbered, when it is open: the machine
+          // Numbered when the term channel is open, and on it too: the machine
           // types whichever copy comes first (see rtcTerm).
-          const n = termNumber();
+          const { n, direct } = termNumber();
           if (n) {
             msg.seq = n;
-            try { rtcTerm.send(JSON.stringify({ s: termStream, n, data: msg.data })); } catch (_) {}
+            if (direct) { try { rtcTerm.send(JSON.stringify({ s: termStream, n, data: msg.data })); } catch (_) {} }
           }
         } else {
           const payload = JSON.stringify({ cols: msg.cols, rows: msg.rows, viewer: viewerId, ...(msg.away ? { away: true } : {}) });
@@ -12148,8 +12148,7 @@
     let rtcTerm = null;
     let termN = 0;            // the last number given to typed input
     let termStream = 0;       // the handshake stream termN counts on
-    let termLive = false;     // typed input is being numbered and sent on the channel
-    let termTypedAt = 0;      // when input was last sent (numbering starts in a pause)
+    let termLive = false;     // typed input is numbered, and from the second piece on sent on the channel too
     let wsDataStarted = 0;    // the newest output entry the relay's copy has begun to open
     let termSeq = 0;          // the newest output entry drawn from the term channel
     let rtcRetryAt = 0;  // don't (re)attempt P2P before this time (ms epoch)
@@ -12203,20 +12202,22 @@
       enqueueData(bytes);
       bytesReceived += bytes.byteLength;
     }
-    // termNumber gives typed input its number when it is to go on the term
-    // channel as well, or 0 when it goes on the relay alone. Numbering
-    // starts only in a pause in the typing: a key sent just before, on the
-    // relay alone, could otherwise be passed on the way by the next one on
-    // the channel. Counted per handshake stream: a new handshake starts at 1.
+    // termNumber gives typed input its number when the term channel is
+    // open, and says whether this piece goes on the channel as well: {n: 0}
+    // when the channel is not open (the relay alone, unnumbered). The first
+    // numbered piece after the channel opens goes on the relay ALONE: what
+    // was typed just before went there unnumbered and may still be on its
+    // way, and on the relay it stays behind that. The machine types a
+    // channel copy only when every number before it has been typed, so no
+    // later piece can pass it either. Nothing here depends on timing.
+    // Counted per handshake stream: a new handshake starts at 1.
     function termNumber() {
       const open = !!(rtcTerm && rtcTerm.readyState === 'open' && sealState && sealState.stream);
-      const now = Date.now();
-      const paused = now - termTypedAt > 1000;
-      termTypedAt = now;
-      if (!open) { termLive = false; return 0; }
+      if (!open) { termLive = false; return { n: 0, direct: false }; }
       if (termStream !== sealState.stream) { termStream = sealState.stream; termN = 0; termLive = false; }
-      if (!termLive) { if (!paused) return 0; termLive = true; }
-      return ++termN;
+      const direct = termLive;
+      termLive = true;
+      return { n: ++termN, direct };
     }
     function rtcCtlOpen() { return !!(rtcCtl && rtcCtl.readyState === 'open'); }
     // Inspect the live ICE candidate pair to tell a direct P2P path from a TURN
