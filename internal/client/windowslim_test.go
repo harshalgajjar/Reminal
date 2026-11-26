@@ -97,8 +97,11 @@ func TestALighterPictureKeepsItsSizeInPixels(t *testing.T) {
 		}
 		prev = len(got)
 	}
-	if prev*2 > len(orig) {
-		t.Errorf("the last step is %d of %d bytes: less than half was hoped for", prev, len(orig))
+	if prev*4 > len(orig)*3 {
+		t.Errorf("the last step is %d of %d bytes: a quarter off at the least was expected", prev, len(orig))
+	}
+	if q := relayQualities[len(relayQualities)-1]; q < 22 {
+		t.Errorf("the last step's quality is %d: below 22 small text is hard to read", q)
 	}
 	junk := []byte("not a picture")
 	if got := slimJPEG(junk, 2); !bytes.Equal(got, junk) {

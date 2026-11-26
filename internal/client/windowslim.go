@@ -30,8 +30,9 @@ const (
 )
 
 // relayQualities are the JPEG qualities of the steps: 0 is the picture as it
-// was captured.
-var relayQualities = []int{0, 30, 22, 15}
+// was captured. No step is below 22: a pane is mostly text, and lower than
+// that small text is hard to read.
+var relayQualities = []int{0, 30, 22}
 
 // relaySlim is a stream's step, and what it has seen of the link.
 type relaySlim struct {
