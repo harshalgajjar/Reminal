@@ -128,6 +128,11 @@ func chromeOurs(home string) []chromeBrowser {
 		}
 		raw, err := os.ReadFile(chromeHostManifestPath(home, b))
 		if err != nil {
+			// Its setup as a snap alone is its too (the usual manifest was
+			// taken away by hand): a remove still finds it.
+			if chromeSnapSetUpThere(home, b) {
+				out = append(out, b)
+			}
 			continue
 		}
 		var m struct {

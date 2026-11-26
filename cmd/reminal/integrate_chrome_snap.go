@@ -74,6 +74,7 @@ func chromeSnapApply(home, exe string, b chromeBrowser, remove bool) error {
 		if rerr := client.SnapBrowserRemove(home); err == nil {
 			err = rerr
 		}
+		chromeSnapTellHub()
 		return err
 	}
 	if !chromeSnapHere(home, b) {
@@ -85,7 +86,29 @@ func chromeSnapApply(home, exe string, b chromeBrowser, remove bool) error {
 	if err := client.SnapBrowserSetUp(home, exe); err != nil {
 		return err
 	}
-	return client.SnapBrowserWriteManifest(home, name, chromeHostManifest(client.SnapBrowserHelper(home)))
+	if err := client.SnapBrowserWriteManifest(home, name, chromeHostManifest(client.SnapBrowserHelper(home))); err != nil {
+		return err
+	}
+	chromeSnapTellHub()
+	return nil
+}
+
+// chromeSnapTellHub has a running daemon look at the snap's folder now: its
+// hub opens the socket there for a setup just made, and closes it for one
+// just taken away, when it is asked its state. A var so a test can see it.
+var chromeSnapTellHub = func() { _ = client.QueryBrowserStatus() }
+
+// chromeSnapSetUpThere reports whether reminal's setup is in b's snap
+// folder: its copy, or its host manifest.
+func chromeSnapSetUpThere(home string, b chromeBrowser) bool {
+	if chromeOS != "linux" || b.Name != "Chromium" {
+		return false
+	}
+	if there, _ := client.SnapBrowserSetUpDone(home, ""); there {
+		return true
+	}
+	_, err := client.SnapBrowserManifest(home, browserHostName+".json")
+	return err == nil
 }
 
 // chromeSnapSetUpCurrent reports whether b, where it is here as a snap, is

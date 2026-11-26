@@ -242,7 +242,14 @@ func TestIntegrateSetsUpChromiumAsASnap(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, "snap", "chromium", "common"), 0o775); err != nil {
 		t.Fatal(err)
 	}
+	oldTell := chromeSnapTellHub
+	t.Cleanup(func() { chromeSnapTellHub = oldTell })
+	told := 0
+	chromeSnapTellHub = func() { told++ }
 	out := runIntegrateRig(t, "--yes")
+	if told != 1 {
+		t.Errorf("after a setup the daemon should be told once to open the snap's socket, told %d time(s)", told)
+	}
 	if !regexp.MustCompile(`✓\s+Chromium\s+ready`).MatchString(out) || strings.Contains(out, "installed as a snap") {
 		t.Fatalf("Chromium as a snap should be ready:\n%s", out)
 	}
@@ -269,7 +276,16 @@ func TestIntegrateSetsUpChromiumAsASnap(t *testing.T) {
 	if got, _ := os.ReadFile(client.SnapBrowserHelper(home)); string(got) != "reminal two!" {
 		t.Errorf("a second setup did not bring the copy up to date: %q", got)
 	}
+	// The usual manifest gone (taken away by hand): a remove still finds
+	// the snap's setup.
+	if err := os.Remove(chromeHostManifestPath(home, chromiumRow(t))); err != nil {
+		t.Fatal(err)
+	}
+	told = 0
 	runIntegrateRig(t, "--remove", "--yes")
+	if told != 1 {
+		t.Errorf("after a remove the daemon should be told once to close the snap's socket, told %d time(s)", told)
+	}
 	if _, err := os.Lstat(client.SnapBrowserDir(home)); !os.IsNotExist(err) {
 		t.Errorf("after a remove the snap's folder of reminal's is still there: %v", err)
 	}
