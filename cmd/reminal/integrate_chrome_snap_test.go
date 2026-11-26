@@ -179,3 +179,32 @@ func TestIntegrateSaysABrowserItCannotWorkWith(t *testing.T) {
 		t.Errorf("the steps open %s, want the browser that works", got)
 	}
 }
+
+// With no browser here that can work, nothing is left to do in a browser:
+// the steps for loading the extension are not said (the rows say why). With
+// a browser that works beside it, they are.
+func TestNoStepsWhenNoBrowserHereCanWork(t *testing.T) {
+	integrateRig(t, 200)
+	old := chromeCannotStart
+	t.Cleanup(func() { chromeCannotStart = old })
+	chromeCannotStart = func(_ string, b chromeBrowser) string {
+		if b.Name == "Chromium" {
+			return chromeSnapWhy
+		}
+		return ""
+	}
+	both := runIntegrateRig(t, "--yes")
+	if !strings.Contains(both, "Next, in your browser") {
+		t.Fatalf("with a browser that works, the steps should be said:\n%s", both)
+	}
+	chromeAppFound = func(_ string, b chromeBrowser) bool { return b.Name == "Chromium" }
+	out := runIntegrateRig(t, "--yes")
+	if !strings.Contains(out, "installed as a snap") {
+		t.Fatalf("the row saying why is missing:\n%s", out)
+	}
+	for _, said := range []string{"Next, in your browser", "Load unpacked", "can then use the browser"} {
+		if strings.Contains(out, said) {
+			t.Errorf("no browser here can work, yet %q is said:\n%s", said, out)
+		}
+	}
+}

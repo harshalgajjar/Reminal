@@ -243,10 +243,32 @@ func chromeExtensionsPage(home string, browsers []chromeBrowser) string {
 	return client.BrowserExtensionsPage(browserPrograms[first].family)
 }
 
+// chromeAnyCanWork reports whether a browser of browsers that is here can
+// work with reminal. With none of them here at all it is true: the steps
+// are then for the browser the person goes on to install.
+func chromeAnyCanWork(home string, browsers []chromeBrowser) bool {
+	found := false
+	for _, b := range browsers {
+		if !chromeAppFound(home, b) {
+			continue
+		}
+		if chromeCannotStart(home, b) == "" {
+			return true
+		}
+		found = true
+	}
+	return !found
+}
+
 // printChromeSteps is said last in a setup, until the extension is in the
 // Chrome Web Store: the one thing left for the person to do, as steps short
 // enough to read on a phone, ending on the folder to pick.
 func printChromeSteps(home string, browsers []chromeBrowser) {
+	// With no browser here that can work, nothing is left to do in one: the
+	// rows above say why.
+	if !chromeAnyCanWork(home, browsers) {
+		return
+	}
 	o := newIntegrateOut()
 	fmt.Println()
 	o.para("", "", "Next, in your browser:", plain)
