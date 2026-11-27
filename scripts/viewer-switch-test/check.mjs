@@ -10,7 +10,17 @@ import { chromium } from 'playwright';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 const html = readFileSync('/t/index.html');
-const srv = http.createServer((q, r) => { const a = /^\/assets\/([\w.-]+\.js)$/.exec(q.url.split('?')[0]); if (a) { let b; try { b = readFileSync('/t/assets/' + a[1]); } catch (_) { r.writeHead(404); return r.end(); } r.writeHead(200, { 'content-type': 'text/javascript' }); return r.end(b); } if (q.url.split('?')[0] === '/reload.js') { r.writeHead(200, { 'content-type': 'text/javascript' }); return r.end(readFileSync('/t/reload.js')); } r.writeHead(200, { 'content-type': 'text/html' }); r.end(html); }).listen(8099);
+// The page as built: its own files by their paths (the terminal library
+// among them: without it the page's script stops part way), the page itself
+// for the rest.
+const types = { js: 'text/javascript', css: 'text/css', json: 'application/json', html: 'text/html', wasm: 'application/wasm' };
+const srv = http.createServer((q, r) => {
+  const path = q.url.split('?')[0];
+  if (/^\/[\w./-]+\.\w+$/.test(path) && !path.includes('..')) {
+    try { const b = readFileSync('/t' + path); r.writeHead(200, { 'content-type': types[path.split('.').pop()] || 'application/octet-stream' }); return r.end(b); } catch (_) {}
+  }
+  r.writeHead(200, { 'content-type': 'text/html' }); r.end(html);
+}).listen(8099);
 const b = await chromium.launch();
 const page = await b.newPage();
 await page.goto('http://127.0.0.1:8099/');
