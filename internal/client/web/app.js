@@ -289,7 +289,13 @@
         return unnamed <= HISTORY_MAX;
       });
     }
-    function rememberSession(id, pin) {
+    // visit: the person moved to this session (or was on it a moment ago):
+    // its lastSeen is now, and it goes to the list's front. Not a visit (the
+    // page connecting again to the session it is already on): what is known
+    // of it is kept, its PIN filled in, its place and time left as they are.
+    // The dock and Recents order by lastSeen, and a session that merely
+    // connected again must not move in them.
+    function rememberSession(id, pin, visit = true) {
       // pin '' is a valid entry: owner (PIN-free) connects go through auth_ok
       // with no PIN, and they must land in Recents too — otherwise sessions on
       // other owned machines never show up here or in the session dock built
@@ -298,6 +304,13 @@
       const list = loadHistory();
       const existingIdx = list.findIndex(e => e.id === id);
       const existing = existingIdx >= 0 ? list[existingIdx] : null;
+      if (existing && !visit) {
+        if (!pin || existing.pin === pin) return; // nothing new to keep
+        existing.pin = pin;
+        saveHistory(list);
+        renderRecents();
+        return;
+      }
       const entry = {
         id: id.toUpperCase(),
         pin: pin || existing?.pin || '',
@@ -308,6 +321,35 @@
       list.unshift(entry);
       saveHistory(trimHistory(list));
       renderRecents();
+    }
+    // The session this page last counted a visit to. The history is shared by
+    // every tab of the browser, so each tab counts its own: a tab left on a
+    // session, connecting again as the screen wakes, visits nothing.
+    let visitedSession = '';
+    // noteSessionAuthed: this page is connected to id. A visit the first time
+    // since the page moved to it (opened on it, or switched to it); after
+    // that, a connection made again.
+    function noteSessionAuthed(id, pin) {
+      const up = String(id || '').toUpperCase();
+      const visit = up !== visitedSession;
+      visitedSession = up;
+      rememberSession(id, pin, visit);
+    }
+    // noteSessionLeft: the page is moving from id to another session. The one
+    // left was being looked at until now, so now is when it was last seen:
+    // it ranks right after the one being moved to, whenever it last
+    // connected.
+    function noteSessionLeft(id) {
+      const up = String(id || '').toUpperCase();
+      visitedSession = '';
+      if (!up) return;
+      const list = loadHistory();
+      const at = list.findIndex(e => e.id === up);
+      if (at < 0) return; // never connected from here: nothing to rank
+      const [e] = list.splice(at, 1);
+      e.lastSeen = Date.now();
+      list.unshift(e);
+      saveHistory(list);
     }
     function renameSession(id, name) {
       const list = loadHistory();
@@ -2054,8 +2096,10 @@
           const now = Date.now();
           const pool = [];
           const seen = new Set();
-          // ORDER IS CONNECT RECENCY, nothing cleverer: the sessions this
-          // browser connected to, most recent first (their history lastSeen).
+          // ORDER IS VISIT RECENCY, nothing cleverer: the sessions the person
+          // moved to in this browser, most recent first (their history
+          // lastSeen: stamped as a page moves to a session and as it leaves
+          // one, never by a connection made again; see rememberSession).
           // Host-side idle looked smart and was wrong — an always-active
           // agent outranked the session the user just left. Activity only
           // breaks ties among never-connected sessions, which sort after
@@ -2088,8 +2132,8 @@
             seen.add(e.id);
             pool.push({ id: e.id, pin: e.pin, label: e.name, last: e.lastSeen || 0, act: 0 });
           }
-          // Current session first outright (it is the most recent connect by
-          // definition, whatever the clocks say), then connect recency, then
+          // Current session first outright (it is the most recent visit by
+          // definition, whatever the clocks say), then visit recency, then
           // host activity for the never-connected tail.
           pool.sort((a, b) => (b.id === sessionId) - (a.id === sessionId)
             || b.last - a.last || b.act - a.act);
@@ -4170,7 +4214,7 @@
       // remembered — never fires on this path, so without this an owner
       // connect leaves no trace in the history the dropdown and the session
       // dock rank by.
-      rememberSession(sessionId, '');
+      noteSessionAuthed(sessionId, '');
       // We're connected PIN-free → we own this machine; hide the enroll offer.
       iOwnThisMachine = true;
       if (typeof renderHost === 'function') renderHost();
@@ -7579,6 +7623,8 @@
         staleScreen = false;
         document.getElementById('terminal').classList.remove('stale');
         lastSeq = 0; wsDataStarted = 0; termSeq = 0;
+        // The one being left was on screen until now (the dock's order).
+        noteSessionLeft(sessionId);
         sessionId = s;
         term.reset();
         showCachedScreen(s);
@@ -7858,7 +7904,7 @@
           saveCred(sessionId, pinValue);
           // Also add to the persistent localStorage history so the user
           // can pick this session from the Recent dropdown later.
-          rememberSession(sessionId, pinValue);
+          noteSessionAuthed(sessionId, pinValue);
           refreshTabTitle();
           acquireWakeLock();
           // The handshake left with auth (ws.onopen). Only a socket that has
