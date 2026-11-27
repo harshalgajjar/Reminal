@@ -2,14 +2,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2026 Harshal Gajjar
 #
-# The order of the session dock: check.mjs drives the page as served, in two
-# tabs of one browser, with no host behind it. The sessions are in the order
-# the person moved between them; one that connects again (in this tab, or in
-# another tab left on it) does not move. Needs docker; the browser runs in a
-# Playwright container. Nothing here touches the host's reminal.
+# The order of the session dock. Two runs, each in Docker with one browser in
+# a Playwright container; nothing here touches the host's reminal:
 #
-#   run.sh [REF]   REF: the page of that git ref instead of this tree's
+#   check.mjs  the page as served, two tabs, no host behind it: the order as
+#              the person moves, a session connecting again (in this tab or
+#              another), a page loaded again, forget and kill, named sessions,
+#              history of a page of before, a first PIN connection.
+#   real.mjs   the real page on this tree's reminal as relay with three
+#              sessions, a phone's screen: moves by the dock's own gesture
+#              and by a Recents row, the other tab's connection dropped and
+#              made again, the screen off and on, pages loaded again.
+#
+#   run.sh [REF]   REF: that git ref's page and reminal instead of this tree's
 #                  (a control: origin/main before this must fail).
+#   ONLY=page|real run one of the two.
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$(cd ../.. && pwd)
@@ -20,8 +27,21 @@ if [ -n "${1:-}" ]; then
   git -C "$ROOT" archive "$1" | tar -x -C "$TMP"
   SRC=$TMP
 fi
-PAGE=$("$SRC/scripts/viewer-page.sh")
-trap '"$ROOT/scripts/rm-tmp.sh" "$PAGE"; [ -z "$TMP" ] || "$ROOT/scripts/rm-tmp.sh" "$TMP"' EXIT
+PAGE=""
+OUT=$(mktemp -d)
+trap '"$ROOT/scripts/rm-tmp.sh" "$PAGE" "$OUT" "$TMP"' EXIT
 PW=mcr.microsoft.com/playwright:v1.56.0-noble
-docker run --rm --cpus 2 -v "$PAGE":/t:ro -v "$PWD":/s:ro -w /e2e "$PW" \
-  sh -c 'cp /s/check.mjs /e2e/t.mjs; npm i --silent --no-save playwright@1.56.0 >/dev/null 2>&1; node t.mjs'
+rc=0
+if [ "${ONLY:-page}" = page ]; then
+  PAGE=$("$SRC/scripts/viewer-page.sh")
+  echo "== check.mjs: the page as served, two tabs"
+  docker run --rm --cpus 2 -v "$PAGE":/t:ro -v "$PWD":/s:ro -w /e2e "$PW" \
+    sh -c 'cp /s/check.mjs /e2e/t.mjs; npm i --silent --no-save playwright@1.56.0 >/dev/null 2>&1; node t.mjs' || rc=1
+fi
+if [ "${ONLY:-real}" = real ]; then
+  echo "== real.mjs: a relay, three sessions, a phone's screen"
+  docker run --rm --cpus 2 -v "$SRC":/src:ro -v "$OUT":/out -v reminal-gocache:/root/.cache/go-build -v reminal-gomod:/go/pkg/mod -e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false golang:1.26-bookworm \
+    sh -c 'mkdir -p /w && cp -r /src/. /w/ && cd /w && go build -o /out/reminal ./cmd/reminal'
+  docker run --rm --cpus 2 --shm-size=1g -v "$OUT":/out:ro -v "$PWD":/s:ro -w /e2e "$PW" bash /s/inside.sh || rc=1
+fi
+exit $rc

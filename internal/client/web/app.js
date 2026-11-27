@@ -324,15 +324,23 @@
     }
     // The session this page last counted a visit to. The history is shared by
     // every tab of the browser, so each tab counts its own: a tab left on a
-    // session, connecting again as the screen wakes, visits nothing.
+    // session, connecting again as the screen wakes, visits nothing. Kept
+    // with the tab (sessionStorage), so the page loaded again in it, on the
+    // session it was on, is no new visit either; a tab newly opened is.
+    const VISITED_KEY = 'reminal:visited';
     let visitedSession = '';
+    try { visitedSession = sessionStorage.getItem(VISITED_KEY) || ''; } catch (_) {}
+    function setVisitedSession(id) {
+      visitedSession = id;
+      try { if (id) sessionStorage.setItem(VISITED_KEY, id); else sessionStorage.removeItem(VISITED_KEY); } catch (_) {}
+    }
     // noteSessionAuthed: this page is connected to id. A visit the first time
     // since the page moved to it (opened on it, or switched to it); after
     // that, a connection made again.
     function noteSessionAuthed(id, pin) {
       const up = String(id || '').toUpperCase();
       const visit = up !== visitedSession;
-      visitedSession = up;
+      setVisitedSession(up);
       rememberSession(id, pin, visit);
     }
     // noteSessionLeft: the page is moving from id to another session. The one
@@ -341,8 +349,10 @@
     // connected.
     function noteSessionLeft(id) {
       const up = String(id || '').toUpperCase();
-      visitedSession = '';
+      // The page just loaded is on no session yet: it leaves none, and the
+      // one its tab was on is still the one it last visited.
       if (!up) return;
+      setVisitedSession('');
       const list = loadHistory();
       const at = list.findIndex(e => e.id === up);
       if (at < 0) return; // never connected from here: nothing to rank
@@ -7509,6 +7519,9 @@
       if (echoWatch) { clearTimeout(echoWatch); echoWatch = 0; }
       unechoed = 0;
       authed = true;
+      // The page moved to s, on a connection kept open for it: a visit, as
+      // its first connection would be (the dock's order).
+      noteSessionAuthed(s, '');
       agentLive = false; // until the relay says it is a viewer again
       if (snapAsm) { clearTimeout(snapAsm.timer); snapAsm = null; }
       snapLive = null;
