@@ -432,12 +432,16 @@ var harnessLimitNotices = map[string][]limitNotice{
 	// the mark Amp draws before its notices is not known: not read.) Amp
 	// 0.0.1794945632 names the plan it offers next, whichever that is
 	// ("Upgrade to Megawatt for more included usage, ..."), and has a
-	// monthly twin that ends "or add paid credits to continue now".
+	// monthly twin that ends "or add paid credits to continue now". Where a
+	// workspace caps its members at their tier's usage, the monthly limit
+	// ends "or wait for your tier to reset", and the row under it says to
+	// wait or ask a workspace admin. (Its headline names the plan: not read.)
 	"amp": wholeRows(`\.?`,
 		`youareoutofcredits\.addpaidcreditsorchooseapaidtier`,
 		`addcreditstokeepusingamp(?:rightnow,orwaituntilthenexthourstartsformorefreeusage)?`,
 		`upgradetoapaidtier,oraddcreditstokeepusingamp`,
-		`upgradeto[a-z0-9]{1,24}formoreincludedusage,or(?:addcreditstokeepusingamp|addpaidcreditstocontinuenow)`,
+		`upgradeto[a-z0-9]{1,24}formoreincludedusage,or(?:addcreditstokeepusingamp|addpaidcreditstocontinuenow|waitforyourtiertoreset)`,
+		`waitforyourtiertoresetoraskaworkspaceadmintoadjustthislimit`,
 		`ratelimitexceeded\.tryagainshortly`,
 		`usagequotaexceeded`,
 		// Amp's "Workspace Requires a Subscription" dialog: no subscription
