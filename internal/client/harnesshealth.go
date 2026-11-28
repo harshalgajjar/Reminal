@@ -119,7 +119,8 @@ func loginMarked(marks string, res ...string) []loginRow {
 const loginParagraphMax = 1000
 
 // loginParagraphs are notices of several sentences, each read as a whole
-// paragraph: from a row led by one of marks that starts with start, through
+// paragraph: from a row led by one of marks (any row, with no marks: the
+// mark its CLI draws is not known) that starts with start, through
 // the rows under it to the paragraph's end (a blank row, the prompt, the
 // screen's end), and those rows together are the notice's words and nothing
 // else. Unlike a row and the few it wraps onto, a paragraph is joined past
@@ -312,7 +313,16 @@ var harnessLoginScreens = map[string][]loginRow{
 		loginThen(`请使用您的factory账户登录以继续。?`, `登录factorycustomdeployment`),
 		loginThen(`如果链接未自动打开，请访问https?://[^·]+?并输入代码[a-z0-9-]+以完成认证。?`, `等待认证完成`),
 		loginThen(`계속하려면factory계정으로로그인하세요`, `factorycustomdeployment에로그인`),
-		loginThen(`링크가자동으로열리지않으면다음을방문하세요https?://[^·]+?그리고코드를입력하세요[a-z0-9-]+인증을완료합니다`, `인증완료대기중`)),
+		loginThen(`링크가자동으로열리지않으면다음을방문하세요https?://[^·]+?그리고코드를입력하세요[a-z0-9-]+인증을완료합니다`, `인증완료대기중`),
+		// Droid 1.23.0, in a session begun under another organization or
+		// account than the one signed in now: the message is not sent, and
+		// nothing goes on until the person switches back. Two sentences, so
+		// read as its whole paragraph and nothing after it. (From Droid's own
+		// strings; no screen recorded.)
+		loginParagraphs("", "thissessionbelongsto",
+			`thissessionbelongstoanotherorganizationoraccountthantheoneyou.?resignedinto,soyourmessagewasnotsent\.`+
+				`switchbacktothatorganizationoraccounttocontinuethissession`,
+		)),
 	// Qwen Code: its provider menu (0.24: "Connect a Provider", a dialog
 	// taller than the rows read, so by its last choice), the steps of
 	// setting one up, and a login that lapsed.
@@ -658,7 +668,7 @@ func harnessLoginRowIn(l loginLines, i int, rs []loginRow) bool {
 			continue
 		}
 		if r.para != "" {
-			if ok && strings.ContainsAny(lead, r.marks) && strings.HasPrefix(core, r.para) && l.paragraphIs(i, core, r.re) {
+			if ok && (r.marks == "" || strings.ContainsAny(lead, r.marks)) && strings.HasPrefix(core, r.para) && l.paragraphIs(i, core, r.re) {
 				return true
 			}
 			continue

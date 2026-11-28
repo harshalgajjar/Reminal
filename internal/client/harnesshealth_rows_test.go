@@ -1041,3 +1041,59 @@ func TestClaudesSignInParagraphsAtEveryWidth(t *testing.T) {
 		}
 	}
 }
+
+// Droid 1.23.0 turns a message away in a session begun under another
+// organization or account than the one signed in now, and says so in two
+// sentences: read as needing the person wherever its rows break, also where
+// a row ends on the first sentence's full stop. Carried on by an agent's own
+// words, or a sentence about switching accounts, it is not that.
+func TestDroidsOtherAccountSessionNotice(t *testing.T) {
+	const notice = "This session belongs to another organization or account than the one you're signed in to, so your message was not sent. Switch back to that organization or account to continue this session."
+	wrap := func(text string, width int) string {
+		var rows []string
+		row := "  "
+		for _, w := range strings.Fields(text) {
+			if len(row)+len(w) > width && strings.TrimSpace(row) != "" {
+				rows = append(rows, strings.TrimRight(row, " "))
+				row = "  "
+			}
+			row += w + " "
+		}
+		return strings.Join(append(rows, strings.TrimRight(row, " ")), "\n")
+	}
+	ends := false
+	for width := 40; width <= 240; width++ {
+		drawn := wrap(notice, width)
+		ends = ends || strings.Contains(drawn, "not sent.\n")
+		for _, under := range []string{"", "\n\n> ", loginRowFrame} {
+			for _, prog := range []string{"droid", ""} {
+				if screen := "> continue\n\n" + drawn + under; !harnessProblemIn(screen, prog) {
+					t.Errorf("at %d columns (program %q), not read as needing the person:\n%s", width, prog, screen)
+				}
+			}
+		}
+	}
+	if !ends {
+		t.Error("no width broke a row on the first sentence's full stop")
+	}
+	for _, c := range []struct{ what, screen string }{
+		{"the notice with an agent's words after it", "  " + notice + " That is what it printed, so I stopped."},
+		{"the same, wrapped", wrap(notice+" That is what it printed, so I stopped.", 80)},
+		{"its first sentence carried on", "  This session belongs to another organization or account than the one you're signed in to, so your message was not sent, the log says."},
+		{"its first sentence alone", "  This session belongs to another organization or account than the one you're signed in to, so your message was not sent."},
+		{"its second sentence alone", "  Switch back to that organization or account to continue this session."},
+		{"the notice quoted", "  \"" + notice + "\""},
+		{"the notice in a list", "  - " + notice},
+		{"a sentence about switching accounts", "  Switch back to your work account to continue, then run the deploy again."},
+		{"a sentence about the session", "  This session belongs to another organization, so I used the staging one."},
+	} {
+		for _, prog := range []string{"droid", ""} {
+			if harnessProblemIn("> continue\n\n"+c.screen+"\n\n> ", prog) {
+				t.Errorf("%s (program %q): read as Droid's notice:\n%s", c.what, prog, c.screen)
+			}
+		}
+	}
+	if harnessProblemIn("> continue\n\n  "+notice+"\n\n> ", "claude") {
+		t.Error("Droid's notice read as Claude Code's")
+	}
+}
