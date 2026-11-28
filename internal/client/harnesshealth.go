@@ -119,8 +119,9 @@ func loginMarked(marks string, res ...string) []loginRow {
 const loginParagraphMax = 1000
 
 // loginParagraphs are notices of several sentences, each read as a whole
-// paragraph: from a row led by one of marks (any row, with no marks: the
-// mark its CLI draws is not known) that starts with start, through
+// paragraph: from a row led by one of marks (with no marks, the mark its
+// CLI draws not known: any row but a person's text at a prompt) that starts
+// with start, through
 // the rows under it to the paragraph's end (a blank row, the prompt, the
 // screen's end), and those rows together are the notice's words and nothing
 // else. Unlike a row and the few it wraps onto, a paragraph is joined past
@@ -219,6 +220,18 @@ var harnessLoginScreens = map[string][]loginRow{
 			`authenticationfailedduetosecurityvalidation\.pleasetry`+kiroLogin+`again`,
 			`socialloginfailed\.pleasetry`+kiroLogin+`withadifferentmethod`,
 		),
+		// Kiro 3.7.0's newer agent ends a turn on a row of its own, perhaps
+		// with the request's id after it: no sign-in, a sign-in refused, and
+		// an account that cannot use Kiro (suspended, no access, none given).
+		// Each needs the person. Read as its whole paragraph, since a row
+		// may end on a sentence's full stop where it wraps, and with
+		// nothing after it. (From Kiro's own strings; no screen recorded.)
+		loginParagraphs("", "signinto", `signintokirotosendaprompt\.?`+kiroRequestEnd),
+		loginParagraphs("", "kirocouldnot", `kirocouldnotloadtheavailablemodelsbecauseyouarenotsignedin\.pleasesigninandretry\.?`+kiroRequestEnd),
+		loginParagraphs("", "authentication", `authenticationfailed\.pleasesigninagain\.?`+kiroRequestEnd),
+		loginParagraphs("", "youraccount", `youraccounthasbeentemporarilysuspended\.?`+kiroRequestEnd),
+		loginParagraphs("", "kiroaccess", `kiroaccessnotavailableforthisaccount\.?`+kiroRequestEnd),
+		loginParagraphs("", "youdon", `youdon.?thaveakiroseatyet\.askyouradministratortoassignyouaseat\.?`+kiroRequestEnd),
 	),
 	// Gemini CLI: no way to sign in chosen yet; its Google sign-in waiting
 	// for the code; its API key dialog; no key at all; and a key it cannot
@@ -668,7 +681,7 @@ func harnessLoginRowIn(l loginLines, i int, rs []loginRow) bool {
 			continue
 		}
 		if r.para != "" {
-			if ok && (r.marks == "" || strings.ContainsAny(lead, r.marks)) && strings.HasPrefix(core, r.para) && l.paragraphIs(i, core, r.re) {
+			if ok && (r.marks == "" && !strings.ContainsAny(lead, limitPromptGlyphs) || r.marks != "" && strings.ContainsAny(lead, r.marks)) && strings.HasPrefix(core, r.para) && l.paragraphIs(i, core, r.re) {
 				return true
 			}
 			continue

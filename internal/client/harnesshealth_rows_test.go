@@ -39,6 +39,20 @@ var loginRowCases = []loginRowCase{
 	{prog: "kiro", row: " Authentication timed out. Please try \"kiro-cli login\" again."},
 	{prog: "kiro", row: " Authentication failed due to security validation. Please try \"kiro-cli login\" again."},
 	{prog: "kiro", row: " Social login failed. Please try \"kiro-cli login\" with a different method."},
+	// Kiro 3.7.0's newer agent: a turn ended for want of a sign-in, or by
+	// the account itself; each perhaps with the request's id after it.
+	{prog: "kiro", row: " Sign in to Kiro to send a prompt."},
+	{prog: "kiro", row: " Sign in to Kiro to send a prompt. (Request ID: 3f9c2a1e-0b7d-4c55-9e21-7a1d2b3c4d5e)"},
+	{prog: "kiro", row: " Kiro could not load the available models because you are not signed in. Please sign in and retry."},
+	{prog: "kiro", row: " Kiro could not load the available models because you are not signed in. Please sign in and retry. (Request ID: 3f9c2a1e-0b7d-4c55-9e21-7a1d2b3c4d5e)"},
+	{prog: "kiro", row: " Authentication failed. Please sign in again."},
+	{prog: "kiro", row: " Authentication failed. Please sign in again. (Request ID: 3f9c2a1e-0b7d-4c55-9e21-7a1d2b3c4d5e)"},
+	{prog: "kiro", row: " Your account has been temporarily suspended."},
+	{prog: "kiro", row: " Your account has been temporarily suspended. (Request ID: 3f9c2a1e-0b7d-4c55-9e21-7a1d2b3c4d5e)"},
+	{prog: "kiro", row: " Kiro access not available for this account."},
+	{prog: "kiro", row: " Kiro access not available for this account. (Request ID: 3f9c2a1e-0b7d-4c55-9e21-7a1d2b3c4d5e)"},
+	{prog: "kiro", row: " You don't have a Kiro seat yet. Ask your administrator to assign you a seat."},
+	{prog: "kiro", row: " You don't have a Kiro seat yet. Ask your administrator to assign you a seat. (Request ID: 3f9c2a1e-0b7d-4c55-9e21-7a1d2b3c4d5e)"},
 
 	{prog: "codex", row: "  Sign in with ChatGPT to use Codex as part of your paid plan"},
 	{prog: "codex", row: "■ Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again."},
@@ -1084,6 +1098,7 @@ func TestDroidsOtherAccountSessionNotice(t *testing.T) {
 		{"its second sentence alone", "  Switch back to that organization or account to continue this session."},
 		{"the notice quoted", "  \"" + notice + "\""},
 		{"the notice in a list", "  - " + notice},
+		{"the notice typed at a prompt", "> " + notice},
 		{"a sentence about switching accounts", "  Switch back to your work account to continue, then run the deploy again."},
 		{"a sentence about the session", "  This session belongs to another organization, so I used the staging one."},
 	} {
@@ -1095,5 +1110,41 @@ func TestDroidsOtherAccountSessionNotice(t *testing.T) {
 	}
 	if harnessProblemIn("> continue\n\n  "+notice+"\n\n> ", "claude") {
 		t.Error("Droid's notice read as Claude Code's")
+	}
+}
+
+// Kiro's newer agent's sign-in and account rows, wrapped at narrow widths,
+// are read; typed at a prompt, in a list, or under another agent, they are
+// not Kiro's.
+func TestKirosNewerAgentSignInRows(t *testing.T) {
+	for _, c := range loginRowCases {
+		if c.prog != "kiro" || !strings.Contains(c.row, "(Request ID: ") {
+			continue
+		}
+		for _, text := range []string{c.row, strings.Split(c.row, " (Request ID: ")[0]} {
+			text = strings.TrimSpace(text)
+			for _, width := range []int{400, 100, 80, 60, 48} {
+				screen := "> continue\n\n" + kiroWrap(text, width) + "\n\n> "
+				for _, prog := range []string{"kiro", ""} {
+					if !harnessProblemIn(screen, prog) {
+						t.Errorf("at %d columns (program %q), not read as needing the person:\n%s", width, prog, screen)
+					}
+				}
+			}
+			for why, screen := range map[string]string{
+				"typed at a prompt":         "> " + text + "\n\n working",
+				"in a list":                 " - " + text,
+				"an agent's words after it": " " + text + " That is what it printed, so I stopped.",
+			} {
+				for _, prog := range []string{"kiro", ""} {
+					if harnessProblemIn(screen, prog) {
+						t.Errorf("%s (program %q): read as Kiro's row:\n%s", why, prog, screen)
+					}
+				}
+			}
+			if harnessProblemIn(" "+text+"\n\n> ", "claude") {
+				t.Errorf("read as Claude Code's: %q", text)
+			}
+		}
 	}
 }
