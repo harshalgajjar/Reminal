@@ -499,6 +499,9 @@ var harnessLimitNotices = map[string][]limitNotice{
 		// Kiro CLI 3.6 says it this way.
 		`thecloudserviceisrate-limitingrequests\.waitamomentandretry`,
 		`monthlyrequestlimitreached(?:-thelimitsreseton\d{1,2}/01)?`,
+		// Its throttle row (3.6.2 and 3.7.0). ("Too many requests — please try
+		// again later." is its feedback form's: not read.)
+		`toomanyrequestshavebeensentrecently,pleasewaitandtryagainlater`,
 	), wholeRows(`\.?`+kiroRequestEnd,
 		// Kiro 3.7.0's newer agent ends a turn on a row of its own: a usage
 		// limit by the hour, day, week or month, or none named; its overage

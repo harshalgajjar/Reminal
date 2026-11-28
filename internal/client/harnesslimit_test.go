@@ -231,6 +231,10 @@ var limitScreens = []struct {
 	{"kiro", "\n The cloud service is rate-limiting requests. Wait a moment and retry.\n", time.Time{}},
 	{"kiro", "Monthly request limit reached - The limits reset on 12/01.\n", time.Time{}},
 	{"kiro", "Monthly request limit reached\n", time.Time{}},
+	// Its throttle row (3.6.2 and 3.7.0), on one row and wrapped.
+	{"kiro", " Too many requests have been sent recently, please wait and try again later\n", time.Time{}},
+	{"kiro", " Too many requests have been sent recently, please wait and try again later.\n", time.Time{}},
+	{"kiro", " Too many requests have been sent recently, please\n wait and try again later\n", time.Time{}},
 	{"copilot", "  You've hit your session rate limit.\n", time.Time{}},
 	{"copilot", "  You've reached your weekly rate limit. Learn More (https://docs.github.com/copilot/concepts/rate-limits).\n", time.Time{}},
 	{"copilot", "  You've hit the rate limit for this model. Please switch models or wait for your limit to reset\n", time.Time{}},
@@ -1200,6 +1204,8 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"kiro", "", "The cloud service is rate-limiting requests. Wait a moment and retry.", false},
 		{"kiro", "", "Monthly request limit reached", false},
 		{"kiro", "", "Monthly request limit reached - The limits reset on 12/01.", false},
+		{"kiro", "", "Too many requests have been sent recently, please wait and try again later", false},
+		{"kiro", "", "Too many requests have been sent recently, please wait and try again later.", false},
 		{"kiro", "", "You've reached your hourly usage limit. Please return soon to continue building.", false},
 		{"kiro", "", "You've reached your daily usage limit. Please return tomorrow to continue building.", false},
 		{"kiro", "", "You've reached your weekly usage limit. Please return next week to continue building.", false},
@@ -1546,6 +1552,13 @@ func TestKirosNewerAgentLimitRows(t *testing.T) {
 		" The service is under high load. Retrying in 10 seconds.",
 		" You've reached your usage limit on the staging API, so the job backs off.",
 		" Too many requests, please wait before trying again, the gateway answered.",
+		// Its feedback form's own row: no turn ended on it.
+		" Too many requests — please try again later.",
+		" Too many requests - please try again later.",
+		" - Too many requests have been sent recently, please wait and try again later",
+		"> Too many requests have been sent recently, please wait and try again later\n\n working",
+		" \"Too many requests have been sent recently, please wait and try again later\"",
+		" Too many requests have been sent recently, please wait and try again later, it said, so I waited.",
 		" You've reached your yearly usage limit. Please return next year to continue building.",
 	} {
 		if hit, _ := harnessLimitIn(screen+"\n\n> ", "kiro", limitTestNow); hit {
