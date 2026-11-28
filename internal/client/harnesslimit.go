@@ -232,6 +232,10 @@ const limitWhen = `(?:on)?(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)
 // request's id, the error's closing bracket, and its retry hint.
 const qwenErrorEnd = `\.?(?:\(request_id:[a-z0-9._-]{1,128}\))?\](?:\(pressctrl\+ytoretry\))?`
 
+// kiroRequestEnd is what Kiro's newer agent may put after a row that ends
+// a turn: the request's id.
+const kiroRequestEnd = `(?:\(requestid:[a-z0-9-]{1,64}\))?`
+
 // codexEnd is what may follow a Codex notice: when to try again.
 const codexEnd = `(?:,?ortryagain(?:later|at` + limitWhen + `))?\.?`
 
@@ -490,12 +494,28 @@ var harnessLimitNotices = map[string][]limitNotice{
 	)...),
 	// Kiro CLI 3.2: its rate limit (the warning sign before it is not
 	// needed), and its monthly requests, perhaps with when they reset.
-	"kiro": wholeRows(`\.?`,
+	"kiro": append(wholeRows(`\.?`,
 		`kiroratelimitreached:?`,
 		// Kiro CLI 3.6 says it this way.
 		`thecloudserviceisrate-limitingrequests\.waitamomentandretry`,
 		`monthlyrequestlimitreached(?:-thelimitsreseton\d{1,2}/01)?`,
-	),
+		// Its throttle row (3.6.2 and 3.7.0). ("Too many requests — please try
+		// again later." is its feedback form's: not read.)
+		`toomanyrequestshavebeensentrecently,pleasewaitandtryagainlater`,
+	), wholeRows(`\.?`+kiroRequestEnd,
+		// Kiro 3.7.0's newer agent ends a turn on a row of its own: a usage
+		// limit by the hour, day, week or month, or none named; its overage
+		// limit; credits or requests used faster than its rate limit allows.
+		// None says when it resets ("up to 5 minutes" is how long to wait,
+		// not a time). Its "Retrying in N seconds" and high-load rows go on
+		// by themselves: not read.
+		`you.?vereachedyour(?:hourlyusagelimit\.pleasereturnsoon|dailyusagelimit\.pleasereturntomorrow|weeklyusagelimit\.pleasereturnnextweek|monthlyusagelimit\.pleasereturnnextmonth)tocontinuebuilding`,
+		`you.?vereachedyourusagelimit\.thanksforusingkiro-pleasereturnsoontocontinuebuilding`,
+		`you.?vereachedyouroveragelimit`,
+		`you.?reusingcreditsfasterthanyourratelimitallows\.pleasewait(?:upto(?:aminute|anhour|\d{1,3}(?:minutes|hours))|afewminutes)beforetryingagain`,
+		`you.?resendingrequestsfasterthanyourratelimitallows\.waitamomentbeforetryingagain,orrunfewersessionsatthesametime`,
+		`toomanyrequests,pleasewaitbeforetryingagain`,
+	)...),
 }
 
 // limitPromptGlyphs are what an input prompt, or a person's message echoed

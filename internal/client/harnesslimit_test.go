@@ -231,6 +231,10 @@ var limitScreens = []struct {
 	{"kiro", "\n The cloud service is rate-limiting requests. Wait a moment and retry.\n", time.Time{}},
 	{"kiro", "Monthly request limit reached - The limits reset on 12/01.\n", time.Time{}},
 	{"kiro", "Monthly request limit reached\n", time.Time{}},
+	// Its throttle row (3.6.2 and 3.7.0), on one row and wrapped.
+	{"kiro", " Too many requests have been sent recently, please wait and try again later\n", time.Time{}},
+	{"kiro", " Too many requests have been sent recently, please wait and try again later.\n", time.Time{}},
+	{"kiro", " Too many requests have been sent recently, please\n wait and try again later\n", time.Time{}},
 	{"copilot", "  You've hit your session rate limit.\n", time.Time{}},
 	{"copilot", "  You've reached your weekly rate limit. Learn More (https://docs.github.com/copilot/concepts/rate-limits).\n", time.Time{}},
 	{"copilot", "  You've hit the rate limit for this model. Please switch models or wait for your limit to reset\n", time.Time{}},
@@ -1200,6 +1204,21 @@ func TestHarnessLimitNewWordingsAreWholeRows(t *testing.T) {
 		{"kiro", "", "The cloud service is rate-limiting requests. Wait a moment and retry.", false},
 		{"kiro", "", "Monthly request limit reached", false},
 		{"kiro", "", "Monthly request limit reached - The limits reset on 12/01.", false},
+		{"kiro", "", "Too many requests have been sent recently, please wait and try again later", false},
+		{"kiro", "", "Too many requests have been sent recently, please wait and try again later.", false},
+		{"kiro", "", "You've reached your hourly usage limit. Please return soon to continue building.", false},
+		{"kiro", "", "You've reached your daily usage limit. Please return tomorrow to continue building.", false},
+		{"kiro", "", "You've reached your weekly usage limit. Please return next week to continue building.", false},
+		{"kiro", "", "You've reached your monthly usage limit. Please return next month to continue building.", false},
+		{"kiro", "", "You've reached your usage limit. Thanks for using Kiro - please return soon to continue building.", false},
+		{"kiro", "", "You've reached your overage limit.", false},
+		{"kiro", "", "You're using credits faster than your rate limit allows. Please wait up to a minute before trying again.", false},
+		{"kiro", "", "You're using credits faster than your rate limit allows. Please wait up to 5 minutes before trying again.", false},
+		{"kiro", "", "You're using credits faster than your rate limit allows. Please wait up to an hour before trying again.", false},
+		{"kiro", "", "You're using credits faster than your rate limit allows. Please wait up to 12 hours before trying again.", false},
+		{"kiro", "", "You're using credits faster than your rate limit allows. Please wait a few minutes before trying again.", false},
+		{"kiro", "", "You're sending requests faster than your rate limit allows. Wait a moment before trying again, or run fewer sessions at the same time.", false},
+		{"kiro", "", "Too many requests, please wait before trying again.", false},
 	} {
 		words := strings.TrimRight(n.text, ".")
 		if hit, _ := harnessLimitIn("  "+n.glyph+n.text+"\n", n.prog, limitTestNow); !hit {
@@ -1447,6 +1466,103 @@ func TestHarnessLimitTurnsAreReadFromQwensHook(t *testing.T) {
 	for _, code := range []string{"loop_detected", "invalid_request", "server_error", "max_output_tokens", "unknown"} {
 		if limitRefusals[code] {
 			t.Errorf("%s is read as the limit's refusal", code)
+		}
+	}
+}
+
+// kiroNewerLimits are the rows Kiro 3.7.0's newer agent ends a turn on at a
+// usage or rate limit (from its own strings; no screen recorded).
+var kiroNewerLimits = []string{
+	"You've reached your hourly usage limit. Please return soon to continue building.",
+	"You've reached your daily usage limit. Please return tomorrow to continue building.",
+	"You've reached your weekly usage limit. Please return next week to continue building.",
+	"You've reached your monthly usage limit. Please return next month to continue building.",
+	"You've reached your usage limit. Thanks for using Kiro - please return soon to continue building.",
+	"You've reached your overage limit.",
+	"You're using credits faster than your rate limit allows. Please wait up to a minute before trying again.",
+	"You're using credits faster than your rate limit allows. Please wait up to 5 minutes before trying again.",
+	"You're using credits faster than your rate limit allows. Please wait up to an hour before trying again.",
+	"You're using credits faster than your rate limit allows. Please wait up to 12 hours before trying again.",
+	"You're using credits faster than your rate limit allows. Please wait a few minutes before trying again.",
+	"You're sending requests faster than your rate limit allows. Wait a moment before trying again, or run fewer sessions at the same time.",
+	"Too many requests, please wait before trying again.",
+}
+
+// kiroRequestID is what Kiro's newer agent may put after such a row.
+const kiroRequestID = " (Request ID: 3f9c2a1e-0b7d-4c55-9e21-7a1d2b3c4d5e)"
+
+// kiroWrap is text as a terminal width columns wide draws it.
+func kiroWrap(text string, width int) string {
+	var rows []string
+	row := " "
+	for _, w := range strings.Fields(text) {
+		if len(row)+len(w) > width && strings.TrimSpace(row) != "" {
+			rows = append(rows, strings.TrimRight(row, " "))
+			row = " "
+		}
+		row += w + " "
+	}
+	return strings.Join(append(rows, strings.TrimRight(row, " ")), "\n")
+}
+
+// Each is read as Kiro at its limit: with and without the request's id, on
+// one row and wrapped at narrow widths, with Kiro here and with no program
+// known; none names a time. Under another agent it is not that agent's.
+// Quoted, typed at a prompt, in a list, or carried on in an agent's own
+// words, it is not the notice.
+func TestKirosNewerAgentLimitRows(t *testing.T) {
+	for _, row := range kiroNewerLimits {
+		for _, text := range []string{row, row + kiroRequestID} {
+			for _, width := range []int{400, 100, 80, 60, 48} {
+				screen := "> continue\n\n" + kiroWrap(text, width) + "\n\n> "
+				for _, prog := range []string{"kiro", ""} {
+					hit, at := harnessLimitIn(screen, prog, limitTestNow)
+					if !hit {
+						t.Errorf("at %d columns (program %q), limit not seen:\n%s", width, prog, screen)
+					} else if !at.IsZero() {
+						t.Errorf("at %d columns: a time read (%v) where none is named:\n%s", width, at, screen)
+					}
+				}
+				if hit, _ := harnessLimitIn(screen, "claude", limitTestNow); hit {
+					t.Errorf("read as Claude Code's limit:\n%s", screen)
+				}
+			}
+			words := strings.TrimRight(row, ".")
+			for why, screen := range map[string]string{
+				"quoted":                    " \"" + text + "\"",
+				"typed at a prompt":         "> " + text + "\n\n working",
+				"in a list":                 " - " + text,
+				"an agent's words after it": " " + text + " That is what it printed, so I stopped.",
+				"a sentence that goes on":   " " + words + ", so I paused the deploy.",
+				// Without the id: a row that is the notice whole, with its id
+				// alone on the next, is the notice wherever it stands.
+				"wrapped, then going on": kiroWrap(row+" was the row, and I went on with the next file.", 60),
+			} {
+				for _, prog := range []string{"kiro", ""} {
+					if hit, _ := harnessLimitIn(screen, prog, limitTestNow); hit {
+						t.Errorf("%s (program %q): read as at its limit:\n%s", why, prog, screen)
+					}
+				}
+			}
+		}
+	}
+	// What does not end the turn, and a sentence of anyone's.
+	for _, screen := range []string{
+		" Retrying in 5 seconds",
+		" The service is under high load. Retrying in 10 seconds.",
+		" You've reached your usage limit on the staging API, so the job backs off.",
+		" Too many requests, please wait before trying again, the gateway answered.",
+		// Its feedback form's own row: no turn ended on it.
+		" Too many requests — please try again later.",
+		" Too many requests - please try again later.",
+		" - Too many requests have been sent recently, please wait and try again later",
+		"> Too many requests have been sent recently, please wait and try again later\n\n working",
+		" \"Too many requests have been sent recently, please wait and try again later\"",
+		" Too many requests have been sent recently, please wait and try again later, it said, so I waited.",
+		" You've reached your yearly usage limit. Please return next year to continue building.",
+	} {
+		if hit, _ := harnessLimitIn(screen+"\n\n> ", "kiro", limitTestNow); hit {
+			t.Errorf("read as at its limit: %q", screen)
 		}
 	}
 }
